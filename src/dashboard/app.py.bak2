@@ -682,7 +682,7 @@ if page == "🌡️ Обзор":
                 "trend": c.get("trend", "stable"),
                 "articles": c.get("article_count", 0), "events": _evl,
             })
-        _components.html(_get_threads(_viz), height=550, scrolling=False)
+        _components.html(_get_threads(_viz), height=650, scrolling=False)
         st.stop()
 
     # Fetch UN votes summary for cards
@@ -760,73 +760,28 @@ if page == "🌡️ Обзор":
 
 
     # ─── Map ───
-    st.markdown(f'<div class="section-header">Карта отношений{info_badge("Цвет отражает «температуру» — взвешенный sentiment за выбранный период. Шкала: от −100° (враждебность, красный) до +100° (союзничество, зелёный). Нейтральные страны — жёлтые. Нажмите на страну для перехода к деталям.")}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="section-header">Карта отношений{info_badge("Цвет отражает «температуру» — взвешенный sentiment за выбранный период. Шкала: от −100° (враждебность, красный) до +100° (союзничество, зелёный). Нейтральные страны — жёлтые.")}</div>', unsafe_allow_html=True)
 
-    # Capital coordinates for annotations
-    _CAPITALS = {
-        "KAZ": {"lat": 49.0, "lon": 66.0, "flag": "🇰🇿", "short": "KZ", "name": "Казахстан"},
-        "ARM": {"lat": 39.5, "lon": 44.5, "flag": "🇦🇲", "short": "AM", "name": "Армения"},
-        "UZB": {"lat": 42.0, "lon": 63.5, "flag": "🇺🇿", "short": "UZ", "name": "Узбекистан"},
-        "KGZ": {"lat": 41.5, "lon": 74.5, "flag": "🇰🇬", "short": "KG", "name": "Кыргызстан"},
-        "TJK": {"lat": 38.5, "lon": 70.5, "flag": "🇹🇯", "short": "TJ", "name": "Таджикистан"},
-        "TKM": {"lat": 40.0, "lon": 58.5, "flag": "🇹🇲", "short": "TM", "name": "Туркменистан"},
-        "AZE": {"lat": 40.8, "lon": 49.5, "flag": "🇦🇿", "short": "AZ", "name": "Азербайджан"},
-        "GEO": {"lat": 42.3, "lon": 43.5, "flag": "🇬🇪", "short": "GE", "name": "Грузия"},
-        "MDA": {"lat": 47.0, "lon": 28.5, "flag": "🇲🇩", "short": "MD", "name": "Молдова"},
-        "BLR": {"lat": 53.2, "lon": 28.0, "flag": "🇧🇾", "short": "BY", "name": "Беларусь"},
-    }
-
-    # Trend helpers
-    _TREND_ARROWS = {"rising": "▲", "falling": "▼", "stable": "→"}
-    _TREND_LABELS_RU = {"rising": "потепление", "falling": "охлаждение", "stable": "стабильно"}
-
-    # Zone classification
-    def _temp_zone(t):
-        if t is None: return ("—", "#52525b")
-        if t <= -30: return ("🔴 Враждебность", "#ef4444")
-        if t <= -15: return ("🟠 Напряжённость", "#f97316")
-        if t <= -5:  return ("🟡 Охлаждение", "#fbbf24")
-        if t <= 5:   return ("⚪ Нейтралитет", "#a1a1aa")
-        if t <= 15:  return ("🟢 Потепление", "#86efac")
-        if t <= 30:  return ("🟢 Сотрудничество", "#22c55e")
-        return ("🟢 Союзничество", "#16a34a")
-
-    # Build map data with enriched info
     map_data = []
+    iso3_codes = []
+    temperatures = []
+    country_names = []
     for c in countries:
         if c.get("iso3"):
             temp = c.get("temperature")
-            trend = c.get("trend") or "stable"
-            zone_label, zone_color = _temp_zone(temp)
-            arrow = _TREND_ARROWS.get(trend, "→")
-            trend_ru = _TREND_LABELS_RU.get(trend, "стабильно")
-            arts = c.get("article_count", 0)
-            un_pct = _un_summary.get(c["code"], {}).get("agreement_pct")
-            un_str = f"{un_pct:.0f}%" if un_pct is not None else "—"
-
-            # Temperature visual bar (20 chars wide)
-            if temp is not None:
-                bar_pos = max(0, min(20, int((temp + 60) / 120 * 20)))
-                bar = "▬" * bar_pos + "●" + "▬" * (20 - bar_pos)
-                bar_str = f"-60° {bar} +60°"
-            else:
-                bar_str = ""
-
             map_data.append({
                 "iso3": c["iso3"],
                 "country": c["name"],
                 "code": c["code"],
                 "temperature": temp if temp is not None else float("nan"),
                 "has_data": temp is not None,
-                "trend": trend,
-                "trend_ru": trend_ru,
-                "arrow": arrow,
-                "articles": arts,
-                "zone_label": zone_label,
-                "zone_color": zone_color,
-                "un_pct": un_str,
-                "bar_str": bar_str,
+                "trend": c.get("trend") or "нет данных",
+                "articles": c.get("article_count", 0),
             })
+            if temp is not None:
+                iso3_codes.append(c["iso3"])
+                temperatures.append(temp)
+                country_names.append(c["name"])
 
     if map_data:
         df = pd.DataFrame(map_data)
@@ -835,203 +790,96 @@ if page == "🌡️ Обзор":
 
         fig = go.Figure()
 
-        # Russia shown as subtle reference (no choropleth — avoids stretching bounds)
+        # Russia — gray reference
+        fig.add_trace(go.Choropleth(
+            locations=["RUS"],
+            z=[0],
+            text=["Россия"],
+            colorscale=[[0, '#1e1e2e'], [1, '#1e1e2e']],
+            showscale=False,
+            marker_line_color='rgba(255,255,255,0.12)',
+            marker_line_width=1,
+            hovertemplate="<b>Россия</b><br>Опорная точка<extra></extra>",
+        ))
 
-        # Countries with data — rich hover
         if not df_data.empty:
-            hover_texts = df_data.apply(
-                lambda r: (
-                    f"<b>{r['country']}</b><br>"
-                    f"<span style='font-size:18px;font-weight:bold;color:{r['zone_color']}'>{r['temperature']:.1f}°</span> "
-                    f"<span style='color:{r['zone_color']}'>{r['zone_label']}</span><br>"
-                    f"<br>"
-                    f"📊 Тренд: <b>{r['arrow']} {r['trend_ru']}</b><br>"
-                    f"📰 Статей за период: <b>{r['articles']}</b><br>"
-                    f"🏛️ Голоса ООН с РФ: <b>{r['un_pct']}</b><br>"
-                    f"<br>"
-                    f"<span style='font-family:monospace;font-size:10px;color:#71717a'>{r['bar_str']}</span><br>"
-                    f"<br>"
-                    f"<span style='color:#60a5fa;font-size:11px'>⟵ Нажмите для детальной аналитики</span>"
-                ), axis=1,
-            )
             fig.add_trace(go.Choropleth(
                 locations=df_data["iso3"],
                 z=df_data["temperature"],
-                text=hover_texts,
-                hoverinfo="text",
-                hoverlabel=dict(
-                    bgcolor='#1e1e2e',
-                    bordercolor='rgba(96,165,250,0.3)',
-                    font=dict(family='Inter, system-ui, sans-serif', size=13, color='#e4e4e7'),
-                    namelength=0,
+                text=df_data.apply(
+                    lambda r: f"<b>{r['country']}</b><br>"
+                              f"Температура: {r['temperature']:.1f}°<br>"
+                              f"Тренд: {r['trend']}<br>"
+                              f"Статей: {r['articles']}",
+                    axis=1,
                 ),
+                hoverinfo="text",
                 colorscale=[
                     [0, '#991b1b'],
-                    [0.15, '#ef4444'],
-                    [0.3, '#f97316'],
-                    [0.45, '#fbbf24'],
-                    [0.5, '#fde68a'],
-                    [0.55, '#bbf7d0'],
-                    [0.7, '#86efac'],
-                    [0.85, '#22c55e'],
+                    [0.2, '#ef4444'],
+                    [0.35, '#f97316'],
+                    [0.5, '#fbbf24'],
+                    [0.65, '#86efac'],
+                    [0.8, '#22c55e'],
                     [1, '#16a34a'],
                 ],
                 zmid=0,
                 zmin=-60,
                 zmax=60,
                 colorbar=dict(
-                    title=dict(text="°C", side="right", font=dict(size=12, color='#a1a1aa')),
-                    tickvals=[-60, -40, -20, 0, 20, 40, 60],
-                    ticktext=["-60°", "-40°", "-20°", "0°", "+20°", "+40°", "+60°"],
+                    title=dict(text="°", side="right"),
+                    tickvals=[-60, -30, 0, 30, 60],
                     outlinewidth=0,
                     bgcolor='rgba(0,0,0,0)',
                     tickfont=dict(color='#71717a', size=11),
-                    len=0.55,
-                    thickness=14,
-                    x=1.02,
+                    len=0.6,
+                    thickness=12,
                 ),
-                marker_line_color='rgba(255,255,255,0.15)',
-                marker_line_width=1,
+                marker_line_color='rgba(255,255,255,0.1)',
+                marker_line_width=0.8,
             ))
 
-        # Countries without data
         if not df_nodata.empty:
             fig.add_trace(go.Choropleth(
                 locations=df_nodata["iso3"],
                 z=[0] * len(df_nodata),
                 text=df_nodata.apply(
-                    lambda r: f"<b>{r['country']}</b><br><span style='color:#71717a'>Нет данных за период</span><br>📰 Статей: {r['articles']}",
+                    lambda r: f"<b>{r['country']}</b><br>Нет данных<br>Статей: {r['articles']}",
                     axis=1,
                 ),
                 hoverinfo="text",
-                hoverlabel=dict(
-                    bgcolor='#1e1e2e',
-                    bordercolor='rgba(255,255,255,0.1)',
-                    font=dict(family='Inter, system-ui, sans-serif', size=13, color='#a1a1aa'),
-                ),
-                colorscale=[[0, '#1a1a24'], [1, '#1a1a24']],
+                colorscale=[[0, '#27272a'], [1, '#27272a']],
                 showscale=False,
                 marker_line_color='rgba(255,255,255,0.08)',
                 marker_line_width=0.5,
             ))
 
-        # Moscow anchor marker
-        fig.add_trace(go.Scattergeo(
-            lat=[55.75], lon=[37.62],
-            mode="markers+text",
-            marker=dict(size=10, color='#60a5fa', symbol='diamond', line=dict(width=1.5, color='rgba(96,165,250,0.6)')),
-            text=["🇷🇺 Москва"],
-            textposition="bottom center",
-            textfont=dict(size=11, color='#60a5fa', family='Inter, system-ui, sans-serif'),
-            showlegend=False,
-            hovertemplate="<b>🇷🇺 Москва</b><br>Опорная точка<extra></extra>",
-        ))
-
-        # Connection lines from Moscow to each capital + temperature labels
-        _label_lats = []
-        _label_lons = []
-        _label_texts = []
-        for iso3, cap in _CAPITALS.items():
-            row = df[df["iso3"] == iso3]
-            if row.empty:
-                continue
-            r = row.iloc[0]
-
-            if r["has_data"]:
-                temp = r["temperature"]
-                arrow = r["arrow"]
-
-                # Line color based on temperature
-                if temp <= -15:
-                    lcolor = 'rgba(239,68,68,0.3)'
-                elif temp <= 0:
-                    lcolor = 'rgba(251,191,36,0.25)'
-                elif temp <= 15:
-                    lcolor = 'rgba(134,239,172,0.25)'
-                else:
-                    lcolor = 'rgba(34,197,94,0.3)'
-
-                # Connection line
-                fig.add_trace(go.Scattergeo(
-                    lat=[55.75, cap["lat"]], lon=[37.62, cap["lon"]],
-                    mode="lines",
-                    line=dict(width=1, color=lcolor, dash='dot'),
-                    showlegend=False,
-                    hoverinfo="skip",
-                ))
-
-                # Label text
-                _label_lats.append(cap["lat"])
-                _label_lons.append(cap["lon"])
-                _label_texts.append(f"{cap['flag']} {temp:.0f}° {arrow}")
-            else:
-                _label_lats.append(cap["lat"])
-                _label_lons.append(cap["lon"])
-                _label_texts.append(f"{cap['flag']} —")
-
-        # Temperature labels as Scattergeo text
-        if _label_lats:
-            fig.add_trace(go.Scattergeo(
-                lat=_label_lats,
-                lon=_label_lons,
-                mode="text",
-                text=_label_texts,
-                textfont=dict(
-                    size=12,
-                    color='#e4e4e7',
-                    family='Inter, system-ui, sans-serif',
-                ),
-                textposition="top center",
-                showlegend=False,
-                hoverinfo="skip",
-            ))
-
         fig.update_geos(
-            projection_type="equirectangular",
-            center=dict(lat=45, lon=52),
-            lataxis_range=[35, 57],
-            lonaxis_range=[24, 80],
+            projection_type="natural earth",
+            center=dict(lat=45, lon=62),
+            lataxis_range=[25, 62],
+            lonaxis_range=[25, 90],
             bgcolor='rgba(0,0,0,0)',
             showcoastlines=True,
-            coastlinecolor='rgba(255,255,255,0.06)',
+            coastlinecolor='rgba(255,255,255,0.08)',
             showland=True,
-            landcolor='#0f0f18',
+            landcolor='#12121a',
             showocean=True,
-            oceancolor='#080810',
+            oceancolor='#0a0a0f',
             showcountries=True,
-            countrycolor='rgba(255,255,255,0.05)',
+            countrycolor='rgba(255,255,255,0.06)',
             showlakes=False,
             showframe=False,
             resolution=50,
         )
-
         map_layout = {k: v for k, v in CHART_LAYOUT.items() if k != 'margin'}
         fig.update_layout(
             **map_layout,
-            height=550,
-            margin=dict(l=0, r=40, t=0, b=0),
+            height=520,
+            margin=dict(l=0, r=0, t=0, b=0),
             geo=dict(bgcolor='rgba(0,0,0,0)'),
         )
-
-        # Render map with click handling
-        _map_event = st.plotly_chart(fig, use_container_width=True, on_select="rerun", key="geo_map")
-
-        # Handle click → navigate to country
-        if _map_event and hasattr(_map_event, 'selection') and _map_event.selection:
-            _sel = _map_event.selection
-            if hasattr(_sel, 'points') and _sel.points:
-                _clicked = _sel.points[0]
-                _loc = getattr(_clicked, 'location', None) or (_clicked.get('location') if isinstance(_clicked, dict) else None)
-                if _loc and _loc != "RUS":
-                    _click_code = None
-                    for _mc in map_data:
-                        if _mc["iso3"] == _loc:
-                            _click_code = _mc["code"]
-                            break
-                    if _click_code:
-                        st.session_state.selected_country = _click_code
-                        st.session_state.navigate_to = _click_code
-                        st.rerun()
+        st.plotly_chart(fig, use_container_width=True)
 
     # Country cards — premium design
     _period_hint = f"за {_selected_period.lower()}" if _period_days > 0 else "за всё время"
