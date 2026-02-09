@@ -481,6 +481,161 @@ button[kind=headerNoPadding] { display: none !important; }
     border-right: 6px solid transparent;
     border-bottom: 6px solid rgba(255,255,255,0.1);
 }
+
+/* ========== MOBILE RESPONSIVE ========== */
+@media (max-width: 640px) {
+    /* Reduce main padding */
+    .block-container {
+        padding-top: 0.5rem !important;
+        padding-left: 0.5rem !important;
+        padding-right: 0.5rem !important;
+    }
+
+    /* Nav tabs — horizontal scroll, single line, no wrap */
+    .stRadio > div {
+        flex-wrap: nowrap !important;
+        overflow-x: auto !important;
+        -webkit-overflow-scrolling: touch !important;
+        gap: 0 !important;
+        padding-bottom: 4px !important;
+        scrollbar-width: none !important;
+    }
+    .stRadio > div::-webkit-scrollbar { display: none !important; }
+    .stRadio > div > label[data-baseweb="radio"] {
+        white-space: nowrap !important;
+        padding: 4px 8px !important;
+        font-size: 0.7rem !important;
+        flex-shrink: 0 !important;
+    }
+
+    
+    /* Period button columns — force inline row on mobile */
+    [data-testid="stHorizontalBlock"] [data-testid="stColumn"] .stButton > button {
+        width: auto !important;
+        display: inline-block !important;
+    }
+    /* Force columns to be inline (shrink to content) */
+    [data-testid="stHorizontalBlock"] {
+        flex-wrap: wrap !important;
+        gap: 4px 6px !important;
+        justify-content: flex-start !important;
+    }
+    [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
+        flex: 0 0 auto !important;
+        width: auto !important;
+        min-width: 0 !important;
+    }
+
+    /* ALL st.columns — wrap instead of stack (keeps period btns inline) */
+    [data-testid="stHorizontalBlock"] {
+        flex-wrap: wrap !important;
+        gap: 4px !important;
+    }
+    
+    /* Period buttons — small inline pills, NOT full-width */
+    .stButton > button {
+        font-size: 0.65rem !important;
+        padding: 4px 12px !important;
+        min-height: 26px !important;
+        line-height: 1.2 !important;
+    }
+    .stButton > button[kind="primary"] {
+        font-size: 0.65rem !important;
+        padding: 4px 12px !important;
+    }
+    /* Make period columns shrink to fit content */
+    [data-testid="stColumn"] {
+        width: auto !important;
+        flex: 0 1 auto !important;
+    }
+
+    /* Metrics row — 2x2 grid */
+    .metrics-row {
+        flex-wrap: wrap !important;
+        gap: 6px !important;
+    }
+    .metric-box {
+        flex: 1 1 calc(50% - 4px) !important;
+        min-width: calc(50% - 4px) !important;
+        padding: 10px 8px !important;
+    }
+    .metric-value {
+        font-size: 1.15rem !important;
+    }
+    .metric-label {
+        font-size: 0.62rem !important;
+    }
+
+    /* Country cards — full width */
+    .country-card {
+        padding: 12px !important;
+    }
+    .temp-value {
+        font-size: 1.5rem !important;
+    }
+
+    /* Digest cards — full width stack */
+    .digest-card {
+        padding: 14px !important;
+        font-size: 0.85rem !important;
+        line-height: 1.6 !important;
+    }
+
+    /* Map — limit height so it doesn't dominate */
+    [data-testid="stPlotlyChart"] > div {
+        max-height: 300px !important;
+        overflow: hidden !important;
+    }
+
+    /* Section headers */
+    .section-header {
+        font-size: 0.95rem !important;
+        margin: 12px 0 6px !important;
+    }
+
+    /* Info tooltips — compact on mobile */
+    .info-tt .info-popup {
+        max-width: 260px !important;
+        font-size: 0.75rem !important;
+        left: -100px !important;
+    }
+
+    /* Headings */
+    h1 { font-size: 1.4rem !important; }
+    h2 { font-size: 1.05rem !important; }
+    h3 { font-size: 0.9rem !important; }
+
+    /* Period badge — compact */
+    [data-testid="stMarkdown"] span[style*="border-radius:20px"] {
+        font-size: 0.7rem !important;
+        padding: 4px 10px !important;
+    }
+
+    /* "Подробнее" buttons — minimal */
+    .stButton > button[kind="secondary"] {
+        font-size: 0.6rem !important;
+        padding: 1px 6px !important;
+    }
+
+    /* Plotly charts — allow horizontal scroll */
+    [data-testid="stPlotlyChart"] {
+        overflow-x: auto !important;
+    }
+}
+
+/* Tablet tweaks */
+@media (max-width: 1024px) and (min-width: 641px) {
+    .metrics-row {
+        flex-wrap: wrap !important;
+    }
+    .metric-box {
+        flex: 1 1 calc(50% - 6px) !important;
+    }
+    [data-testid="stHorizontalBlock"] {
+        flex-wrap: wrap !important;
+    }
+}
+
 </style>
 ''', unsafe_allow_html=True)
 
@@ -642,7 +797,7 @@ if page == "🌡️ Обзор":
         _pill_cols = st.columns(len(_period_names))
         for _pi, _pname in enumerate(_period_names):
             with _pill_cols[_pi]:
-                if st.button(_pname, key=f"period_{_pi}", use_container_width=True,
+                if st.button(_pname, key=f"period_{_pi}",
                              type="primary" if _pi == st.session_state.overview_period_idx else "secondary"):
                     st.session_state.overview_period_idx = _pi
                     st.rerun()
