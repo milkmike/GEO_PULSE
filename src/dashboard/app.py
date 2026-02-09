@@ -607,6 +607,13 @@ button[kind=headerNoPadding] { display: none !important; }
         position: relative !important;
     }
 
+    /* DataFrames — horizontal scroll on mobile */
+    [data-testid="stDataFrame"] {
+        overflow-x: auto !important;
+        overflow: visible !important;
+        -webkit-overflow-scrolling: touch !important;
+    }
+
     /* Section headers */
     .section-header { font-size: 0.95rem !important; margin: 12px 0 6px !important; }
 
