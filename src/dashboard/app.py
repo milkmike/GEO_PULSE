@@ -484,21 +484,22 @@ button[kind=headerNoPadding] { display: none !important; }
 
 /* ========== MOBILE RESPONSIVE ========== */
 @media (max-width: 640px) {
-    /* Reduce main padding */
+    /* Main padding */
     .block-container {
         padding-top: 0.5rem !important;
         padding-left: 0.5rem !important;
         padding-right: 0.5rem !important;
     }
 
-    /* Nav tabs — horizontal scroll, single line, no wrap */
+    /* NAV TABS — force single-line horizontal scroll */
     .stRadio > div {
         flex-wrap: nowrap !important;
-        overflow-x: auto !important;
+        overflow-x: scroll !important;
         -webkit-overflow-scrolling: touch !important;
         gap: 0 !important;
         padding-bottom: 4px !important;
         scrollbar-width: none !important;
+        max-width: 100vw !important;
     }
     .stRadio > div::-webkit-scrollbar { display: none !important; }
     .stRadio > div > label[data-baseweb="radio"] {
@@ -508,13 +509,7 @@ button[kind=headerNoPadding] { display: none !important; }
         flex-shrink: 0 !important;
     }
 
-    
-    /* Period button columns — force inline row on mobile */
-    [data-testid="stHorizontalBlock"] [data-testid="stColumn"] .stButton > button {
-        width: auto !important;
-        display: inline-block !important;
-    }
-    /* Force columns to be inline (shrink to content) */
+    /* ALL columns — wrap and shrink */
     [data-testid="stHorizontalBlock"] {
         flex-wrap: wrap !important;
         gap: 4px 6px !important;
@@ -526,30 +521,27 @@ button[kind=headerNoPadding] { display: none !important; }
         min-width: 0 !important;
     }
 
-    /* ALL st.columns — wrap instead of stack (keeps period btns inline) */
-    [data-testid="stHorizontalBlock"] {
-        flex-wrap: wrap !important;
-        gap: 4px !important;
-    }
-    
-    /* Period buttons — small inline pills, NOT full-width */
+    /* Period buttons — small pills, no text wrap */
     .stButton > button {
         font-size: 0.65rem !important;
-        padding: 4px 12px !important;
-        min-height: 26px !important;
+        padding: 4px 10px !important;
+        min-height: 24px !important;
         line-height: 1.2 !important;
+        width: auto !important;
+        white-space: nowrap !important;
     }
     .stButton > button[kind="primary"] {
         font-size: 0.65rem !important;
         padding: 4px 12px !important;
-    }
-    /* Make period columns shrink to fit content */
-    [data-testid="stColumn"] {
         width: auto !important;
-        flex: 0 1 auto !important;
+    }
+    .stButton > button[kind="secondary"] {
+        font-size: 0.6rem !important;
+        padding: 1px 6px !important;
+        width: auto !important;
     }
 
-    /* Metrics row — 2x2 grid */
+    /* Metrics — 2x2 grid */
     .metrics-row {
         flex-wrap: wrap !important;
         gap: 6px !important;
@@ -559,75 +551,92 @@ button[kind=headerNoPadding] { display: none !important; }
         min-width: calc(50% - 4px) !important;
         padding: 10px 8px !important;
     }
-    .metric-value {
-        font-size: 1.15rem !important;
-    }
-    .metric-label {
-        font-size: 0.62rem !important;
+    .metric-value { font-size: 1.15rem !important; }
+    .metric-label { font-size: 0.62rem !important; }
+
+    /* Country cards */
+    .country-card { padding: 12px !important; }
+    .temp-value { font-size: 1.5rem !important; }
+
+    /* Digest columns — full width on mobile */
+    [data-testid="stHorizontalBlock"]:has(.digest-card) > [data-testid="stColumn"],
+    [data-testid="stHorizontalBlock"]:has(.country-card) > [data-testid="stColumn"] {
+        flex: 1 1 100% !important;
+        width: 100% !important;
     }
 
-    /* Country cards — full width */
-    .country-card {
-        padding: 12px !important;
-    }
-    .temp-value {
-        font-size: 1.5rem !important;
-    }
-
-    /* Digest cards — full width stack */
+    /* DIGEST CARDS — force word-wrap, prevent horizontal overflow */
     .digest-card {
-        padding: 14px !important;
-        font-size: 0.85rem !important;
-        line-height: 1.6 !important;
+        padding: 12px !important;
+        font-size: 0.82rem !important;
+        line-height: 1.55 !important;
+        word-wrap: break-word !important;
+        overflow-wrap: break-word !important;
+        max-width: 100% !important;
+        overflow-x: hidden !important;
+    }
+    .digest-card p {
+        word-wrap: break-word !important;
+        overflow-wrap: break-word !important;
+    }
+    .digest-card a {
+        word-break: break-all !important;
     }
 
-    /* Map — limit height so it doesn't dominate */
-    [data-testid="stPlotlyChart"] > div {
-        max-height: 300px !important;
+    /* ALL markdown containers — prevent overflow */
+    [data-testid="stMarkdown"] {
+        max-width: 100% !important;
+        overflow-x: hidden !important;
+        word-wrap: break-word !important;
+    }
+    [data-testid="stMarkdown"] div,
+    [data-testid="stMarkdown"] p {
+        max-width: 100% !important;
+        overflow-wrap: break-word !important;
+        word-wrap: break-word !important;
+    }
+
+    /* Plotly map — crop empty space from top on mobile */
+    [data-testid="stPlotlyChart"] {
+        max-height: 260px !important;
         overflow: hidden !important;
+        position: relative !important;
+    }
+    [data-testid="stPlotlyChart"] > div {
+        margin-top: -180px !important;
+        position: relative !important;
     }
 
     /* Section headers */
-    .section-header {
-        font-size: 0.95rem !important;
-        margin: 12px 0 6px !important;
-    }
+    .section-header { font-size: 0.95rem !important; margin: 12px 0 6px !important; }
 
-    /* Info tooltips — compact on mobile */
-    .info-tt .info-popup {
-        max-width: 260px !important;
-        font-size: 0.75rem !important;
-        left: -100px !important;
-    }
+    /* Info tooltips */
+    .info-tt .info-popup { max-width: 260px !important; font-size: 0.75rem !important; }
 
     /* Headings */
     h1 { font-size: 1.4rem !important; }
     h2 { font-size: 1.05rem !important; }
     h3 { font-size: 0.9rem !important; }
 
-    /* Period badge — compact */
+    /* Period badge */
     [data-testid="stMarkdown"] span[style*="border-radius:20px"] {
         font-size: 0.7rem !important;
         padding: 4px 10px !important;
     }
 
-    /* "Подробнее" buttons — minimal */
-    .stButton > button[kind="secondary"] {
-        font-size: 0.6rem !important;
-        padding: 1px 6px !important;
-    }
-
-    /* Plotly charts — allow horizontal scroll */
-    [data-testid="stPlotlyChart"] {
-        overflow-x: auto !important;
+    /* Force body no horizontal scroll */
+    body, html, [data-testid="stAppViewContainer"] {
+        overflow-x: hidden !important;
+        max-width: 100vw !important;
     }
 }
 
 /* Tablet tweaks */
 @media (max-width: 1024px) and (min-width: 641px) {
-    .metrics-row {
-        flex-wrap: wrap !important;
-    }
+    .metrics-row { flex-wrap: wrap !important; }
+    .metric-box { flex: 1 1 calc(50% - 6px) !important; }
+    [data-testid="stHorizontalBlock"] { flex-wrap: wrap !important; }
+}
     .metric-box {
         flex: 1 1 calc(50% - 6px) !important;
     }
@@ -791,18 +800,16 @@ if page == "🌡️ Обзор":
     if "overview_period_idx" not in st.session_state:
         st.session_state.overview_period_idx = 1  # default: Месяц
 
-    # Combined row: period pills (left) + view toggle (right)
-    _ctrl_left, _ctrl_right = st.columns([3, 1])
-    with _ctrl_left:
-        _pill_cols = st.columns(len(_period_names))
-        for _pi, _pname in enumerate(_period_names):
-            with _pill_cols[_pi]:
-                if st.button(_pname, key=f"period_{_pi}",
-                             type="primary" if _pi == st.session_state.overview_period_idx else "secondary"):
-                    st.session_state.overview_period_idx = _pi
-                    st.rerun()
-    with _ctrl_right:
-        _view = st.radio("Вид", ["Термометр", "Связи"], horizontal=True, label_visibility="collapsed")
+    # Period pills row
+    _pill_cols = st.columns(len(_period_names))
+    for _pi, _pname in enumerate(_period_names):
+        with _pill_cols[_pi]:
+            if st.button(_pname, key=f"period_{_pi}",
+                         type="primary" if _pi == st.session_state.overview_period_idx else "secondary"):
+                st.session_state.overview_period_idx = _pi
+                st.rerun()
+    # View toggle
+    _view = st.radio("Вид", ["Термометр", "Связи"], horizontal=True, label_visibility="collapsed")
 
     _selected_period = _period_names[st.session_state.overview_period_idx]
     _period_days = PERIOD_OPTIONS[_selected_period]
@@ -990,7 +997,16 @@ if page == "🌡️ Обзор":
 
         fig = go.Figure()
 
-        # Russia shown as subtle reference (no choropleth — avoids stretching bounds)
+        # Russia — subtle light-gray fill
+        fig.add_trace(go.Choropleth(
+            locations=["RUS"],
+            z=[0],
+            colorscale=[[0, '#252530'], [1, '#252530']],
+            showscale=False,
+            marker_line_color='rgba(255,255,255,0.08)',
+            marker_line_width=0.8,
+            hovertemplate="<b>🇷🇺 Россия</b><br>Опорная точка<extra></extra>",
+        ))
 
         # Countries with data — rich hover
         if not df_data.empty:
@@ -1144,13 +1160,13 @@ if page == "🌡️ Обзор":
         fig.update_geos(
             projection_type="equirectangular",
             center=dict(lat=45, lon=52),
-            lataxis_range=[35, 57],
+            lataxis_range=[36, 56],
             lonaxis_range=[24, 80],
             bgcolor='rgba(0,0,0,0)',
             showcoastlines=True,
             coastlinecolor='rgba(255,255,255,0.06)',
             showland=True,
-            landcolor='#0f0f18',
+            landcolor='#141420',
             showocean=True,
             oceancolor='#080810',
             showcountries=True,
