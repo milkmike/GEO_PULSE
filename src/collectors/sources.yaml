@@ -1,0 +1,125 @@
+countries:
+  KZ:
+    name: Казахстан
+    sources:
+      - name: Tengrinews.kz
+        type: web
+        url: https://tengrinews.kz
+        weight: 1.5
+        language: ru
+      - name: Informburo.kz
+        type: web
+        url: https://informburo.kz
+        weight: 1.2
+        language: ru
+      - name: Zakon.kz
+        type: web
+        url: https://www.zakon.kz
+        weight: 1.0
+        language: ru
+
+  AM:
+    name: Армения
+    sources:
+      - name: News.am
+        type: rss
+        url: https://news.am/rus/rss/
+        weight: 1.0
+        language: ru
+      - name: CivilNet.am
+        type: rss
+        url: https://www.civilnet.am/ru/feed
+        weight: 1.3
+        language: ru
+
+  UZ:
+    name: Узбекистан
+    sources:
+      - name: Gazeta.uz
+        type: rss
+        url: https://www.gazeta.uz/ru/rss/
+        weight: 1.3
+        language: ru
+      - name: Kun.uz
+        type: web
+        url: https://kun.uz/ru
+        weight: 1.0
+        language: ru
+
+  KG:
+    name: Кыргызстан
+    sources:
+      - name: Kloop.kg
+        type: rss
+        url: https://kloop.kg/feed/
+        weight: 1.2
+        language: ru
+      - name: 24.kg
+        type: rss
+        url: https://24.kg/rss/
+        weight: 1.0
+        language: ru
+
+  TJ:
+    name: Таджикистан
+    sources:
+      - name: Asia-Plus
+        type: web
+        url: https://asiaplustj.info/ru
+        weight: 1.3
+        language: ru
+
+  TM:
+    name: Туркменистан
+    sources:
+      - name: Turkmen.news
+        type: web
+        url: https://turkmen.news/ru/
+        weight: 1.5
+        language: ru
+
+  AZ:
+    name: Азербайджан
+    sources:
+      - name: Caliber.az
+        type: web
+        url: https://caliber.az/ru/
+        weight: 1.0
+        language: ru
+      - name: Haqqin.az
+        type: web
+        url: https://haqqin.az
+        weight: 1.0
+        language: ru
+
+  GE:
+    name: Грузия
+    sources:
+      - name: Civil.ge
+        type: rss
+        url: https://civil.ge/ru/feed
+        weight: 1.3
+        language: ru
+
+  MD:
+    name: Молдова
+    sources:
+      - name: NewsMaker.md
+        type: rss
+        url: https://newsmaker.md/feed/
+        weight: 1.3
+        language: ru
+
+  BY:
+    name: Беларусь
+    sources:
+      - name: Zerkalo.io
+        type: web
+        url: https://news.zerkalo.io
+        weight: 1.3
+        language: ru
+      - name: BelTA
+        type: rss
+        url: https://belta.by/rss/
+        weight: 0.8
+        language: ru
