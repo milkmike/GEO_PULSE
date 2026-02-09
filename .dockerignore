@@ -1,0 +1,7 @@
+.git
+__pycache__
+*.pyc
+.env.local
+data/experiments
+data/ground_truth
+tests

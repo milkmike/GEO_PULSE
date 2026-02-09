@@ -1,0 +1,159 @@
+"""NLP analysis pipeline. Processes unanalyzed articles with parallel requests."""
+import argparse
+import logging
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+from sqlalchemy import text
+
+from src.config import OPENROUTER_API_KEY
+from src.db import get_session, wait_for_db, Analysis
+from src.pipeline.filter import is_relevant
+from src.pipeline.sentiment import analyze_sentiment
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+)
+logger = logging.getLogger("analyzer")
+
+MAX_WORKERS = 5
+
+
+def _analyze_one(row) -> dict | None:
+    """Analyze a single article. Returns dict to save or None."""
+    title = row.title or ""
+    body = row.body or ""
+
+    # Step 1: Keyword filter (free)
+    relevant = is_relevant(title, body)
+
+    if not relevant:
+        return {
+            "article_id": row.id,
+            "is_relevant": False,
+            "relevance_score": 0.0,
+        }
+
+    # Step 2: LLM sentiment analysis
+    if OPENROUTER_API_KEY:
+        try:
+            result = analyze_sentiment(
+                title=title,
+                body=body,
+                source_name=row.source_name,
+                country_code=row.country_code,
+            )
+            if result:
+                logger.info(
+                    f"  [{row.country_code}] {title[:60]}... → "
+                    f"sentiment={result['sentiment']}, type={result['event_type']}, "
+                    f"action={result['action_level']}"
+                )
+                time.sleep(0.3)  # rate limit
+                return {
+                    "article_id": row.id,
+                    "is_relevant": True,
+                    "relevance_score": 1.0,
+                    "sentiment": result["sentiment"],
+                    "sentiment_confidence": result["confidence"],
+                    "event_type": result["event_type"],
+                    "action_level": result["action_level"],
+                    "model_used": result["model_used"],
+                    "prompt_version": result["prompt_version"],
+                    "event_key": result.get("event_key", ""),
+                    "raw_response": result["raw_response"],
+                }
+        except Exception as e:
+            logger.error(f"  LLM analysis failed for article {row.id}: {e}")
+
+    # Fallback
+    return {
+        "article_id": row.id,
+        "is_relevant": True,
+        "relevance_score": 0.8,
+        "model_used": "keyword_filter",
+        "prompt_version": "v1.1",
+    }
+
+
+def analyze_new_articles(batch_size: int = 100):
+    """Find and analyze articles that haven't been processed yet."""
+    with get_session() as session:
+        rows = session.execute(
+            text("""
+                SELECT ar.id, ar.title, ar.body, ar.source_id,
+                       s.name as source_name, s.country_code, s.weight
+                FROM articles ar
+                JOIN sources s ON ar.source_id = s.id
+                LEFT JOIN analysis an ON an.article_id = ar.id
+                WHERE an.id IS NULL AND ar.is_duplicate = FALSE
+                ORDER BY ar.collected_at DESC
+                LIMIT :batch
+            """),
+            {"batch": batch_size},
+        ).fetchall()
+
+    if not rows:
+        logger.info("No new articles to analyze")
+        return 0
+
+    logger.info(f"Analyzing {len(rows)} new articles (parallel workers: {MAX_WORKERS})...")
+
+    results = []
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        future_to_row = {executor.submit(_analyze_one, row): row for row in rows}
+        for future in as_completed(future_to_row):
+            try:
+                result = future.result()
+                if result:
+                    results.append(result)
+            except Exception as e:
+                row = future_to_row[future]
+                logger.error(f"  Worker error for article {row.id}: {e}")
+
+    # Save all results
+    saved = 0
+    with get_session() as session:
+        for r in results:
+            try:
+                analysis = Analysis(**r)
+                session.add(analysis)
+                saved += 1
+            except Exception as e:
+                logger.error(f"  Save error for article {r['article_id']}: {e}")
+
+    logger.info(f"Analyzed {saved}/{len(rows)} articles")
+    return saved
+
+
+def main():
+    parser = argparse.ArgumentParser(description="CIS Thermometer Analyzer")
+    parser.add_argument("--loop", action="store_true", help="Run continuously")
+    parser.add_argument("--interval", type=int, default=60, help="Loop interval in seconds")
+    parser.add_argument("--batch", type=int, default=100, help="Batch size")
+    args = parser.parse_args()
+
+    wait_for_db()
+
+    if not OPENROUTER_API_KEY:
+        logger.warning("⚠️  OPENROUTER_API_KEY not set! Sentiment analysis will be skipped.")
+
+    if args.loop:
+        logger.info(f"Starting analyzer loop (interval: {args.interval}s, batch: {args.batch})")
+        while True:
+            try:
+                processed = analyze_new_articles(args.batch)
+                # If we processed a full batch, there might be more - run again quickly
+                if processed >= args.batch:
+                    logger.info("Full batch processed, running again immediately...")
+                    continue
+            except Exception as e:
+                logger.error(f"Analysis error: {e}", exc_info=True)
+            time.sleep(args.interval)
+    else:
+        analyze_new_articles(args.batch)
+
+
+if __name__ == "__main__":
+    main()
