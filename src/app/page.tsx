@@ -124,66 +124,53 @@ export default function OverviewPage() {
       {/* Stats cards */}
       <StatsCards stats={stats} loading={loading} />
 
-      {/* Top threads */}
+      {/* Top threads — two columns */}
       {topThreads.length > 0 && (
-        <div className="space-y-4">
-          {/* Hero thread */}
+        <div className="grid gap-4 md:grid-cols-2">
+          {/* Left: Hero thread */}
           {topThreads[0] && (
-            <div>
-              <SectionHeader
-                icon="🔥"
-                title="Главный сюжет"
-                description="Самый значимый активный сюжет по совокупности факторов"
-                infoTitle="Сюжеты"
-                infoContent={glossary.threads.detail}
-              />
-              <Link href={`/threads/${topThreads[0].id}`}>
-                <div className="mt-3 rounded-xl border border-red-500/20 bg-gradient-to-r from-red-500/5 to-transparent p-5 hover:border-red-500/40 transition-all cursor-pointer">
-                  <div className="flex items-center gap-2 mb-2">
-                    <span className="text-sm">{COUNTRY_FLAGS[topThreads[0].country_code]}</span>
-                    <span className="text-xs text-muted-foreground">{topThreads[0].country_name}</span>
-                    <Badge variant="outline" className="text-[10px]">★ {topThreads[0].importance_score.toFixed(0)}</Badge>
-                    <Badge variant="outline" className="text-[10px]">📰 {topThreads[0].article_count} статей</Badge>
-                  </div>
-                  <h3 className="text-xl font-bold hover:text-blue-400 transition-colors">{topThreads[0].title}</h3>
-                  {topThreads[0].narrative && (
-                    <p className="mt-2 text-sm text-muted-foreground line-clamp-2">{topThreads[0].narrative}</p>
-                  )}
+            <Link href={`/threads/${topThreads[0].id}`}>
+              <div className="rounded-xl border border-red-500/15 bg-gradient-to-br from-red-500/5 to-transparent p-5 hover:border-red-500/30 transition-all cursor-pointer h-full">
+                <div className="flex items-center gap-2 mb-3">
+                  <span className="text-[10px] font-semibold tracking-widest uppercase text-red-400/70">🔥 Главный сюжет</span>
                 </div>
-              </Link>
-            </div>
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="text-sm">{COUNTRY_FLAGS[topThreads[0].country_code]}</span>
+                  <span className="text-xs text-muted-foreground">{topThreads[0].country_name}</span>
+                  <Badge variant="outline" className="text-[10px]">★ {topThreads[0].importance_score.toFixed(0)}</Badge>
+                  <Badge variant="outline" className="text-[10px]">📰 {topThreads[0].article_count}</Badge>
+                </div>
+                <h3 className="text-lg font-bold hover:text-blue-400 transition-colors leading-snug">{topThreads[0].title}</h3>
+                {topThreads[0].narrative && (
+                  <p className="mt-2 text-xs text-muted-foreground line-clamp-3">{topThreads[0].narrative}</p>
+                )}
+              </div>
+            </Link>
           )}
 
-          {/* Focus threads */}
+          {/* Right: Focus threads stacked */}
           {topThreads.length > 1 && (
-            <div>
-              <SectionHeader
-                icon="🎯"
-                title="В фокусе"
-                description="Следующие по значимости сюжеты"
-                infoTitle="Importance Score"
-                infoContent={glossary.importanceScore.detail}
-              />
-              <div className="mt-3 grid gap-3 md:grid-cols-3">
-                {topThreads.slice(1, 4).map((thread) => (
-                  <Link key={thread.id} href={`/threads/${thread.id}`}>
-                    <div className="rounded-lg border border-white/8 p-4 hover:border-white/20 transition-all cursor-pointer h-full">
-                      <div className="flex items-center gap-2 mb-2">
-                        <span className="text-sm">{COUNTRY_FLAGS[thread.country_code]}</span>
-                        <span className="text-xs text-muted-foreground">{thread.country_name}</span>
-                        <span className="text-xs text-muted-foreground ml-auto">★ {thread.importance_score.toFixed(0)}</span>
-                      </div>
-                      <h4 className="font-semibold text-sm hover:text-blue-400 transition-colors line-clamp-2">{thread.title}</h4>
-                      <div className="mt-2 flex gap-2 text-xs text-muted-foreground">
-                        <span>📰 {thread.article_count}</span>
-                        <span style={{ color: thread.avg_sentiment > 0.05 ? "#22c55e" : thread.avg_sentiment < -0.05 ? "#ef4444" : "#eab308" }}>
-                          💬 {thread.avg_sentiment.toFixed(2)}
-                        </span>
+            <div className="space-y-2">
+              <span className="text-[10px] font-semibold tracking-widest uppercase text-white/30 px-1">🎯 В фокусе</span>
+              {topThreads.slice(1, 4).map((thread) => (
+                <Link key={thread.id} href={`/threads/${thread.id}`}>
+                  <div className="rounded-lg border border-white/[0.06] p-3 hover:border-white/15 transition-all cursor-pointer">
+                    <div className="flex items-start gap-3">
+                      <span className="text-sm mt-0.5 shrink-0">{COUNTRY_FLAGS[thread.country_code]}</span>
+                      <div className="min-w-0 flex-1">
+                        <h4 className="font-medium text-sm hover:text-blue-400 transition-colors line-clamp-1">{thread.title}</h4>
+                        <div className="mt-1 flex gap-3 text-[11px] text-muted-foreground">
+                          <span>★ {thread.importance_score.toFixed(0)}</span>
+                          <span>📰 {thread.article_count}</span>
+                          <span style={{ color: thread.avg_sentiment > 0.05 ? "#22c55e" : thread.avg_sentiment < -0.05 ? "#ef4444" : "#eab308" }}>
+                            💬 {thread.avg_sentiment.toFixed(2)}
+                          </span>
+                        </div>
                       </div>
                     </div>
-                  </Link>
-                ))}
-              </div>
+                  </div>
+                </Link>
+              ))}
             </div>
           )}
         </div>
