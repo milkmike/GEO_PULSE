@@ -13,6 +13,8 @@ import UNVotesChart from "@/components/UNVotesChart";
 import TradeChart from "@/components/TradeChart";
 import InfoPopover from "@/components/InfoPopover";
 import { glossary } from "@/lib/glossary";
+import Link from "next/link";
+import SectionHeader from "@/components/SectionHeader";
 import {
   getCountries,
   getCountryEvents,
@@ -20,6 +22,7 @@ import {
   getCountryTemperature,
   getCountryUNVotes,
   getCountryTrade,
+  getCountryThreads,
   getSources,
   PERIOD_DAYS,
   type Country,
@@ -29,6 +32,7 @@ import {
   type TemperaturePoint,
   type UNVoteYear,
   type TradeYear,
+  type Thread,
   temperatureColor,
   trendIcon,
   formatDate,
@@ -105,8 +109,9 @@ export default function CountryPage() {
   const [typeFilter, setTypeFilter] = useState<string | null>(null);
   const [tierFilter, setTierFilter] = useState<string | null>(null);
   const [sourceTierMap, setSourceTierMap] = useState<Record<string, string>>({});
+  const [threads, setThreads] = useState<Thread[]>([]);
 
-  // Load country info + UN votes + trade once
+  // Load country info + UN votes + trade + threads once
   useEffect(() => {
     getCountries(365).then((d) => {
       const c = d.countries.find((c) => c.code === code);
@@ -118,6 +123,9 @@ export default function CountryPage() {
     getCountryTrade(code)
       .then((r) => setTradeData(r.data || []))
       .catch(() => setTradeData([]));
+    getCountryThreads(code, { limit: 10 })
+      .then((r) => setThreads(r.threads || []))
+      .catch(() => setThreads([]));
     getSources()
       .then((r) => {
         const map: Record<string, string> = {};
@@ -302,6 +310,147 @@ export default function CountryPage() {
           </CardContent>
         </Card>
       )}
+
+      {/* Threads / storylines */}
+      {threads.length > 0 && (() => {
+        const PHASE_CFG: Record<string, { emoji: string; color: string; label: string }> = {
+          emerging:   { emoji: "🌱", color: "#3b82f6", label: "Зарождение" },
+          escalating: { emoji: "📈", color: "#f59e0b", label: "Эскалация" },
+          peak:       { emoji: "🔥", color: "#ef4444", label: "Пик" },
+          cooling:    { emoji: "❄️", color: "#06b6d4", label: "Затухание" },
+          resolved:   { emoji: "✅", color: "#22c55e", label: "Завершён" },
+        };
+        const PHASE_ORDER = ["emerging", "escalating", "peak", "cooling", "resolved"];
+
+        const sorted = [...threads].sort((a, b) => b.importance_score - a.importance_score);
+        const hero = sorted[0];
+        const rest = sorted.slice(1, 6);
+        const heroPhase = PHASE_CFG[hero.arc_phase] || PHASE_CFG.emerging;
+
+        return (
+          <div className="space-y-4">
+            <SectionHeader
+              icon="🧵"
+              title={`Сюжеты (${threads.length})`}
+              description="Ключевые сюжетные линии по этой стране — от зарождения до завершения"
+              infoTitle="Сюжеты"
+              infoContent={glossary.threads.detail}
+            />
+
+            {/* Hero thread */}
+            <Link href={`/threads/${hero.id}`}>
+              <div
+                className="rounded-xl border-2 p-5 hover:brightness-110 transition-all cursor-pointer"
+                style={{
+                  borderColor: heroPhase.color + "33",
+                  background: `linear-gradient(135deg, ${heroPhase.color}08 0%, rgba(10,10,15,0.95) 60%)`,
+                }}
+              >
+                <div className="flex flex-wrap items-center gap-2 mb-2">
+                  <span
+                    className="text-xs px-2 py-0.5 rounded-full font-semibold"
+                    style={{ backgroundColor: heroPhase.color + "22", color: heroPhase.color }}
+                  >
+                    {heroPhase.emoji} {heroPhase.label}
+                  </span>
+                  <Badge variant="outline" className="text-[10px]">★ {hero.importance_score.toFixed(0)}</Badge>
+                  <Badge variant="outline" className="text-[10px]">📰 {hero.article_count} статей</Badge>
+                  {(hero as any).velocity > 1 && (
+                    <span className="text-xs text-orange-400">⚡ {((hero as any).velocity).toFixed(1)} ст/день</span>
+                  )}
+                </div>
+                <h3 className="text-xl font-bold hover:text-blue-400 transition-colors">{hero.title}</h3>
+                {/* Arc bar */}
+                <div className="flex gap-1 my-3">
+                  {PHASE_ORDER.map((p, i) => (
+                    <div
+                      key={p}
+                      className="flex-1 rounded-full h-1.5"
+                      style={{
+                        backgroundColor: i <= PHASE_ORDER.indexOf(hero.arc_phase)
+                          ? (PHASE_CFG[p]?.color || "#555")
+                          : "rgba(255,255,255,0.06)",
+                      }}
+                    />
+                  ))}
+                </div>
+                <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
+                  <span style={{ color: hero.avg_sentiment > 0.05 ? "#22c55e" : hero.avg_sentiment < -0.05 ? "#ef4444" : "#eab308" }}>
+                    💬 Sentiment: {hero.avg_sentiment.toFixed(2)}
+                  </span>
+                  <span>⚡ Макс. уровень: {hero.max_action_level}</span>
+                  <span>{formatDate(hero.first_seen)} → {formatDate(hero.last_seen)}</span>
+                </div>
+                {hero.narrative && (
+                  <p className="mt-3 text-sm text-muted-foreground line-clamp-2">{hero.narrative}</p>
+                )}
+              </div>
+            </Link>
+
+            {/* Rest of threads */}
+            {rest.length > 0 && (
+              <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+                {rest.map((thread) => {
+                  const phase = PHASE_CFG[thread.arc_phase] || PHASE_CFG.emerging;
+                  return (
+                    <Link key={thread.id} href={`/threads/${thread.id}`}>
+                      <div
+                        className="rounded-lg border p-4 hover:border-white/20 transition-all cursor-pointer h-full"
+                        style={{ borderColor: phase.color + "20" }}
+                      >
+                        <div className="flex items-center gap-2 mb-2">
+                          <span
+                            className="text-[10px] px-1.5 py-0.5 rounded-full"
+                            style={{ backgroundColor: phase.color + "22", color: phase.color }}
+                          >
+                            {phase.emoji} {phase.label}
+                          </span>
+                          <span className="text-xs text-muted-foreground ml-auto">★ {thread.importance_score.toFixed(0)}</span>
+                        </div>
+                        <h4 className="font-semibold text-sm hover:text-blue-400 transition-colors line-clamp-2">{thread.title}</h4>
+                        {/* Mini arc bar */}
+                        <div className="flex gap-0.5 my-2">
+                          {PHASE_ORDER.map((p, i) => (
+                            <div
+                              key={p}
+                              className="flex-1 rounded-full h-1"
+                              style={{
+                                backgroundColor: i <= PHASE_ORDER.indexOf(thread.arc_phase)
+                                  ? (PHASE_CFG[p]?.color || "#555")
+                                  : "rgba(255,255,255,0.06)",
+                              }}
+                            />
+                          ))}
+                        </div>
+                        <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+                          <span>📰 {thread.article_count}</span>
+                          <span style={{ color: thread.avg_sentiment > 0.05 ? "#22c55e" : thread.avg_sentiment < -0.05 ? "#ef4444" : "#eab308" }}>
+                            💬 {thread.avg_sentiment.toFixed(2)}
+                          </span>
+                          <span>{formatDate(thread.last_seen)}</span>
+                        </div>
+                        {thread.narrative && (
+                          <p className="mt-2 text-xs text-muted-foreground line-clamp-2">{thread.narrative}</p>
+                        )}
+                      </div>
+                    </Link>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Link to full threads page filtered by country */}
+            <div className="text-center">
+              <Link
+                href={`/threads`}
+                className="text-xs text-blue-400 hover:text-blue-300 transition-colors"
+              >
+                Все сюжеты на странице «Сюжеты» →
+              </Link>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Temperature Chart */}
       <Card className="border-border bg-card">
