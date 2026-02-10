@@ -146,33 +146,48 @@ export default function V2DashboardPage() {
       <div className="rounded-lg border border-border bg-card p-5">
         <h2 className="mb-3 text-lg font-semibold">⚡ Pipeline</h2>
         {pipeline ? (
-          pipeline.redis_available ? (
-            <div className="grid gap-4 sm:grid-cols-4">
+          !pipeline.error ? (
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-6">
               <div>
-                <div className="text-xs text-muted-foreground">Очередь</div>
-                <div className="text-xl font-bold text-blue-400">{pipeline.queue_size ?? 0}</div>
+                <div className="text-xs text-muted-foreground">Ожидают сбора</div>
+                <div className="text-xl font-bold text-blue-400">{(pipeline as any).raw_articles_pending ?? 0}</div>
               </div>
               <div>
-                <div className="text-xs text-muted-foreground">Обработка</div>
-                <div className="text-xl font-bold text-green-400">{pipeline.processing ?? 0}</div>
+                <div className="text-xs text-muted-foreground">Ожидают анализа</div>
+                <div className="text-xl font-bold text-yellow-400">{(pipeline as any).analyzed_pending ?? 0}</div>
               </div>
               <div>
                 <div className="text-xs text-muted-foreground">Dead Letters</div>
-                <div className="text-xl font-bold text-red-400">{pipeline.dead_letters ?? 0}</div>
+                <div className="text-xl font-bold text-red-400">{(pipeline as any).dead_letter ?? 0}</div>
               </div>
               <div>
-                <div className="text-xs text-muted-foreground">Avg время (мс)</div>
-                <div className="text-xl font-bold">{pipeline.avg_processing_time_ms?.toFixed(0) ?? "—"}</div>
+                <div className="text-xs text-muted-foreground">Проанализировано сегодня</div>
+                <div className="text-xl font-bold text-green-400">{(pipeline as any).analyzer_today_count ?? 0}</div>
+              </div>
+              <div>
+                <div className="text-xs text-muted-foreground">Последний сбор</div>
+                <div className="text-sm font-medium">
+                  {(pipeline as any).collector_last_run
+                    ? new Date((pipeline as any).collector_last_run).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })
+                    : "—"}
+                </div>
+              </div>
+              <div>
+                <div className="text-xs text-muted-foreground">Последний анализ</div>
+                <div className="text-sm font-medium">
+                  {(pipeline as any).analyzer_last_run
+                    ? new Date((pipeline as any).analyzer_last_run).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })
+                    : "—"}
+                </div>
               </div>
             </div>
           ) : (
             <div className="flex items-center gap-2 text-yellow-400">
               <span className="text-lg">⚠️</span>
               <div>
-                <div className="font-medium">Redis не подключен</div>
+                <div className="font-medium">Ошибка pipeline</div>
                 <div className="text-xs text-muted-foreground">
-                  Pipeline работает в fallback-режиме. Для полной v2 архитектуры нужен Redis.
-                  {pipeline.error && <span className="ml-1 text-red-400">({pipeline.error})</span>}
+                  {pipeline.error}
                 </div>
               </div>
             </div>
