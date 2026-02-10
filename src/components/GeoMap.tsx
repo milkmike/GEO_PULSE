@@ -120,10 +120,10 @@ export default function GeoMap({
         line: {
           color: countries.map((c) =>
             c.code === selectedCountry
-              ? "rgba(255,255,255,0.8)"
-              : "rgba(255,255,255,0.15)"
+              ? "rgba(255,255,255,0.9)"
+              : "rgba(255,255,255,0.35)"
           ),
-          width: countries.map((c) => (c.code === selectedCountry ? 2.5 : 0.5)),
+          width: countries.map((c) => (c.code === selectedCountry ? 3 : 1.2)),
         },
       },
     };
@@ -216,8 +216,7 @@ export default function GeoMap({
           oceancolor: "#09090b",
           showlakes: true,
           lakecolor: "#0c0c12",
-          showcountries: true,
-          countrycolor: "rgba(255,255,255,0.08)",
+          showcountries: false,
           showsubunits: false,
           bgcolor: "rgba(0,0,0,0)",
           center,
