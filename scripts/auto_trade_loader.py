@@ -181,8 +181,11 @@ def try_imf_dots() -> list[dict] | None:
             f"?startPeriod={current_year - 2}&endPeriod={current_year}"
         )
         try:
-            req = urllib.request.Request(url)
-            with urllib.request.urlopen(req, timeout=15) as resp:
+            req = urllib.request.Request(url, headers={
+                "User-Agent": "GeoPulse/1.0",
+                "Accept": "application/json",
+            })
+            with urllib.request.urlopen(req, timeout=60) as resp:
                 data = json.loads(resp.read())
 
             dataset = data.get("CompactData", {}).get("DataSet", {})

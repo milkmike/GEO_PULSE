@@ -33,13 +33,31 @@ LOCAL_PATH = "/tmp/un_agreement.csv"
 
 
 def download_data():
-    """Download agreement scores CSV if not present."""
-    if os.path.exists(LOCAL_PATH) and os.path.getsize(LOCAL_PATH) > 1000:
-        print(f"Using cached file: {LOCAL_PATH}")
-        return
+    """Download agreement scores CSV."""
     print(f"Downloading from {DATA_URL}...")
-    urllib.request.urlretrieve(DATA_URL, LOCAL_PATH)
-    print(f"Downloaded to {LOCAL_PATH}")
+    req = urllib.request.Request(DATA_URL, headers={
+        "User-Agent": "GeoPulse/1.0 (research; https://github.com/milkmike/GEO_PULSE)",
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            data = resp.read()
+            with open(LOCAL_PATH, "wb") as f:
+                f.write(data)
+        print(f"Downloaded {len(data)} bytes to {LOCAL_PATH}")
+    except Exception as e:
+        # Try with redirect following
+        import http.client
+        import ssl
+        print(f"Direct download failed ({e}), trying with redirect...")
+        req2 = urllib.request.Request(DATA_URL, headers={
+            "User-Agent": "Mozilla/5.0 (compatible; GeoPulse/1.0)",
+        })
+        opener = urllib.request.build_opener(urllib.request.HTTPRedirectHandler)
+        with opener.open(req2, timeout=60) as resp:
+            data = resp.read()
+            with open(LOCAL_PATH, "wb") as f:
+                f.write(data)
+        print(f"Downloaded {len(data)} bytes to {LOCAL_PATH}")
 
 
 def parse_data():
