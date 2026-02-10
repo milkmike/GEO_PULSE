@@ -23,7 +23,7 @@ OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 MODEL = "anthropic/claude-sonnet-4"
 
 # Clustering config
-TRGM_THRESHOLD = 0.35  # Lower threshold to catch more similar keys
+TRGM_THRESHOLD = 0.25  # Low threshold to catch near-duplicates (предлоги, падежи)
 MIN_ARTICLES_FOR_THREAD = 2
 MIN_IMPORTANCE = 3.0
 NARRATIVE_MIN_IMPORTANCE = 5.0
@@ -137,6 +137,32 @@ def fetch_articles(session, days: int = 30) -> list[dict]:
     return articles
 
 
+# ── Step 1.5: Normalize event keys ──────────────────────
+
+import re as _re
+
+# Russian stopwords/prepositions that cause false splits
+_STOPWORDS = {"в", "на", "и", "с", "о", "об", "из", "к", "по", "за", "для", "от", "до", "при", "про", "между"}
+
+# Transliteration normalization (common variants)
+_TRANSLIT_MAP = {
+    "вэнс": "вэнс", "венс": "вэнс", "vance": "вэнс",
+    "байден": "байден", "biden": "байден",
+    "трамп": "трамп", "trump": "трамп",
+}
+
+
+def normalize_event_key(key: str) -> str:
+    """Normalize event key: remove stopwords, unify transliterations."""
+    words = key.lower().strip().split()
+    normalized = []
+    for w in words:
+        w = _TRANSLIT_MAP.get(w, w)
+        if w not in _STOPWORDS and len(w) > 1:
+            normalized.append(w)
+    return " ".join(normalized)
+
+
 # ── Step 2: Two-pass clustering ─────────────────────────
 
 def cluster_pass1_trgm(session, articles: list[dict]) -> dict[str, list[dict]]:
@@ -153,8 +179,29 @@ def cluster_pass1_trgm(session, articles: list[dict]) -> dict[str, list[dict]]:
         if not unique_keys:
             continue
 
+        # Pre-merge: exact match after normalization
+        norm_map: dict[str, str] = {}  # normalized -> first original key
+        for k in unique_keys:
+            nk = normalize_event_key(k)
+            if nk not in norm_map:
+                norm_map[nk] = k
+
         # Build union-find via pg_trgm similarity
         parent: dict[str, str] = {k: k for k in unique_keys}
+
+        # Union keys with same normalized form
+        for nk, first_key in norm_map.items():
+            for k in unique_keys:
+                if normalize_event_key(k) == nk:
+                    # Union with the first key for this normalized form
+                    pass  # Will be handled by union below
+
+        # Pre-union: same normalized key → same cluster
+        for k in unique_keys:
+            nk = normalize_event_key(k)
+            canonical = norm_map[nk]
+            if canonical != k:
+                parent[k] = canonical
 
         def find(x):
             while parent[x] != x:
@@ -239,12 +286,20 @@ def cluster_pass2_llm(clusters: dict[str, list[dict]]) -> dict[str, list[dict]]:
 
         # Batch: send up to 30 clusters at a time
         summaries_text = "\n".join(
-            f"[{s['id']}] keys: {', '.join(s['keys'][:3])} | {s['count']} articles | \"{s['title'][:80]}\""
-            for s in summaries[:30]
+            f"[{s['id']}] keys: {', '.join(s['keys'][:5])} | {s['count']} articles | \"{s['title'][:120]}\""
+            for s in summaries[:40]
         )
 
         prompt = f"""Ты аналитик медиа. Ниже список кластеров новостей из страны {COUNTRY_NAMES.get(cc, cc)}.
 Найди кластеры которые описывают ОДИН И ТОТ ЖЕ сюжет и должны быть объединены.
+
+ВАЖНО: мержи если:
+- Один и тот же инцидент/событие, даже если заголовки сформулированы по-разному
+- Разные аспекты одного события (напр. "запрет въезда Х в Россию" и "Россия запретила въезд Х")
+- Одно и то же лицо/действие, но разные написания (Вэнс/Венс, Сабуров/Saburov)
+- Один сюжет с фокусом на разных странах (напр. "визит Вэнса в Армению" и "визит Вэнса в Армению и Азербайджан")
+
+НЕ мержи если это реально разные события, даже если про одну тему.
 
 Кластеры:
 {summaries_text}
