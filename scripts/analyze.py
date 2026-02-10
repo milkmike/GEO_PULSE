@@ -9,6 +9,7 @@ from sqlalchemy import text
 
 from src.config import OPENROUTER_API_KEY
 from src.db import get_session, wait_for_db, Analysis
+from src.embeddings import generate_embeddings_batch, prepare_embedding_text
 from src.pipeline.filter import is_relevant
 from src.pipeline.sentiment import analyze_sentiment
 
@@ -185,16 +186,23 @@ def analyze_new_articles(batch_size: int = 100):
 
     # Save all results
     saved = 0
+    saved_article_ids = []
     with get_session() as session:
         for r in results:
             try:
                 analysis = Analysis(**r)
                 session.add(analysis)
                 saved += 1
+                if r.get("is_relevant"):
+                    saved_article_ids.append(r["article_id"])
             except Exception as e:
                 logger.error(f"  Save error for article {r['article_id']}: {e}")
 
     logger.info(f"Analyzed {saved}/{len(rows)} articles")
+
+    # Generate embeddings for relevant articles
+    if saved_article_ids:
+        _generate_embeddings_for_articles(saved_article_ids, rows)
 
     # Update Redis stats
     if _redis_available:
@@ -206,6 +214,46 @@ def analyze_new_articles(batch_size: int = 100):
             pass
 
     return saved
+
+
+def _generate_embeddings_for_articles(article_ids: list[int], rows: list):
+    """Generate and save embeddings for a batch of articles."""
+    # Build id→row lookup
+    row_map = {r.id: r for r in rows}
+
+    texts = []
+    valid_ids = []
+    for aid in article_ids:
+        row = row_map.get(aid)
+        if row:
+            text_for_embed = prepare_embedding_text(
+                title=row.title or "",
+                body=row.body or "",
+                summary="",  # summary not always available at this point
+            )
+            if text_for_embed.strip():
+                texts.append(text_for_embed)
+                valid_ids.append(aid)
+
+    if not texts:
+        return
+
+    logger.info(f"Generating embeddings for {len(texts)} articles...")
+    embeddings = generate_embeddings_batch(texts)
+
+    embedded_count = 0
+    with get_session() as session:
+        for aid, emb in zip(valid_ids, embeddings):
+            if emb is not None:
+                # pgvector expects a list/string representation
+                emb_str = "[" + ",".join(str(x) for x in emb) + "]"
+                session.execute(
+                    text("UPDATE analysis SET embedding = :emb WHERE article_id = :aid"),
+                    {"emb": emb_str, "aid": aid},
+                )
+                embedded_count += 1
+
+    logger.info(f"Saved {embedded_count}/{len(texts)} embeddings")
 
 
 def main():

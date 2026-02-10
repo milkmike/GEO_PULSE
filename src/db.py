@@ -10,6 +10,11 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
+try:
+    from pgvector.sqlalchemy import Vector
+except ImportError:
+    Vector = None  # pgvector not installed — embedding column won't have type
+
 from src.config import DATABASE_URL
 
 logger = logging.getLogger(__name__)
@@ -71,6 +76,9 @@ class Analysis(Base):
     prompt_version = Column(String(20))
     raw_response = Column(JSONB)
     analyzed_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    # Embedding for semantic clustering (text-embedding-3-small, 1536 dims)
+    # Column managed via raw SQL (pgvector vector type)
+    entities = Column(JSONB)  # Future: extracted entities for Graphiti integration
 
 
 class Temperature(Base):

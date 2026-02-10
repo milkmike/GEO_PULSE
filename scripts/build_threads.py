@@ -23,7 +23,9 @@ OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 MODEL = "anthropic/claude-sonnet-4"
 
 # Clustering config
-TRGM_THRESHOLD = 0.25  # Low threshold to catch near-duplicates (предлоги, падежи)
+COSINE_THRESHOLD = 0.82       # Embedding similarity: auto-merge
+COSINE_MAYBE_THRESHOLD = 0.72 # Embedding similarity: send to LLM judge
+TRGM_THRESHOLD = 0.25         # Fallback for articles without embeddings
 MIN_ARTICLES_FOR_THREAD = 2
 MIN_IMPORTANCE = 3.0
 NARRATIVE_MIN_IMPORTANCE = 5.0
@@ -87,7 +89,7 @@ def llm_json(prompt: str, max_tokens: int = 800) -> dict | None:
 # ── Step 1: Fetch articles ──────────────────────────────
 
 def fetch_articles(session, days: int = 30) -> list[dict]:
-    """Fetch all relevant articles with event_keys."""
+    """Fetch all relevant articles with event_keys and embeddings."""
     rows = session.execute(text("""
         SELECT
             an.id AS analysis_id,
@@ -96,6 +98,7 @@ def fetch_articles(session, days: int = 30) -> list[dict]:
             an.sentiment,
             an.action_level,
             an.event_type,
+            an.embedding IS NOT NULL AS has_embedding,
             ar.title,
             ar.url,
             ar.published_at,
@@ -108,7 +111,8 @@ def fetch_articles(session, days: int = 30) -> list[dict]:
         WHERE an.is_relevant = true
           AND ar.published_at > NOW() - INTERVAL :days
           AND (
-            (an.event_key IS NOT NULL AND LENGTH(TRIM(an.event_key)) > 5)
+            an.embedding IS NOT NULL
+            OR (an.event_key IS NOT NULL AND LENGTH(TRIM(an.event_key)) > 5)
             OR (an.raw_response->>'event_key' IS NOT NULL
                 AND LENGTH(TRIM(an.raw_response->>'event_key')) > 5)
           )
@@ -118,12 +122,14 @@ def fetch_articles(session, days: int = 30) -> list[dict]:
     articles = []
     for r in rows:
         ek = (r.event_key or "").strip().lower()
-        if not ek or any(bl in ek for bl in BLACKLIST):
+        # Articles with embeddings don't need event_key for clustering
+        if not r.has_embedding and (not ek or any(bl in ek for bl in BLACKLIST)):
             continue
         articles.append({
             "analysis_id": r.analysis_id,
             "article_id": r.article_id,
-            "event_key": ek,
+            "event_key": ek or "(no key)",
+            "has_embedding": r.has_embedding,
             "sentiment": float(r.sentiment) if r.sentiment is not None else None,
             "action_level": r.action_level or 1,
             "event_type": r.event_type,
@@ -134,6 +140,9 @@ def fetch_articles(session, days: int = 30) -> list[dict]:
             "source_name": r.source_name,
             "tier": r.tier or "mainstream",
         })
+
+    embedded = sum(1 for a in articles if a["has_embedding"])
+    logger.info(f"  {embedded}/{len(articles)} articles have embeddings")
     return articles
 
 
@@ -170,7 +179,221 @@ def normalize_event_key(key: str) -> str:
     return " ".join(normalized)
 
 
-# ── Step 2: Two-pass clustering ─────────────────────────
+# ── Step 2: Clustering ──────────────────────────────────
+
+def cluster_pass1_embeddings(session, articles: list[dict]) -> dict[str, list[dict]]:
+    """Pass 1: Cluster articles by embedding cosine similarity.
+
+    Uses pgvector's <=> operator for cosine distance.
+    Falls back to trgm for articles without embeddings.
+    """
+    by_country: dict[str, list[dict]] = defaultdict(list)
+    for a in articles:
+        by_country[a["country_code"]].append(a)
+
+    clusters: dict[str, list[dict]] = {}
+
+    for cc, cc_articles in by_country.items():
+        embedded = [a for a in cc_articles if a["has_embedding"]]
+        no_embedding = [a for a in cc_articles if not a["has_embedding"]]
+
+        if not embedded:
+            # All articles lack embeddings — fall back to trgm for this country
+            trgm_clusters = _cluster_trgm_country(session, cc, cc_articles)
+            clusters.update(trgm_clusters)
+            continue
+
+        # Get article_ids with embeddings
+        article_ids = [a["article_id"] for a in embedded]
+
+        # Find all pairs with cosine similarity > threshold using pgvector
+        # cosine_distance = 1 - cosine_similarity, so we want distance < (1 - threshold)
+        max_distance = 1.0 - COSINE_MAYBE_THRESHOLD
+
+        try:
+            pairs = session.execute(text("""
+                SELECT a1.article_id AS id1, a2.article_id AS id2,
+                       1 - (a1.embedding <=> a2.embedding) AS similarity
+                FROM analysis a1
+                JOIN analysis a2 ON a1.article_id < a2.article_id
+                WHERE a1.article_id = ANY(:ids)
+                  AND a2.article_id = ANY(:ids)
+                  AND a1.embedding IS NOT NULL
+                  AND a2.embedding IS NOT NULL
+                  AND (a1.embedding <=> a2.embedding) < :max_dist
+            """), {"ids": article_ids, "max_dist": max_distance}).fetchall()
+        except Exception as e:
+            logger.warning(f"Embedding clustering failed for {cc}: {e}")
+            trgm_clusters = _cluster_trgm_country(session, cc, cc_articles)
+            clusters.update(trgm_clusters)
+            continue
+
+        # Build union-find
+        parent = {a["article_id"]: a["article_id"] for a in embedded}
+
+        def find(x):
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+
+        def union(a, b):
+            ra, rb = find(a), find(b)
+            if ra != rb:
+                parent[ra] = rb
+
+        # Auto-merge high similarity pairs
+        maybe_pairs = []  # pairs to send to LLM judge
+        for p in pairs:
+            if p.similarity >= COSINE_THRESHOLD:
+                union(p.id1, p.id2)
+            else:
+                maybe_pairs.append(p)
+
+        # LLM judge for borderline pairs (cosine 0.72-0.82)
+        if maybe_pairs:
+            _llm_judge_pairs(session, cc, embedded, maybe_pairs, union)
+
+        # Group articles into clusters
+        groups: dict[int, list[dict]] = defaultdict(list)
+        aid_to_article = {a["article_id"]: a for a in embedded}
+        for a in embedded:
+            root = find(a["article_id"])
+            groups[root].append(a)
+
+        # Create cluster IDs using the best event_key or title
+        for root_id, group_articles in groups.items():
+            # Pick best key for cluster naming
+            keys_with_articles = [(a["event_key"], a) for a in group_articles if a["event_key"] != "(no key)"]
+            if keys_with_articles:
+                # Use key from article with highest action_level
+                best_key = max(keys_with_articles, key=lambda x: x[1].get("action_level", 1))[0]
+            else:
+                # No event_key — use truncated title
+                best_key = group_articles[0]["title"][:80].lower()
+
+            cluster_id = f"{cc}:{best_key}"
+            clusters[cluster_id] = group_articles
+
+        # Handle articles without embeddings via trgm
+        if no_embedding:
+            trgm_clusters = _cluster_trgm_country(session, cc, no_embedding)
+            # Try to merge trgm clusters into embedding clusters by event_key similarity
+            for trgm_cid, trgm_arts in trgm_clusters.items():
+                merged = False
+                for emb_cid in list(clusters.keys()):
+                    if not emb_cid.startswith(f"{cc}:"):
+                        continue
+                    # Check if any event_keys overlap
+                    emb_keys = {a["event_key"] for a in clusters[emb_cid]}
+                    trgm_keys = {a["event_key"] for a in trgm_arts}
+                    if emb_keys & trgm_keys:
+                        clusters[emb_cid].extend(trgm_arts)
+                        merged = True
+                        break
+                if not merged:
+                    clusters[trgm_cid] = trgm_arts
+
+    return clusters
+
+
+def _llm_judge_pairs(session, cc: str, articles: list[dict], pairs: list, union_fn):
+    """Ask LLM to judge borderline similarity pairs."""
+    if not pairs or len(pairs) > 50:
+        # Too many pairs — skip LLM judging, rely on threshold
+        return
+
+    aid_to_article = {a["article_id"]: a for a in articles}
+
+    pairs_text = []
+    for p in pairs[:20]:  # Limit to 20 pairs per LLM call
+        a1 = aid_to_article.get(p.id1, {})
+        a2 = aid_to_article.get(p.id2, {})
+        pairs_text.append(
+            f"[{p.id1}] \"{a1.get('title', '?')[:80]}\"\n"
+            f"[{p.id2}] \"{a2.get('title', '?')[:80]}\"\n"
+            f"Cosine: {p.similarity:.3f}"
+        )
+
+    prompt = f"""Ты аналитик. Для каждой пары статей из {COUNTRY_NAMES.get(cc, cc)} определи:
+это ОДИН сюжет (merge) или РАЗНЫЕ события (split)?
+
+Пары:
+{chr(10).join(pairs_text)}
+
+Верни JSON: {{"decisions": [{{"id1": X, "id2": Y, "action": "merge"|"split"}}]}}"""
+
+    result = llm_json(prompt, max_tokens=500)
+    if result and "decisions" in result:
+        for d in result["decisions"]:
+            if d.get("action") == "merge":
+                union_fn(d["id1"], d["id2"])
+
+
+def _cluster_trgm_country(session, cc: str, articles: list[dict]) -> dict[str, list[dict]]:
+    """Cluster articles by event_key trgm similarity within one country (legacy fallback)."""
+    unique_keys = list({a["event_key"] for a in articles if a["event_key"] != "(no key)"})
+    if not unique_keys:
+        return {}
+
+    parent: dict[str, str] = {k: k for k in unique_keys}
+
+    # Pre-union: same normalized key
+    norm_map: dict[str, str] = {}
+    for k in unique_keys:
+        nk = normalize_event_key(k)
+        if nk not in norm_map:
+            norm_map[nk] = k
+    for k in unique_keys:
+        nk = normalize_event_key(k)
+        canonical = norm_map[nk]
+        if canonical != k:
+            parent[k] = canonical
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a, b):
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    # trgm similarity
+    for i, key_a in enumerate(unique_keys):
+        others = [k for k in unique_keys[i+1:]]
+        if not others:
+            continue
+        try:
+            pg_array = "ARRAY[" + ",".join(
+                f"'{k.replace(chr(39), chr(39)+chr(39))}'" for k in others
+            ) + "]::text[]"
+            sim_rows = session.execute(text(f"""
+                SELECT unnest AS candidate, similarity(unnest, :key) AS sim
+                FROM unnest({pg_array})
+                WHERE similarity(unnest, :key) > :threshold
+            """), {"key": key_a, "threshold": TRGM_THRESHOLD}).fetchall()
+            for row in sim_rows:
+                union(key_a, row.candidate)
+        except Exception as e:
+            logger.warning(f"trgm failed for {key_a[:50]}: {e}")
+
+    # Group
+    groups: dict[str, list[str]] = defaultdict(list)
+    for k in unique_keys:
+        groups[find(k)].append(k)
+
+    clusters = {}
+    for canonical, keys in groups.items():
+        cluster_id = f"{cc}:{canonical}"
+        cluster_articles = [a for a in articles if a["event_key"] in set(keys)]
+        if cluster_articles:
+            clusters[cluster_id] = cluster_articles
+
+    return clusters
+
 
 def cluster_pass1_trgm(session, articles: list[dict]) -> dict[str, list[dict]]:
     """Pass 1: Group by country, then cluster with pg_trgm."""
@@ -601,28 +824,92 @@ def upsert_thread(session, cc: str, canonical_key: str, articles: list[dict], al
 # ── Step 6: Find cross-thread relations ─────────────────
 
 def link_related_threads(session):
-    """Find and link related threads across countries."""
-    session.execute(text("""
-        UPDATE threads t1
-        SET related_threads = (
-            SELECT array_agg(DISTINCT t2.id)
-            FROM threads t2
-            WHERE t2.id != t1.id
-              AND t2.country_code != t1.country_code
-              AND similarity(t1.thread_key, t2.thread_key) > 0.3
-              AND t2.importance_score >= 3
-        )
-        WHERE t1.importance_score >= 5
-    """))
+    """Find and link related threads across countries using embeddings + trgm."""
+    # Try embedding-based linking first
+    try:
+        session.execute(text("""
+            WITH thread_emb AS (
+                SELECT ta.thread_id, AVG(an.embedding) AS avg_emb
+                FROM thread_articles ta
+                JOIN analysis an ON an.article_id = ta.article_id
+                WHERE an.embedding IS NOT NULL
+                GROUP BY ta.thread_id
+                HAVING COUNT(an.embedding) >= 1
+            )
+            UPDATE threads t1
+            SET related_threads = (
+                SELECT array_agg(DISTINCT t2_id)
+                FROM (
+                    -- Embedding similarity across countries
+                    SELECT te2.thread_id AS t2_id
+                    FROM thread_emb te1
+                    JOIN thread_emb te2 ON te1.thread_id != te2.thread_id
+                    JOIN threads th2 ON th2.id = te2.thread_id
+                    WHERE te1.thread_id = t1.id
+                      AND th2.country_code != t1.country_code
+                      AND th2.importance_score >= 3
+                      AND 1 - (te1.avg_emb <=> te2.avg_emb) > 0.75
+                    UNION
+                    -- trgm fallback
+                    SELECT t2.id AS t2_id
+                    FROM threads t2
+                    WHERE t2.id != t1.id
+                      AND t2.country_code != t1.country_code
+                      AND similarity(t1.thread_key, t2.thread_key) > 0.3
+                      AND t2.importance_score >= 3
+                ) sub
+            )
+            WHERE t1.importance_score >= 5
+        """))
+    except Exception as e:
+        # Fallback to trgm-only
+        logger.warning(f"Embedding linking failed, using trgm: {e}")
+        session.execute(text("""
+            UPDATE threads t1
+            SET related_threads = (
+                SELECT array_agg(DISTINCT t2.id)
+                FROM threads t2
+                WHERE t2.id != t1.id
+                  AND t2.country_code != t1.country_code
+                  AND similarity(t1.thread_key, t2.thread_key) > 0.3
+                  AND t2.importance_score >= 3
+            )
+            WHERE t1.importance_score >= 5
+        """))
 
 
 # ── Step 7: Cleanup old threads ─────────────────────────
 
 def cleanup_duplicate_threads(session):
-    """Remove duplicate threads that have very similar keys in the same country."""
-    # Find pairs with high trgm similarity within same country
+    """Remove duplicate threads using embedding similarity + trgm fallback."""
     try:
-        dupes = session.execute(text("""
+        # Method 1: Embedding-based — find threads whose articles are semantically similar
+        # Average embedding per thread, then compare
+        emb_dupes = session.execute(text("""
+            WITH thread_emb AS (
+                SELECT ta.thread_id, AVG(an.embedding) AS avg_emb
+                FROM thread_articles ta
+                JOIN analysis an ON an.article_id = ta.article_id
+                WHERE an.embedding IS NOT NULL
+                GROUP BY ta.thread_id
+                HAVING COUNT(an.embedding) >= 1
+            )
+            SELECT t1.thread_id AS keep_id, t2.thread_id AS remove_id,
+                   th1.thread_key AS keep_key, th2.thread_key AS remove_key,
+                   th1.article_count AS keep_count, th2.article_count AS remove_count,
+                   1 - (t1.avg_emb <=> t2.avg_emb) AS sim
+            FROM thread_emb t1
+            JOIN thread_emb t2 ON t1.thread_id < t2.thread_id
+            JOIN threads th1 ON th1.id = t1.thread_id
+            JOIN threads th2 ON th2.id = t2.thread_id
+            WHERE th1.country_code = th2.country_code
+              AND th1.status != 'resolved'
+              AND th2.status != 'resolved'
+              AND 1 - (t1.avg_emb <=> t2.avg_emb) > 0.85
+        """)).fetchall()
+
+        # Method 2: trgm fallback for threads without embeddings
+        trgm_dupes = session.execute(text("""
             SELECT t1.id AS keep_id, t2.id AS remove_id,
                    t1.thread_key AS keep_key, t2.thread_key AS remove_key,
                    t1.article_count AS keep_count, t2.article_count AS remove_count,
@@ -635,44 +922,14 @@ def cleanup_duplicate_threads(session):
               AND t2.status != 'resolved'
         """)).fetchall()
 
-        # Also find duplicates via normalized key comparison (catches Вэнс/Венс etc.)
-        all_threads = session.execute(text("""
-            SELECT id, country_code, thread_key, article_count
-            FROM threads WHERE status != 'resolved'
-        """)).fetchall()
-
-        # Group by country, normalize keys, find matches
-        from collections import defaultdict as _dd
-        by_cc = _dd(list)
-        for t in all_threads:
-            by_cc[t.country_code].append(t)
-
-        norm_dupes = []
-        for cc, threads in by_cc.items():
-            norm_groups = _dd(list)
-            for t in threads:
-                nk = normalize_event_key(t.thread_key)
-                # Create a "signature" from sorted words (catches reorderings)
-                sig = " ".join(sorted(nk.split()))
-                norm_groups[sig].append(t)
-
-            # Also check word overlap ≥ 60%
-            for i, t1 in enumerate(threads):
-                nk1 = set(normalize_event_key(t1.thread_key).split())
-                for t2 in threads[i + 1:]:
-                    nk2 = set(normalize_event_key(t2.thread_key).split())
-                    if not nk1 or not nk2:
-                        continue
-                    overlap = len(nk1 & nk2) / min(len(nk1), len(nk2))
-                    if overlap >= 0.6 and (t1.id, t2.id) not in {(d.keep_id, d.remove_id) for d in dupes}:
-                        norm_dupes.append(type('D', (), {
-                            'keep_id': t1.id, 'remove_id': t2.id,
-                            'keep_key': t1.thread_key, 'remove_key': t2.thread_key,
-                            'keep_count': t1.article_count, 'remove_count': t2.article_count,
-                            'sim': overlap,
-                        })())
-
-        dupes = list(dupes) + norm_dupes
+        # Combine, deduplicate pairs
+        seen_pairs = set()
+        dupes = []
+        for d in list(emb_dupes) + list(trgm_dupes):
+            pair = (min(d.keep_id, d.remove_id), max(d.keep_id, d.remove_id))
+            if pair not in seen_pairs:
+                seen_pairs.add(pair)
+                dupes.append(d)
 
         removed = 0
         already_removed = set()
@@ -760,11 +1017,18 @@ def build_threads():
             logger.info("No articles, skipping")
             return
 
-        # 2. Cluster pass 1: pg_trgm
-        clusters = cluster_pass1_trgm(session, articles)
-        logger.info(f"Pass 1 (trgm): {len(clusters)} clusters")
+        # 2. Cluster: prefer embeddings, fallback to trgm
+        embedded_count = sum(1 for a in articles if a["has_embedding"])
+        if embedded_count > len(articles) * 0.3:
+            # Enough embeddings — use cosine similarity
+            clusters = cluster_pass1_embeddings(session, articles)
+            logger.info(f"Pass 1 (embeddings): {len(clusters)} clusters")
+        else:
+            # Not enough embeddings yet — use trgm (will phase out after backfill)
+            clusters = cluster_pass1_trgm(session, articles)
+            logger.info(f"Pass 1 (trgm fallback): {len(clusters)} clusters")
 
-        # 3. Cluster pass 2: LLM dedup
+        # 3. Cluster pass 2: LLM dedup (catches remaining semantic duplicates)
         clusters = cluster_pass2_llm(clusters)
         logger.info(f"Pass 2 (LLM): {len(clusters)} clusters after dedup")
 
