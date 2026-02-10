@@ -1,3 +1,4 @@
+# GeoPulse v2 — Full stack with Redis queues
 services:
   db:
     image: timescale/timescaledb:latest-pg16
@@ -17,31 +18,52 @@ services:
       timeout: 5s
       retries: 5
 
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "127.0.0.1:6379:6379"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   collector:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile.collector
     command: python scripts/collect.py --loop --interval 1800
     environment:
       DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: redis://redis:6379/0
     depends_on:
       db:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     restart: unless-stopped
 
   analyzer:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile.analyzer
     command: python scripts/analyze.py --loop --interval 60 --batch 100
     environment:
       DATABASE_URL: ${DATABASE_URL}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
-      PYTHONIOENCODING: utf-8
-      LANG: C.UTF-8
+      REDIS_URL: redis://redis:6379/0
     depends_on:
       db:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     restart: unless-stopped
 
   temperature:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile.temperature
     command: python scripts/calc_temperature.py --loop --interval 3600
     environment:
       DATABASE_URL: ${DATABASE_URL}
@@ -50,40 +72,33 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  api:
-    build: .
-    command: uvicorn src.api.main:app --host 0.0.0.0 --port 8000
-    ports:
-      - "8100:8000"
+  threads:
+    build:
+      context: .
+      dockerfile: Dockerfile.temperature
+    command: python scripts/build_threads.py --loop --interval 3600
     environment:
       DATABASE_URL: ${DATABASE_URL}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
     depends_on:
       db:
         condition: service_healthy
     restart: unless-stopped
 
-  dashboard:
-    build: .
-    command: streamlit run src/dashboard/app.py --server.port 8501 --server.address 0.0.0.0 --server.headless true
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    command: uvicorn src.api.main:app --host 0.0.0.0 --port 8000
     ports:
-      - "8101:8501"
+      - "8100:8000"
     environment:
       DATABASE_URL: ${DATABASE_URL}
-      API_URL: http://api:8000
-    depends_on:
-      - api
-    restart: unless-stopped
-
-  threads:
-    build: .
-    command: python scripts/build_threads.py --loop --interval 3600
-    environment:
-      DATABASE_URL: ${DATABASE_URL}
-      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
-      PYTHONIOENCODING: utf-8
-      LANG: C.UTF-8
+      REDIS_URL: redis://redis:6379/0
     depends_on:
       db:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     restart: unless-stopped
 
