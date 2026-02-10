@@ -611,8 +611,64 @@ def link_related_threads(session):
 
 # ── Step 7: Cleanup old threads ─────────────────────────
 
+def cleanup_duplicate_threads(session):
+    """Remove duplicate threads that have very similar keys in the same country."""
+    # Find pairs with high trgm similarity within same country
+    try:
+        dupes = session.execute(text("""
+            SELECT t1.id AS keep_id, t2.id AS remove_id,
+                   t1.thread_key AS keep_key, t2.thread_key AS remove_key,
+                   t1.article_count AS keep_count, t2.article_count AS remove_count,
+                   similarity(t1.thread_key, t2.thread_key) AS sim
+            FROM threads t1
+            JOIN threads t2 ON t1.country_code = t2.country_code
+                           AND t1.id < t2.id
+            WHERE similarity(t1.thread_key, t2.thread_key) > 0.5
+              AND t1.status != 'resolved'
+              AND t2.status != 'resolved'
+        """)).fetchall()
+
+        removed = 0
+        for d in dupes:
+            # Keep the one with more articles or higher importance
+            if d.keep_count >= d.remove_count:
+                remove_id, keep_id = d.remove_id, d.keep_id
+            else:
+                remove_id, keep_id = d.keep_id, d.remove_id
+
+            # Move articles from removed thread to kept thread
+            session.execute(text("""
+                INSERT INTO thread_articles (thread_id, article_id)
+                SELECT :keep_id, article_id FROM thread_articles
+                WHERE thread_id = :remove_id
+                ON CONFLICT DO NOTHING
+            """), {"keep_id": keep_id, "remove_id": remove_id})
+
+            # Update article count on kept thread
+            new_count = session.execute(text(
+                "SELECT COUNT(*) FROM thread_articles WHERE thread_id = :tid"
+            ), {"tid": keep_id}).scalar()
+            session.execute(text(
+                "UPDATE threads SET article_count = :cnt WHERE id = :tid"
+            ), {"cnt": new_count, "tid": keep_id})
+
+            # Delete duplicate
+            session.execute(text("DELETE FROM thread_articles WHERE thread_id = :tid"), {"tid": remove_id})
+            session.execute(text("DELETE FROM threads WHERE id = :tid"), {"tid": remove_id})
+            removed += 1
+            logger.info(f"  Deduped: removed thread {remove_id} (merged into {keep_id}, sim={d.sim:.2f})")
+
+        if removed:
+            logger.info(f"Cleaned up {removed} duplicate threads")
+    except Exception as e:
+        logger.warning(f"Duplicate cleanup failed: {e}")
+
+
 def cleanup_old_threads(session):
     """Mark old developing threads as dormant/resolved."""
+    # First: remove duplicates
+    cleanup_duplicate_threads(session)
+
     # Dormant: no articles for 72h
     session.execute(text("""
         UPDATE threads SET status = 'dormant'
