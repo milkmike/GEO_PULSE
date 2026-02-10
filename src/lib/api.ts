@@ -195,6 +195,68 @@ export interface TierDivergenceResponse {
   countries: TierDivergenceCountry[];
 }
 
+// ── Admin types ────────────────────────────────────────
+
+export interface AdminSummary {
+  total_cost_today: number;
+  total_cost_week: number;
+  total_cost_month: number;
+  calls_today: number;
+  top_service: string | null;
+  top_model: string | null;
+}
+
+export interface AdminUsageRow {
+  date: string;
+  service: string;
+  total_calls: number;
+  tokens_in: number;
+  tokens_out: number;
+  cost_usd: number;
+}
+
+export interface AdminUsageResponse {
+  period: string;
+  data: AdminUsageRow[];
+}
+
+export interface AdminKeyInfo {
+  service: string;
+  env_var: string;
+  key_masked: string;
+  status: "active" | "missing" | "blocked";
+}
+
+export interface AdminKeysResponse {
+  keys: AdminKeyInfo[];
+}
+
+export interface AdminHealthService {
+  service: string;
+  status: "ok" | "degraded" | "unreachable";
+  http_code: number | null;
+  latency_ms: number | null;
+  error?: string;
+}
+
+export interface AdminHealthResponse {
+  services: AdminHealthService[];
+}
+
+export interface AdminScriptUsage {
+  script: string;
+  total_calls: number;
+  tokens_in: number;
+  tokens_out: number;
+  cost_usd: number;
+  avg_duration_ms: number;
+}
+
+export interface AdminScriptUsageResponse {
+  period_days: number;
+  scripts: AdminScriptUsage[];
+}
+
 // ── Fetch wrapper ──────────────────────────────────────
 
 async function apiFetch<T>(path: string, params?: Record<string, string | number>): Promise<T> {
@@ -349,3 +411,25 @@ export const COUNTRY_NAMES: Record<string, string> = {
   TJ: "Таджикистан", TM: "Туркменистан", AZ: "Азербайджан",
   GE: "Грузия", MD: "Молдова", BY: "Беларусь",
 };
+
+// ── Admin API ──────────────────────────────────────────
+
+export async function getAdminSummary() {
+  return apiFetch<AdminSummary>("/api/v1/admin/summary");
+}
+
+export async function getAdminUsage(period: string = "week", service: string = "all") {
+  return apiFetch<AdminUsageResponse>("/api/v1/admin/usage", { period, service });
+}
+
+export async function getAdminKeys() {
+  return apiFetch<AdminKeysResponse>("/api/v1/admin/keys");
+}
+
+export async function getAdminHealth() {
+  return apiFetch<AdminHealthResponse>("/api/v1/admin/health");
+}
+
+export async function getAdminUsageByScript(days: number = 7) {
+  return apiFetch<AdminScriptUsageResponse>("/api/v1/admin/usage-by-script", { days });
+}

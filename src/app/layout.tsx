@@ -21,6 +21,7 @@ const navItems = [
   { href: "/sources", label: "📡 Источники" },
   { href: "/about", label: "ℹ️ О проекте" },
   { href: "/v2", label: "🚀 v2" },
+  { href: "/admin", label: "⚙️ Admin" },
 ];
 
 export default function RootLayout({
