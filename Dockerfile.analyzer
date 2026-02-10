@@ -4,5 +4,5 @@ RUN apt-get update && apt-get install -y --no-install-recommends gcc libpq-dev &
 COPY requirements-base.txt requirements-analyzer.txt ./
 RUN pip install --no-cache-dir -r requirements-analyzer.txt
 COPY src/ src/
-COPY scripts/analyze.py scripts/
+COPY scripts/analyze.py scripts/backfill_embeddings.py scripts/
 ENV PYTHONPATH=/app PYTHONUNBUFFERED=1 LANG=C.UTF-8
