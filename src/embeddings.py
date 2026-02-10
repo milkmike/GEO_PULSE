@@ -1,48 +1,64 @@
-"""Embedding generation via OpenAI-compatible API (text-embedding-3-small).
+"""Embedding generation for semantic article clustering.
 
-Used for semantic clustering of articles. Generates 1536-dim vectors.
+Supports multiple backends:
+1. OpenAI API (text-embedding-3-small, 1536 dims)
+2. Jina AI (jina-embeddings-v3, 1024 dims) — no geo restrictions
+3. OpenRouter fallback
+
 Architecture note: this module is designed to be swappable — future Graphiti
 integration would add a graph-based enrichment layer on top of embeddings.
 """
 import json
 import logging
+import os
 import time
 from typing import Optional
 
 import httpx
 
-from src.config import OPENROUTER_API_KEY
-
 logger = logging.getLogger(__name__)
 
-# OpenAI embedding API (direct, not through OpenRouter — cheaper and faster)
-OPENAI_API_KEY = None  # Will use OpenRouter key for now
-EMBEDDING_MODEL = "text-embedding-3-small"
-EMBEDDING_DIM = 1536
-
-# OpenRouter supports embeddings too
-OPENROUTER_EMBEDDING_URL = "https://openrouter.ai/api/v1/embeddings"
+# Embedding configuration — auto-detect best available backend
+EMBEDDING_DIM = None  # Set dynamically based on backend
 
 
-def _get_api_config() -> tuple[str, dict]:
-    """Return (url, headers) for embedding API."""
-    # Prefer direct OpenAI if key available
-    import os
+def _get_api_config() -> tuple[str, dict, str, int]:
+    """Return (url, headers, model, dimensions) for embedding API.
+
+    Priority: Jina AI → OpenAI → OpenRouter
+    """
+    # Option 1: Jina AI (no geo restrictions, great multilingual)
+    jina_key = os.environ.get("JINA_API_KEY", "")
+    if jina_key:
+        return "https://api.jina.ai/v1/embeddings", {
+            "Authorization": f"Bearer {jina_key}",
+            "Content-Type": "application/json",
+        }, "jina-embeddings-v3", 1024
+
+    # Option 2: OpenAI direct
     openai_key = os.environ.get("OPENAI_API_KEY", "")
     if openai_key:
         return "https://api.openai.com/v1/embeddings", {
             "Authorization": f"Bearer {openai_key}",
             "Content-Type": "application/json",
-        }
-    # Fallback to OpenRouter
-    if OPENROUTER_API_KEY:
-        return OPENROUTER_EMBEDDING_URL, {
-            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        }, "text-embedding-3-small", 1536
+
+    # Option 3: OpenRouter (limited embedding support)
+    openrouter_key = os.environ.get("OPENROUTER_API_KEY", "")
+    if openrouter_key:
+        return "https://openrouter.ai/api/v1/embeddings", {
+            "Authorization": f"Bearer {openrouter_key}",
             "Content-Type": "application/json",
             "HTTP-Referer": "https://cis-thermometer.app",
-            "X-Title": "CIS Thermometer",
-        }
-    return "", {}
+        }, "openai/text-embedding-3-small", 1536
+
+    return "", {}, "", 0
+
+
+def get_embedding_dim() -> int:
+    """Return the embedding dimension for the current backend."""
+    _, _, _, dim = _get_api_config()
+    return dim or 1536
 
 
 def generate_embedding(text: str) -> Optional[list[float]]:
@@ -52,28 +68,26 @@ def generate_embedding(text: str) -> Optional[list[float]]:
         text: Input text (title + summary/body). Truncated to ~8000 chars.
 
     Returns:
-        List of 1536 floats, or None on failure.
+        List of floats (dimension depends on backend), or None on failure.
     """
-    url, headers = _get_api_config()
+    url, headers, model, dim = _get_api_config()
     if not url:
+        logger.warning("No embedding API configured (set JINA_API_KEY or OPENAI_API_KEY)")
         return None
 
-    # Truncate to ~8000 chars (~2000 tokens) — well within 8191 token limit
     text = text[:8000].strip()
     if not text:
         return None
 
     for attempt in range(3):
         try:
-            response = httpx.post(
-                url,
-                headers=headers,
-                json={
-                    "model": EMBEDDING_MODEL,
-                    "input": text,
-                },
-                timeout=30.0,
-            )
+            payload = {"model": model, "input": [text]}
+            # Jina-specific: task type for better quality
+            if "jina" in model:
+                payload["task"] = "text-matching"
+
+            response = httpx.post(url, headers=headers, json=payload, timeout=30.0)
+
             if response.status_code == 429:
                 wait = 5 * (attempt + 1)
                 logger.warning(f"Embedding rate limited, waiting {wait}s")
@@ -82,6 +96,11 @@ def generate_embedding(text: str) -> Optional[list[float]]:
 
             response.raise_for_status()
             data = response.json()
+
+            if "data" not in data or not data["data"]:
+                logger.warning(f"No embedding data in response: {str(data)[:200]}")
+                return None
+
             embedding = data["data"][0]["embedding"]
             return embedding
 
@@ -93,9 +112,7 @@ def generate_embedding(text: str) -> Optional[list[float]]:
 
 
 def generate_embeddings_batch(texts: list[str]) -> list[Optional[list[float]]]:
-    """Generate embeddings for a batch of texts (up to 100).
-
-    OpenAI supports batch embedding in a single call.
+    """Generate embeddings for a batch of texts.
 
     Args:
         texts: List of input texts.
@@ -103,37 +120,35 @@ def generate_embeddings_batch(texts: list[str]) -> list[Optional[list[float]]]:
     Returns:
         List of embeddings (same order), None for failures.
     """
-    url, headers = _get_api_config()
+    url, headers, model, dim = _get_api_config()
     if not url:
+        logger.warning("No embedding API configured")
         return [None] * len(texts)
 
-    # Truncate each text
     truncated = [t[:8000].strip() for t in texts]
-    # Filter out empty
     valid_indices = [i for i, t in enumerate(truncated) if t]
     valid_texts = [truncated[i] for i in valid_indices]
 
     if not valid_texts:
         return [None] * len(texts)
 
-    # Process in chunks of 100 (API limit)
     results = [None] * len(texts)
 
-    for chunk_start in range(0, len(valid_texts), 100):
-        chunk = valid_texts[chunk_start:chunk_start + 100]
-        chunk_indices = valid_indices[chunk_start:chunk_start + 100]
+    # Jina supports up to 2048 inputs, OpenAI up to 100
+    chunk_size = 50 if "jina" in model else 100
+
+    for chunk_start in range(0, len(valid_texts), chunk_size):
+        chunk = valid_texts[chunk_start:chunk_start + chunk_size]
+        chunk_indices = valid_indices[chunk_start:chunk_start + chunk_size]
 
         for attempt in range(3):
             try:
-                response = httpx.post(
-                    url,
-                    headers=headers,
-                    json={
-                        "model": EMBEDDING_MODEL,
-                        "input": chunk,
-                    },
-                    timeout=60.0,
-                )
+                payload = {"model": model, "input": chunk}
+                if "jina" in model:
+                    payload["task"] = "text-matching"
+
+                response = httpx.post(url, headers=headers, json=payload, timeout=60.0)
+
                 if response.status_code == 429:
                     wait = 10 * (attempt + 1)
                     logger.warning(f"Batch embedding rate limited, waiting {wait}s")
@@ -143,17 +158,24 @@ def generate_embeddings_batch(texts: list[str]) -> list[Optional[list[float]]]:
                 response.raise_for_status()
                 data = response.json()
 
+                if "data" not in data:
+                    logger.warning(f"No data in batch response: {str(data)[:200]}")
+                    break
+
                 for item in data["data"]:
                     idx = item["index"]
-                    original_idx = chunk_indices[idx]
-                    results[original_idx] = item["embedding"]
+                    if idx < len(chunk_indices):
+                        original_idx = chunk_indices[idx]
+                        results[original_idx] = item["embedding"]
+
+                logger.info(f"  Batch {chunk_start//chunk_size + 1}: {len(data['data'])} embeddings")
                 break
 
             except Exception as e:
                 logger.warning(f"Batch embedding error (attempt {attempt + 1}): {e}")
                 time.sleep(3)
 
-        time.sleep(0.5)  # Rate limit between chunks
+        time.sleep(0.5)
 
     return results
 
