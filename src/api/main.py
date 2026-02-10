@@ -623,6 +623,112 @@ def get_resonance_events(code: str, days: int = 14, limit: int = 10):
         return {"country": code, "days": days, "events": events}
 
 
+@app.get("/api/v1/analytics/coverage")
+def get_coverage(days: int = Query(default=30, ge=7, le=90)):
+    """Get daily article counts per country for coverage heatmap."""
+    with get_session() as session:
+        rows = session.execute(
+            text("""
+                SELECT s.country_code,
+                       DATE(ar.published_at) AS day,
+                       COUNT(*) AS total,
+                       COUNT(*) FILTER (WHERE an.id IS NOT NULL) AS analyzed,
+                       COUNT(*) FILTER (WHERE an.is_relevant = true) AS relevant
+                FROM articles ar
+                JOIN sources s ON ar.source_id = s.id
+                LEFT JOIN analysis an ON an.article_id = ar.id
+                WHERE ar.published_at > NOW() - make_interval(days => :days)
+                  AND s.country_code IS NOT NULL
+                GROUP BY s.country_code, DATE(ar.published_at)
+                ORDER BY s.country_code, day
+            """),
+            {"days": days},
+        ).fetchall()
+
+        # Group by country
+        coverage: dict = {}
+        for r in rows:
+            cc = r.country_code
+            if cc not in coverage:
+                coverage[cc] = {"code": cc, "name": COUNTRY_NAMES.get(cc, cc), "days": []}
+            coverage[cc]["days"].append({
+                "date": r.day.isoformat(),
+                "total": r.total,
+                "analyzed": r.analyzed,
+                "relevant": r.relevant,
+            })
+
+        return {"period_days": days, "countries": list(coverage.values())}
+
+
+@app.get("/api/v1/analytics/tier-divergence")
+def get_tier_divergence(days: int = Query(default=14, ge=1, le=90)):
+    """Get tier sentiment divergence across all countries in a single query."""
+    with get_session() as session:
+        rows = session.execute(
+            text("""
+                SELECT s.country_code,
+                       COALESCE(s.tier, 'mainstream') AS tier,
+                       AVG(an.sentiment) AS avg_sentiment,
+                       COUNT(*) AS article_count,
+                       COUNT(DISTINCT s.id) AS source_count
+                FROM analysis an
+                JOIN articles ar ON an.article_id = ar.id
+                JOIN sources s ON ar.source_id = s.id
+                WHERE an.is_relevant = true
+                  AND an.sentiment IS NOT NULL
+                  AND ar.published_at > NOW() - make_interval(days => :days)
+                  AND s.country_code IS NOT NULL
+                GROUP BY s.country_code, COALESCE(s.tier, 'mainstream')
+                ORDER BY s.country_code, tier
+            """),
+            {"days": days},
+        ).fetchall()
+
+        # Aggregate per country
+        countries_data: dict = {}
+        for r in rows:
+            cc = r.country_code
+            if cc not in countries_data:
+                countries_data[cc] = {"code": cc, "name": COUNTRY_NAMES.get(cc, cc), "tiers": []}
+            countries_data[cc]["tiers"].append({
+                "tier": r.tier,
+                "label": TIER_LABELS.get(r.tier, r.tier),
+                "sentiment": round(float(r.avg_sentiment), 3),
+                "article_count": r.article_count,
+                "source_count": r.source_count,
+            })
+
+        # Calculate divergence + overall for each country
+        result = []
+        for cc, d in countries_data.items():
+            sents = [t["sentiment"] for t in d["tiers"]]
+            total_articles = sum(t["article_count"] for t in d["tiers"])
+            weighted_sum = sum(t["sentiment"] * t["article_count"] for t in d["tiers"])
+            overall = round(weighted_sum / total_articles, 3) if total_articles > 0 else 0
+
+            divergence = round(max(sents) - min(sents), 3) if len(sents) >= 2 else 0.0
+
+            # Identify which tier is most positive vs negative
+            tier_sorted = sorted(d["tiers"], key=lambda t: t["sentiment"])
+            most_negative = tier_sorted[0]["tier"] if tier_sorted else None
+            most_positive = tier_sorted[-1]["tier"] if tier_sorted else None
+
+            result.append({
+                **d,
+                "divergence": divergence,
+                "overall_sentiment": overall,
+                "total_articles": total_articles,
+                "most_positive_tier": most_positive,
+                "most_negative_tier": most_negative,
+            })
+
+        # Sort by divergence descending (most interesting first)
+        result.sort(key=lambda x: -x["divergence"])
+
+        return {"period_days": days, "countries": result}
+
+
 @app.get("/api/v1/pipeline/stats")
 def get_pipeline_stats_endpoint():
     """Get pipeline queue statistics."""
