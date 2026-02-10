@@ -111,12 +111,8 @@ export default function CountryPage() {
   const [sourceTierMap, setSourceTierMap] = useState<Record<string, string>>({});
   const [threads, setThreads] = useState<Thread[]>([]);
 
-  // Load country info + UN votes + trade + threads once
+  // Load UN votes + trade + threads + sources once
   useEffect(() => {
-    getCountries(365).then((d) => {
-      const c = d.countries.find((c) => c.code === code);
-      setCountry(c || null);
-    });
     getCountryUNVotes(code)
       .then((r) => setUnVotes(r.data || []))
       .catch(() => setUnVotes([]));
@@ -137,11 +133,15 @@ export default function CountryPage() {
       .catch(() => {});
   }, [code]);
 
-  // Load events & digest when period changes
+  // Load country info + events + digest + temperature when period changes
   useEffect(() => {
     const days = PERIOD_DAYS[period] || 30;
     setEventsLoading(true);
     setVisibleCount(20);
+    getCountries(days).then((d) => {
+      const c = d.countries.find((c) => c.code === code);
+      setCountry(c || null);
+    });
     getCountryTemperature(code, days)
       .then((r) => setTempData(r.data || []))
       .catch(() => setTempData([]));
