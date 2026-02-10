@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import V2AuthGate, { useV2Auth } from "./auth";
 
 const v2Nav = [
   { href: "/v2", label: "⚡ Пульт", exact: true },
@@ -9,8 +10,9 @@ const v2Nav = [
   { href: "/v2/resonance", label: "🔥 Резонанс" },
 ];
 
-export default function V2Layout({ children }: { children: React.ReactNode }) {
+function V2Inner({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const { logout } = useV2Auth();
 
   return (
     <div>
@@ -37,16 +39,31 @@ export default function V2Layout({ children }: { children: React.ReactNode }) {
             </Link>
           );
         })}
-        <div className="ml-auto">
+        <div className="ml-auto flex items-center gap-3">
           <Link
             href="/"
             className="text-xs text-muted-foreground hover:text-foreground"
           >
             ← назад к v1
           </Link>
+          <button
+            onClick={logout}
+            className="text-xs text-muted-foreground hover:text-red-400"
+            title="Выйти"
+          >
+            🔒
+          </button>
         </div>
       </div>
       {children}
     </div>
+  );
+}
+
+export default function V2Layout({ children }: { children: React.ReactNode }) {
+  return (
+    <V2AuthGate>
+      <V2Inner>{children}</V2Inner>
+    </V2AuthGate>
   );
 }
