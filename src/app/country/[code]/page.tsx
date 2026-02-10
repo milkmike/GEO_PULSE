@@ -326,35 +326,34 @@ export default function CountryPage() {
       <Card className="border-border bg-card">
         <CardHeader>
           <div className="flex flex-col gap-3">
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-              <CardTitle className="text-lg">
-                📅 События ({filteredEvents.length})
-              </CardTitle>
-              <div className="flex flex-wrap gap-1">
+            <CardTitle className="text-lg">
+              📅 События ({filteredEvents.length})
+            </CardTitle>
+            <div className="flex flex-wrap items-center gap-1">
+              <span className="mr-1 text-[11px] text-muted-foreground">Тип:</span>
+              <button
+                onClick={() => setTypeFilter(null)}
+                className={`rounded-full px-2.5 py-0.5 text-[11px] font-medium transition-all ${
+                  !typeFilter
+                    ? "bg-white/15 text-foreground"
+                    : "text-muted-foreground hover:bg-white/5"
+                }`}
+              >
+                Все
+              </button>
+              {eventTypes.map((t) => (
                 <button
-                  onClick={() => setTypeFilter(null)}
-                  className={`rounded-full px-2.5 py-0.5 text-[11px] font-medium transition-all ${
-                    !typeFilter
-                      ? "bg-white/15 text-foreground"
-                      : "text-muted-foreground hover:bg-white/5"
+                  key={t}
+                  onClick={() => setTypeFilter(typeFilter === t ? null : t)}
+                  className={`rounded-full border px-2.5 py-0.5 text-[11px] font-medium transition-all ${
+                    typeFilter === t
+                      ? EVENT_TYPE_COLORS[t] || "bg-white/15 text-foreground"
+                      : "border-transparent text-muted-foreground hover:bg-white/5"
                   }`}
                 >
-                  Все
+                  {EVENT_TYPE_LABELS[t] || t}
                 </button>
-                {eventTypes.map((t) => (
-                  <button
-                    key={t}
-                    onClick={() => setTypeFilter(typeFilter === t ? null : t)}
-                    className={`rounded-full border px-2.5 py-0.5 text-[11px] font-medium transition-all ${
-                      typeFilter === t
-                        ? EVENT_TYPE_COLORS[t] || "bg-white/15 text-foreground"
-                        : "border-transparent text-muted-foreground hover:bg-white/5"
-                    }`}
-                  >
-                    {EVENT_TYPE_LABELS[t] || t}
-                  </button>
-                ))}
-              </div>
+              ))}
             </div>
             {availableTiers.length > 0 && (
               <div className="flex flex-wrap items-center gap-1">
