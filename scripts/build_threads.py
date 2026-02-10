@@ -1,7 +1,8 @@
-"""Narrative Threads builder — clusters event_keys into threads with LLM narratives."""
+"""Narrative Threads v2 — LLM-powered dedup, structured narratives, smart scoring."""
 import argparse
 import json
 import logging
+import math
 import time
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
@@ -16,13 +17,23 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
 )
-logger = logging.getLogger("threads")
+logger = logging.getLogger("threads-v2")
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 MODEL = "anthropic/claude-sonnet-4"
-SIMILARITY_THRESHOLD = 0.6
-IMPORTANCE_THRESHOLD = 3.0
-NARRATIVE_IMPORTANCE_THRESHOLD = 5.0
+
+# Clustering config
+TRGM_THRESHOLD = 0.35  # Lower threshold to catch more similar keys
+MIN_ARTICLES_FOR_THREAD = 2
+MIN_IMPORTANCE = 3.0
+NARRATIVE_MIN_IMPORTANCE = 5.0
+
+# Blacklist garbage event_keys
+BLACKLIST = [
+    'прогноз погоды', 'архив сайта', 'поиск на сайте', 'курс валют',
+    'новости дня', 'лента новостей', 'главные новости', 'обзор прессы',
+    'новости мира', 'важные новости', 'последние новости',
+]
 
 
 def get_headers() -> dict | None:
@@ -31,13 +42,52 @@ def get_headers() -> dict | None:
     return {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
         "Content-Type": "application/json",
-        "HTTP-Referer": "https://cis-thermometer.app",
-        "X-Title": "CIS Thermometer - Threads",
+        "HTTP-Referer": "https://geopulse.app",
+        "X-Title": "GeoPulse Threads v2",
     }
 
 
-def fetch_event_keys(session) -> list[dict]:
-    """Fetch all articles with event_key from analysis table."""
+def llm_call(prompt: str, max_tokens: int = 500) -> str | None:
+    """Make LLM API call. Returns response text or None."""
+    headers = get_headers()
+    if not headers:
+        return None
+    try:
+        resp = httpx.post(
+            OPENROUTER_URL,
+            headers=headers,
+            json={"model": MODEL, "max_tokens": max_tokens, "messages": [{"role": "user", "content": prompt}]},
+            timeout=60.0,
+        )
+        resp.raise_for_status()
+        return resp.json()["choices"][0]["message"]["content"].strip()
+    except Exception as e:
+        logger.error(f"LLM call failed: {e}")
+        return None
+
+
+def llm_json(prompt: str, max_tokens: int = 800) -> dict | None:
+    """LLM call expecting JSON response."""
+    raw = llm_call(prompt, max_tokens)
+    if not raw:
+        return None
+    # Extract JSON from response (handle ```json blocks)
+    text_clean = raw
+    if "```json" in text_clean:
+        text_clean = text_clean.split("```json")[1].split("```")[0]
+    elif "```" in text_clean:
+        text_clean = text_clean.split("```")[1].split("```")[0]
+    try:
+        return json.loads(text_clean.strip())
+    except json.JSONDecodeError:
+        logger.warning(f"Failed to parse LLM JSON: {raw[:200]}")
+        return None
+
+
+# ── Step 1: Fetch articles ──────────────────────────────
+
+def fetch_articles(session, days: int = 30) -> list[dict]:
+    """Fetch all relevant articles with event_keys."""
     rows = session.execute(text("""
         SELECT
             an.id AS analysis_id,
@@ -56,355 +106,542 @@ def fetch_event_keys(session) -> list[dict]:
         JOIN articles ar ON an.article_id = ar.id
         JOIN sources s ON ar.source_id = s.id
         WHERE an.is_relevant = true
-          AND (an.event_key IS NOT NULL AND LENGTH(an.event_key) > 3
-               OR an.raw_response->>'event_key' IS NOT NULL
-                  AND LENGTH(an.raw_response->>'event_key') > 3)
-          AND ar.published_at > NOW() - INTERVAL '30 days'
+          AND ar.published_at > NOW() - INTERVAL :days
+          AND (
+            (an.event_key IS NOT NULL AND LENGTH(TRIM(an.event_key)) > 5)
+            OR (an.raw_response->>'event_key' IS NOT NULL
+                AND LENGTH(TRIM(an.raw_response->>'event_key')) > 5)
+          )
         ORDER BY ar.published_at ASC
-    """)).fetchall()
-    return [dict(r._mapping) for r in rows]
+    """), {"days": f"{days} days"}).fetchall()
+
+    articles = []
+    for r in rows:
+        ek = (r.event_key or "").strip().lower()
+        if not ek or any(bl in ek for bl in BLACKLIST):
+            continue
+        articles.append({
+            "analysis_id": r.analysis_id,
+            "article_id": r.article_id,
+            "event_key": ek,
+            "sentiment": float(r.sentiment) if r.sentiment is not None else None,
+            "action_level": r.action_level or 1,
+            "event_type": r.event_type,
+            "title": r.title,
+            "url": r.url,
+            "published_at": r.published_at,
+            "country_code": r.country_code.strip(),
+            "source_name": r.source_name,
+            "tier": r.tier or "mainstream",
+        })
+    return articles
 
 
-def cluster_event_keys(session, articles: list[dict]) -> dict[str, dict]:
-    """Cluster similar event_keys per country using pg_trgm similarity.
+# ── Step 2: Two-pass clustering ─────────────────────────
 
-    Returns: {(country_code, canonical_key): {articles: [...], ...}}
-    """
-    # Group by country first
+def cluster_pass1_trgm(session, articles: list[dict]) -> dict[str, list[dict]]:
+    """Pass 1: Group by country, then cluster with pg_trgm."""
     by_country: dict[str, list[dict]] = defaultdict(list)
     for a in articles:
-        if a["event_key"]:
-            by_country[a["country_code"]].append(a)
+        by_country[a["country_code"]].append(a)
 
-    clusters: dict[tuple, dict] = {}
+    # result: {cluster_id -> [articles]}
+    clusters: dict[str, list[dict]] = {}
 
-    for country_code, country_articles in by_country.items():
-        # Get unique event_keys for this country
-        unique_keys = list({a["event_key"] for a in country_articles})
-
+    for cc, cc_articles in by_country.items():
+        unique_keys = list({a["event_key"] for a in cc_articles})
         if not unique_keys:
             continue
 
-        # Build similarity groups using pg_trgm
-        # For each pair of event_keys, check similarity
-        key_to_cluster: dict[str, str] = {}
-        cluster_canonical: dict[str, str] = {}  # cluster_id -> canonical key
+        # Build union-find via pg_trgm similarity
+        parent: dict[str, str] = {k: k for k in unique_keys}
 
-        for i, key in enumerate(unique_keys):
-            if key in key_to_cluster:
+        def find(x):
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+
+        def union(a, b):
+            ra, rb = find(a), find(b)
+            if ra != rb:
+                parent[ra] = rb
+
+        # Check all pairs via DB (batch)
+        for i, key_a in enumerate(unique_keys):
+            if len(unique_keys) <= 1:
+                break
+            # Find all keys similar to key_a
+            others = [k for k in unique_keys[i+1:] if find(k) != find(key_a) or True]
+            if not others:
                 continue
 
-            # This key starts a new cluster
-            key_to_cluster[key] = key
-            cluster_canonical[key] = key
-
-            # Find similar keys using DB
-            if len(unique_keys) > 1:
-                # Build PostgreSQL array literal for text[]
-                _escaped = [k.replace("'", "''") for k in unique_keys]
-                _pg_array = "ARRAY[" + ",".join(f"'{k}'" for k in _escaped) + "]::text[]"
-                similar_rows = session.execute(text(f"""
-                    SELECT unnest AS candidate,
-                           similarity(unnest, :key) AS sim
-                    FROM unnest({_pg_array}) AS unnest
+            try:
+                pg_array = "ARRAY[" + ",".join(f"'{k.replace(chr(39), chr(39)+chr(39))}'" for k in others) + "]::text[]"
+                sim_rows = session.execute(text(f"""
+                    SELECT unnest AS candidate, similarity(unnest, :key) AS sim
+                    FROM unnest({pg_array})
                     WHERE similarity(unnest, :key) > :threshold
-                      AND unnest != :key
-                    ORDER BY sim DESC
-                """), {
-                    "key": key,
-                    "threshold": SIMILARITY_THRESHOLD,
-                }).fetchall()
+                """), {"key": key_a, "threshold": TRGM_THRESHOLD}).fetchall()
 
-                for row in similar_rows:
-                    candidate = row.candidate
-                    if candidate not in key_to_cluster:
-                        key_to_cluster[candidate] = key
+                for row in sim_rows:
+                    union(key_a, row.candidate)
+            except Exception as e:
+                logger.warning(f"trgm similarity failed for {key_a[:50]}: {e}")
 
-        # Now group articles by cluster
-        for article in country_articles:
-            ek = article["event_key"]
-            canonical = key_to_cluster.get(ek, ek)
-            cluster_key = (country_code, canonical)
+        # Group articles by cluster
+        groups: dict[str, list[str]] = defaultdict(list)
+        for k in unique_keys:
+            groups[find(k)].append(k)
 
-            if cluster_key not in clusters:
-                clusters[cluster_key] = {
-                    "country_code": country_code,
-                    "thread_key": canonical,
-                    "articles": [],
-                    "event_keys": set(),
-                }
-
-            clusters[cluster_key]["articles"].append(article)
-            clusters[cluster_key]["event_keys"].add(ek)
+        for canonical, keys in groups.items():
+            cluster_id = f"{cc}:{canonical}"
+            cluster_articles = [a for a in cc_articles if a["event_key"] in set(keys)]
+            if cluster_articles:
+                clusters[cluster_id] = cluster_articles
 
     return clusters
 
 
-def determine_arc_phase(articles: list[dict]) -> str:
-    """Determine narrative arc phase based on article timeline."""
+def cluster_pass2_llm(clusters: dict[str, list[dict]]) -> dict[str, list[dict]]:
+    """Pass 2: LLM-based merge of similar clusters within same country."""
+    # Group clusters by country
+    by_country: dict[str, list[tuple[str, list[dict]]]] = defaultdict(list)
+    for cid, articles in clusters.items():
+        cc = cid.split(":")[0]
+        by_country[cc].append((cid, articles))
+
+    merged: dict[str, list[dict]] = {}
+    merge_count = 0
+
+    for cc, cc_clusters in by_country.items():
+        if len(cc_clusters) <= 1:
+            for cid, arts in cc_clusters:
+                merged[cid] = arts
+            continue
+
+        # Extract cluster summaries for LLM
+        summaries = []
+        for cid, arts in cc_clusters:
+            keys = list({a["event_key"] for a in arts})
+            summaries.append({
+                "id": cid,
+                "keys": keys[:5],
+                "title": arts[0]["title"][:100] if arts else "",
+                "count": len(arts),
+            })
+
+        # Only send to LLM if there are enough clusters to potentially merge
+        if len(summaries) < 2:
+            for cid, arts in cc_clusters:
+                merged[cid] = arts
+            continue
+
+        # Batch: send up to 30 clusters at a time
+        summaries_text = "\n".join(
+            f"[{s['id']}] keys: {', '.join(s['keys'][:3])} | {s['count']} articles | \"{s['title'][:80]}\""
+            for s in summaries[:30]
+        )
+
+        prompt = f"""Ты аналитик медиа. Ниже список кластеров новостей из страны {COUNTRY_NAMES.get(cc, cc)}.
+Найди кластеры которые описывают ОДИН И ТОТ ЖЕ сюжет и должны быть объединены.
+
+Кластеры:
+{summaries_text}
+
+Верни JSON массив групп для объединения. Каждая группа — массив id кластеров.
+Если кластер уникален, НЕ включай его. Только группы для мержа.
+Формат: {{"merge": [["id1", "id2"], ["id3", "id4", "id5"]]}}
+Если нечего мержить: {{"merge": []}}"""
+
+        result = llm_json(prompt, max_tokens=500)
+
+        # Apply merges
+        merged_ids: set[str] = set()
+        if result and "merge" in result:
+            for group in result["merge"]:
+                if len(group) < 2:
+                    continue
+                # Merge all into first
+                primary_id = group[0]
+                combined_articles = []
+                for gid in group:
+                    for cid, arts in cc_clusters:
+                        if cid == gid:
+                            combined_articles.extend(arts)
+                            merged_ids.add(cid)
+                            break
+                if combined_articles:
+                    merged[primary_id] = combined_articles
+                    merge_count += len(group) - 1
+                    logger.info(f"  Merged {len(group)} clusters → {primary_id}")
+
+        # Add unmerged clusters
+        for cid, arts in cc_clusters:
+            if cid not in merged_ids:
+                merged[cid] = arts
+
+    if merge_count:
+        logger.info(f"LLM merged {merge_count} duplicate clusters")
+    return merged
+
+
+# ── Step 3: Scoring ─────────────────────────────────────
+
+def calculate_importance_v2(articles: list[dict]) -> dict:
+    """Calculate enhanced importance metrics."""
     if not articles:
-        return "emerging"
+        return {"importance": 0, "velocity": 0, "sentiment_shift": 0}
+
+    n = len(articles)
+    dates = sorted([a["published_at"] for a in articles if a["published_at"]])
+    sentiments = [a["sentiment"] for a in articles if a["sentiment"] is not None]
+    tiers = {a["tier"] for a in articles}
+    sources = {a["source_name"] for a in articles}
+    max_action = max((a["action_level"] or 1) for a in articles)
+
+    # Velocity: articles per day (higher = faster growing)
+    if len(dates) >= 2:
+        span_hours = max((dates[-1] - dates[0]).total_seconds() / 3600, 1)
+        velocity = n / (span_hours / 24)
+    else:
+        velocity = 0
+
+    # Sentiment shift: difference between first and last quarter
+    sentiment_shift = 0.0
+    if len(sentiments) >= 4:
+        q = len(sentiments) // 4
+        first_q = sum(sentiments[:q]) / q
+        last_q = sum(sentiments[-q:]) / q
+        sentiment_shift = last_q - first_q
+
+    # Freshness: decay based on last article age
+    now = datetime.now(timezone.utc)
+    if dates:
+        hours_since_last = (now - dates[-1]).total_seconds() / 3600
+        freshness = max(0.1, 1.0 - (hours_since_last / (7 * 24)))  # decay over 7 days
+    else:
+        freshness = 0.1
+
+    # Source diversity: log scale
+    source_diversity = math.log(len(sources) + 1) / math.log(10)
+
+    # Tier coverage (max 5 tiers)
+    tier_bonus = len(tiers) * 0.5
+
+    # Action escalation: was there an increase in action_level?
+    action_levels = [a["action_level"] or 1 for a in articles]
+    if len(action_levels) >= 2:
+        mid = len(action_levels) // 2
+        first_avg = sum(action_levels[:mid]) / mid
+        second_avg = sum(action_levels[mid:]) / (len(action_levels) - mid)
+        escalation = max(1.0, second_avg / max(first_avg, 0.5))
+    else:
+        escalation = 1.0
+
+    # Final importance
+    volume = math.log(n + 1) * 3
+    importance = round(
+        volume * max_action * source_diversity * (1 + tier_bonus) * freshness * escalation,
+        2
+    )
+
+    return {
+        "importance": importance,
+        "velocity": round(velocity, 2),
+        "sentiment_shift": round(sentiment_shift, 3),
+    }
+
+
+def determine_arc_phase(articles: list[dict]) -> tuple[str, str]:
+    """Returns (arc_phase, status)."""
+    if not articles:
+        return "emerging", "developing"
 
     now = datetime.now(timezone.utc)
     dates = [a["published_at"] for a in articles if a["published_at"]]
     if not dates:
-        return "emerging"
+        return "emerging", "developing"
 
     first = min(dates)
     last = max(dates)
     age_hours = (now - first).total_seconds() / 3600
     silence_hours = (now - last).total_seconds() / 3600
 
-    # resolved: no new articles for > 48h
+    if silence_hours > 72:
+        return "resolved", "resolved"
     if silence_hours > 48:
-        return "resolved"
-
-    # dormant: no new articles for > 24h but < 48h
+        return "resolved", "dormant"
     if silence_hours > 24:
-        return "cooling"
+        return "cooling", "developing"
+    if age_hours < 12:
+        return "emerging", "developing"
 
-    # emerging: less than 24h old
-    if age_hours < 24:
-        return "emerging"
-
-    # Check if escalating or at peak
-    # Split timeline into halves and compare volume
+    # Compare halves
     mid = first + (last - first) / 2
-    first_half = [a for a in articles if a["published_at"] and a["published_at"] <= mid]
-    second_half = [a for a in articles if a["published_at"] and a["published_at"] > mid]
+    first_half = sum(1 for a in articles if a["published_at"] and a["published_at"] <= mid)
+    second_half = sum(1 for a in articles if a["published_at"] and a["published_at"] > mid)
 
-    if len(second_half) > len(first_half):
-        return "escalating"
-    elif len(second_half) < len(first_half) * 0.7:
-        return "cooling"
+    if second_half > first_half * 1.3:
+        return "escalating", "developing"
+    elif second_half < first_half * 0.5:
+        return "cooling", "developing"
     else:
-        return "peak"
+        return "peak", "developing"
 
 
-def calculate_importance(articles: list[dict]) -> float:
-    """Calculate importance score = article_count * max_action_level * tier_diversity."""
-    if not articles:
-        return 0.0
+# ── Step 4: Structured narrative ────────────────────────
 
-    article_count = len(articles)
-    max_action = max((a.get("action_level") or 1) for a in articles)
-    unique_tiers = len({a.get("tier", "mainstream") for a in articles})
+def generate_structured_narrative(
+    cc: str, thread_key: str, articles: list[dict], metrics: dict
+) -> dict | None:
+    """Generate structured narrative via LLM."""
+    country = COUNTRY_NAMES.get(cc, cc)
 
-    return round(article_count * max_action * unique_tiers, 2)
-
-
-def generate_narrative(
-    country_code: str,
-    thread_key: str,
-    articles: list[dict],
-    avg_sentiment: float,
-) -> str | None:
-    """Generate narrative summary via LLM."""
-    headers = get_headers()
-    if headers is None:
-        logger.warning("OPENROUTER_API_KEY not set, skipping narrative generation")
-        return None
-
-    country = COUNTRY_NAMES.get(country_code, country_code)
-
-    # Build articles list for prompt
-    articles_sorted = sorted(articles, key=lambda a: a.get("published_at") or datetime.min.replace(tzinfo=timezone.utc))
+    sorted_arts = sorted(articles, key=lambda a: a.get("published_at") or datetime.min.replace(tzinfo=timezone.utc))
     articles_text = "\n".join(
         f"- [{str(a.get('published_at', '?'))[:16]}] {a.get('title', '?')} "
-        f"(sentiment: {a.get('sentiment', '?')}, source: {a.get('source_name', '?')})"
-        for a in articles_sorted[:15]  # Limit to 15 articles
+        f"(sent: {a.get('sentiment', '?')}, action: {a.get('action_level', '?')}, "
+        f"src: {a.get('source_name', '?')}, tier: {a.get('tier', '?')})"
+        for a in sorted_arts[:20]
     )
 
-    prompt = f"""Ты аналитик. Опиши развитие этого сюжета в 2-3 предложения.
+    tiers = list({a["tier"] for a in articles})
+    sources = list({a["source_name"] for a in articles})
+
+    prompt = f"""Ты геополитический аналитик. Проанализируй сюжет и верни структурированный JSON.
+
 Страна: {country}
-Ключ события: {thread_key}
+Ключ: {thread_key}
+Статей: {len(articles)}, источников: {len(sources)}, tier'ов: {len(tiers)}
+Velocity: {metrics['velocity']:.1f} статей/день
+Sentiment shift: {metrics['sentiment_shift']:+.3f}
+
 Статьи (хронологически):
 {articles_text}
-Средний sentiment: {avg_sentiment:+.2f}
-Формат: краткий нарратив, как развивался сюжет. Начни с сути, потом динамика."""
 
-    try:
-        # Ensure prompt is clean UTF-8 (replace any problematic chars)
-        prompt_clean = prompt.encode("utf-8", errors="replace").decode("utf-8")
-        response = httpx.post(
-            OPENROUTER_URL,
-            headers=headers,
-            json={
-                "model": MODEL,
-                "max_tokens": 300,
-                "messages": [{"role": "user", "content": prompt_clean}],
-            },
-            timeout=60.0,
-        )
-        response.raise_for_status()
-        data = response.json()
-        narrative = data["choices"][0]["message"]["content"].strip()
-        return narrative
-    except Exception as e:
-        logger.error(f"Failed to generate narrative for {thread_key}: {e}", exc_info=True)
+Верни JSON:
+{{
+  "title": "краткий заголовок сюжета (до 100 символов)",
+  "summary": "суть в 1 предложении",
+  "dynamics": "как развивался сюжет, ключевые повороты (2-3 предложения)",
+  "impact": "почему это важно для отношений с Россией (1 предложение)",
+  "forecast": "куда движется, что ожидать (1 предложение)",
+  "key_actors": ["список ключевых участников"],
+  "tags": ["3-5 тематических тегов"]
+}}"""
+
+    return llm_json(prompt, max_tokens=800)
+
+
+# ── Step 5: Upsert ──────────────────────────────────────
+
+def upsert_thread(session, cc: str, canonical_key: str, articles: list[dict], all_keys: list[str]) -> int | None:
+    """Upsert a single thread. Returns thread_id or None."""
+    n = len(articles)
+    if n < MIN_ARTICLES_FOR_THREAD:
         return None
 
+    metrics = calculate_importance_v2(articles)
+    if metrics["importance"] < MIN_IMPORTANCE:
+        return None
 
-def generate_title(thread_key: str, articles: list[dict]) -> str:
-    """Generate a human-readable title from the thread key and top article."""
-    # Use the most common/representative article title as base
-    if articles:
-        # Pick article with highest action_level
+    arc_phase, status = determine_arc_phase(articles)
+    sentiments = [a["sentiment"] for a in articles if a["sentiment"] is not None]
+    avg_sentiment = sum(sentiments) / len(sentiments) if sentiments else 0
+    max_action = max((a["action_level"] or 1) for a in articles)
+    dates = [a["published_at"] for a in articles if a["published_at"]]
+    first_seen = min(dates) if dates else None
+    last_seen = max(dates) if dates else None
+
+    # Generate narrative for important threads
+    summary_json = None
+    title = canonical_key[:200]
+    narrative = None
+
+    if metrics["importance"] >= NARRATIVE_MIN_IMPORTANCE:
+        structured = generate_structured_narrative(cc, canonical_key, articles, metrics)
+        if structured:
+            summary_json = structured
+            title = structured.get("title", title)[:500]
+            narrative = structured.get("summary", "")
+            if structured.get("dynamics"):
+                narrative += " " + structured["dynamics"]
+    
+    if not narrative:
+        # Fallback: use best article title
         best = max(articles, key=lambda a: (a.get("action_level") or 1))
-        title = best.get("title", thread_key)
-        if len(title) > 200:
-            title = title[:197] + "..."
-        return title
-    return thread_key[:200]
+        title = best.get("title", canonical_key)[:500]
+
+    result = session.execute(text("""
+        INSERT INTO threads (
+            country_code, thread_key, title, narrative, status, arc_phase,
+            first_seen, last_seen, article_count, avg_sentiment,
+            max_action_level, importance_score, velocity, sentiment_shift,
+            merged_keys, summary_json, generated_at
+        ) VALUES (
+            :cc, :thread_key, :title, :narrative, :status, :arc_phase,
+            :first_seen, :last_seen, :article_count, :avg_sentiment,
+            :max_action, :importance, :velocity, :sentiment_shift,
+            :merged_keys, :summary_json, NOW()
+        )
+        ON CONFLICT (country_code, thread_key)
+        DO UPDATE SET
+            title = EXCLUDED.title,
+            narrative = COALESCE(EXCLUDED.narrative, threads.narrative),
+            status = EXCLUDED.status,
+            arc_phase = EXCLUDED.arc_phase,
+            first_seen = LEAST(threads.first_seen, EXCLUDED.first_seen),
+            last_seen = GREATEST(threads.last_seen, EXCLUDED.last_seen),
+            article_count = EXCLUDED.article_count,
+            avg_sentiment = EXCLUDED.avg_sentiment,
+            max_action_level = EXCLUDED.max_action_level,
+            importance_score = EXCLUDED.importance_score,
+            velocity = EXCLUDED.velocity,
+            sentiment_shift = EXCLUDED.sentiment_shift,
+            merged_keys = EXCLUDED.merged_keys,
+            summary_json = COALESCE(EXCLUDED.summary_json, threads.summary_json),
+            generated_at = NOW()
+        RETURNING id
+    """), {
+        "cc": cc,
+        "thread_key": canonical_key[:200],
+        "title": title,
+        "narrative": narrative,
+        "status": status,
+        "arc_phase": arc_phase,
+        "first_seen": first_seen,
+        "last_seen": last_seen,
+        "article_count": n,
+        "avg_sentiment": round(avg_sentiment, 2),
+        "max_action": max_action,
+        "importance": metrics["importance"],
+        "velocity": metrics["velocity"],
+        "sentiment_shift": metrics["sentiment_shift"],
+        "merged_keys": all_keys,
+        "summary_json": json.dumps(summary_json, ensure_ascii=False) if summary_json else None,
+    })
+
+    thread_id = result.fetchone()[0]
+
+    # Update thread_articles
+    article_ids = list({a["article_id"] for a in articles})
+    session.execute(text("DELETE FROM thread_articles WHERE thread_id = :tid"), {"tid": thread_id})
+    for aid in article_ids:
+        session.execute(text("""
+            INSERT INTO thread_articles (thread_id, article_id)
+            VALUES (:tid, :aid) ON CONFLICT DO NOTHING
+        """), {"tid": thread_id, "aid": aid})
+
+    return thread_id
 
 
-def upsert_threads(session, clusters: dict) -> int:
-    """UPSERT thread clusters into the database. Returns count of upserted threads."""
-    count = 0
+# ── Step 6: Find cross-thread relations ─────────────────
 
-    for (country_code, canonical_key), cluster in clusters.items():
-        articles = cluster["articles"]
-        if not articles:
-            continue
+def link_related_threads(session):
+    """Find and link related threads across countries."""
+    session.execute(text("""
+        UPDATE threads t1
+        SET related_threads = (
+            SELECT array_agg(DISTINCT t2.id)
+            FROM threads t2
+            WHERE t2.id != t1.id
+              AND t2.country_code != t1.country_code
+              AND similarity(t1.thread_key, t2.thread_key) > 0.3
+              AND t2.importance_score >= 3
+        )
+        WHERE t1.importance_score >= 5
+    """))
 
-        article_count = len(articles)
-        sentiments = [a["sentiment"] for a in articles if a["sentiment"] is not None]
-        avg_sentiment = round(sum(sentiments) / len(sentiments), 2) if sentiments else 0.0
-        max_action = max((a.get("action_level") or 1) for a in articles)
-        importance = calculate_importance(articles)
 
-        if importance < IMPORTANCE_THRESHOLD:
-            continue
+# ── Step 7: Cleanup old threads ─────────────────────────
 
-        dates = [a["published_at"] for a in articles if a["published_at"]]
-        first_seen = min(dates) if dates else None
-        last_seen = max(dates) if dates else None
+def cleanup_old_threads(session):
+    """Mark old developing threads as dormant/resolved."""
+    # Dormant: no articles for 72h
+    session.execute(text("""
+        UPDATE threads SET status = 'dormant'
+        WHERE status = 'developing' AND last_seen < NOW() - INTERVAL '72 hours'
+    """))
+    # Resolved: no articles for 7 days
+    session.execute(text("""
+        UPDATE threads SET status = 'resolved', arc_phase = 'resolved'
+        WHERE status IN ('developing', 'dormant') AND last_seen < NOW() - INTERVAL '7 days'
+    """))
+    # Delete very old low-importance resolved threads
+    session.execute(text("""
+        DELETE FROM threads
+        WHERE status = 'resolved' AND importance_score < 5
+          AND last_seen < NOW() - INTERVAL '30 days'
+    """))
 
-        arc_phase = determine_arc_phase(articles)
 
-        # Determine status from arc_phase
-        if arc_phase == "resolved":
-            status = "resolved"
-        elif arc_phase == "cooling" and last_seen and (datetime.now(timezone.utc) - last_seen).total_seconds() > 48 * 3600:
-            status = "dormant"
-        else:
-            status = "developing"
-
-        title = generate_title(canonical_key, articles)
-
-        # Generate narrative for important threads
-        narrative = None
-        if importance >= NARRATIVE_IMPORTANCE_THRESHOLD:
-            narrative = generate_narrative(country_code, canonical_key, articles, avg_sentiment)
-
-        # UPSERT
-        result = session.execute(text("""
-            INSERT INTO threads (
-                country_code, thread_key, title, narrative, status, arc_phase,
-                first_seen, last_seen, article_count, avg_sentiment,
-                max_action_level, importance_score, generated_at
-            ) VALUES (
-                :country_code, :thread_key, :title, :narrative, :status, :arc_phase,
-                :first_seen, :last_seen, :article_count, :avg_sentiment,
-                :max_action_level, :importance_score, NOW()
-            )
-            ON CONFLICT (country_code, thread_key)
-            DO UPDATE SET
-                title = EXCLUDED.title,
-                narrative = COALESCE(EXCLUDED.narrative, threads.narrative),
-                status = EXCLUDED.status,
-                arc_phase = EXCLUDED.arc_phase,
-                first_seen = LEAST(threads.first_seen, EXCLUDED.first_seen),
-                last_seen = GREATEST(threads.last_seen, EXCLUDED.last_seen),
-                article_count = EXCLUDED.article_count,
-                avg_sentiment = EXCLUDED.avg_sentiment,
-                max_action_level = EXCLUDED.max_action_level,
-                importance_score = EXCLUDED.importance_score,
-                generated_at = NOW()
-            RETURNING id
-        """), {
-            "country_code": country_code,
-            "thread_key": canonical_key,
-            "title": title,
-            "narrative": narrative,
-            "status": status,
-            "arc_phase": arc_phase,
-            "first_seen": first_seen,
-            "last_seen": last_seen,
-            "article_count": article_count,
-            "avg_sentiment": avg_sentiment,
-            "max_action_level": max_action,
-            "importance_score": importance,
-        })
-
-        thread_id = result.fetchone()[0]
-
-        # Update thread_articles
-        article_ids = [a["article_id"] for a in articles]
-        if article_ids:
-            # Delete old links and re-insert
-            session.execute(text("DELETE FROM thread_articles WHERE thread_id = :tid"), {"tid": thread_id})
-            for aid in article_ids:
-                session.execute(text("""
-                    INSERT INTO thread_articles (thread_id, article_id)
-                    VALUES (:tid, :aid)
-                    ON CONFLICT DO NOTHING
-                """), {"tid": thread_id, "aid": aid})
-
-        count += 1
-
-    return count
-
+# ── Main ────────────────────────────────────────────────
 
 def build_threads():
-    """Main thread building logic."""
-    logger.info("Building narrative threads...")
+    """Main thread building pipeline."""
+    logger.info("═══ Threads v2 build started ═══")
 
     with get_session() as session:
-        # Fetch articles with event_keys
-        articles = fetch_event_keys(session)
+        # 1. Fetch
+        articles = fetch_articles(session)
         logger.info(f"Fetched {len(articles)} articles with event_keys")
-
         if not articles:
-            logger.info("No articles with event_keys found, skipping")
+            logger.info("No articles, skipping")
             return
 
-        # Cluster event_keys
-        clusters = cluster_event_keys(session, articles)
-        logger.info(f"Found {len(clusters)} event_key clusters")
+        # 2. Cluster pass 1: pg_trgm
+        clusters = cluster_pass1_trgm(session, articles)
+        logger.info(f"Pass 1 (trgm): {len(clusters)} clusters")
 
-        # UPSERT threads
-        count = upsert_threads(session, clusters)
+        # 3. Cluster pass 2: LLM dedup
+        clusters = cluster_pass2_llm(clusters)
+        logger.info(f"Pass 2 (LLM): {len(clusters)} clusters after dedup")
+
+        # 4. Upsert threads
+        count = 0
+        for cluster_id, cluster_articles in clusters.items():
+            cc = cluster_id.split(":")[0]
+            canonical_key = cluster_id.split(":", 1)[1] if ":" in cluster_id else cluster_id
+            all_keys = list({a["event_key"] for a in cluster_articles})
+
+            tid = upsert_thread(session, cc, canonical_key, cluster_articles, all_keys)
+            if tid:
+                count += 1
+
         logger.info(f"Upserted {count} threads")
 
-        # Mark old developing threads as dormant
-        session.execute(text("""
-            UPDATE threads
-            SET status = 'dormant'
-            WHERE status = 'developing'
-              AND last_seen < NOW() - INTERVAL '72 hours'
-        """))
+        # 5. Link related threads
+        try:
+            link_related_threads(session)
+            logger.info("Related threads linked")
+        except Exception as e:
+            logger.warning(f"Failed to link related threads: {e}")
 
-    logger.info("Thread building complete")
+        # 6. Cleanup
+        cleanup_old_threads(session)
+        logger.info("Cleanup done")
+
+    logger.info("═══ Threads v2 build complete ═══")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="GEO PULSE — Narrative Threads Builder")
-    parser.add_argument("--loop", action="store_true", help="Run in loop mode")
-    parser.add_argument("--interval", type=int, default=3600, help="Interval between runs (seconds)")
+    parser = argparse.ArgumentParser(description="GeoPulse — Narrative Threads v2")
+    parser.add_argument("--loop", action="store_true")
+    parser.add_argument("--interval", type=int, default=3600)
     args = parser.parse_args()
 
     wait_for_db()
 
     if args.loop:
-        logger.info(f"Starting thread builder (interval: {args.interval}s)")
+        logger.info(f"Starting threads v2 (interval: {args.interval}s)")
         build_threads()
         while True:
             time.sleep(args.interval)
             try:
                 build_threads()
             except Exception as e:
-                logger.error(f"Thread building error: {e}", exc_info=True)
+                logger.error(f"Thread build error: {e}", exc_info=True)
     else:
         build_threads()
 
