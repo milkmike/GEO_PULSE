@@ -18,6 +18,7 @@ import {
   getCountryTemperature,
   getCountryUNVotes,
   getCountryTrade,
+  getSources,
   PERIOD_DAYS,
   type Country,
   type CountryEvent,
@@ -30,6 +31,24 @@ import {
   trendIcon,
   formatDate,
 } from "@/lib/api";
+
+const TIER_COLORS: Record<string, string> = {
+  official: "bg-red-500/20 text-red-400 border-red-500/30",
+  mainstream: "bg-blue-500/20 text-blue-400 border-blue-500/30",
+  independent: "bg-green-500/20 text-green-400 border-green-500/30",
+  domestic_opposition: "bg-yellow-500/20 text-yellow-400 border-yellow-500/30",
+  analytics: "bg-purple-500/20 text-purple-400 border-purple-500/30",
+  western_proxy: "bg-gray-500/20 text-gray-400 border-gray-500/30",
+};
+
+const TIER_LABELS: Record<string, string> = {
+  official: "Официальные",
+  mainstream: "Мейнстрим",
+  independent: "Независимые",
+  domestic_opposition: "Оппозиция",
+  analytics: "Аналитика",
+  western_proxy: "Западные",
+};
 
 const EVENT_TYPE_COLORS: Record<string, string> = {
   diplomatic: "bg-blue-500/20 text-blue-400 border-blue-500/30",
@@ -82,6 +101,8 @@ export default function CountryPage() {
   const [eventsLoading, setEventsLoading] = useState(false);
   const [visibleCount, setVisibleCount] = useState(20);
   const [typeFilter, setTypeFilter] = useState<string | null>(null);
+  const [tierFilter, setTierFilter] = useState<string | null>(null);
+  const [sourceTierMap, setSourceTierMap] = useState<Record<string, string>>({});
 
   // Load country info + UN votes + trade once
   useEffect(() => {
@@ -95,6 +116,15 @@ export default function CountryPage() {
     getCountryTrade(code)
       .then((r) => setTradeData(r.data || []))
       .catch(() => setTradeData([]));
+    getSources()
+      .then((r) => {
+        const map: Record<string, string> = {};
+        for (const s of r.sources) {
+          map[s.name] = s.tier;
+        }
+        setSourceTierMap(map);
+      })
+      .catch(() => {});
   }, [code]);
 
   // Load events & digest when period changes
@@ -128,8 +158,11 @@ export default function CountryPage() {
     if (typeFilter) {
       evs = evs.filter((e) => e.event_type === typeFilter);
     }
+    if (tierFilter) {
+      evs = evs.filter((e) => sourceTierMap[e.source] === tierFilter);
+    }
     return evs;
-  }, [events, typeFilter]);
+  }, [events, typeFilter, tierFilter, sourceTierMap]);
 
   const visibleEvents = filteredEvents.slice(0, visibleCount);
 
@@ -138,6 +171,16 @@ export default function CountryPage() {
     const types = new Set(events.map((e) => e.event_type));
     return Array.from(types).sort();
   }, [events]);
+
+  // Unique tiers for filter chips
+  const availableTiers = useMemo(() => {
+    const tiers = new Set<string>();
+    for (const e of events) {
+      const t = sourceTierMap[e.source];
+      if (t) tiers.add(t);
+    }
+    return Array.from(tiers).sort();
+  }, [events, sourceTierMap]);
 
   if (loading) {
     return (
@@ -282,35 +325,65 @@ export default function CountryPage() {
       {/* Events */}
       <Card className="border-border bg-card">
         <CardHeader>
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <CardTitle className="text-lg">
-              📅 События ({filteredEvents.length})
-            </CardTitle>
-            <div className="flex flex-wrap gap-1">
-              <button
-                onClick={() => setTypeFilter(null)}
-                className={`rounded-full px-2.5 py-0.5 text-[11px] font-medium transition-all ${
-                  !typeFilter
-                    ? "bg-white/15 text-foreground"
-                    : "text-muted-foreground hover:bg-white/5"
-                }`}
-              >
-                Все
-              </button>
-              {eventTypes.map((t) => (
+          <div className="flex flex-col gap-3">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <CardTitle className="text-lg">
+                📅 События ({filteredEvents.length})
+              </CardTitle>
+              <div className="flex flex-wrap gap-1">
                 <button
-                  key={t}
-                  onClick={() => setTypeFilter(typeFilter === t ? null : t)}
-                  className={`rounded-full border px-2.5 py-0.5 text-[11px] font-medium transition-all ${
-                    typeFilter === t
-                      ? EVENT_TYPE_COLORS[t] || "bg-white/15 text-foreground"
-                      : "border-transparent text-muted-foreground hover:bg-white/5"
+                  onClick={() => setTypeFilter(null)}
+                  className={`rounded-full px-2.5 py-0.5 text-[11px] font-medium transition-all ${
+                    !typeFilter
+                      ? "bg-white/15 text-foreground"
+                      : "text-muted-foreground hover:bg-white/5"
                   }`}
                 >
-                  {EVENT_TYPE_LABELS[t] || t}
+                  Все
                 </button>
-              ))}
+                {eventTypes.map((t) => (
+                  <button
+                    key={t}
+                    onClick={() => setTypeFilter(typeFilter === t ? null : t)}
+                    className={`rounded-full border px-2.5 py-0.5 text-[11px] font-medium transition-all ${
+                      typeFilter === t
+                        ? EVENT_TYPE_COLORS[t] || "bg-white/15 text-foreground"
+                        : "border-transparent text-muted-foreground hover:bg-white/5"
+                    }`}
+                  >
+                    {EVENT_TYPE_LABELS[t] || t}
+                  </button>
+                ))}
+              </div>
             </div>
+            {availableTiers.length > 0 && (
+              <div className="flex flex-wrap items-center gap-1">
+                <span className="mr-1 text-[11px] text-muted-foreground">Источник:</span>
+                <button
+                  onClick={() => setTierFilter(null)}
+                  className={`rounded-full px-2.5 py-0.5 text-[11px] font-medium transition-all ${
+                    !tierFilter
+                      ? "bg-white/15 text-foreground"
+                      : "text-muted-foreground hover:bg-white/5"
+                  }`}
+                >
+                  Все
+                </button>
+                {availableTiers.map((t) => (
+                  <button
+                    key={t}
+                    onClick={() => setTierFilter(tierFilter === t ? null : t)}
+                    className={`rounded-full border px-2.5 py-0.5 text-[11px] font-medium transition-all ${
+                      tierFilter === t
+                        ? TIER_COLORS[t] || "bg-white/15 text-foreground"
+                        : "border-transparent text-muted-foreground hover:bg-white/5"
+                    }`}
+                  >
+                    {TIER_LABELS[t] || t}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         </CardHeader>
         <CardContent>
