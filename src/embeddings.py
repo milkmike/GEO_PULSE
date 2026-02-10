@@ -27,7 +27,26 @@ def _get_api_config() -> tuple[str, dict, str, int]:
 
     Priority: Jina AI → OpenAI → OpenRouter
     """
-    # Option 1: Jina AI (no geo restrictions, great multilingual)
+    # Option 0: Embedding proxy (bypasses geo restrictions)
+    proxy_url = os.environ.get("EMBEDDING_PROXY_URL", "")
+    if proxy_url:
+        proxy_secret = os.environ.get("EMBEDDING_PROXY_SECRET", "")
+        jina_key = os.environ.get("JINA_API_KEY", "")
+        openai_key = os.environ.get("OPENAI_API_KEY", "")
+
+        # Determine which backend to use through proxy
+        if jina_key:
+            return proxy_url, {
+                "Content-Type": "application/json",
+                "X-Proxy-Secret": proxy_secret,
+            }, "jina-embeddings-v3", 1024
+        elif openai_key:
+            return proxy_url, {
+                "Content-Type": "application/json",
+                "X-Proxy-Secret": proxy_secret,
+            }, "text-embedding-3-small", 1536
+
+    # Option 1: Jina AI direct (works outside restricted regions)
     jina_key = os.environ.get("JINA_API_KEY", "")
     if jina_key:
         return "https://api.jina.ai/v1/embeddings", {
@@ -43,16 +62,26 @@ def _get_api_config() -> tuple[str, dict, str, int]:
             "Content-Type": "application/json",
         }, "text-embedding-3-small", 1536
 
-    # Option 3: OpenRouter (limited embedding support)
-    openrouter_key = os.environ.get("OPENROUTER_API_KEY", "")
-    if openrouter_key:
-        return "https://openrouter.ai/api/v1/embeddings", {
-            "Authorization": f"Bearer {openrouter_key}",
-            "Content-Type": "application/json",
-            "HTTP-Referer": "https://cis-thermometer.app",
-        }, "openai/text-embedding-3-small", 1536
-
     return "", {}, "", 0
+
+
+def _add_proxy_fields(payload: dict, model: str) -> dict:
+    """Add proxy routing fields if using embedding proxy."""
+    proxy_url = os.environ.get("EMBEDDING_PROXY_URL", "")
+    if not proxy_url:
+        return payload
+
+    jina_key = os.environ.get("JINA_API_KEY", "")
+    openai_key = os.environ.get("OPENAI_API_KEY", "")
+
+    if "jina" in model and jina_key:
+        payload["_target_url"] = "https://api.jina.ai/v1/embeddings"
+        payload["_target_auth"] = f"Bearer {jina_key}"
+    elif openai_key:
+        payload["_target_url"] = "https://api.openai.com/v1/embeddings"
+        payload["_target_auth"] = f"Bearer {openai_key}"
+
+    return payload
 
 
 def get_embedding_dim() -> int:
@@ -82,9 +111,11 @@ def generate_embedding(text: str) -> Optional[list[float]]:
     for attempt in range(3):
         try:
             payload = {"model": model, "input": [text]}
-            # Jina-specific: task type for better quality
             if "jina" in model:
                 payload["task"] = "text-matching"
+
+            # Add proxy routing info if using proxy
+            payload = _add_proxy_fields(payload, model)
 
             response = httpx.post(url, headers=headers, json=payload, timeout=30.0)
 
@@ -146,6 +177,8 @@ def generate_embeddings_batch(texts: list[str]) -> list[Optional[list[float]]]:
                 payload = {"model": model, "input": chunk}
                 if "jina" in model:
                     payload["task"] = "text-matching"
+
+                payload = _add_proxy_fields(payload, model)
 
                 response = httpx.post(url, headers=headers, json=payload, timeout=60.0)
 
