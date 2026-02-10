@@ -151,6 +151,50 @@ export interface TradeResponse {
   data: TradeYear[];
 }
 
+// ── Analytics types ────────────────────────────────────
+
+export interface CoverageDay {
+  date: string;
+  total: number;
+  analyzed: number;
+  relevant: number;
+}
+
+export interface CoverageCountry {
+  code: string;
+  name: string;
+  days: CoverageDay[];
+}
+
+export interface CoverageResponse {
+  period_days: number;
+  countries: CoverageCountry[];
+}
+
+export interface TierInfo {
+  tier: string;
+  label: string;
+  sentiment: number;
+  article_count: number;
+  source_count: number;
+}
+
+export interface TierDivergenceCountry {
+  code: string;
+  name: string;
+  tiers: TierInfo[];
+  divergence: number;
+  overall_sentiment: number;
+  total_articles: number;
+  most_positive_tier: string | null;
+  most_negative_tier: string | null;
+}
+
+export interface TierDivergenceResponse {
+  period_days: number;
+  countries: TierDivergenceCountry[];
+}
+
 // ── Fetch wrapper ──────────────────────────────────────
 
 async function apiFetch<T>(path: string, params?: Record<string, string | number>): Promise<T> {
@@ -237,6 +281,14 @@ export interface SourcesResponse {
 
 export async function getSources() {
   return apiFetch<SourcesResponse>("/api/v1/sources");
+}
+
+export async function getCoverage(days = 30) {
+  return apiFetch<CoverageResponse>("/api/v1/analytics/coverage", { days });
+}
+
+export async function getTierDivergence(days = 14) {
+  return apiFetch<TierDivergenceResponse>("/api/v1/analytics/tier-divergence", { days });
 }
 
 // ── Helpers ────────────────────────────────────────────
