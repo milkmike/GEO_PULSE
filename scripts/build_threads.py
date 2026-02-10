@@ -144,11 +144,18 @@ import re as _re
 # Russian stopwords/prepositions that cause false splits
 _STOPWORDS = {"в", "на", "и", "с", "о", "об", "из", "к", "по", "за", "для", "от", "до", "при", "про", "между"}
 
-# Transliteration normalization (common variants)
+# Transliteration normalization (common variants + word forms)
 _TRANSLIT_MAP = {
-    "вэнс": "вэнс", "венс": "вэнс", "vance": "вэнс",
-    "байден": "байден", "biden": "байден",
-    "трамп": "трамп", "trump": "трамп",
+    "вэнс": "вэнс", "вэнса": "вэнс", "вэнсу": "вэнс", "вэнсом": "вэнс",
+    "венс": "вэнс", "венса": "вэнс", "венсу": "вэнс", "венсом": "вэнс",
+    "vance": "вэнс",
+    "байден": "байден", "байдена": "байден", "байдену": "байден",
+    "biden": "байден",
+    "трамп": "трамп", "трампа": "трамп", "трампу": "трамп",
+    "trump": "трамп",
+    "сабуров": "сабуров", "сабурова": "сабуров", "сабурову": "сабуров", "сабуровым": "сабуров",
+    "россия": "россия", "россию": "россия", "россией": "россия", "россии": "россия",
+    "russia": "россия",
 }
 
 
@@ -623,10 +630,49 @@ def cleanup_duplicate_threads(session):
             FROM threads t1
             JOIN threads t2 ON t1.country_code = t2.country_code
                            AND t1.id < t2.id
-            WHERE similarity(t1.thread_key, t2.thread_key) > 0.5
+            WHERE similarity(t1.thread_key, t2.thread_key) > 0.45
               AND t1.status != 'resolved'
               AND t2.status != 'resolved'
         """)).fetchall()
+
+        # Also find duplicates via normalized key comparison (catches Вэнс/Венс etc.)
+        all_threads = session.execute(text("""
+            SELECT id, country_code, thread_key, article_count
+            FROM threads WHERE status != 'resolved'
+        """)).fetchall()
+
+        # Group by country, normalize keys, find matches
+        from collections import defaultdict as _dd
+        by_cc = _dd(list)
+        for t in all_threads:
+            by_cc[t.country_code].append(t)
+
+        norm_dupes = []
+        for cc, threads in by_cc.items():
+            norm_groups = _dd(list)
+            for t in threads:
+                nk = normalize_event_key(t.thread_key)
+                # Create a "signature" from sorted words (catches reorderings)
+                sig = " ".join(sorted(nk.split()))
+                norm_groups[sig].append(t)
+
+            # Also check word overlap ≥ 60%
+            for i, t1 in enumerate(threads):
+                nk1 = set(normalize_event_key(t1.thread_key).split())
+                for t2 in threads[i + 1:]:
+                    nk2 = set(normalize_event_key(t2.thread_key).split())
+                    if not nk1 or not nk2:
+                        continue
+                    overlap = len(nk1 & nk2) / min(len(nk1), len(nk2))
+                    if overlap >= 0.6 and (t1.id, t2.id) not in {(d.keep_id, d.remove_id) for d in dupes}:
+                        norm_dupes.append(type('D', (), {
+                            'keep_id': t1.id, 'remove_id': t2.id,
+                            'keep_key': t1.thread_key, 'remove_key': t2.thread_key,
+                            'keep_count': t1.article_count, 'remove_count': t2.article_count,
+                            'sim': overlap,
+                        })())
+
+        dupes = list(dupes) + norm_dupes
 
         removed = 0
         for d in dupes:
