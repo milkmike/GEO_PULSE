@@ -1,6 +1,5 @@
 "use client";
 
-import { Card, CardContent } from "@/components/ui/card";
 import type { Stats } from "@/lib/api";
 
 interface StatsCardsProps {
@@ -9,31 +8,32 @@ interface StatsCardsProps {
 }
 
 const metrics = [
-  { key: "total_articles" as const, label: "Статей собрано", icon: "📰" },
-  { key: "total_analyzed" as const, label: "Проанализировано", icon: "🔬" },
-  { key: "total_relevant" as const, label: "Релевантных", icon: "✅" },
-  { key: "active_sources" as const, label: "Источников", icon: "📡" },
+  { key: "total_articles" as const, label: "статей", icon: "📰" },
+  { key: "total_analyzed" as const, label: "проанализировано", icon: "🔬" },
+  { key: "total_relevant" as const, label: "релевантных", icon: "✅" },
+  { key: "active_sources" as const, label: "источников", icon: "📡" },
 ];
 
 export default function StatsCards({ stats, loading }: StatsCardsProps) {
+  if (loading || !stats) {
+    return (
+      <div className="h-5 w-64 animate-pulse rounded bg-white/5" />
+    );
+  }
+
   return (
-    <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-      {metrics.map((m) => (
-        <Card key={m.key} className="border-border bg-card">
-          <CardContent className="p-4">
-            <div className="flex items-center gap-2">
-              <span className="text-lg">{m.icon}</span>
-              <span className="text-xs text-muted-foreground">{m.label}</span>
-            </div>
-            <div className="mt-2 text-2xl font-bold tabular-nums text-foreground">
-              {loading || !stats ? (
-                <div className="h-8 w-20 animate-pulse rounded bg-white/5" />
-              ) : (
-                stats[m.key].toLocaleString("ru-RU")
-              )}
-            </div>
-          </CardContent>
-        </Card>
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-white/40">
+      {metrics.map((m, i) => (
+        <span key={m.key} className="flex items-center gap-1.5">
+          <span>{m.icon}</span>
+          <span className="font-semibold text-white/60 tabular-nums">
+            {stats[m.key].toLocaleString("ru-RU")}
+          </span>
+          <span>{m.label}</span>
+          {i < metrics.length - 1 && (
+            <span className="ml-2 text-white/10">·</span>
+          )}
+        </span>
       ))}
     </div>
   );
