@@ -1,12 +1,14 @@
 """FastAPI application."""
 import logging
+import json as _json
 import os
-import time
 from datetime import datetime, timezone
 
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
+import httpx
+import redis
 
 from src.config import COUNTRY_NAMES, COUNTRY_ISO3
 from src.db import get_session
@@ -362,14 +364,16 @@ def get_stats(days: int = Query(default=0, ge=0, le=1460)):
 
 
 TIER_LABELS = {
-    "official": "🏛️ Официальный",
-    "mainstream": "📰 Mainstream",
+    "official": "🏛️ Официальные",
+    "mainstream": "📰 Мейнстрим",
+    "independent": "🔓 Независимые",
+    "domestic_opposition": "📢 Оппозиция",
     "analytics": "🔍 Аналитика",
+    "western_proxy": "🌐 Западные",
     "social": "💬 Соцсети",
-    "opposition": "📢 Оппозиция",
 }
 
-TIER_ORDER = ["official", "mainstream", "analytics", "social", "opposition"]
+TIER_ORDER = ["official", "mainstream", "independent", "domestic_opposition", "analytics", "western_proxy", "social"]
 
 
 @app.get("/api/v1/countries/{code}/tiers")
@@ -417,6 +421,68 @@ def get_country_tiers(code: str, days: int = Query(default=14, le=365)):
                     "article_count": len(d["sentiments"]),
                     "sources": sorted(d["sources"]),
                 })
+        # Also include tiers not in TIER_ORDER
+        for t in tier_data:
+            if t not in TIER_ORDER:
+                d = tier_data[t]
+                avg = sum(d["sentiments"]) / len(d["sentiments"])
+                sentiments_all.append(avg)
+                tiers.append({
+                    "tier": t,
+                    "label": TIER_LABELS.get(t, t),
+                    "sentiment": round(avg, 2),
+                    "article_count": len(d["sentiments"]),
+                    "sources": sorted(d["sources"]),
+                })
+
+        # Get representative headlines per tier (most positive + most negative)
+        tier_headlines = {}
+        for t_info in tiers:
+            t = t_info["tier"]
+            headline_rows = session.execute(
+                text("""
+                    SELECT ar.title, ar.url, an.sentiment, s.name as source_name
+                    FROM analysis an
+                    JOIN articles ar ON an.article_id = ar.id
+                    JOIN sources s ON ar.source_id = s.id
+                    WHERE s.country_code = :cc
+                      AND COALESCE(s.tier, 'mainstream') = :tier
+                      AND an.is_relevant = true
+                      AND an.sentiment IS NOT NULL
+                      AND ar.published_at > NOW() - INTERVAL ':days days'
+                    ORDER BY an.sentiment DESC
+                    LIMIT 2
+                """.replace(":days", str(days))),
+                {"cc": code, "tier": t},
+            ).fetchall()
+            neg_rows = session.execute(
+                text("""
+                    SELECT ar.title, ar.url, an.sentiment, s.name as source_name
+                    FROM analysis an
+                    JOIN articles ar ON an.article_id = ar.id
+                    JOIN sources s ON ar.source_id = s.id
+                    WHERE s.country_code = :cc
+                      AND COALESCE(s.tier, 'mainstream') = :tier
+                      AND an.is_relevant = true
+                      AND an.sentiment IS NOT NULL
+                      AND ar.published_at > NOW() - INTERVAL ':days days'
+                    ORDER BY an.sentiment ASC
+                    LIMIT 2
+                """.replace(":days", str(days))),
+                {"cc": code, "tier": t},
+            ).fetchall()
+            headlines = []
+            seen = set()
+            for r in list(headline_rows) + list(neg_rows):
+                if r.title not in seen:
+                    seen.add(r.title)
+                    headlines.append({
+                        "title": r.title,
+                        "url": r.url,
+                        "sentiment": round(float(r.sentiment), 2),
+                        "source": r.source_name,
+                    })
+            tier_headlines[t] = headlines[:4]
 
         # Overall
         all_sentiments = [float(r.sentiment) for r in rows]
@@ -426,6 +492,10 @@ def get_country_tiers(code: str, days: int = Query(default=14, le=365)):
         divergence = 0.0
         if sentiments_all:
             divergence = round(max(sentiments_all) - min(sentiments_all), 2)
+
+        # Attach headlines to tiers
+        for t_info in tiers:
+            t_info["headlines"] = tier_headlines.get(t_info["tier"], [])
 
         return {
             "country_code": code,
@@ -625,112 +695,6 @@ def get_resonance_events(code: str, days: int = 14, limit: int = 10):
         return {"country": code, "days": days, "events": events}
 
 
-@app.get("/api/v1/analytics/coverage")
-def get_coverage(days: int = Query(default=30, ge=7, le=90)):
-    """Get daily article counts per country for coverage heatmap."""
-    with get_session() as session:
-        rows = session.execute(
-            text("""
-                SELECT s.country_code,
-                       DATE(ar.published_at) AS day,
-                       COUNT(*) AS total,
-                       COUNT(*) FILTER (WHERE an.id IS NOT NULL) AS analyzed,
-                       COUNT(*) FILTER (WHERE an.is_relevant = true) AS relevant
-                FROM articles ar
-                JOIN sources s ON ar.source_id = s.id
-                LEFT JOIN analysis an ON an.article_id = ar.id
-                WHERE ar.published_at > NOW() - make_interval(days => :days)
-                  AND s.country_code IS NOT NULL
-                GROUP BY s.country_code, DATE(ar.published_at)
-                ORDER BY s.country_code, day
-            """),
-            {"days": days},
-        ).fetchall()
-
-        # Group by country
-        coverage: dict = {}
-        for r in rows:
-            cc = r.country_code
-            if cc not in coverage:
-                coverage[cc] = {"code": cc, "name": COUNTRY_NAMES.get(cc, cc), "days": []}
-            coverage[cc]["days"].append({
-                "date": r.day.isoformat(),
-                "total": r.total,
-                "analyzed": r.analyzed,
-                "relevant": r.relevant,
-            })
-
-        return {"period_days": days, "countries": list(coverage.values())}
-
-
-@app.get("/api/v1/analytics/tier-divergence")
-def get_tier_divergence(days: int = Query(default=14, ge=1, le=90)):
-    """Get tier sentiment divergence across all countries in a single query."""
-    with get_session() as session:
-        rows = session.execute(
-            text("""
-                SELECT s.country_code,
-                       COALESCE(s.tier, 'mainstream') AS tier,
-                       AVG(an.sentiment) AS avg_sentiment,
-                       COUNT(*) AS article_count,
-                       COUNT(DISTINCT s.id) AS source_count
-                FROM analysis an
-                JOIN articles ar ON an.article_id = ar.id
-                JOIN sources s ON ar.source_id = s.id
-                WHERE an.is_relevant = true
-                  AND an.sentiment IS NOT NULL
-                  AND ar.published_at > NOW() - make_interval(days => :days)
-                  AND s.country_code IS NOT NULL
-                GROUP BY s.country_code, COALESCE(s.tier, 'mainstream')
-                ORDER BY s.country_code, tier
-            """),
-            {"days": days},
-        ).fetchall()
-
-        # Aggregate per country
-        countries_data: dict = {}
-        for r in rows:
-            cc = r.country_code
-            if cc not in countries_data:
-                countries_data[cc] = {"code": cc, "name": COUNTRY_NAMES.get(cc, cc), "tiers": []}
-            countries_data[cc]["tiers"].append({
-                "tier": r.tier,
-                "label": TIER_LABELS.get(r.tier, r.tier),
-                "sentiment": round(float(r.avg_sentiment), 3),
-                "article_count": r.article_count,
-                "source_count": r.source_count,
-            })
-
-        # Calculate divergence + overall for each country
-        result = []
-        for cc, d in countries_data.items():
-            sents = [t["sentiment"] for t in d["tiers"]]
-            total_articles = sum(t["article_count"] for t in d["tiers"])
-            weighted_sum = sum(t["sentiment"] * t["article_count"] for t in d["tiers"])
-            overall = round(weighted_sum / total_articles, 3) if total_articles > 0 else 0
-
-            divergence = round(max(sents) - min(sents), 3) if len(sents) >= 2 else 0.0
-
-            # Identify which tier is most positive vs negative
-            tier_sorted = sorted(d["tiers"], key=lambda t: t["sentiment"])
-            most_negative = tier_sorted[0]["tier"] if tier_sorted else None
-            most_positive = tier_sorted[-1]["tier"] if tier_sorted else None
-
-            result.append({
-                **d,
-                "divergence": divergence,
-                "overall_sentiment": overall,
-                "total_articles": total_articles,
-                "most_positive_tier": most_positive,
-                "most_negative_tier": most_negative,
-            })
-
-        # Sort by divergence descending (most interesting first)
-        result.sort(key=lambda x: -x["divergence"])
-
-        return {"period_days": days, "countries": result}
-
-
 @app.get("/api/v1/pipeline/stats")
 def get_pipeline_stats_endpoint():
     """Get pipeline queue statistics."""
@@ -741,230 +705,182 @@ def get_pipeline_stats_endpoint():
         return {"error": str(e), "redis_available": False}
 
 
-# ── Admin: API Usage & Monitoring ───────────────────────
+# ── Headline endpoint ───────────────────────────────────
+
+_redis_client = None
+
+def _get_redis():
+    global _redis_client
+    if _redis_client is None:
+        _redis_client = redis.from_url(os.environ.get("REDIS_URL", "redis://redis:6379/0"))
+    return _redis_client
 
 
-@app.get("/api/v1/admin/usage")
-def get_api_usage(
-    period: str = Query(default="week", regex="^(day|week|month)$"),
-    service: str = Query(default="all"),
-):
-    """Get API usage statistics grouped by date and service."""
-    interval_map = {"day": "1 day", "week": "7 days", "month": "30 days"}
-    interval = interval_map[period]
-
-    service_filter = ""
-    params: dict = {"interval": interval}
-    if service != "all":
-        service_filter = "AND service = :svc"
-        params["svc"] = service
-
-    with get_session() as session:
-        rows = session.execute(
-            text(f"""
-                SELECT DATE(created_at) AS date,
-                       service,
-                       COUNT(*) AS total_calls,
-                       SUM(tokens_in) AS tokens_in,
-                       SUM(tokens_out) AS tokens_out,
-                       SUM(cost_usd) AS cost_usd
-                FROM api_usage
-                WHERE created_at > NOW() - INTERVAL :interval
-                  {service_filter}
-                GROUP BY DATE(created_at), service
-                ORDER BY date DESC, service
-            """),
-            params,
-        ).fetchall()
-
-        return {
-            "period": period,
-            "data": [
-                {
-                    "date": r.date.isoformat(),
-                    "service": r.service,
-                    "total_calls": r.total_calls,
-                    "tokens_in": int(r.tokens_in or 0),
-                    "tokens_out": int(r.tokens_out or 0),
-                    "cost_usd": float(r.cost_usd or 0),
-                }
-                for r in rows
-            ],
-        }
+HEADLINE_CACHE_KEY = "geopulse:headline:v1"
+HEADLINE_TTL = 3600
 
 
-@app.get("/api/v1/admin/keys")
-def get_api_keys():
-    """List API keys (masked) and their status."""
-    keys_config = [
-        {"service": "OpenRouter", "env_var": "OPENROUTER_API_KEY"},
-        {"service": "Jina AI", "env_var": "JINA_API_KEY"},
-        {"service": "Comtrade", "env_var": "COMTRADE_API_KEY"},
-        {"service": "OpenAI", "env_var": "OPENAI_API_KEY"},
-    ]
-
-    result = []
-    for kc in keys_config:
-        value = os.environ.get(kc["env_var"], "")
-        if value and len(value) > 12:
-            masked = value[:8] + "…" + value[-4:]
-            status = "active"
-        elif value:
-            masked = "***"
-            status = "active"
-        else:
-            masked = ""
-            status = "missing"
-
-        result.append({
-            "service": kc["service"],
-            "env_var": kc["env_var"],
-            "key_masked": masked,
-            "status": status,
-        })
-
-    return {"keys": result}
+TIER_LABELS_RU = {
+    "official": "официальные СМИ",
+    "mainstream": "мейнстрим",
+    "independent": "независимые СМИ",
+    "domestic_opposition": "оппозиция",
+    "analytics": "аналитики",
+    "western_proxy": "западные СМИ",
+}
 
 
-@app.get("/api/v1/admin/health")
-def get_api_health():
-    """Ping external services and return latency/status."""
-    import httpx
-
-    services = [
-        {
-            "service": "OpenRouter",
-            "url": "https://openrouter.ai/api/v1/models",
-            "headers": {},
-        },
-        {
-            "service": "Jina AI",
-            "url": "https://api.jina.ai/",
-            "headers": {},
-        },
-        {
-            "service": "Comtrade",
-            "url": "https://comtradeapi.un.org/public/v1/preview/C/A/HS?reporterCode=643&period=2023&partnerCode=398&flowCode=X&cmdCode=TOTAL",
-            "headers": {},
-        },
-        {
-            "service": "OpenAI",
-            "url": "https://api.openai.com/v1/models",
-            "headers": {},
-        },
-    ]
-
-    results = []
-    for svc in services:
+@app.get("/api/v1/headline")
+def get_headline(force: bool = False):
+    """Generate editorial headline from current geopolitical data."""
+    # Check cache
+    if not force:
         try:
-            start = time.time()
-            resp = httpx.get(svc["url"], headers=svc["headers"], timeout=10.0)
-            latency_ms = int((time.time() - start) * 1000)
-            results.append({
-                "service": svc["service"],
-                "status": "ok" if resp.status_code < 500 else "degraded",
-                "http_code": resp.status_code,
-                "latency_ms": latency_ms,
-            })
-        except Exception as e:
-            results.append({
-                "service": svc["service"],
-                "status": "unreachable",
-                "http_code": None,
-                "latency_ms": None,
-                "error": str(e)[:200],
-            })
+            cached = _get_redis().get(HEADLINE_CACHE_KEY)
+            if cached:
+                return _json.loads(cached)
+        except Exception:
+            pass
 
-    return {"services": results}
-
-
-@app.get("/api/v1/admin/summary")
-def get_api_summary():
-    """Get admin dashboard summary: costs, calls, top service/model."""
+    # 1. Tier divergence
+    divergence_data = []
     with get_session() as session:
-        # Today
-        today = session.execute(text("""
-            SELECT COUNT(*) AS calls,
-                   COALESCE(SUM(cost_usd), 0) AS cost
-            FROM api_usage
-            WHERE created_at > DATE_TRUNC('day', NOW())
-        """)).fetchone()
+        for code, name in COUNTRY_NAMES.items():
+            tier_rows = session.execute(
+                text("""
+                    SELECT COALESCE(s.tier, 'mainstream') AS tier,
+                           AVG(an.sentiment) AS avg_sent,
+                           COUNT(*) as cnt
+                    FROM analysis an
+                    JOIN articles ar ON an.article_id = ar.id
+                    JOIN sources s ON ar.source_id = s.id
+                    WHERE s.country_code = :cc
+                      AND an.is_relevant = true
+                      AND an.sentiment IS NOT NULL
+                      AND ar.published_at > NOW() - INTERVAL '14 days'
+                    GROUP BY s.tier
+                    HAVING COUNT(*) >= 3
+                """),
+                {"cc": code},
+            ).fetchall()
 
-        # This week
-        week = session.execute(text("""
-            SELECT COALESCE(SUM(cost_usd), 0) AS cost
-            FROM api_usage
-            WHERE created_at > NOW() - INTERVAL '7 days'
-        """)).fetchone()
+            if len(tier_rows) >= 2:
+                tiers_info = []
+                for r in tier_rows:
+                    tiers_info.append({
+                        "tier": r.tier,
+                        "label": TIER_LABELS_RU.get(r.tier, r.tier),
+                        "sentiment": round(float(r.avg_sent), 2),
+                        "count": r.cnt,
+                    })
+                sents = [t["sentiment"] for t in tiers_info]
+                div = round(max(sents) - min(sents), 2)
+                most_pos = max(tiers_info, key=lambda x: x["sentiment"])
+                most_neg = min(tiers_info, key=lambda x: x["sentiment"])
+                divergence_data.append({
+                    "code": code, "name": name, "divergence": div,
+                    "most_positive": most_pos, "most_negative": most_neg,
+                    "tiers": tiers_info,
+                })
+        divergence_data.sort(key=lambda x: -x["divergence"])
 
-        # This month
-        month = session.execute(text("""
-            SELECT COALESCE(SUM(cost_usd), 0) AS cost
-            FROM api_usage
-            WHERE created_at > NOW() - INTERVAL '30 days'
-        """)).fetchone()
-
-        # Top service
-        top_svc = session.execute(text("""
-            SELECT service, COUNT(*) AS cnt
-            FROM api_usage
-            WHERE created_at > NOW() - INTERVAL '7 days'
-            GROUP BY service
-            ORDER BY cnt DESC LIMIT 1
-        """)).fetchone()
-
-        # Top model
-        top_model = session.execute(text("""
-            SELECT model, COUNT(*) AS cnt
-            FROM api_usage
-            WHERE created_at > NOW() - INTERVAL '7 days'
-              AND model IS NOT NULL AND model != ''
-            GROUP BY model
-            ORDER BY cnt DESC LIMIT 1
-        """)).fetchone()
-
-        return {
-            "total_cost_today": float(today.cost) if today else 0,
-            "total_cost_week": float(week.cost) if week else 0,
-            "total_cost_month": float(month.cost) if month else 0,
-            "calls_today": today.calls if today else 0,
-            "top_service": top_svc.service if top_svc else None,
-            "top_model": top_model.model if top_model else None,
-        }
-
-
-@app.get("/api/v1/admin/usage-by-script")
-def get_usage_by_script(days: int = Query(default=7, ge=1, le=90)):
-    """Get API usage grouped by script."""
-    with get_session() as session:
-        rows = session.execute(
+        # 2. Alerts
+        alert_rows = session.execute(
             text("""
-                SELECT script,
-                       COUNT(*) AS total_calls,
-                       SUM(tokens_in) AS tokens_in,
-                       SUM(tokens_out) AS tokens_out,
-                       SUM(cost_usd) AS cost_usd,
-                       AVG(duration_ms) AS avg_duration_ms
-                FROM api_usage
-                WHERE created_at > NOW() - make_interval(days => :days)
-                  AND script IS NOT NULL AND script != ''
-                GROUP BY script
-                ORDER BY cost_usd DESC
+                SELECT country_code, severity, description, data
+                FROM alerts WHERE created_at > NOW() - INTERVAL '24 hours'
+                ORDER BY created_at DESC LIMIT 5
             """),
-            {"days": days},
         ).fetchall()
+        alerts = [{
+            "country": COUNTRY_NAMES.get(r.country_code, r.country_code),
+            "code": r.country_code, "severity": r.severity,
+            "z_score": r.data.get("z_score") if r.data else None,
+            "temperature": r.data.get("temperature") if r.data else None,
+        } for r in alert_rows]
 
-        return {
-            "period_days": days,
-            "scripts": [
-                {
-                    "script": r.script,
-                    "total_calls": r.total_calls,
-                    "tokens_in": int(r.tokens_in or 0),
-                    "tokens_out": int(r.tokens_out or 0),
-                    "cost_usd": float(r.cost_usd or 0),
-                    "avg_duration_ms": int(r.avg_duration_ms or 0),
-                }
-                for r in rows
-            ],
-        }
+        # 3. Temperature extremes
+        temp_rows = session.execute(
+            text("""
+                SELECT DISTINCT ON (country_code) country_code, temperature, trend
+                FROM temperature ORDER BY country_code, time DESC
+            """),
+        ).fetchall()
+        temps = {r.country_code: {"temp": float(r.temperature) if r.temperature else 0, "trend": r.trend} for r in temp_rows}
+        hottest = max(temps.items(), key=lambda x: x[1]["temp"])
+        coldest = min(temps.items(), key=lambda x: x[1]["temp"])
+
+    # Build LLM context
+    ctx = "Данные GeoPulse — аналитика медийной температуры стран СНГ по отношению к России.\n"
+    ctx += "Шкала: −50° (максимальное сотрудничество) до +50° (максимальный конфликт).\n\n"
+    ctx += "РАСХОЖДЕНИЕ НАРРАТИВОВ (за 14 дней):\n"
+    for d in divergence_data[:5]:
+        ctx += f"- {d['name']}: расхождение {d['divergence']}. "
+        ctx += f"{d['most_positive']['label']}={d['most_positive']['sentiment']:+.2f}, "
+        ctx += f"{d['most_negative']['label']}={d['most_negative']['sentiment']:+.2f}\n"
+    if alerts:
+        ctx += "\nАНОМАЛИИ (24ч):\n"
+        for a in alerts[:3]:
+            ctx += f"- {a['country']}: {a['severity']}, z={a['z_score']}, t={a['temperature']}°\n"
+    ctx += f"\nТЕМПЕРАТУРА:\n"
+    ctx += f"- Горячий: {COUNTRY_NAMES.get(hottest[0])} {hottest[1]['temp']:+.1f}° ({hottest[1]['trend']})\n"
+    ctx += f"- Холодный: {COUNTRY_NAMES.get(coldest[0])} {coldest[1]['temp']:+.1f}° ({coldest[1]['trend']})\n"
+
+    prompt = f"""{ctx}
+
+Ты — редактор аналитического издания уровня The Economist. Напиши заголовок и подзаголовок для hero-блока дашборда геополитической аналитики.
+
+ПРАВИЛА:
+- Заголовок: 4-8 слов. Хлёсткий, журналистский, с характером. Без эмодзи. Без кавычек вокруг всего заголовка.
+- Подзаголовок: 1-2 предложения. Конкретика, можно цифры. Раскрывает интригу заголовка.
+- Тон: умный, слегка ироничный, острый. Не сухой.
+- Выбери ОДИН самый яркий инсайт.
+- Русский язык.
+
+JSON формат ответа:
+{{"headline": "...", "subline": "...", "country_code": "XX", "type": "divergence|anomaly|temperature"}}"""
+
+    api_key = os.environ.get("OPENROUTER_API_KEY", "")
+    result = None
+
+    if api_key:
+        try:
+            resp = httpx.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json={
+                    "model": "anthropic/claude-sonnet-4",
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 300, "temperature": 0.8,
+                },
+                timeout=30,
+            )
+            resp.raise_for_status()
+            content = resp.json()["choices"][0]["message"]["content"]
+            if "```" in content:
+                content = content.split("```")[1]
+                if content.startswith("json"):
+                    content = content[4:]
+            result = _json.loads(content.strip())
+            result["generated"] = True
+        except Exception as e:
+            logger.warning(f"Headline LLM error: {e}")
+
+    if not result:
+        top = divergence_data[0] if divergence_data else None
+        if top:
+            result = {
+                "headline": f"{top['name']}: два мира в одних границах",
+                "subline": f"{top['most_positive']['label'].capitalize()} ({top['most_positive']['sentiment']:+.2f}) и {top['most_negative']['label']} ({top['most_negative']['sentiment']:+.2f}) — расхождение {top['divergence']}, максимальное в СНГ.",
+                "country_code": top["code"], "type": "divergence", "generated": False,
+            }
+        else:
+            result = {"headline": None, "subline": None, "generated": False}
+
+    # Cache
+    try:
+        _get_redis().setex(HEADLINE_CACHE_KEY, HEADLINE_TTL, _json.dumps(result, ensure_ascii=False))
+    except Exception:
+        pass
+
+    return result
