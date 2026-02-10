@@ -11,6 +11,8 @@ import PeriodSelector from "@/components/PeriodSelector";
 import TemperatureChart from "@/components/TemperatureChart";
 import UNVotesChart from "@/components/UNVotesChart";
 import TradeChart from "@/components/TradeChart";
+import InfoPopover from "@/components/InfoPopover";
+import { glossary } from "@/lib/glossary";
 import {
   getCountries,
   getCountryEvents,
@@ -239,8 +241,9 @@ export default function CountryPage() {
               {country.temperature > 0 ? "+" : ""}
               {country.temperature.toFixed(1)}°
             </div>
-            <div className="mt-2 text-sm text-muted-foreground">
+            <div className="mt-2 text-sm text-muted-foreground flex items-center justify-center gap-1">
               Температура {trendIcon(country.trend)}
+              <InfoPopover title="Медийная температура">{glossary.temperature.detail}</InfoPopover>
             </div>
           </CardContent>
         </Card>
@@ -253,7 +256,10 @@ export default function CountryPage() {
         <Card className="border-border bg-card">
           <CardContent className="p-6 text-center">
             <div className="text-4xl font-bold">{country.divergence.toFixed(2)}</div>
-            <div className="mt-2 text-sm text-muted-foreground">Расхождение</div>
+            <div className="mt-2 text-sm text-muted-foreground flex items-center justify-center gap-1">
+              Расхождение
+              <InfoPopover title="Расхождение нарративов">{glossary.divergence.detail}</InfoPopover>
+            </div>
           </CardContent>
         </Card>
       </div>
@@ -263,7 +269,12 @@ export default function CountryPage() {
         <Card className="border-border bg-card">
           <CardHeader>
             <div className="flex items-center justify-between">
-              <CardTitle className="text-lg">📋 Дайджест</CardTitle>
+              <CardTitle className="text-lg flex items-center gap-2">📋 Дайджест
+                <InfoPopover title="Дайджест">
+                  <p>AI-сгенерированная сводка ключевых событий за период.</p>
+                  <p>Включает ссылки на оригинальные статьи. Обновляется при каждом пересчёте температуры.</p>
+                </InfoPopover>
+              </CardTitle>
               {digest.generated_at && (
                 <span className="text-xs text-muted-foreground">
                   {formatDate(digest.generated_at)}
@@ -295,7 +306,9 @@ export default function CountryPage() {
       {/* Temperature Chart */}
       <Card className="border-border bg-card">
         <CardHeader>
-          <CardTitle className="text-lg">🌡️ Температура</CardTitle>
+          <CardTitle className="text-lg flex items-center gap-2">🌡️ Температура
+            <InfoPopover title="Медийная температура">{glossary.temperature.detail}</InfoPopover>
+          </CardTitle>
         </CardHeader>
         <CardContent>
           <TemperatureChart data={tempData} />
@@ -306,7 +319,9 @@ export default function CountryPage() {
       <div className="grid gap-6 md:grid-cols-2">
         <Card className="border-border bg-card">
           <CardHeader>
-            <CardTitle className="text-lg">🗳️ Голосования в ООН</CardTitle>
+            <CardTitle className="text-lg flex items-center gap-2">🗳️ Голосования в ООН
+              <InfoPopover title="Голосования в ООН">{glossary.unVotes.detail}</InfoPopover>
+            </CardTitle>
           </CardHeader>
           <CardContent>
             <UNVotesChart data={unVotes} />
@@ -314,7 +329,9 @@ export default function CountryPage() {
         </Card>
         <Card className="border-border bg-card">
           <CardHeader>
-            <CardTitle className="text-lg">💰 Торговля с Россией</CardTitle>
+            <CardTitle className="text-lg flex items-center gap-2">💰 Торговля с Россией
+              <InfoPopover title="Торговые данные">{glossary.trade.detail}</InfoPopover>
+            </CardTitle>
           </CardHeader>
           <CardContent>
             <TradeChart data={tradeData} />
@@ -326,8 +343,9 @@ export default function CountryPage() {
       <Card className="border-border bg-card">
         <CardHeader>
           <div className="flex flex-col gap-3">
-            <CardTitle className="text-lg">
+            <CardTitle className="text-lg flex items-center gap-2">
               📅 События ({filteredEvents.length})
+              <InfoPopover title="Action Level">{glossary.actionLevel.detail}</InfoPopover>
             </CardTitle>
             <div className="flex flex-wrap items-center gap-1">
               <span className="mr-1 text-[11px] text-muted-foreground">Тип:</span>

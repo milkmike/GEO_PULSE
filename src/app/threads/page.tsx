@@ -3,6 +3,8 @@
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { getThread, formatDate, type ThreadDetail, type ThreadTimelineArticle } from "@/lib/api";
+import SectionHeader from "@/components/SectionHeader";
+import { glossary } from "@/lib/glossary";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://YOUR_SERVER_IP:8100";
 
@@ -376,8 +378,14 @@ export default function ThreadsPage() {
       {/* Header */}
       <div className="flex items-end justify-between">
         <div>
-          <h1 className="text-3xl font-bold">Сюжеты</h1>
-          <p className="text-muted-foreground mt-1">
+          <SectionHeader
+            icon="📖"
+            title="Сюжеты"
+            description={glossary.threads.short}
+            infoTitle="Сюжеты"
+            infoContent={glossary.threads.detail}
+          />
+          <p className="text-muted-foreground mt-1 text-sm">
             {threads.length} сюжетов · {totalArticles} статей · {escalating} в эскалации
           </p>
         </div>
@@ -431,10 +439,14 @@ export default function ThreadsPage() {
       {/* Spotlight: Геополитический фокус */}
       {spotlights.length > 0 && (
         <div>
-          <h2 className="text-lg font-bold mb-4 text-muted-foreground uppercase tracking-wider text-xs">
-            🎯 Геополитический фокус
-          </h2>
-          <div className="grid gap-4 md:grid-cols-3">
+          <SectionHeader
+            icon="🎯"
+            title="Геополитический фокус"
+            description="Топ-3 сюжета по геополитической значимости (importance score)"
+            infoTitle="Importance Score"
+            infoContent={glossary.importanceScore.detail}
+          />
+          <div className="grid gap-4 md:grid-cols-3 mt-4">
             {spotlights.map((t, i) => (
               <SpotlightCard key={t.id} thread={t} />
             ))}
@@ -445,10 +457,20 @@ export default function ThreadsPage() {
       {/* Trending */}
       {trending.length > 0 && (
         <div>
-          <h2 className="text-lg font-bold mb-4 text-muted-foreground uppercase tracking-wider text-xs">
-            📈 Быстрорастущие
-          </h2>
-          <div className="grid gap-3 md:grid-cols-2">
+          <SectionHeader
+            icon="📈"
+            title="Быстрорастущие"
+            description="Сюжеты с высокой скоростью публикаций — набирают обороты прямо сейчас"
+            infoTitle="Velocity (скорость)"
+            infoContent={
+              <>
+                <p><strong>Velocity</strong> — количество статей в день по данному сюжету.</p>
+                <p>{'>'} 1.5 ст/день = сюжет активно развивается. {'>'} 5 = информационный шторм.</p>
+                <p>Быстрорастущие сюжеты часто сигнализируют о новых событиях, которые ещё не отразились в температуре.</p>
+              </>
+            }
+          />
+          <div className="grid gap-3 md:grid-cols-2 mt-4">
             {trending.map((t) => (
               <CompactCard key={t.id} thread={t} />
             ))}

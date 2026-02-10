@@ -1,25 +1,36 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import PeriodSelector from "@/components/PeriodSelector";
 import StatsCards from "@/components/StatsCards";
 import CountryCard from "@/components/CountryCard";
+import SectionHeader from "@/components/SectionHeader";
+import InfoPopover from "@/components/InfoPopover";
+import { glossary } from "@/lib/glossary";
 import dynamic from "next/dynamic";
 import {
   getCountries,
   getStats,
+  getTierDivergence,
   PERIOD_DAYS,
+  COUNTRY_FLAGS,
   formatDate,
   minutesAgo,
+  temperatureColor,
   type Country,
   type Stats,
+  type Thread,
+  type TierDivergenceCountry,
 } from "@/lib/api";
 
-const PlotlyMap = dynamic(() => import("@/components/PlotlyMap"), {
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://YOUR_SERVER_IP:8100";
+
+const GeoMap = dynamic(() => import("@/components/GeoMap"), {
   ssr: false,
   loading: () => (
-    <div className="flex h-[420px] items-center justify-center rounded-lg border border-border bg-card">
+    <div className="flex h-[520px] items-center justify-center rounded-xl border border-border bg-card">
       <span className="text-sm text-muted-foreground">Загрузка карты…</span>
     </div>
   ),
@@ -34,18 +45,25 @@ export default function OverviewPage() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [loading, setLoading] = useState(true);
   const [lastUpdate, setLastUpdate] = useState<string>("");
+  const [topThreads, setTopThreads] = useState<Thread[]>([]);
+  const [divergence, setDivergence] = useState<TierDivergenceCountry[]>([]);
+  const [selectedCountry, setSelectedCountry] = useState<string | null>(null);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
       const days = PERIOD_DAYS[period];
-      const [countriesData, statsData] = await Promise.all([
+      const [countriesData, statsData, threadsRes, divRes] = await Promise.all([
         getCountries(days),
         getStats(days),
+        fetch(`${API_URL}/api/v1/threads?limit=5&sort=importance`).then(r => r.json()).catch(() => ({ threads: [] })),
+        getTierDivergence(14).catch(() => ({ countries: [] })),
       ]);
       setCountries(countriesData.countries);
       setStats(statsData);
       setLastUpdate(statsData.newest_article);
+      setTopThreads(threadsRes.threads || []);
+      setDivergence(divRes.countries || []);
     } catch (err) {
       console.error("Failed to fetch data:", err);
     } finally {
@@ -102,14 +120,159 @@ export default function OverviewPage() {
       {/* Stats cards */}
       <StatsCards stats={stats} loading={loading} />
 
+      {/* Top threads */}
+      {topThreads.length > 0 && (
+        <div className="space-y-4">
+          {/* Hero thread */}
+          {topThreads[0] && (
+            <div>
+              <SectionHeader
+                icon="🔥"
+                title="Главный сюжет"
+                description="Самый значимый активный сюжет по совокупности факторов"
+                infoTitle="Сюжеты"
+                infoContent={glossary.threads.detail}
+              />
+              <Link href={`/threads/${topThreads[0].id}`}>
+                <div className="mt-3 rounded-xl border border-red-500/20 bg-gradient-to-r from-red-500/5 to-transparent p-5 hover:border-red-500/40 transition-all cursor-pointer">
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="text-sm">{COUNTRY_FLAGS[topThreads[0].country_code]}</span>
+                    <span className="text-xs text-muted-foreground">{topThreads[0].country_name}</span>
+                    <Badge variant="outline" className="text-[10px]">★ {topThreads[0].importance_score.toFixed(0)}</Badge>
+                    <Badge variant="outline" className="text-[10px]">📰 {topThreads[0].article_count} статей</Badge>
+                  </div>
+                  <h3 className="text-xl font-bold hover:text-blue-400 transition-colors">{topThreads[0].title}</h3>
+                  {topThreads[0].narrative && (
+                    <p className="mt-2 text-sm text-muted-foreground line-clamp-2">{topThreads[0].narrative}</p>
+                  )}
+                </div>
+              </Link>
+            </div>
+          )}
+
+          {/* Focus threads */}
+          {topThreads.length > 1 && (
+            <div>
+              <SectionHeader
+                icon="🎯"
+                title="В фокусе"
+                description="Следующие по значимости сюжеты"
+                infoTitle="Importance Score"
+                infoContent={glossary.importanceScore.detail}
+              />
+              <div className="mt-3 grid gap-3 md:grid-cols-3">
+                {topThreads.slice(1, 4).map((thread) => (
+                  <Link key={thread.id} href={`/threads/${thread.id}`}>
+                    <div className="rounded-lg border border-white/8 p-4 hover:border-white/20 transition-all cursor-pointer h-full">
+                      <div className="flex items-center gap-2 mb-2">
+                        <span className="text-sm">{COUNTRY_FLAGS[thread.country_code]}</span>
+                        <span className="text-xs text-muted-foreground">{thread.country_name}</span>
+                        <span className="text-xs text-muted-foreground ml-auto">★ {thread.importance_score.toFixed(0)}</span>
+                      </div>
+                      <h4 className="font-semibold text-sm hover:text-blue-400 transition-colors line-clamp-2">{thread.title}</h4>
+                      <div className="mt-2 flex gap-2 text-xs text-muted-foreground">
+                        <span>📰 {thread.article_count}</span>
+                        <span style={{ color: thread.avg_sentiment > 0.05 ? "#22c55e" : thread.avg_sentiment < -0.05 ? "#ef4444" : "#eab308" }}>
+                          💬 {thread.avg_sentiment.toFixed(2)}
+                        </span>
+                      </div>
+                    </div>
+                  </Link>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Map */}
-      <PlotlyMap countries={countries} />
+      <SectionHeader
+        icon="🗺️"
+        title="Карта"
+        description={glossary.temperature.short}
+        infoTitle="Медийная температура"
+        infoContent={glossary.temperature.detail}
+      />
+      <GeoMap
+        countries={countries}
+        selectedCountry={selectedCountry}
+        onCountrySelect={setSelectedCountry}
+        height={520}
+      />
+
+      {/* Narrative divergence */}
+      {divergence.length > 0 && (() => {
+        const topDiv = [...divergence].sort((a, b) => b.divergence - a.divergence).slice(0, 3);
+        return (
+          <div className="space-y-3">
+            <SectionHeader
+              icon="🎭"
+              title="Где расходятся нарративы"
+              description={glossary.divergence.short}
+              infoTitle="Расхождение нарративов"
+              infoContent={glossary.divergence.detail}
+            />
+            <div className="grid gap-3 md:grid-cols-3">
+              {topDiv.map((c) => (
+                <Link key={c.code} href={`/country/${c.code}`}>
+                  <div className={`rounded-lg border p-4 hover:border-white/20 transition-all cursor-pointer ${
+                    c.divergence >= 0.5 ? "border-red-500/20 bg-red-500/5" : c.divergence >= 0.2 ? "border-yellow-500/20 bg-yellow-500/5" : "border-white/8"
+                  }`}>
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="font-medium text-sm">{COUNTRY_FLAGS[c.code]} {c.name}</span>
+                      <Badge variant="outline" className={`text-[10px] font-mono ${
+                        c.divergence >= 0.5 ? "border-red-500/30 text-red-400" : c.divergence >= 0.2 ? "border-yellow-500/30 text-yellow-400" : "border-green-500/30 text-green-400"
+                      }`}>
+                        Δ {c.divergence.toFixed(2)}
+                      </Badge>
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      {c.total_articles} статей · {c.tiers.length} тиров
+                      {c.most_positive_tier && c.most_negative_tier && c.most_positive_tier !== c.most_negative_tier && (
+                        <span className="block mt-1">
+                          Позитив: {c.most_positive_tier} → Негатив: {c.most_negative_tier}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </Link>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* System mini stats */}
+      {stats && (
+        <div className="flex flex-wrap items-center gap-4 rounded-lg border border-border/50 bg-card/30 px-4 py-3">
+          <SectionHeader
+            icon="📊"
+            title="Система"
+            infoTitle="О системе"
+            infoContent={
+              <>
+                <p>GeoPulse собирает и анализирует медиа из стран СНГ для оценки геополитических отношений с Россией.</p>
+                <p>Данные обновляются в реальном времени. Каждая статья проходит AI-анализ для определения sentiment, типа события и уровня влияния.</p>
+              </>
+            }
+          />
+          <div className="flex flex-wrap gap-4 text-xs text-muted-foreground ml-auto">
+            <span>📡 {stats.active_sources} источников</span>
+            <span>📰 {stats.total_articles.toLocaleString("ru-RU")} статей</span>
+            <span>✅ {Math.round((stats.total_analyzed / Math.max(stats.total_articles, 1)) * 100)}% проанализировано</span>
+          </div>
+        </div>
+      )}
 
       {/* Country cards grid */}
       <div>
-        <h2 className="mb-4 text-lg font-semibold text-foreground">
-          Страны ({countries.length})
-        </h2>
+        <SectionHeader
+          icon="🌍"
+          title={`Страны (${countries.length})`}
+          description="Все отслеживаемые страны СНГ — отсортированы по температуре"
+          infoTitle="Медийная температура"
+          infoContent={glossary.temperature.detail}
+        />
         {loading ? (
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {Array.from({ length: 6 }).map((_, i) => (

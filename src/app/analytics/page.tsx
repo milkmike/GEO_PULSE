@@ -3,6 +3,8 @@
 import { useEffect, useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import SectionHeader from "@/components/SectionHeader";
+import { glossary } from "@/lib/glossary";
 import {
   ResponsiveContainer,
   BarChart,
@@ -297,7 +299,20 @@ export default function AnalyticsPage() {
       {/* ── 1. System Stats Cards ────────────────────── */}
       {stats && (
         <section className="space-y-3">
-          <h2 className="text-lg font-semibold text-muted-foreground">📦 Состояние системы</h2>
+          <SectionHeader
+            icon="📦"
+            title="Состояние системы"
+            description="Ключевые метрики работы платформы — сбор, анализ, свежесть данных"
+            infoTitle="Состояние системы"
+            infoContent={
+              <>
+                <p>Здесь видно, насколько здорова система сбора и анализа данных.</p>
+                <p><strong>Статей</strong> — сколько статей собрано за период. <strong>Проанализировано</strong> — сколько прошли AI-анализ.</p>
+                <p><strong>Свежесть</strong> — когда последний раз были новые данные. Если {'>'} 1 часа — возможна проблема с парсерами.</p>
+                <p><strong>Дубликаты</strong> — статьи, отфильтрованные как повторы (перепечатки).</p>
+              </>
+            }
+          />
           <div className="grid gap-3 grid-cols-2 lg:grid-cols-5">
             <StatCard
               label="Статей"
@@ -336,12 +351,13 @@ export default function AnalyticsPage() {
       {/* ── 2. Coverage Heatmap ──────────────────────── */}
       {coverageSorted.length > 0 && (
         <section className="space-y-3">
-          <div>
-            <h2 className="text-lg font-semibold text-muted-foreground">🗺️ Покрытие по странам</h2>
-            <p className="text-xs text-muted-foreground/60 mt-0.5">
-              Яркость ячейки = количество статей в день. Пустые — слепые пятна.
-            </p>
-          </div>
+          <SectionHeader
+            icon="🗺️"
+            title="Покрытие по странам"
+            description={glossary.coverage.short}
+            infoTitle="Покрытие"
+            infoContent={glossary.coverage.detail}
+          />
           <Card className="border-border bg-card overflow-x-auto">
             <CardContent className="p-4">
               {/* Date labels */}
@@ -420,12 +436,13 @@ export default function AnalyticsPage() {
       {/* ── 3. Tier Divergence ───────────────────────── */}
       {divergence.length > 0 && (
         <section className="space-y-3">
-          <div>
-            <h2 className="text-lg font-semibold text-muted-foreground">🎭 Расхождение нарративов</h2>
-            <p className="text-xs text-muted-foreground/60 mt-0.5">
-              Разница в sentiment между тирами источников. Высокий divergence = тиры противоречат друг другу.
-            </p>
-          </div>
+          <SectionHeader
+            icon="🎭"
+            title="Расхождение нарративов"
+            description={glossary.divergence.short}
+            infoTitle="Расхождение нарративов"
+            infoContent={glossary.divergence.detail}
+          />
           <div className="grid gap-3 md:grid-cols-2">
             {divergence.map((country) => {
               const maxAbsSent = Math.max(
@@ -571,7 +588,13 @@ export default function AnalyticsPage() {
       {/* ── 4. UN Votes ──────────────────────────────── */}
       {unSorted.length > 0 && (
         <section className="space-y-4">
-          <h2 className="text-lg font-semibold text-muted-foreground">🗳️ Голосования в ООН — совпадение с Россией</h2>
+          <SectionHeader
+            icon="🗳️"
+            title="Голосования в ООН — совпадение с Россией"
+            description={glossary.unVotes.short}
+            infoTitle="Голосования в ООН"
+            infoContent={glossary.unVotes.detail}
+          />
           <Card className="border-border bg-card overflow-x-auto">
             <CardContent className="p-0">
               <table className="w-full text-sm">
@@ -647,7 +670,13 @@ export default function AnalyticsPage() {
       {/* ── 5. Trade ─────────────────────────────────── */}
       {tradeSorted.length > 0 && (
         <section className="space-y-4">
-          <h2 className="text-lg font-semibold text-muted-foreground">💰 Торговля с Россией</h2>
+          <SectionHeader
+            icon="💰"
+            title="Торговля с Россией"
+            description={glossary.trade.short}
+            infoTitle="Торговые данные"
+            infoContent={glossary.trade.detail}
+          />
           <Card className="border-border bg-card overflow-x-auto">
             <CardContent className="p-0">
               <table className="w-full text-sm">
@@ -789,9 +818,13 @@ export default function AnalyticsPage() {
       {/* ── 6. Correlation Scatter ───────────────────── */}
       {scatterData.length > 0 && (
         <section className="space-y-4">
-          <h2 className="text-lg font-semibold text-muted-foreground">
-            🔗 Корреляция: ООН vs Медийная температура
-          </h2>
+          <SectionHeader
+            icon="🔗"
+            title="Корреляция: ООН vs Медийная температура"
+            description={glossary.correlation.short}
+            infoTitle="Корреляция"
+            infoContent={glossary.correlation.detail}
+          />
           <Card className="border-border bg-card">
             <CardContent className="pt-6">
               <ResponsiveContainer width="100%" height={400}>

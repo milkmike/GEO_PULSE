@@ -3,6 +3,8 @@
 import { useEffect, useState, useMemo } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import SectionHeader from "@/components/SectionHeader";
+import { glossary } from "@/lib/glossary";
 import {
   getSources,
   COUNTRY_FLAGS,
@@ -85,10 +87,13 @@ export default function SourcesPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold">📡 Источники</h1>
-        <p className="mt-1 text-muted-foreground">Медиа-источники, отслеживаемые системой</p>
-      </div>
+      <SectionHeader
+        icon="📡"
+        title="Источники"
+        description={glossary.sources.short}
+        infoTitle="Источники"
+        infoContent={glossary.sources.detail}
+      />
 
       {/* Metric Cards */}
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
