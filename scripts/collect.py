@@ -1,6 +1,7 @@
 """RSS/Web collector script. Runs in a loop or one-shot."""
 import argparse
 import logging
+import os
 import time
 from datetime import datetime, timezone
 
@@ -18,9 +19,44 @@ logging.basicConfig(
 )
 logger = logging.getLogger("collector")
 
+SKIP_YAML_SYNC = os.environ.get("SKIP_YAML_SYNC", "0") == "1"
+
+# Redis integration (optional, graceful fallback)
+_redis_available = False
+try:
+    from src.queue import enqueue, Q_RAW_ARTICLES, get_redis
+    _redis_available = True
+except ImportError:
+    logger.info("Redis queue module not available, running without queue")
+
+
+def _enqueue_article(article_id: int, country_code: str):
+    """Enqueue article to Redis queue. Silently fails if Redis is down."""
+    if not _redis_available:
+        return
+    try:
+        enqueue(Q_RAW_ARTICLES, {"article_id": article_id, "country_code": country_code})
+    except Exception as e:
+        logger.warning(f"Failed to enqueue article {article_id} to Redis: {e}")
+
+
+def _update_collector_stats():
+    """Update collector stats in Redis. Silently fails if Redis is down."""
+    if not _redis_available:
+        return
+    try:
+        r = get_redis()
+        r.set("stats:collector:last_run", datetime.now(timezone.utc).isoformat())
+    except Exception as e:
+        logger.warning(f"Failed to update collector stats in Redis: {e}")
+
 
 def ensure_sources_in_db():
     """Sync sources from YAML config to database."""
+    if SKIP_YAML_SYNC:
+        logger.info("SKIP_YAML_SYNC=1, skipping YAML source sync")
+        return
+
     config = load_sources()
     
     with get_session() as session:
@@ -109,6 +145,7 @@ def collect_all():
                     duplicate_of=parent_id,
                 )
                 session.add(article)
+                session.flush()  # Get article.id for Redis enqueue
 
                 if parent_id:
                     # Increment reprint_count on the parent article
@@ -122,6 +159,8 @@ def collect_all():
                     )
                 else:
                     new_count += 1
+                    # Enqueue new non-duplicate articles to Redis for analysis
+                    _enqueue_article(article.id, source.country_code)
 
         total_new += new_count
         total_dupes += dupe_count
@@ -134,6 +173,10 @@ def collect_all():
         f"Collection complete: {total_new} new articles, {total_dupes} cross-source dupes, "
         f"{total_skipped} exact duplicates skipped"
     )
+
+    # Update Redis stats after collection run
+    _update_collector_stats()
+
     return total_new
 
 

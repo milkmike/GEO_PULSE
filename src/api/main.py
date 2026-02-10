@@ -621,3 +621,13 @@ def get_resonance_events(code: str, days: int = 14, limit: int = 10):
         events.sort(key=lambda x: -x["resonance_score"])
         
         return {"country": code, "days": days, "events": events}
+
+
+@app.get("/api/v1/pipeline/stats")
+def get_pipeline_stats_endpoint():
+    """Get pipeline queue statistics."""
+    try:
+        from src.queue import get_pipeline_stats
+        return get_pipeline_stats()
+    except Exception as e:
+        return {"error": str(e), "redis_available": False}

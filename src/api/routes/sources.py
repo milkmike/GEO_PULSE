@@ -26,6 +26,7 @@ class SourceCreate(BaseModel):
     language: str = "ru"
     config: dict = {}
     active: bool = True
+    tier: str = "mainstream"
 
     @field_validator("url")
     @classmethod
