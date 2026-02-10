@@ -3,6 +3,7 @@ import argparse
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
 
 from sqlalchemy import text
 
@@ -18,6 +19,14 @@ logging.basicConfig(
 logger = logging.getLogger("analyzer")
 
 MAX_WORKERS = 5
+
+# Redis integration (optional, graceful fallback)
+_redis_available = False
+try:
+    from src.queue import dequeue, enqueue, Q_RAW_ARTICLES, Q_DEAD_LETTER, get_redis
+    _redis_available = True
+except ImportError:
+    logger.info("Redis queue module not available, running without queue")
 
 
 def _analyze_one(row) -> dict | None:
@@ -77,6 +86,68 @@ def _analyze_one(row) -> dict | None:
     }
 
 
+def _analyze_article_by_id(article_id: int) -> bool:
+    """Analyze a single article by ID (for Redis queue mode)."""
+    with get_session() as session:
+        row = session.execute(
+            text("""
+                SELECT ar.id, ar.title, ar.body, ar.source_id,
+                       s.name as source_name, s.country_code, s.weight
+                FROM articles ar
+                JOIN sources s ON ar.source_id = s.id
+                LEFT JOIN analysis an ON an.article_id = ar.id
+                WHERE ar.id = :aid AND an.id IS NULL AND ar.is_duplicate = FALSE
+            """),
+            {"aid": article_id},
+        ).fetchone()
+
+    if not row:
+        logger.debug(f"Article {article_id} already analyzed or is duplicate, skipping")
+        return True  # Not an error, just already done
+
+    result = _analyze_one(row)
+    if result:
+        with get_session() as session:
+            analysis = Analysis(**result)
+            session.add(analysis)
+        return True
+    return False
+
+
+def process_from_queue() -> bool:
+    """Process one article from Redis queue. Returns True if processed."""
+    if not _redis_available:
+        return False
+
+    try:
+        job = dequeue(Q_RAW_ARTICLES, timeout=5)
+    except Exception as e:
+        logger.warning(f"Redis dequeue failed: {e}")
+        return False
+
+    if not job:
+        return False
+
+    article_id = job["article_id"]
+    try:
+        _analyze_article_by_id(article_id)
+        # Update stats
+        try:
+            r = get_redis()
+            r.incr("stats:analyzer:today_count")
+            r.set("stats:analyzer:last_run", datetime.now(timezone.utc).isoformat())
+        except Exception:
+            pass  # Stats update is non-critical
+        return True
+    except Exception as e:
+        logger.error(f"Failed to analyze article {article_id}: {e}")
+        try:
+            enqueue(Q_DEAD_LETTER, {**job, "error": str(e)})
+        except Exception:
+            pass
+        return False
+
+
 def analyze_new_articles(batch_size: int = 100):
     """Find and analyze articles that haven't been processed yet."""
     with get_session() as session:
@@ -124,6 +195,16 @@ def analyze_new_articles(batch_size: int = 100):
                 logger.error(f"  Save error for article {r['article_id']}: {e}")
 
     logger.info(f"Analyzed {saved}/{len(rows)} articles")
+
+    # Update Redis stats
+    if _redis_available:
+        try:
+            redis_client = get_redis()
+            redis_client.set("stats:analyzer:last_run", datetime.now(timezone.utc).isoformat())
+            redis_client.incrby("stats:analyzer:today_count", saved)
+        except Exception:
+            pass
+
     return saved
 
 
@@ -143,9 +224,16 @@ def main():
         logger.info(f"Starting analyzer loop (interval: {args.interval}s, batch: {args.batch})")
         while True:
             try:
-                processed = analyze_new_articles(args.batch)
+                # Try Redis queue first
+                processed = process_from_queue()
+                if processed:
+                    time.sleep(0.5)
+                    continue
+
+                # Fallback: scan DB for unanalyzed articles
+                batch_processed = analyze_new_articles(args.batch)
                 # If we processed a full batch, there might be more - run again quickly
-                if processed >= args.batch:
+                if batch_processed >= args.batch:
                     logger.info("Full batch processed, running again immediately...")
                     continue
             except Exception as e:
