@@ -42,7 +42,7 @@ export default function Headline({ countries }: HeadlineProps) {
 
   return (
     <div
-      onClick={() => data.country_code && router.push(`/country/${data.country_code}`)}
+      onClick={() => data.country_code && router.push(`/country/${data.country_code}#narratives`)}
       className="group relative overflow-hidden rounded-2xl border border-white/[0.06] cursor-pointer transition-all duration-500 hover:border-white/[0.12]"
       style={{
         background: `linear-gradient(135deg, ${color}10 0%, rgba(9,9,11,0.98) 50%, ${color}06 100%)`,

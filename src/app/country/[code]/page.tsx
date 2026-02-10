@@ -12,6 +12,7 @@ import TemperatureChart from "@/components/TemperatureChart";
 import UNVotesChart from "@/components/UNVotesChart";
 import TradeChart from "@/components/TradeChart";
 import InfoPopover from "@/components/InfoPopover";
+import NarrativeXray from "@/components/NarrativeXray";
 import { glossary } from "@/lib/glossary";
 import Link from "next/link";
 import SectionHeader from "@/components/SectionHeader";
@@ -271,6 +272,9 @@ export default function CountryPage() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Narrative Xray */}
+      <NarrativeXray code={code} days={PERIOD_DAYS[period] || 30} />
 
       {/* Digest */}
       {digest && digest.digest && (
