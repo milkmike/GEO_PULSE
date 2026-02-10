@@ -328,8 +328,12 @@ export default function ThreadsPage() {
   }
 
   // Split into sections
-  // Hero: highest media impact (articles × velocity combined)
-  const mediaScore = (t: any) => t.article_count * Math.max(t.velocity || 0.1, 0.1) * (t.arc_phase === "escalating" ? 2 : t.arc_phase === "peak" ? 1.5 : 1);
+  // Hero: highest media impact — sqrt dampens velocity spikes, cap prevents tiny threads with huge velocity from dominating
+  const mediaScore = (t: any) => {
+    const v = Math.min(t.velocity || 0.1, t.article_count * 5); // velocity can't exceed 5× article count
+    const phaseMult = t.arc_phase === "escalating" ? 2 : t.arc_phase === "peak" ? 1.5 : 1;
+    return t.article_count * Math.sqrt(v) * phaseMult;
+  };
   const sorted = [...threads].sort((a, b) => mediaScore(b) - mediaScore(a));
 
   const hero = sorted[0] || null;
