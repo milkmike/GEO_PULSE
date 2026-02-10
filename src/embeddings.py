@@ -16,6 +16,8 @@ from typing import Optional
 
 import httpx
 
+from src.api_tracker import track_api_call, track_duration
+
 logger = logging.getLogger(__name__)
 
 # Embedding configuration — auto-detect best available backend
@@ -108,6 +110,8 @@ def generate_embedding(text: str) -> Optional[list[float]]:
     if not text:
         return None
 
+    svc = "jina" if "jina" in model else "openai"
+
     for attempt in range(3):
         try:
             payload = {"model": model, "input": [text]}
@@ -117,11 +121,17 @@ def generate_embedding(text: str) -> Optional[list[float]]:
             # Add proxy routing info if using proxy
             payload = _add_proxy_fields(payload, model)
 
-            response = httpx.post(url, headers=headers, json=payload, timeout=30.0)
+            with track_duration() as timer:
+                response = httpx.post(url, headers=headers, json=payload, timeout=30.0)
 
             if response.status_code == 429:
                 wait = 5 * (attempt + 1)
                 logger.warning(f"Embedding rate limited, waiting {wait}s")
+                track_api_call(
+                    service=svc, endpoint="/v1/embeddings", model=model,
+                    script="embeddings.py", status="error",
+                    error="rate_limited_429", duration_ms=timer.ms,
+                )
                 time.sleep(wait)
                 continue
 
@@ -132,11 +142,23 @@ def generate_embedding(text: str) -> Optional[list[float]]:
                 logger.warning(f"No embedding data in response: {str(data)[:200]}")
                 return None
 
+            usage = data.get("usage", {})
+            track_api_call(
+                service=svc, endpoint="/v1/embeddings", model=model,
+                script="embeddings.py",
+                tokens_in=usage.get("prompt_tokens", usage.get("total_tokens", 0)),
+                tokens_out=0, status="ok", duration_ms=timer.ms,
+            )
+
             embedding = data["data"][0]["embedding"]
             return embedding
 
         except Exception as e:
             logger.warning(f"Embedding error (attempt {attempt + 1}): {e}")
+            track_api_call(
+                service=svc, endpoint="/v1/embeddings", model=model,
+                script="embeddings.py", status="error", error=str(e)[:500],
+            )
             time.sleep(2)
 
     return None
@@ -167,6 +189,7 @@ def generate_embeddings_batch(texts: list[str]) -> list[Optional[list[float]]]:
 
     # Jina supports up to 2048 inputs, OpenAI up to 100
     chunk_size = 50 if "jina" in model else 100
+    svc = "jina" if "jina" in model else "openai"
 
     for chunk_start in range(0, len(valid_texts), chunk_size):
         chunk = valid_texts[chunk_start:chunk_start + chunk_size]
@@ -180,11 +203,17 @@ def generate_embeddings_batch(texts: list[str]) -> list[Optional[list[float]]]:
 
                 payload = _add_proxy_fields(payload, model)
 
-                response = httpx.post(url, headers=headers, json=payload, timeout=60.0)
+                with track_duration() as timer:
+                    response = httpx.post(url, headers=headers, json=payload, timeout=60.0)
 
                 if response.status_code == 429:
                     wait = 10 * (attempt + 1)
                     logger.warning(f"Batch embedding rate limited, waiting {wait}s")
+                    track_api_call(
+                        service=svc, endpoint="/v1/embeddings", model=model,
+                        script="embeddings.py", status="error",
+                        error="rate_limited_429", duration_ms=timer.ms,
+                    )
                     time.sleep(wait)
                     continue
 
@@ -201,11 +230,23 @@ def generate_embeddings_batch(texts: list[str]) -> list[Optional[list[float]]]:
                         original_idx = chunk_indices[idx]
                         results[original_idx] = item["embedding"]
 
+                usage = data.get("usage", {})
+                track_api_call(
+                    service=svc, endpoint="/v1/embeddings", model=model,
+                    script="embeddings.py",
+                    tokens_in=usage.get("prompt_tokens", usage.get("total_tokens", 0)),
+                    tokens_out=0, status="ok", duration_ms=timer.ms,
+                )
+
                 logger.info(f"  Batch {chunk_start//chunk_size + 1}: {len(data['data'])} embeddings")
                 break
 
             except Exception as e:
                 logger.warning(f"Batch embedding error (attempt {attempt + 1}): {e}")
+                track_api_call(
+                    service=svc, endpoint="/v1/embeddings", model=model,
+                    script="embeddings.py", status="error", error=str(e)[:500],
+                )
                 time.sleep(3)
 
         time.sleep(0.5)

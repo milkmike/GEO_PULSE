@@ -7,6 +7,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 
 from src.config import OPENROUTER_API_KEY, COUNTRY_NAMES
 from src.pipeline.prompts import PROMPT_VERSION, SENTIMENT_PROMPT, ACTION_LEVEL_PROMPT
+from src.api_tracker import track_api_call, track_duration
 
 logger = logging.getLogger(__name__)
 
@@ -55,20 +56,34 @@ def analyze_sentiment(
     )
 
     try:
-        response = httpx.post(
-            OPENROUTER_URL,
-            headers=headers,
-            json={
-                "model": MODEL,
-                "max_tokens": 300,
-                "messages": [{"role": "user", "content": prompt}],
-            },
-            timeout=60.0,
-        )
-        response.raise_for_status()
+        with track_duration() as timer:
+            response = httpx.post(
+                OPENROUTER_URL,
+                headers=headers,
+                json={
+                    "model": MODEL,
+                    "max_tokens": 300,
+                    "messages": [{"role": "user", "content": prompt}],
+                },
+                timeout=60.0,
+            )
+            response.raise_for_status()
         
         data = response.json()
         text = data["choices"][0]["message"]["content"].strip()
+
+        # Extract token usage from response
+        usage = data.get("usage", {})
+        _tokens_in = usage.get("prompt_tokens", 0)
+        _tokens_out = usage.get("completion_tokens", 0)
+
+        # Track successful call
+        track_api_call(
+            service="openrouter", endpoint="/chat/completions",
+            model=MODEL, script="analyze.py",
+            tokens_in=_tokens_in, tokens_out=_tokens_out,
+            status="ok", duration_ms=timer.ms,
+        )
         
         # Try to extract JSON from response (handle markdown code blocks)
         if text.startswith("```"):
@@ -105,12 +120,27 @@ def analyze_sentiment(
 
     except json.JSONDecodeError as e:
         logger.error(f"Failed to parse LLM response as JSON: {e}, raw: {text[:200]}")
+        track_api_call(
+            service="openrouter", endpoint="/chat/completions",
+            model=MODEL, script="analyze.py",
+            status="error", error=f"JSON parse: {e}",
+        )
         return None
     except httpx.HTTPStatusError as e:
         logger.error(f"OpenRouter API error: {e.response.status_code} {e.response.text[:200]}")
+        track_api_call(
+            service="openrouter", endpoint="/chat/completions",
+            model=MODEL, script="analyze.py",
+            status="error", error=f"HTTP {e.response.status_code}",
+        )
         raise
     except Exception as e:
         logger.error(f"Unexpected error in sentiment analysis: {e}")
+        track_api_call(
+            service="openrouter", endpoint="/chat/completions",
+            model=MODEL, script="analyze.py",
+            status="error", error=str(e)[:500],
+        )
         raise
 
 
@@ -138,20 +168,30 @@ def analyze_action_level(
     )
 
     try:
-        response = httpx.post(
-            OPENROUTER_URL,
-            headers=headers,
-            json={
-                "model": MODEL,
-                "max_tokens": 100,
-                "messages": [{"role": "user", "content": prompt}],
-            },
-            timeout=60.0,
-        )
-        response.raise_for_status()
+        with track_duration() as timer:
+            response = httpx.post(
+                OPENROUTER_URL,
+                headers=headers,
+                json={
+                    "model": MODEL,
+                    "max_tokens": 100,
+                    "messages": [{"role": "user", "content": prompt}],
+                },
+                timeout=60.0,
+            )
+            response.raise_for_status()
         
         data = response.json()
         text = data["choices"][0]["message"]["content"].strip()
+
+        usage = data.get("usage", {})
+        track_api_call(
+            service="openrouter", endpoint="/chat/completions",
+            model=MODEL, script="analyze.py",
+            tokens_in=usage.get("prompt_tokens", 0),
+            tokens_out=usage.get("completion_tokens", 0),
+            status="ok", duration_ms=timer.ms,
+        )
         
         if text.startswith("```"):
             text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
@@ -162,4 +202,9 @@ def analyze_action_level(
 
     except Exception as e:
         logger.error(f"Failed to analyze action_level: {e}")
+        track_api_call(
+            service="openrouter", endpoint="/chat/completions",
+            model=MODEL, script="analyze.py",
+            status="error", error=str(e)[:500],
+        )
         return 1

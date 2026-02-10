@@ -20,6 +20,8 @@ import time
 import urllib.request
 from datetime import datetime
 
+from src.api_tracker import track_api_call, track_duration
+
 logger = logging.getLogger(__name__)
 
 DB_URL = os.environ.get(
@@ -99,9 +101,10 @@ def try_comtrade_api() -> list[dict] | None:
 
         for attempt in range(3):
             try:
-                req = urllib.request.Request(url)
-                with urllib.request.urlopen(req, timeout=30) as resp:
-                    data = json.loads(resp.read())
+                with track_duration() as timer:
+                    req = urllib.request.Request(url)
+                    with urllib.request.urlopen(req, timeout=30) as resp:
+                        data = json.loads(resp.read())
 
                 for row in data.get("data", []):
                     # Filter: aggregate only (motCode=0, partner2Code=0)
@@ -123,14 +126,29 @@ def try_comtrade_api() -> list[dict] | None:
                         }
                     )
                 logger.info(f"Comtrade batch {period_str}: {len(data.get('data', []))} records")
+                track_api_call(
+                    service="comtrade", endpoint="/data/v1/get",
+                    script="auto_trade_loader.py",
+                    status="ok", duration_ms=timer.ms,
+                )
                 break
             except Exception as e:
                 if "429" in str(e):
                     wait = 10 * (attempt + 1)
                     logger.warning(f"Rate limited, waiting {wait}s...")
+                    track_api_call(
+                        service="comtrade", endpoint="/data/v1/get",
+                        script="auto_trade_loader.py",
+                        status="error", error="rate_limited_429",
+                    )
                     time.sleep(wait)
                     continue
                 logger.warning(f"Comtrade API error for {period_str}: {e}")
+                track_api_call(
+                    service="comtrade", endpoint="/data/v1/get",
+                    script="auto_trade_loader.py",
+                    status="error", error=str(e)[:500],
+                )
                 break
 
         time.sleep(2)  # Rate limit between batches
