@@ -675,12 +675,24 @@ def cleanup_duplicate_threads(session):
         dupes = list(dupes) + norm_dupes
 
         removed = 0
+        already_removed = set()
         for d in dupes:
+            # Skip if either thread was already removed in this pass
+            if d.keep_id in already_removed or d.remove_id in already_removed:
+                continue
+
             # Keep the one with more articles or higher importance
             if d.keep_count >= d.remove_count:
                 remove_id, keep_id = d.remove_id, d.keep_id
             else:
                 remove_id, keep_id = d.keep_id, d.remove_id
+
+            # Verify both threads still exist
+            exists = session.execute(text(
+                "SELECT COUNT(*) FROM threads WHERE id IN (:k, :r)"
+            ), {"k": keep_id, "r": remove_id}).scalar()
+            if exists < 2:
+                continue
 
             # Move articles from removed thread to kept thread
             session.execute(text("""
@@ -701,6 +713,7 @@ def cleanup_duplicate_threads(session):
             # Delete duplicate
             session.execute(text("DELETE FROM thread_articles WHERE thread_id = :tid"), {"tid": remove_id})
             session.execute(text("DELETE FROM threads WHERE id = :tid"), {"tid": remove_id})
+            already_removed.add(remove_id)
             removed += 1
             logger.info(f"  Deduped: removed thread {remove_id} (merged into {keep_id}, sim={d.sim:.2f})")
 
