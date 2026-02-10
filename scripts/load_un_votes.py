@@ -133,13 +133,46 @@ def load_to_db(results):
     print(f"\nLoaded {count} records into un_votes table.")
 
 
-def main():
-    print("=== UN Voting Agreement Data Loader ===")
+def run_once():
+    """Download and load UN voting data."""
+    # Remove cached file to force re-download (source might have updated)
+    if os.path.exists(LOCAL_PATH):
+        os.remove(LOCAL_PATH)
     download_data()
     results = parse_data()
     print(f"\nParsed {len(results)} country-year records")
     load_to_db(results)
     print("Done!")
+
+
+def main():
+    import argparse
+    import time
+    import logging
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--loop", action="store_true", help="Run in loop mode")
+    parser.add_argument("--interval", type=int, default=2592000,
+                        help="Interval in seconds (default: 30 days)")
+    args = parser.parse_args()
+
+    logging.basicConfig(level=logging.INFO,
+                        format="%(asctime)s [un-votes] %(levelname)s: %(message)s")
+    logger = logging.getLogger(__name__)
+
+    if args.loop:
+        logger.info(f"Starting UN votes loader loop (interval: {args.interval}s)")
+        while True:
+            try:
+                print("=== UN Voting Agreement Data Loader ===")
+                run_once()
+            except Exception as e:
+                logger.error(f"UN votes loader failed: {e}")
+            logger.info(f"Sleeping {args.interval}s...")
+            time.sleep(args.interval)
+    else:
+        print("=== UN Voting Agreement Data Loader ===")
+        run_once()
 
 
 if __name__ == "__main__":

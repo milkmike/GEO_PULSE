@@ -141,24 +141,38 @@ def generate_digest(country_code: str) -> dict | None:
     return {"country": country_code, "digest": digest_text, "temperature": temperature}
 
 
+def run_once(country: str | None = None):
+    """Generate digests once for all or one country."""
+    countries = [country] if country else list(COUNTRY_NAMES.keys())
+
+    for cc in countries:
+        result = generate_digest(cc)
+        if result:
+            logger.info(f"{COUNTRY_NAMES.get(cc, cc)} ({result['temperature']:+.1f}°): {len(result['digest'])} chars")
+        time.sleep(1)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--country", help="Generate for one country")
+    parser.add_argument("--loop", action="store_true", help="Run in loop mode")
+    parser.add_argument("--interval", type=int, default=86400, help="Interval between runs in seconds (default: 86400 = 24h)")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s [digest] %(levelname)s: %(message)s")
 
-    countries = [args.country] if args.country else list(COUNTRY_NAMES.keys())
-
-    for cc in countries:
-        result = generate_digest(cc)
-        if result:
-            print(f"\n{'='*60}")
-            print(f"{COUNTRY_NAMES.get(cc, cc)} ({result['temperature']:+.1f}°)")
-            print(f"{'='*60}")
-            print(result["digest"])
-        time.sleep(1)
+    if args.loop:
+        logger.info(f"Starting digest loop (interval: {args.interval}s)")
+        while True:
+            try:
+                run_once(args.country)
+                logger.info(f"Digests complete. Sleeping {args.interval}s...")
+            except Exception as e:
+                logger.error(f"Digest generation failed: {e}")
+            time.sleep(args.interval)
+    else:
+        run_once(args.country)
 
 
 if __name__ == "__main__":
