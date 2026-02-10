@@ -1,5 +1,7 @@
 """FastAPI application."""
 import logging
+import os
+import time
 from datetime import datetime, timezone
 
 from fastapi import FastAPI, Query
@@ -737,3 +739,232 @@ def get_pipeline_stats_endpoint():
         return get_pipeline_stats()
     except Exception as e:
         return {"error": str(e), "redis_available": False}
+
+
+# ── Admin: API Usage & Monitoring ───────────────────────
+
+
+@app.get("/api/v1/admin/usage")
+def get_api_usage(
+    period: str = Query(default="week", regex="^(day|week|month)$"),
+    service: str = Query(default="all"),
+):
+    """Get API usage statistics grouped by date and service."""
+    interval_map = {"day": "1 day", "week": "7 days", "month": "30 days"}
+    interval = interval_map[period]
+
+    service_filter = ""
+    params: dict = {"interval": interval}
+    if service != "all":
+        service_filter = "AND service = :svc"
+        params["svc"] = service
+
+    with get_session() as session:
+        rows = session.execute(
+            text(f"""
+                SELECT DATE(created_at) AS date,
+                       service,
+                       COUNT(*) AS total_calls,
+                       SUM(tokens_in) AS tokens_in,
+                       SUM(tokens_out) AS tokens_out,
+                       SUM(cost_usd) AS cost_usd
+                FROM api_usage
+                WHERE created_at > NOW() - INTERVAL :interval
+                  {service_filter}
+                GROUP BY DATE(created_at), service
+                ORDER BY date DESC, service
+            """),
+            params,
+        ).fetchall()
+
+        return {
+            "period": period,
+            "data": [
+                {
+                    "date": r.date.isoformat(),
+                    "service": r.service,
+                    "total_calls": r.total_calls,
+                    "tokens_in": int(r.tokens_in or 0),
+                    "tokens_out": int(r.tokens_out or 0),
+                    "cost_usd": float(r.cost_usd or 0),
+                }
+                for r in rows
+            ],
+        }
+
+
+@app.get("/api/v1/admin/keys")
+def get_api_keys():
+    """List API keys (masked) and their status."""
+    keys_config = [
+        {"service": "OpenRouter", "env_var": "OPENROUTER_API_KEY"},
+        {"service": "Jina AI", "env_var": "JINA_API_KEY"},
+        {"service": "Comtrade", "env_var": "COMTRADE_API_KEY"},
+        {"service": "OpenAI", "env_var": "OPENAI_API_KEY"},
+    ]
+
+    result = []
+    for kc in keys_config:
+        value = os.environ.get(kc["env_var"], "")
+        if value and len(value) > 12:
+            masked = value[:8] + "…" + value[-4:]
+            status = "active"
+        elif value:
+            masked = "***"
+            status = "active"
+        else:
+            masked = ""
+            status = "missing"
+
+        result.append({
+            "service": kc["service"],
+            "env_var": kc["env_var"],
+            "key_masked": masked,
+            "status": status,
+        })
+
+    return {"keys": result}
+
+
+@app.get("/api/v1/admin/health")
+def get_api_health():
+    """Ping external services and return latency/status."""
+    import httpx
+
+    services = [
+        {
+            "service": "OpenRouter",
+            "url": "https://openrouter.ai/api/v1/models",
+            "headers": {},
+        },
+        {
+            "service": "Jina AI",
+            "url": "https://api.jina.ai/",
+            "headers": {},
+        },
+        {
+            "service": "Comtrade",
+            "url": "https://comtradeapi.un.org/public/v1/preview/C/A/HS?reporterCode=643&period=2023&partnerCode=398&flowCode=X&cmdCode=TOTAL",
+            "headers": {},
+        },
+        {
+            "service": "OpenAI",
+            "url": "https://api.openai.com/v1/models",
+            "headers": {},
+        },
+    ]
+
+    results = []
+    for svc in services:
+        try:
+            start = time.time()
+            resp = httpx.get(svc["url"], headers=svc["headers"], timeout=10.0)
+            latency_ms = int((time.time() - start) * 1000)
+            results.append({
+                "service": svc["service"],
+                "status": "ok" if resp.status_code < 500 else "degraded",
+                "http_code": resp.status_code,
+                "latency_ms": latency_ms,
+            })
+        except Exception as e:
+            results.append({
+                "service": svc["service"],
+                "status": "unreachable",
+                "http_code": None,
+                "latency_ms": None,
+                "error": str(e)[:200],
+            })
+
+    return {"services": results}
+
+
+@app.get("/api/v1/admin/summary")
+def get_api_summary():
+    """Get admin dashboard summary: costs, calls, top service/model."""
+    with get_session() as session:
+        # Today
+        today = session.execute(text("""
+            SELECT COUNT(*) AS calls,
+                   COALESCE(SUM(cost_usd), 0) AS cost
+            FROM api_usage
+            WHERE created_at > DATE_TRUNC('day', NOW())
+        """)).fetchone()
+
+        # This week
+        week = session.execute(text("""
+            SELECT COALESCE(SUM(cost_usd), 0) AS cost
+            FROM api_usage
+            WHERE created_at > NOW() - INTERVAL '7 days'
+        """)).fetchone()
+
+        # This month
+        month = session.execute(text("""
+            SELECT COALESCE(SUM(cost_usd), 0) AS cost
+            FROM api_usage
+            WHERE created_at > NOW() - INTERVAL '30 days'
+        """)).fetchone()
+
+        # Top service
+        top_svc = session.execute(text("""
+            SELECT service, COUNT(*) AS cnt
+            FROM api_usage
+            WHERE created_at > NOW() - INTERVAL '7 days'
+            GROUP BY service
+            ORDER BY cnt DESC LIMIT 1
+        """)).fetchone()
+
+        # Top model
+        top_model = session.execute(text("""
+            SELECT model, COUNT(*) AS cnt
+            FROM api_usage
+            WHERE created_at > NOW() - INTERVAL '7 days'
+              AND model IS NOT NULL AND model != ''
+            GROUP BY model
+            ORDER BY cnt DESC LIMIT 1
+        """)).fetchone()
+
+        return {
+            "total_cost_today": float(today.cost) if today else 0,
+            "total_cost_week": float(week.cost) if week else 0,
+            "total_cost_month": float(month.cost) if month else 0,
+            "calls_today": today.calls if today else 0,
+            "top_service": top_svc.service if top_svc else None,
+            "top_model": top_model.model if top_model else None,
+        }
+
+
+@app.get("/api/v1/admin/usage-by-script")
+def get_usage_by_script(days: int = Query(default=7, ge=1, le=90)):
+    """Get API usage grouped by script."""
+    with get_session() as session:
+        rows = session.execute(
+            text("""
+                SELECT script,
+                       COUNT(*) AS total_calls,
+                       SUM(tokens_in) AS tokens_in,
+                       SUM(tokens_out) AS tokens_out,
+                       SUM(cost_usd) AS cost_usd,
+                       AVG(duration_ms) AS avg_duration_ms
+                FROM api_usage
+                WHERE created_at > NOW() - make_interval(days => :days)
+                  AND script IS NOT NULL AND script != ''
+                GROUP BY script
+                ORDER BY cost_usd DESC
+            """),
+            {"days": days},
+        ).fetchall()
+
+        return {
+            "period_days": days,
+            "scripts": [
+                {
+                    "script": r.script,
+                    "total_calls": r.total_calls,
+                    "tokens_in": int(r.tokens_in or 0),
+                    "tokens_out": int(r.tokens_out or 0),
+                    "cost_usd": float(r.cost_usd or 0),
+                    "avg_duration_ms": int(r.avg_duration_ms or 0),
+                }
+                for r in rows
+            ],
+        }

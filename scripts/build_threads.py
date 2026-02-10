@@ -12,6 +12,7 @@ from sqlalchemy import text
 
 from src.config import COUNTRY_NAMES, OPENROUTER_API_KEY
 from src.db import get_session, wait_for_db
+from src.api_tracker import track_api_call, track_duration
 
 logging.basicConfig(
     level=logging.INFO,
@@ -55,16 +56,31 @@ def llm_call(prompt: str, max_tokens: int = 500) -> str | None:
     if not headers:
         return None
     try:
-        resp = httpx.post(
-            OPENROUTER_URL,
-            headers=headers,
-            json={"model": MODEL, "max_tokens": max_tokens, "messages": [{"role": "user", "content": prompt}]},
-            timeout=60.0,
+        with track_duration() as timer:
+            resp = httpx.post(
+                OPENROUTER_URL,
+                headers=headers,
+                json={"model": MODEL, "max_tokens": max_tokens, "messages": [{"role": "user", "content": prompt}]},
+                timeout=60.0,
+            )
+            resp.raise_for_status()
+        data = resp.json()
+        usage = data.get("usage", {})
+        track_api_call(
+            service="openrouter", endpoint="/chat/completions",
+            model=MODEL, script="build_threads.py",
+            tokens_in=usage.get("prompt_tokens", 0),
+            tokens_out=usage.get("completion_tokens", 0),
+            status="ok", duration_ms=timer.ms,
         )
-        resp.raise_for_status()
-        return resp.json()["choices"][0]["message"]["content"].strip()
+        return data["choices"][0]["message"]["content"].strip()
     except Exception as e:
         logger.error(f"LLM call failed: {e}")
+        track_api_call(
+            service="openrouter", endpoint="/chat/completions",
+            model=MODEL, script="build_threads.py",
+            status="error", error=str(e)[:500],
+        )
         return None
 
 

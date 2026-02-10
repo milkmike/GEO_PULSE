@@ -10,6 +10,7 @@ from sqlalchemy import text
 
 from src.config import COUNTRY_NAMES
 from src.db import get_session
+from src.api_tracker import track_api_call, track_duration
 
 logger = logging.getLogger(__name__)
 
@@ -103,24 +104,39 @@ def generate_digest(country_code: str) -> dict | None:
     )
 
     try:
-        resp = httpx.post(
-            "https://openrouter.ai/api/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": MODEL,
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": 500,
-                "temperature": 0.7,
-            },
-            timeout=60.0,
+        with track_duration() as timer:
+            resp = httpx.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": MODEL,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 500,
+                    "temperature": 0.7,
+                },
+                timeout=60.0,
+            )
+            resp.raise_for_status()
+        data = resp.json()
+        digest_text = data["choices"][0]["message"]["content"].strip()
+        usage = data.get("usage", {})
+        track_api_call(
+            service="openrouter", endpoint="/chat/completions",
+            model=MODEL, script="generate_digests.py",
+            tokens_in=usage.get("prompt_tokens", 0),
+            tokens_out=usage.get("completion_tokens", 0),
+            status="ok", duration_ms=timer.ms,
         )
-        resp.raise_for_status()
-        digest_text = resp.json()["choices"][0]["message"]["content"].strip()
     except Exception as e:
         logger.error(f"LLM error for {country_code}: {e}")
+        track_api_call(
+            service="openrouter", endpoint="/chat/completions",
+            model=MODEL, script="generate_digests.py",
+            status="error", error=str(e)[:500],
+        )
         return None
 
     # Save to DB
