@@ -10,6 +10,7 @@ import SectionHeader from "@/components/SectionHeader";
 import InfoPopover from "@/components/InfoPopover";
 import { glossary } from "@/lib/glossary";
 import dynamic from "next/dynamic";
+import Headline from "@/components/Headline";
 import {
   getCountries,
   getStats,
@@ -116,6 +117,9 @@ export default function OverviewPage() {
           {lastUpdate && ` · обновлено ${minutesAgo(lastUpdate)} мин назад`}
         </Badge>
       </div>
+
+      {/* Hero headline */}
+      <Headline countries={countries} />
 
       {/* Stats cards */}
       <StatsCards stats={stats} loading={loading} />
