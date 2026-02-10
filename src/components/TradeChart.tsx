@@ -65,13 +65,13 @@ export default function TradeChart({ data }: Props) {
         </Card>
         <Card className="border-border bg-card">
           <CardContent className="p-4 text-center">
-            <div className="text-2xl font-bold text-blue-400">{fmtBln(last.ru_export_usd)}</div>
+            <div className="text-2xl font-bold text-indigo-400">{fmtBln(last.ru_export_usd)}</div>
             <div className="mt-1 text-[11px] text-muted-foreground">Экспорт РФ</div>
           </CardContent>
         </Card>
         <Card className="border-border bg-card">
           <CardContent className="p-4 text-center">
-            <div className="text-2xl font-bold text-amber-400">{fmtBln(last.ru_import_usd)}</div>
+            <div className="text-2xl font-bold text-teal-400">{fmtBln(last.ru_import_usd)}</div>
             <div className="mt-1 text-[11px] text-muted-foreground">Импорт в РФ</div>
           </CardContent>
         </Card>
@@ -128,8 +128,8 @@ export default function TradeChart({ data }: Props) {
             }
             wrapperStyle={{ fontSize: 11, color: "rgba(255,255,255,0.6)" }}
           />
-          <Bar dataKey="export" stackId="trade" fill="#3b82f6" radius={[0, 0, 0, 0]} />
-          <Bar dataKey="import" stackId="trade" fill="#f59e0b" radius={[2, 2, 0, 0]} />
+          <Bar dataKey="export" stackId="trade" fill="#6366f1" radius={[0, 0, 0, 0]} />
+          <Bar dataKey="import" stackId="trade" fill="#14b8a6" radius={[2, 2, 0, 0]} />
           <Line
             type="monotone"
             dataKey="total"

@@ -710,10 +710,10 @@ export default function AnalyticsPage() {
                         <td className="px-4 py-3 text-right font-bold">
                           {fmtBln(last.total_trade_usd)}
                         </td>
-                        <td className="px-4 py-3 text-right text-blue-400">
+                        <td className="px-4 py-3 text-right text-indigo-400">
                           {fmtBln(last.ru_export_usd)}
                         </td>
-                        <td className="px-4 py-3 text-right text-amber-400">
+                        <td className="px-4 py-3 text-right text-teal-400">
                           {fmtBln(last.ru_import_usd)}
                         </td>
                         <td className="px-4 py-3 text-right">
@@ -801,11 +801,11 @@ export default function AnalyticsPage() {
                       color: "rgba(255,255,255,0.6)",
                     }}
                   />
-                  <Bar dataKey="export" stackId="trade" fill="#3b82f6" />
+                  <Bar dataKey="export" stackId="trade" fill="#6366f1" />
                   <Bar
                     dataKey="import"
                     stackId="trade"
-                    fill="#f59e0b"
+                    fill="#14b8a6"
                     radius={[0, 4, 4, 0]}
                   />
                 </BarChart>
