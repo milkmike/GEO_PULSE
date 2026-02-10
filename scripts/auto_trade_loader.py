@@ -82,39 +82,58 @@ def try_comtrade_api() -> list[dict] | None:
     current_year = datetime.now().year
     results = []
 
-    for year in range(current_year - 2, current_year + 1):
-        for flow, flow_name in [("X", "export"), ("M", "import")]:
-            url = (
-                f"https://comtradeapi.un.org/data/v1/get/C/A/HS"
-                f"?reporterCode={RUSSIA_CODE}"
-                f"&partnerCode={partner_list}"
-                f"&period={year}"
-                f"&flowCode={flow}"
-                f"&cmdCode=TOTAL"
-                f"&subscription-key={COMTRADE_API_KEY}"
-            )
+    # Fetch all years in batches of 5 (Comtrade limit), both flows at once
+    years = list(range(current_year - 2, current_year + 1))
+    for i in range(0, len(years), 5):
+        batch = years[i : i + 5]
+        period_str = ",".join(str(y) for y in batch)
+        url = (
+            f"https://comtradeapi.un.org/data/v1/get/C/A/HS"
+            f"?reporterCode={RUSSIA_CODE}"
+            f"&partnerCode={partner_list}"
+            f"&period={period_str}"
+            f"&flowCode=X,M"
+            f"&cmdCode=TOTAL"
+            f"&subscription-key={COMTRADE_API_KEY}"
+        )
+
+        for attempt in range(3):
             try:
                 req = urllib.request.Request(url)
                 with urllib.request.urlopen(req, timeout=30) as resp:
                     data = json.loads(resp.read())
 
                 for row in data.get("data", []):
+                    # Filter: aggregate only (motCode=0, partner2Code=0)
+                    if row.get("motCode", 0) != 0 or row.get("partner2Code", 0) != 0:
+                        continue
                     partner_code = str(row.get("partnerCode", "")).zfill(3)
                     iso2 = PARTNER_CODES.get(partner_code)
                     if not iso2:
                         continue
+                    flow_code = row.get("flowCode", "")
+                    flow_name = "export" if flow_code == "X" else "import"
                     value_usd = row.get("primaryValue", 0) or 0
                     results.append(
                         {
                             "country": iso2,
-                            "year": year,
+                            "year": int(row.get("period", 0)),
                             "flow": flow_name,
                             "value_usd": int(value_usd),
                         }
                     )
-                time.sleep(0.5)
+                logger.info(f"Comtrade batch {period_str}: {len(data.get('data', []))} records")
+                break
             except Exception as e:
-                logger.warning(f"Comtrade API error for {year}/{flow}: {e}")
+                if "429" in str(e):
+                    wait = 10 * (attempt + 1)
+                    logger.warning(f"Rate limited, waiting {wait}s...")
+                    time.sleep(wait)
+                    continue
+                logger.warning(f"Comtrade API error for {period_str}: {e}")
+                break
+
+        time.sleep(2)  # Rate limit between batches
 
     return results if results else None
 
