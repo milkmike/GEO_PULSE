@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState } from "react";
 import SectionHeader from "@/components/SectionHeader";
 import { glossary } from "@/lib/glossary";
 import {
@@ -51,7 +51,6 @@ const TIER_COLORS: Record<string, string> = {
   social: "#06b6d4",
 };
 
-const TOPICS = ["economic", "military", "diplomatic", "cultural", "security"] as const;
 const TOPIC_LABELS: Record<string, string> = {
   economic: "Экономика",
   military: "Военные",
@@ -94,46 +93,64 @@ function sentimentBg(s: number): string {
   return "rgba(239,68,68,0.6)";
 }
 
-/* ── Mock data generators ── */
-function generateDivergenceTimeline(days: number, currentDivergence: number) {
-  const points = [];
-  const numPoints = Math.min(days, 14);
-  for (let i = numPoints; i >= 0; i--) {
-    const d = new Date();
-    d.setDate(d.getDate() - i);
-    const noise = (Math.random() - 0.5) * 0.3;
-    const base = currentDivergence + noise * (i / numPoints);
-    points.push({
-      date: d.toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit" }),
-      divergence: Math.max(0, Math.min(2, parseFloat(base.toFixed(2)))),
-    });
-  }
-  return points;
+/* ── API data types ── */
+interface TimelinePoint {
+  date: string;
+  divergence: number;
 }
 
-function generateTopicBreakdown() {
-  return TOPICS.map((topic) => ({
-    topic,
-    label: TOPIC_LABELS[topic],
-    divergence: parseFloat((Math.random() * 0.8 + 0.1).toFixed(2)),
-    color: TOPIC_COLORS[topic],
-  })).sort((a, b) => b.divergence - a.divergence);
+interface TopicPoint {
+  topic: string;
+  label: string;
+  divergence: number;
+  color: string;
 }
 
-function generateHeatmapData(tiers: TierInfo[], days: number) {
-  const numDays = Math.min(days, 7);
-  const dayLabels: string[] = [];
-  for (let i = numDays - 1; i >= 0; i--) {
-    const d = new Date();
-    d.setDate(d.getDate() - i);
-    dayLabels.push(d.toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit" }));
-  }
-  return tiers.map((tier) => ({
-    tier: tier.tier,
-    label: tier.label,
-    days: dayLabels.map((day) => ({
+interface HeatmapRow {
+  tier: string;
+  label: string;
+  days: { day: string; sentiment: number }[];
+}
+
+/* ── API fetch helpers ── */
+async function fetchDivergenceTimeline(code: string, days: number): Promise<TimelinePoint[]> {
+  const clampedDays = Math.min(days, 365);
+  const res = await fetch(`${API}/api/v1/countries/${code}/divergence/history?days=${clampedDays}`);
+  if (!res.ok) return [];
+  const json = await res.json();
+  return (json.data || []).map((d: { date: string; divergence: number }) => ({
+    date: new Date(d.date).toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit" }),
+    divergence: d.divergence,
+  }));
+}
+
+async function fetchTopicBreakdown(code: string, days: number): Promise<TopicPoint[]> {
+  const clampedDays = Math.min(days, 365);
+  const res = await fetch(`${API}/api/v1/countries/${code}/topics/divergence?days=${clampedDays}`);
+  if (!res.ok) return [];
+  const json = await res.json();
+  return (json.data || []).map((d: { topic: string; label: string; divergence: number }) => ({
+    topic: d.topic,
+    label: d.label,
+    divergence: d.divergence,
+    color: TOPIC_COLORS[d.topic] || "#6b7280",
+  }));
+}
+
+async function fetchHeatmapData(code: string, days: number): Promise<HeatmapRow[]> {
+  const clampedDays = Math.min(days, 365);
+  const res = await fetch(`${API}/api/v1/countries/${code}/tiers/daily?days=${clampedDays}`);
+  if (!res.ok) return [];
+  const json = await res.json();
+  const dayList: string[] = (json.days || []).map((d: string) =>
+    new Date(d).toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit" })
+  );
+  return (json.tiers || []).map((t: { tier: string; label: string; values: (number | null)[] }) => ({
+    tier: t.tier,
+    label: t.label,
+    days: dayList.map((day, i) => ({
       day,
-      sentiment: parseFloat((tier.sentiment + (Math.random() - 0.5) * 0.4).toFixed(2)),
+      sentiment: t.values[i] ?? 0,
     })),
   }));
 }
@@ -174,23 +191,32 @@ export default function NarrativeXrayExpanded({ code, days }: NarrativeXrayExpan
     }
   }, [data]);
 
-  const safeTiers = data?.tiers ?? [];
+  const [timelineData, setTimelineData] = useState<TimelinePoint[]>([]);
+  const [topicData, setTopicData] = useState<TopicPoint[]>([]);
+  const [heatmapData, setHeatmapData] = useState<HeatmapRow[]>([]);
+  const [timelineLoading, setTimelineLoading] = useState(false);
+  const [topicLoading, setTopicLoading] = useState(false);
+  const [heatmapLoading, setHeatmapLoading] = useState(false);
 
-  const timelineData = useMemo(
-    () => (data ? generateDivergenceTimeline(days, data.divergence) : []),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [data?.divergence, days]
-  );
-  const topicData = useMemo(
-    () => (data ? generateTopicBreakdown() : []),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [data?.country_code]
-  );
-  const heatmapData = useMemo(
-    () => (safeTiers.length > 0 ? generateHeatmapData(safeTiers.map((t) => ({ ...t, headlines: t.headlines ?? [], sources: t.sources ?? [] })), days) : []),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [data?.country_code, days, safeTiers.length]
-  );
+  useEffect(() => {
+    if (!data) return;
+    setTimelineLoading(true);
+    fetchDivergenceTimeline(code, days).then((d) => { setTimelineData(d); setTimelineLoading(false); });
+  }, [code, days, data]);
+
+  useEffect(() => {
+    if (!data) return;
+    setTopicLoading(true);
+    fetchTopicBreakdown(code, days).then((d) => { setTopicData(d); setTopicLoading(false); });
+  }, [code, days, data]);
+
+  useEffect(() => {
+    if (!data) return;
+    setHeatmapLoading(true);
+    fetchHeatmapData(code, days).then((d) => { setHeatmapData(d); setHeatmapLoading(false); });
+  }, [code, days, data]);
+
+  const safeTiers = data?.tiers ?? [];
 
   if (loading) {
     return <div className="h-48 rounded-xl border border-white/[0.06] bg-zinc-950 animate-pulse" />;
@@ -393,8 +419,13 @@ export default function NarrativeXrayExpanded({ code, days }: NarrativeXrayExpan
                 <h3 className="text-sm font-medium text-white/70">Динамика расхождения</h3>
                 <p className="text-[10px] text-white/30 mt-0.5">Как менялось расхождение нарративов по дням</p>
               </div>
-              <div className="text-[10px] text-white/20 px-2 py-1 rounded bg-white/[0.04] border border-white/[0.06]">📊 Мок-данные</div>
             </div>
+            {timelineLoading ? (
+              <div className="h-52 flex items-center justify-center"><div className="w-6 h-6 border-2 border-white/20 border-t-amber-400 rounded-full animate-spin" /></div>
+            ) : timelineData.length === 0 ? (
+              <div className="h-52 flex items-center justify-center text-sm text-white/30">Нет данных за выбранный период</div>
+            ) : (
+            <>
             <div className="h-52">
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={timelineData}>
@@ -415,6 +446,8 @@ export default function NarrativeXrayExpanded({ code, days }: NarrativeXrayExpan
               <div className="flex items-center gap-1.5"><div className="w-6 h-px bg-amber-400/40" /><span className="text-white/30">0.4–0.8 Расхождение</span></div>
               <div className="flex items-center gap-1.5"><div className="w-6 h-px bg-red-400/40" /><span className="text-white/30">&gt; 0.8 Раскол</span></div>
             </div>
+            </>
+            )}
           </div>
         )}
 
@@ -510,8 +543,13 @@ export default function NarrativeXrayExpanded({ code, days }: NarrativeXrayExpan
                 <h3 className="text-sm font-medium text-white/70">Расхождение по темам</h3>
                 <p className="text-[10px] text-white/30 mt-0.5">По каким темам тиры расходятся больше всего</p>
               </div>
-              <div className="text-[10px] text-white/20 px-2 py-1 rounded bg-white/[0.04] border border-white/[0.06]">📊 Мок-данные</div>
             </div>
+            {topicLoading ? (
+              <div className="h-48 flex items-center justify-center"><div className="w-6 h-6 border-2 border-white/20 border-t-purple-400 rounded-full animate-spin" /></div>
+            ) : topicData.length === 0 ? (
+              <div className="h-48 flex items-center justify-center text-sm text-white/30">Нет данных за выбранный период</div>
+            ) : (
+            <>
             <div className="h-48">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={topicData} layout="vertical" barCategoryGap="20%">
@@ -539,6 +577,8 @@ export default function NarrativeXrayExpanded({ code, days }: NarrativeXrayExpan
                 </div>
               ))}
             </div>
+            </>
+            )}
           </div>
         )}
 
@@ -550,8 +590,13 @@ export default function NarrativeXrayExpanded({ code, days }: NarrativeXrayExpan
                 <h3 className="text-sm font-medium text-white/70">Sentiment Heatmap</h3>
                 <p className="text-[10px] text-white/30 mt-0.5">Тональность по тирам и дням</p>
               </div>
-              <div className="text-[10px] text-white/20 px-2 py-1 rounded bg-white/[0.04] border border-white/[0.06]">📊 Мок-данные</div>
             </div>
+            {heatmapLoading ? (
+              <div className="h-48 flex items-center justify-center"><div className="w-6 h-6 border-2 border-white/20 border-t-cyan-400 rounded-full animate-spin" /></div>
+            ) : heatmapData.length === 0 ? (
+              <div className="h-48 flex items-center justify-center text-sm text-white/30">Нет данных за выбранный период</div>
+            ) : (
+            <>
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead>
@@ -595,6 +640,8 @@ export default function NarrativeXrayExpanded({ code, days }: NarrativeXrayExpan
               <div className="flex items-center gap-1"><div className="w-4 h-3 rounded" style={{ backgroundColor: "rgba(34,197,94,0.3)" }} /><span>Скорее +</span></div>
               <div className="flex items-center gap-1"><div className="w-4 h-3 rounded" style={{ backgroundColor: "rgba(34,197,94,0.6)" }} /><span>Позитивный</span></div>
             </div>
+            </>
+            )}
           </div>
         )}
       </div>
