@@ -463,8 +463,8 @@ export default function AboutPage() {
             GeoPulse — это не просто мониторинг. Это количественный подход к пониманию геополитической динамики постсоветского пространства.
           </p>
           <div className="flex items-center justify-center gap-2 text-xs text-zinc-600">
-            <span>Проект</span>
-            <span className="font-bold text-blue-500">АСК ФОРВАРД</span>
+            <span className="font-bold text-blue-500">GEO PULSE</span>
+            <span>· Geopolitical Intelligence Platform</span>
           </div>
         </div>
       </section>
