@@ -168,11 +168,13 @@ export default function NarrativeXrayExpanded({ code, days }: NarrativeXrayExpan
       const s = [...data.tiers].sort((a, b) => b.sentiment - a.sentiment);
       setCompareA(s[0].tier);
       setCompareB(s[s.length - 1].tier);
-    } else if (data && data.tiers.length === 1) {
+    } else if (data && data.tiers && data.tiers.length === 1) {
       setCompareA(data.tiers[0].tier);
       setCompareB(null);
     }
   }, [data]);
+
+  const safeTiers = data?.tiers ?? [];
 
   const timelineData = useMemo(
     () => (data ? generateDivergenceTimeline(days, data.divergence) : []),
@@ -185,16 +187,16 @@ export default function NarrativeXrayExpanded({ code, days }: NarrativeXrayExpan
     [data?.country_code]
   );
   const heatmapData = useMemo(
-    () => (data ? generateHeatmapData(data.tiers.map((t) => ({ ...t, headlines: t.headlines ?? [], sources: t.sources ?? [] })), days) : []),
+    () => (safeTiers.length > 0 ? generateHeatmapData(safeTiers.map((t) => ({ ...t, headlines: t.headlines ?? [], sources: t.sources ?? [] })), days) : []),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [data?.country_code, days]
+    [data?.country_code, days, safeTiers.length]
   );
 
   if (loading) {
     return <div className="h-48 rounded-xl border border-white/[0.06] bg-zinc-950 animate-pulse" />;
   }
 
-  if (!data || data.tiers.length === 0) return null;
+  if (!data || !data.tiers || data.tiers.length === 0) return null;
 
   // Normalize: ensure headlines array exists on every tier
   const normalizedTiers = data.tiers.map((t) => ({
