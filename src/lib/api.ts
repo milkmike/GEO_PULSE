@@ -306,7 +306,7 @@ export async function getUNVotesSummary() {
 }
 
 export async function getCountryTemperature(code: string, days = 30) {
-  return apiFetch<TemperatureResponse>(`/api/v1/countries/${code}/temperature`, { days });
+  return apiFetch<TemperatureResponse>(`/api/v1/countries/${code}/temperature`, { days: Math.min(days, 365) });
 }
 
 export async function getCountryUNVotes(code: string) {

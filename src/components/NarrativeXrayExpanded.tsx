@@ -149,10 +149,15 @@ export default function NarrativeXrayExpanded({ code, days }: NarrativeXrayExpan
 
   useEffect(() => {
     setLoading(true);
-    fetch(`${API}/api/v1/countries/${code}/tiers?days=${days}`)
+    const clampedDays = Math.min(days, 365);
+    fetch(`${API}/api/v1/countries/${code}/tiers?days=${clampedDays}`)
       .then((r) => r.json())
       .then((d) => {
-        setData(d);
+        if (d && d.tiers) {
+          setData(d);
+        } else {
+          setData(null);
+        }
         setLoading(false);
       })
       .catch(() => setLoading(false));

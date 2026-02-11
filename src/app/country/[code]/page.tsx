@@ -13,6 +13,7 @@ import UNVotesChart from "@/components/UNVotesChart";
 import TradeChart from "@/components/TradeChart";
 import InfoPopover from "@/components/InfoPopover";
 import NarrativeXrayExpanded from "@/components/NarrativeXrayExpanded";
+import ErrorBoundary from "@/components/ErrorBoundary";
 import { glossary } from "@/lib/glossary";
 import Link from "next/link";
 import SectionHeader from "@/components/SectionHeader";
@@ -274,7 +275,9 @@ export default function CountryPage() {
       </div>
 
       {/* Narrative Xray */}
-      <NarrativeXrayExpanded code={code} days={PERIOD_DAYS[period] || 30} />
+      <ErrorBoundary name="Нарративный расклад">
+        <NarrativeXrayExpanded code={code} days={PERIOD_DAYS[period] || 30} />
+      </ErrorBoundary>
 
       {/* Digest */}
       {digest && digest.digest && (
@@ -316,6 +319,7 @@ export default function CountryPage() {
       )}
 
       {/* Threads / storylines */}
+      <ErrorBoundary name="Сюжеты">
       {threads.length > 0 && (() => {
         const PHASE_CFG: Record<string, { emoji: string; color: string; label: string }> = {
           emerging:   { emoji: "🌱", color: "#3b82f6", label: "Зарождение" },
@@ -455,6 +459,7 @@ export default function CountryPage() {
           </div>
         );
       })()}
+      </ErrorBoundary>
 
       {/* Temperature Chart */}
       <Card className="border-border bg-card">
