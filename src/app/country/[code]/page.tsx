@@ -13,6 +13,7 @@ import UNVotesChart from "@/components/UNVotesChart";
 import TradeChart from "@/components/TradeChart";
 import InfoPopover from "@/components/InfoPopover";
 import NarrativeXrayExpanded from "@/components/NarrativeXrayExpanded";
+import AudienceSplit from "@/components/AudienceSplit";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import { glossary } from "@/lib/glossary";
 import Link from "next/link";
@@ -277,6 +278,11 @@ export default function CountryPage() {
       {/* Narrative Xray */}
       <ErrorBoundary name="Нарративный расклад">
         <NarrativeXrayExpanded code={code} days={PERIOD_DAYS[period] || 30} />
+      </ErrorBoundary>
+
+      {/* Audience Split */}
+      <ErrorBoundary name="Аудиторный сплит">
+        <AudienceSplit country={code} days={PERIOD_DAYS[period] || 30} />
       </ErrorBoundary>
 
       {/* Digest */}

@@ -4,7 +4,10 @@ import { useEffect, useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import SectionHeader from "@/components/SectionHeader";
+import AudienceSplit from "@/components/AudienceSplit";
 import { glossary } from "@/lib/glossary";
+import ErrorBoundary from "@/components/ErrorBoundary";
+import GeoPulse from "@/components/GeoPulse";
 import {
   ResponsiveContainer,
   BarChart,
@@ -296,6 +299,11 @@ export default function AnalyticsPage() {
         </div>
       </div>
 
+      {/* ── 0. Geopolitical Pulse ────────────────────── */}
+      <ErrorBoundary name="Геополитический пульс">
+        <GeoPulse period={period} />
+      </ErrorBoundary>
+
       {/* ── 1. System Stats Cards ────────────────────── */}
       {stats && (
         <section className="space-y-3">
@@ -584,6 +592,24 @@ export default function AnalyticsPage() {
           </div>
         </section>
       )}
+
+      {/* ── 3.5. Audience Split ─────────────────────── */}
+      <section className="space-y-3">
+        <SectionHeader
+          icon="🎭"
+          title="Аудиторный сплит"
+          description="СМИ, которые пишут об одном событии на разных языках с разной тональностью"
+          infoTitle="Аудиторный сплит"
+          infoContent={
+            <>
+              <p>Некоторые СМИ публикуют одно и то же событие на русском и английском языках с разной тональностью.</p>
+              <p>Это индикатор «аудиторного двуличия» — когда для внутренней аудитории подаётся один нарратив, а для внешней — другой.</p>
+              <p><strong>Δ</strong> — разница средней тональности между языковыми версиями. Красный {'>'} 0.5, жёлтый {'>'} 0.3.</p>
+            </>
+          }
+        />
+        <AudienceSplit days={30} />
+      </section>
 
       {/* ── 4. UN Votes ──────────────────────────────── */}
       {unSorted.length > 0 && (

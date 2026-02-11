@@ -412,6 +412,33 @@ export const COUNTRY_NAMES: Record<string, string> = {
   GE: "Грузия", MD: "Молдова", BY: "Беларусь",
 };
 
+// ── High-Impact Events ─────────────────────────────────
+
+export interface HighImpactEvent {
+  title: string;
+  url: string;
+  source: string;
+  tier: string;
+  country_code: string;
+  country_name: string;
+  sentiment: number;
+  action_level: number;
+  event_type: string;
+  published_at: string;
+}
+
+export interface HighImpactEventsResponse {
+  events: HighImpactEvent[];
+}
+
+export async function getHighImpactEvents(days = 14, minActionLevel = 3, limit = 10) {
+  return apiFetch<HighImpactEventsResponse>("/api/v1/events/high-impact", {
+    days,
+    min_action_level: minActionLevel,
+    limit,
+  });
+}
+
 // ── Admin API ──────────────────────────────────────────
 
 export async function getAdminSummary() {
