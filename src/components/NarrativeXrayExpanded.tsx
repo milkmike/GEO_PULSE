@@ -160,9 +160,12 @@ export default function NarrativeXrayExpanded({ code, days }: NarrativeXrayExpan
 
   useEffect(() => {
     if (data && data.tiers.length >= 2) {
-      const sorted = [...data.tiers].sort((a, b) => b.sentiment - a.sentiment);
-      setCompareA(sorted[0].tier);
-      setCompareB(sorted[sorted.length - 1].tier);
+      const s = [...data.tiers].sort((a, b) => b.sentiment - a.sentiment);
+      setCompareA(s[0].tier);
+      setCompareB(s[s.length - 1].tier);
+    } else if (data && data.tiers.length === 1) {
+      setCompareA(data.tiers[0].tier);
+      setCompareB(null);
     }
   }, [data]);
 
@@ -177,7 +180,7 @@ export default function NarrativeXrayExpanded({ code, days }: NarrativeXrayExpan
     [data?.country_code]
   );
   const heatmapData = useMemo(
-    () => (data ? generateHeatmapData(data.tiers, days) : []),
+    () => (data ? generateHeatmapData(data.tiers.map((t) => ({ ...t, headlines: t.headlines ?? [], sources: t.sources ?? [] })), days) : []),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [data?.country_code, days]
   );
@@ -186,15 +189,22 @@ export default function NarrativeXrayExpanded({ code, days }: NarrativeXrayExpan
     return <div className="h-48 rounded-xl border border-white/[0.06] bg-zinc-950 animate-pulse" />;
   }
 
-  if (!data || data.tiers.length < 2) return null;
+  if (!data || data.tiers.length === 0) return null;
 
-  const sorted = [...data.tiers].sort((a, b) => b.sentiment - a.sentiment);
+  // Normalize: ensure headlines array exists on every tier
+  const normalizedTiers = data.tiers.map((t) => ({
+    ...t,
+    headlines: t.headlines ?? [],
+    sources: t.sources ?? [],
+  }));
+
+  const sorted = [...normalizedTiers].sort((a, b) => b.sentiment - a.sentiment);
   const mostPositive = sorted[0];
   const mostNegative = sorted[sorted.length - 1];
   const gap = data.divergence;
 
-  const tierA = data.tiers.find((t) => t.tier === compareA);
-  const tierB = data.tiers.find((t) => t.tier === compareB);
+  const tierA = normalizedTiers.find((t) => t.tier === compareA);
+  const tierB = normalizedTiers.find((t) => t.tier === compareB);
 
   const tabs = [
     { key: "spectrum" as const, label: "Спектр", icon: "🎯" },
@@ -409,7 +419,7 @@ export default function NarrativeXrayExpanded({ code, days }: NarrativeXrayExpan
               <div>
                 <label className="text-[10px] text-white/30 block mb-1">Тир A</label>
                 <div className="flex flex-wrap gap-1">
-                  {data.tiers.map((t) => (
+                  {normalizedTiers.map((t) => (
                     <button key={t.tier} onClick={() => setCompareA(t.tier)} className={`px-2.5 py-1 rounded-full text-[11px] font-medium transition-all border ${compareA === t.tier ? "border-white/20 bg-white/10 text-white" : "border-transparent text-white/40 hover:text-white/60 hover:bg-white/[0.04]"}`}>
                       <span className="inline-block w-2 h-2 rounded-full mr-1" style={{ backgroundColor: TIER_COLORS[t.tier] }} />
                       {t.label.replace(/^[^\s]+\s/, "")}
@@ -420,7 +430,7 @@ export default function NarrativeXrayExpanded({ code, days }: NarrativeXrayExpan
               <div>
                 <label className="text-[10px] text-white/30 block mb-1">Тир B</label>
                 <div className="flex flex-wrap gap-1">
-                  {data.tiers.map((t) => (
+                  {normalizedTiers.map((t) => (
                     <button key={t.tier} onClick={() => setCompareB(t.tier)} className={`px-2.5 py-1 rounded-full text-[11px] font-medium transition-all border ${compareB === t.tier ? "border-white/20 bg-white/10 text-white" : "border-transparent text-white/40 hover:text-white/60 hover:bg-white/[0.04]"}`}>
                       <span className="inline-block w-2 h-2 rounded-full mr-1" style={{ backgroundColor: TIER_COLORS[t.tier] }} />
                       {t.label.replace(/^[^\s]+\s/, "")}
@@ -430,6 +440,11 @@ export default function NarrativeXrayExpanded({ code, days }: NarrativeXrayExpan
               </div>
             </div>
 
+            {normalizedTiers.length < 2 && (
+              <div className="text-center py-8 text-sm text-white/30">
+                Для сравнения нужно минимум 2 тира. Сейчас доступен только {normalizedTiers.length}.
+              </div>
+            )}
             {tierA && tierB && (
               <div className="grid grid-cols-2 gap-4">
                 {[tierA, tierB].map((tier) => (
