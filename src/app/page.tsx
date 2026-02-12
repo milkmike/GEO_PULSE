@@ -223,24 +223,6 @@ export default function OverviewPage() {
         );
       })()}
 
-      {/* System mini stats */}
-      {stats && (
-        <div className="flex flex-wrap items-center gap-4 rounded-lg border border-border/50 bg-card/30 px-4 py-3">
-          <SectionHeader
-            icon="📊"
-            title="Система"
-            description={glossary.statsCards.short}
-            infoTitle="Системная статистика"
-            infoContent={glossary.statsCards.detail}
-          />
-          <div className="flex flex-wrap gap-4 text-xs text-muted-foreground ml-auto">
-            <span>📡 {stats.active_sources} источников</span>
-            <span>📰 {stats.total_articles.toLocaleString("ru-RU")} статей</span>
-            <span>✅ {Math.round((stats.total_analyzed / Math.max(stats.total_articles, 1)) * 100)}% проанализировано</span>
-          </div>
-        </div>
-      )}
-
       {/* Country cards grid */}
       <div>
         <SectionHeader
