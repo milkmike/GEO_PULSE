@@ -58,6 +58,7 @@ class Article(Base):
     is_duplicate = Column(Boolean, default=False)
     duplicate_of = Column(Integer)
     reprint_count = Column(Integer, default=0)
+    is_backfill = Column(Boolean, default=False)
     __table_args__ = (UniqueConstraint("source_id", "external_id"),)
 
 

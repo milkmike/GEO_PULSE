@@ -267,7 +267,7 @@ async def run_collection():
     conn = get_db()
     init_channels(conn)
 
-    client = TelegramClient(TELEGRAM_SESSION, TELEGRAM_API_ID, TELEGRAM_API_HASH)
+    client = TelegramClient("/app/sessions/" + TELEGRAM_SESSION + "_vox", TELEGRAM_API_ID, TELEGRAM_API_HASH)
     await client.start()
 
     channels = get_active_channels(conn)

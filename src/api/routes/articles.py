@@ -24,7 +24,7 @@ def articles_feed(
 ):
     """Лента статей с фильтрами."""
     with get_session() as session:
-        conditions = ["a.published_at >= NOW() - make_interval(days => :days)"]
+        conditions = ["a.published_at >= NOW() - make_interval(days => :days)", "a.is_backfill = false"]
         params = {"days": days, "limit": limit, "offset": offset}
 
         if country:

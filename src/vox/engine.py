@@ -56,7 +56,7 @@ def calculate_vox_temperature(conn, country_code: str) -> dict | None:
     затуханием (τ=7 дней). Отсекаем вероятных ботов.
     """
     now = datetime.now(timezone.utc)
-    window_start = now - timedelta(days=14)
+    window_start = now - timedelta(days=999)
 
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute("""
