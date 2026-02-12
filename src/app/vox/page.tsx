@@ -467,6 +467,73 @@ export default function VoxPopuliPage() {
                   </div>
                 </div>
 
+                {/* ── Language Map ── */}
+                <div>
+                  <h4 className="text-sm font-medium text-zinc-400 mb-3">🌐 Языковая карта</h4>
+                  {(() => {
+                    const LANG_NAMES: Record<string, string> = {
+                      ru: "🇷🇺 Русский", en: "🇬🇧 English", ro: "🇷🇴 Română",
+                      tk: "🇹🇷 Türk", uz: "🇺🇿 O'zbek", kk: "🇰🇿 Қазақ",
+                      ky: "🇰🇬 Кыргыз", tg: "🇹🇯 Тоҷикӣ", ka: "🇬🇪 ქართ",
+                      hy: "🇦🇲 Հայusage", az: "🇦🇿 Azərbay",
+                    };
+                    const LANG_COLORS: Record<string, string> = {
+                      ru: "bg-blue-500", en: "bg-emerald-500", ro: "bg-yellow-500",
+                      tk: "bg-red-500", uz: "bg-cyan-500", kk: "bg-amber-500",
+                      tg: "bg-purple-500", ky: "bg-pink-500", ka: "bg-lime-500",
+                      hy: "bg-orange-500", az: "bg-teal-500",
+                    };
+                    const artLangs = insights.article_languages || {};
+                    const allCountries = Object.keys(artLangs).sort();
+                    if (allCountries.length === 0) return null;
+                    return (
+                      <div className="space-y-2">
+                        {/* Per-country language bars */}
+                        {allCountries.map(cc => {
+                          const langs = artLangs[cc];
+                          const total = Object.values(langs).reduce((s, v) => s + v, 0);
+                          if (total === 0) return null;
+                          return (
+                            <div key={cc} className="flex items-center gap-2">
+                              <span className="text-sm w-8">{FLAG[cc] || cc}</span>
+                              <div className="flex-1 flex h-5 rounded overflow-hidden">
+                                {Object.entries(langs)
+                                  .sort((a, b) => b[1] - a[1])
+                                  .map(([lang, cnt]) => {
+                                    const pct = (cnt / total * 100);
+                                    if (pct < 1) return null;
+                                    return (
+                                      <div
+                                        key={lang}
+                                        className={`${LANG_COLORS[lang] || "bg-zinc-600"} flex items-center justify-center text-[9px] font-bold text-white`}
+                                        style={{ width: `${pct}%` }}
+                                        title={`${LANG_NAMES[lang] || lang}: ${cnt} (${pct.toFixed(0)}%)`}
+                                      >
+                                        {pct >= 15 ? (LANG_NAMES[lang]?.split(" ")[0] || lang) : ""}
+                                      </div>
+                                    );
+                                  })}
+                              </div>
+                              <span className="text-[10px] text-zinc-600 w-12 text-right">{total.toLocaleString()}</span>
+                            </div>
+                          );
+                        })}
+                        {/* Comment languages */}
+                        {insights.comment_languages && insights.comment_languages.length > 0 && (
+                          <div className="mt-3 pt-3 border-t border-zinc-800">
+                            <span className="text-xs text-zinc-500">Языки комментариев: </span>
+                            {insights.comment_languages.map(l => (
+                              <span key={l.language} className="text-xs text-zinc-400 mr-2">
+                                {LANG_NAMES[l.language]?.split(" ")[0] || l.language} {l.count}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
+                </div>
+
                 {/* ── Topic Cloud ── */}
                 <div>
                   <h4 className="text-sm font-medium text-zinc-400 mb-3">Облако тем</h4>

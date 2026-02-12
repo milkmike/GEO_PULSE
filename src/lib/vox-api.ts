@@ -146,6 +146,8 @@ export interface VoxInsights {
   topics: { topic: string; count: number }[];
   sentiment_buckets: { bucket: string; count: number }[];
   emotion_samples: Record<string, { text: string; sentiment: number; country: string }[]>;
+  comment_languages: { language: string; count: number }[];
+  article_languages: Record<string, Record<string, number>>;
 }
 
 export async function getVoxInsights(params: { country?: string; days?: number } = {}) {
