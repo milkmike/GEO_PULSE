@@ -2,9 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { temperatureColor, COUNTRY_FLAGS, type Country } from "@/lib/api";
-
-const API = process.env.NEXT_PUBLIC_API_URL || "";
+import { temperatureColor, COUNTRY_FLAGS, API_URL, type Country } from "@/lib/api";
+import InfoPopover from "@/components/InfoPopover";
+import { glossary } from "@/lib/glossary";
 
 interface HeadlineData {
   headline: string | null;
@@ -24,7 +24,7 @@ export default function Headline({ countries }: HeadlineProps) {
   const router = useRouter();
 
   useEffect(() => {
-    fetch(`${API}/api/v1/headline`)
+    fetch(`${API_URL}/api/v1/headline`)
       .then((r) => r.json())
       .then((d) => {
         if (d.headline) setData(d);
@@ -69,6 +69,7 @@ export default function Headline({ countries }: HeadlineProps) {
                 ? "Аномалия"
                 : "Температура"}
             </span>
+            <InfoPopover title="Заголовок дня">{glossary.headline.detail}</InfoPopover>
           </div>
         )}
 

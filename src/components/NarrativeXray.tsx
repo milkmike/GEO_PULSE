@@ -4,8 +4,7 @@ import { useEffect, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import SectionHeader from "@/components/SectionHeader";
 import { glossary } from "@/lib/glossary";
-
-const API = process.env.NEXT_PUBLIC_API_URL || "";
+import { API_URL } from "@/lib/api";
 
 interface TierHeadline {
   title: string;
@@ -66,7 +65,7 @@ export default function NarrativeXray({ code, days }: NarrativeXrayProps) {
 
   useEffect(() => {
     setLoading(true);
-    fetch(`${API}/api/v1/countries/${code}/tiers?days=${days}`)
+    fetch(`${API_URL}/api/v1/countries/${code}/tiers?days=${days}`)
       .then((r) => r.json())
       .then((d) => {
         setData(d);

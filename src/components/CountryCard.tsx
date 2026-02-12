@@ -8,9 +8,39 @@ import { temperatureColor, temperatureLabel, trendIcon } from "@/lib/api";
 
 interface CountryCardProps {
   country: Country;
+  sparklineData?: number[];
 }
 
-export default function CountryCard({ country }: CountryCardProps) {
+function MiniSparkline({ data }: { data: number[] }) {
+  if (data.length < 2) return null;
+  const min = Math.min(...data);
+  const max = Math.max(...data);
+  const range = max - min || 1;
+  const w = 80;
+  const h = 40;
+  const pad = 2;
+  const points = data.map((v, i) => {
+    const x = pad + (i / (data.length - 1)) * (w - pad * 2);
+    const y = h - pad - ((v - min) / range) * (h - pad * 2);
+    return `${x},${y}`;
+  });
+  const avg = data.reduce((s, v) => s + v, 0) / data.length;
+  const color = avg <= 0 ? "#3b82f6" : avg <= 10 ? "#eab308" : "#ef4444";
+  return (
+    <svg width={w} height={h} className="shrink-0">
+      <polyline
+        points={points.join(" ")}
+        fill="none"
+        stroke={color}
+        strokeWidth={1.5}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+export default function CountryCard({ country, sparklineData }: CountryCardProps) {
   const temp = country.temperature;
   const color = temperatureColor(temp);
   const label = temperatureLabel(temp);
@@ -54,6 +84,12 @@ export default function CountryCard({ country }: CountryCardProps) {
               </Badge>
             </div>
           </div>
+          {/* Sparkline */}
+          {sparklineData && sparklineData.length >= 2 && (
+            <div className="mt-3 flex items-center justify-center">
+              <MiniSparkline data={sparklineData} />
+            </div>
+          )}
           {/* Mini divergence bar */}
           <div className="mt-3">
             <div className="flex items-center justify-between text-[10px] text-muted-foreground">
@@ -64,8 +100,8 @@ export default function CountryCard({ country }: CountryCardProps) {
               <div
                 className="h-full rounded-full"
                 style={{
-                  width: `${Math.min(country.divergence * 50, 100)}%`,
-                  backgroundColor: color,
+                  width: `${Math.min(country.divergence / 1.0, 1) * 100}%`,
+                  backgroundColor: country.divergence > 0.5 ? "#ef4444" : country.divergence >= 0.2 ? "#eab308" : "#22c55e",
                 }}
               />
             </div>

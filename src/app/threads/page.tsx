@@ -2,11 +2,9 @@
 
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
-import { getThread, formatDate, type ThreadDetail, type ThreadTimelineArticle } from "@/lib/api";
+import { getThread, formatDate, API_URL, type ThreadDetail, type ThreadTimelineArticle } from "@/lib/api";
 import SectionHeader from "@/components/SectionHeader";
 import { glossary } from "@/lib/glossary";
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://YOUR_SERVER_IP:8100";
 
 // ── Constants ──────────────────────────────────────────
 
@@ -80,14 +78,35 @@ function StructuredSummary({ summary, compact }: { summary: any; compact?: boole
 function ArcBar({ phase, height }: { phase: string; height?: string }) {
   const idx = PHASE_ORDER.indexOf(phase);
   return (
-    <div className="flex gap-1 my-2">
-      {PHASE_ORDER.map((p, i) => (
-        <div
-          key={p}
-          className={`flex-1 rounded-full ${height || "h-1.5"}`}
-          style={{ backgroundColor: i <= idx ? PHASE_CFG[p].color : "rgba(255,255,255,0.06)" }}
-        />
-      ))}
+    <div className="my-2">
+      {/* Bar segments */}
+      <div className="flex gap-1">
+        {PHASE_ORDER.map((p, i) => (
+          <div
+            key={p}
+            className={`flex-1 rounded-full ${height || "h-1.5"}`}
+            style={{ backgroundColor: i <= idx ? PHASE_CFG[p].color : "rgba(255,255,255,0.06)" }}
+          />
+        ))}
+      </div>
+      {/* Dots + labels */}
+      <div className="flex justify-between mt-1.5">
+        {PHASE_ORDER.map((p, i) => (
+          <div key={p} className="flex flex-col items-center gap-0.5">
+            <div
+              className="w-2.5 h-2.5 rounded-full border-2 transition-all"
+              style={{
+                backgroundColor: i <= idx ? PHASE_CFG[p].color : "transparent",
+                borderColor: i <= idx ? PHASE_CFG[p].color : "rgba(255,255,255,0.15)",
+                boxShadow: i === idx ? `0 0 6px ${PHASE_CFG[p].color}66` : "none",
+              }}
+            />
+            <span className="text-[9px]" style={{ color: i <= idx ? PHASE_CFG[p].color : "rgba(255,255,255,0.2)" }}>
+              {PHASE_CFG[p].label}
+            </span>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

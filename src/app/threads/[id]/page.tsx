@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { ThreadDetail, ThreadTimelineArticle, getThread, formatDate } from "@/lib/api";
+import { ThreadDetail, ThreadTimelineArticle, getThread, formatDate, API_URL } from "@/lib/api";
 
 const COUNTRY_FLAGS: Record<string, string> = {
   KZ: "🇰🇿", AM: "🇦🇲", UZ: "🇺🇿", KG: "🇰🇬", TJ: "🇹🇯",
@@ -46,12 +46,20 @@ export default function ThreadDetailPage() {
   const [thread, setThread] = useState<ThreadDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [relatedThreads, setRelatedThreads] = useState<any[]>([]);
 
   useEffect(() => {
     if (!id) return;
     setLoading(true);
     getThread(id)
-      .then(setThread)
+      .then((data) => {
+        setThread(data);
+        // Fetch related threads
+        fetch(`${API_URL}/api/v1/threads/${id}/related`)
+          .then((r) => r.ok ? r.json() : { threads: [] })
+          .then((d) => setRelatedThreads(d.threads || []))
+          .catch(() => setRelatedThreads([]));
+      })
       .catch(() => setError("Не удалось загрузить сюжет"))
       .finally(() => setLoading(false));
   }, [id]);
@@ -119,10 +127,28 @@ export default function ThreadDetailPage() {
             );
           })}
         </div>
-        <div className="flex justify-between text-[10px] text-muted-foreground">
-          {PHASE_ORDER.map((p) => (
-            <span key={p}>{PHASE_CONFIG[p].label}</span>
-          ))}
+        <div className="flex justify-between">
+          {PHASE_ORDER.map((p, i) => {
+            const cfg = PHASE_CONFIG[p];
+            return (
+              <div key={p} className="flex flex-col items-center gap-1">
+                <div
+                  className="w-3 h-3 rounded-full border-2 transition-all"
+                  style={{
+                    backgroundColor: i <= activeIdx ? cfg.color : "transparent",
+                    borderColor: i <= activeIdx ? cfg.color : "rgba(255,255,255,0.15)",
+                    boxShadow: i === activeIdx ? `0 0 8px ${cfg.color}66` : "none",
+                  }}
+                />
+                <span
+                  className="text-[10px]"
+                  style={{ color: i <= activeIdx ? cfg.color : "rgba(255,255,255,0.3)" }}
+                >
+                  {cfg.emoji} {cfg.label}
+                </span>
+              </div>
+            );
+          })}
         </div>
       </div>
 
@@ -215,6 +241,42 @@ export default function ThreadDetailPage() {
                 ))}
               </tbody>
             </table>
+          </div>
+        </div>
+      )}
+
+      {/* Related threads */}
+      {relatedThreads.length > 0 && (
+        <div
+          className="rounded-xl border border-white/10 p-5"
+          style={{ background: "linear-gradient(135deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0.01) 100%)" }}
+        >
+          <h2 className="text-lg font-semibold mb-3">🔗 Связанные сюжеты</h2>
+          <div className="grid gap-3 md:grid-cols-2">
+            {relatedThreads.map((rt: any) => {
+              const rtPhase = PHASE_CONFIG[rt.arc_phase] || PHASE_CONFIG.emerging;
+              const rtFlag = COUNTRY_FLAGS[rt.country_code] || "🏳️";
+              return (
+                <Link key={rt.id} href={`/threads/${rt.id}`}>
+                  <div className="rounded-lg border border-white/[0.08] p-3 hover:border-white/20 transition-all cursor-pointer">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-xs" style={{ color: rtPhase.color }}>{rtPhase.emoji}</span>
+                      <span className="text-xs text-muted-foreground">{rtFlag} {rt.country_name || rt.country_code}</span>
+                      <span
+                        className="text-xs px-1.5 py-0.5 rounded-full ml-auto font-mono"
+                        style={{
+                          backgroundColor: (rt.importance_score >= 20 ? "#ef4444" : rt.importance_score >= 10 ? "#f59e0b" : "#3b82f6") + "15",
+                          color: rt.importance_score >= 20 ? "#ef4444" : rt.importance_score >= 10 ? "#f59e0b" : "#3b82f6",
+                        }}
+                      >
+                        ★ {(rt.importance_score ?? 0).toFixed(0)}
+                      </span>
+                    </div>
+                    <h4 className="text-sm font-medium hover:text-blue-400 transition-colors line-clamp-2">{rt.title}</h4>
+                  </div>
+                </Link>
+              );
+            })}
           </div>
         </div>
       )}

@@ -3,8 +3,9 @@
 import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://YOUR_SERVER_IP:8100";
+import { API_URL } from "@/lib/api";
+import InfoPopover from "@/components/InfoPopover";
+import { glossary } from "@/lib/glossary";
 
 interface ArticleInfo {
   id: number;
@@ -131,6 +132,7 @@ export default function AudienceSplit({
         <CardHeader>
           <CardTitle className="text-lg flex items-center gap-2">
             🎭 Аудиторный сплит
+            <InfoPopover title="Аудиторный сплит">{glossary.audienceSplit.detail}</InfoPopover>
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -151,6 +153,7 @@ export default function AudienceSplit({
         <div className="flex items-center justify-between">
           <CardTitle className="text-lg flex items-center gap-2">
             🎭 Аудиторный сплит
+            <InfoPopover title="Аудиторный сплит">{glossary.audienceSplit.detail}</InfoPopover>
           </CardTitle>
           <div className="flex items-center gap-3 text-xs text-muted-foreground">
             <span>

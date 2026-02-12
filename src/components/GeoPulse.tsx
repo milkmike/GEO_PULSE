@@ -17,6 +17,7 @@ import {
   LineChart,
   Line,
 } from "recharts";
+import { glossary } from "@/lib/glossary";
 import {
   getCountries,
   getHighImpactEvents,
@@ -286,13 +287,7 @@ export default function GeoPulse({ period }: { period: number }) {
         title="Геополитический пульс"
         description="Горячие точки, ключевые события и индекс активности в реальном времени"
         infoTitle="Геополитический пульс"
-        infoContent={
-          <>
-            <p><strong>Горячие точки</strong> — визуализация 10 ключевых стран. Позиция по X = sentiment, размер = количество статей, цвет = температура.</p>
-            <p><strong>Лента высокого напряжения</strong> — последние события с высоким уровнем действия (action_level ≥ 3).</p>
-            <p><strong>Индекс активности</strong> — спарклайн-графики публикационной активности за последние дни.</p>
-          </>
-        }
+        infoContent={glossary.geoPulse.detail}
       />
 
       {/* ── Section 1: Hot Spots ──────────────────────── */}

@@ -277,6 +277,13 @@ export default function CountryPage() {
 
       {/* Narrative Xray */}
       <ErrorBoundary name="Нарративный расклад">
+        <SectionHeader
+          icon="🔬"
+          title="Нарративный расклад"
+          description={glossary.tiers.short}
+          infoTitle="Тиры источников"
+          infoContent={glossary.tiers.detail}
+        />
         <NarrativeXrayExpanded code={code} days={PERIOD_DAYS[period] || 30} />
       </ErrorBoundary>
 
@@ -291,9 +298,10 @@ export default function CountryPage() {
           <CardHeader>
             <div className="flex items-center justify-between">
               <CardTitle className="text-lg flex items-center gap-2">📋 Дайджест
-                <InfoPopover title="Дайджест">
-                  <p>AI-сгенерированная сводка ключевых событий за период.</p>
-                  <p>Включает ссылки на оригинальные статьи. Обновляется при каждом пересчёте температуры.</p>
+                <InfoPopover title="AI-дайджест">
+                  <p><strong>AI-дайджест</strong> — автоматически сгенерированная сводка ключевых событий за выбранный период.</p>
+                  <p>Включает ссылки на оригинальные статьи-источники. Обновляется при каждом пересчёте температуры страны.</p>
+                  <p>Генерируется Claude на основе всех релевантных статей с учётом action_level и тира источника.</p>
                 </InfoPopover>
               </CardTitle>
               {digest.generated_at && (

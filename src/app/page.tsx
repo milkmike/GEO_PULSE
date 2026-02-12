@@ -15,6 +15,8 @@ import {
   getCountries,
   getStats,
   getTierDivergence,
+  getCountryTemperature,
+  API_URL,
   PERIOD_DAYS,
   COUNTRY_FLAGS,
   formatDate,
@@ -26,8 +28,6 @@ import {
   type TierDivergenceCountry,
 } from "@/lib/api";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://YOUR_SERVER_IP:8100";
-
 const GeoMap = dynamic(() => import("@/components/GeoMap"), {
   ssr: false,
   loading: () => (
@@ -37,11 +37,8 @@ const GeoMap = dynamic(() => import("@/components/GeoMap"), {
   ),
 });
 
-type ViewMode = "thermometer" | "connections";
-
 export default function OverviewPage() {
   const [period, setPeriod] = useState("Год");
-  const [viewMode, setViewMode] = useState<ViewMode>("thermometer");
   const [countries, setCountries] = useState<Country[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
   const [loading, setLoading] = useState(true);
@@ -49,6 +46,7 @@ export default function OverviewPage() {
   const [topThreads, setTopThreads] = useState<Thread[]>([]);
   const [divergence, setDivergence] = useState<TierDivergenceCountry[]>([]);
   const [selectedCountry, setSelectedCountry] = useState<string | null>(null);
+  const [sparklines, setSparklines] = useState<Record<string, number[]>>({});
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -65,6 +63,20 @@ export default function OverviewPage() {
       setLastUpdate(statsData.newest_article);
       setTopThreads(threadsRes.threads || []);
       setDivergence(divRes.countries || []);
+
+      // Fetch 7-day sparkline data for each country
+      const codes = countriesData.countries.map((c: Country) => c.code);
+      const sparklineResults = await Promise.allSettled(
+        codes.map((code: string) => getCountryTemperature(code, 7))
+      );
+      const sparkMap: Record<string, number[]> = {};
+      codes.forEach((code: string, i: number) => {
+        const result = sparklineResults[i];
+        if (result.status === "fulfilled" && result.value.data) {
+          sparkMap[code] = result.value.data.map((p) => p.temperature);
+        }
+      });
+      setSparklines(sparkMap);
     } catch (err) {
       console.error("Failed to fetch data:", err);
     } finally {
@@ -82,31 +94,9 @@ export default function OverviewPage() {
 
   return (
     <div className="space-y-6">
-      {/* Header row: period selector + view toggle */}
+      {/* Header row: period selector */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <PeriodSelector selected={period} onSelect={setPeriod} />
-        <div className="flex gap-1">
-          <button
-            onClick={() => setViewMode("thermometer")}
-            className={`rounded-full px-3 py-1 text-xs font-medium transition-all ${
-              viewMode === "thermometer"
-                ? "bg-blue-500/20 text-blue-400"
-                : "text-muted-foreground hover:bg-white/5"
-            }`}
-          >
-            🌡️ Термометр
-          </button>
-          <button
-            onClick={() => setViewMode("connections")}
-            className={`rounded-full px-3 py-1 text-xs font-medium transition-all ${
-              viewMode === "connections"
-                ? "bg-blue-500/20 text-blue-400"
-                : "text-muted-foreground hover:bg-white/5"
-            }`}
-          >
-            🔗 Связи
-          </button>
-        </div>
       </div>
 
       {/* Period badge */}
@@ -239,13 +229,9 @@ export default function OverviewPage() {
           <SectionHeader
             icon="📊"
             title="Система"
-            infoTitle="О системе"
-            infoContent={
-              <>
-                <p>GeoPulse собирает и анализирует медиа из стран СНГ для оценки геополитических отношений с Россией.</p>
-                <p>Данные обновляются в реальном времени. Каждая статья проходит AI-анализ для определения sentiment, типа события и уровня влияния.</p>
-              </>
-            }
+            description={glossary.statsCards.short}
+            infoTitle="Системная статистика"
+            infoContent={glossary.statsCards.detail}
           />
           <div className="flex flex-wrap gap-4 text-xs text-muted-foreground ml-auto">
             <span>📡 {stats.active_sources} источников</span>
@@ -278,7 +264,7 @@ export default function OverviewPage() {
             {countries
               .sort((a, b) => b.temperature - a.temperature)
               .map((country) => (
-                <CountryCard key={country.code} country={country} />
+                <CountryCard key={country.code} country={country} sparklineData={sparklines[country.code]} />
               ))}
           </div>
         )}

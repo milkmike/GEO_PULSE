@@ -7,8 +7,7 @@ import {
   LineChart, Line, XAxis, YAxis, Tooltip as RechartsTooltip, ResponsiveContainer,
   BarChart, Bar, Cell, CartesianGrid,
 } from "recharts";
-
-const API = process.env.NEXT_PUBLIC_API_URL || "";
+import { API_URL } from "@/lib/api";
 
 /* ── Types ── */
 interface TierHeadline {
@@ -115,7 +114,7 @@ interface HeatmapRow {
 /* ── API fetch helpers ── */
 async function fetchDivergenceTimeline(code: string, days: number): Promise<TimelinePoint[]> {
   const clampedDays = Math.min(days, 365);
-  const res = await fetch(`${API}/api/v1/countries/${code}/divergence/history?days=${clampedDays}`);
+  const res = await fetch(`${API_URL}/api/v1/countries/${code}/divergence/history?days=${clampedDays}`);
   if (!res.ok) return [];
   const json = await res.json();
   return (json.data || []).map((d: { date: string; divergence: number }) => ({
@@ -126,7 +125,7 @@ async function fetchDivergenceTimeline(code: string, days: number): Promise<Time
 
 async function fetchTopicBreakdown(code: string, days: number): Promise<TopicPoint[]> {
   const clampedDays = Math.min(days, 365);
-  const res = await fetch(`${API}/api/v1/countries/${code}/topics/divergence?days=${clampedDays}`);
+  const res = await fetch(`${API_URL}/api/v1/countries/${code}/topics/divergence?days=${clampedDays}`);
   if (!res.ok) return [];
   const json = await res.json();
   return (json.data || []).map((d: { topic: string; label: string; divergence: number }) => ({
@@ -139,7 +138,7 @@ async function fetchTopicBreakdown(code: string, days: number): Promise<TopicPoi
 
 async function fetchHeatmapData(code: string, days: number): Promise<HeatmapRow[]> {
   const clampedDays = Math.min(days, 365);
-  const res = await fetch(`${API}/api/v1/countries/${code}/tiers/daily?days=${clampedDays}`);
+  const res = await fetch(`${API_URL}/api/v1/countries/${code}/tiers/daily?days=${clampedDays}`);
   if (!res.ok) return [];
   const json = await res.json();
   const dayList: string[] = (json.days || []).map((d: string) =>
@@ -167,7 +166,7 @@ export default function NarrativeXrayExpanded({ code, days }: NarrativeXrayExpan
   useEffect(() => {
     setLoading(true);
     const clampedDays = Math.min(days, 365);
-    fetch(`${API}/api/v1/countries/${code}/tiers?days=${clampedDays}`)
+    fetch(`${API_URL}/api/v1/countries/${code}/tiers?days=${clampedDays}`)
       .then((r) => r.json())
       .then((d) => {
         if (d && d.tiers) {

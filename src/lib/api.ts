@@ -1,4 +1,4 @@
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://YOUR_SERVER_IP:8100";
+export const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://YOUR_SERVER_IP:8100";
 
 // ── Types ──────────────────────────────────────────────
 
@@ -289,20 +289,12 @@ export async function getCountryDigest(code: string, days = 30) {
   return apiFetch<CountryDigest>(`/api/v1/countries/${code}/digest`, { days });
 }
 
-export async function getThreads(params?: { country?: string; status?: string; limit?: number }) {
-  return apiFetch<ThreadsResponse>("/api/v1/threads", params as Record<string, string | number>);
-}
-
 export async function getThread(id: number) {
   return apiFetch<ThreadDetail>(`/api/v1/threads/${id}`);
 }
 
 export async function getCountryThreads(code: string, params?: { status?: string; limit?: number }) {
   return apiFetch<ThreadsResponse>(`/api/v1/countries/${code}/threads`, params as Record<string, string | number>);
-}
-
-export async function getUNVotesSummary() {
-  return apiFetch<UNVotesSummary>("/api/v1/un-votes/summary");
 }
 
 export async function getCountryTemperature(code: string, days = 30) {
