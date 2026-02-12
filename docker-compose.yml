@@ -94,6 +94,10 @@ services:
       - "8100:8000"
     environment:
       DATABASE_URL: ${DATABASE_URL}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      JINA_API_KEY: ${JINA_API_KEY}
+      COMTRADE_API_KEY: ${COMTRADE_API_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
       REDIS_URL: redis://redis:6379/0
     depends_on:
       db:

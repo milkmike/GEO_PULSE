@@ -2,6 +2,7 @@
 import argparse
 import logging
 import os
+import re
 import time
 from datetime import datetime, timezone
 
@@ -12,6 +13,33 @@ from src.collectors.scraper import scrape_web
 from src.config import load_sources
 from src.db import get_session, wait_for_db, Source, Article
 from src.pipeline.dedup import normalize_title, find_duplicate
+
+# Language detection helpers
+import unicodedata
+_CYRILLIC_RE = re.compile(r'[Ѐ-ӿ]')
+_LATIN_RE = re.compile(r'[A-Za-zÀ-ÿ]')
+_RO_CHARS = set('ăâîșțĂÂÎȘȚ')
+_UZ_MARKERS = re.compile(r"(o'z|O'z|bilan|haqida|uchun|bo'yicha)", re.IGNORECASE)
+_TK_MARKERS = re.compile(r'[ňžäýöüŇŽÄÝÖÜ]|(barada|döwlet|türkmen)', re.IGNORECASE)
+
+def _detect_language(title):
+    if not title or len(title.strip()) < 3:
+        return 'ru'
+    cyrillic_count = len(_CYRILLIC_RE.findall(title))
+    latin_count = len(_LATIN_RE.findall(title))
+    total = cyrillic_count + latin_count
+    if total == 0:
+        return 'ru'
+    if latin_count / total >= 0.5 and cyrillic_count <= 2:
+        if any(c in _RO_CHARS for c in title):
+            return 'ro'
+        if _UZ_MARKERS.search(title):
+            return 'uz'
+        if _TK_MARKERS.search(title):
+            return 'tk'
+        return 'en'
+    return 'ru'
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -139,7 +167,7 @@ def collect_all():
                     body=art.get("body", ""),
                     url=art.get("url", ""),
                     published_at=published_at,
-                    language=source.country_code.lower() if hasattr(source, 'language') else "ru",
+                    language=_detect_language(art['title']),
                     title_normalized=title_norm,
                     is_duplicate=parent_id is not None,
                     duplicate_of=parent_id,
