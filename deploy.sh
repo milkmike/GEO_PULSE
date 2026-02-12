@@ -20,6 +20,9 @@ echo "🐙 GeoPulse Deploy starting..."
 if [ -f /root/geo-pulse-next/Dockerfile ]; then
   cd /root/geo-pulse-next
 
+  echo "📥 Pulling latest from GitHub..."
+  git pull origin nextjs
+
   echo "📦 Building Docker image (no-cache)..."
   docker build --no-cache $BUILD_ARG -t "$IMAGE" .
 
@@ -38,17 +41,12 @@ if [ -f /root/geo-pulse-next/Dockerfile ]; then
     exit 1
   fi
 
-# ── If running LOCALLY (rsync + remote) ────────────────
+# ── If running LOCALLY ──────────────────────────────────
 else
   VPS="root@YOUR_SERVER_IP"
   KEY="$HOME/.ssh/graf_vlasti"
-  SRC="$(dirname "$0")/src/"
 
-  echo "📤 Syncing src/ to VPS..."
-  rsync -avz --exclude='node_modules' --exclude='.next' --exclude='.git' \
-    -e "ssh -i $KEY" "$SRC" "$VPS:/root/geo-pulse-next/src/"
-
-  echo "🏗️ Running remote build..."
+  echo "🏗️ Running remote deploy (git pull + docker build)..."
   ssh -i "$KEY" "$VPS" 'bash /root/geo-pulse-next/deploy.sh'
 fi
 
