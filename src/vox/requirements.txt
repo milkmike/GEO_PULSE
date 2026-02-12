@@ -1,0 +1,4 @@
+# VOX POPULI — Dependencies
+telethon>=1.36
+psycopg2-binary>=2.9
+cryptg  # faster Telethon encryption
