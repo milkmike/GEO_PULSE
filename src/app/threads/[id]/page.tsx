@@ -3,22 +3,8 @@
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { ThreadDetail, ThreadTimelineArticle, getThread, formatDate, API_URL } from "@/lib/api";
-
-const COUNTRY_FLAGS: Record<string, string> = {
-  KZ: "🇰🇿", AM: "🇦🇲", UZ: "🇺🇿", KG: "🇰🇬", TJ: "🇹🇯",
-  TM: "🇹🇲", AZ: "🇦🇿", GE: "🇬🇪", MD: "🇲🇩", BY: "🇧🇾",
-};
-
-const PHASE_CONFIG: Record<string, { emoji: string; color: string; label: string }> = {
-  emerging:   { emoji: "🌱", color: "#3b82f6", label: "Зарождение" },
-  escalating: { emoji: "📈", color: "#f59e0b", label: "Эскалация" },
-  peak:       { emoji: "🔥", color: "#ef4444", label: "Пик" },
-  cooling:    { emoji: "❄️", color: "#06b6d4", label: "Затухание" },
-  resolved:   { emoji: "✅", color: "#22c55e", label: "Завершён" },
-};
-
-const PHASE_ORDER = ["emerging", "escalating", "peak", "cooling", "resolved"];
+import { ThreadDetail, ThreadTimelineArticle, getThread, API_URL } from "@/lib/api";
+import { COUNTRY_FLAGS, PHASE_CONFIG, PHASE_ORDER, formatDate } from "@/lib/constants";
 
 function sentimentColor(s: number): string {
   if (s > 0.5) return "#22c55e";

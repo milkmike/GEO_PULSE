@@ -1,4 +1,4 @@
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "";
+import { api as apiClient, apiMutate, API_URL } from "./api-client";
 
 // ── Types ──────────────────────────────────────────────
 
@@ -96,15 +96,10 @@ export interface TestResult {
 // ── Fetch helpers ──────────────────────────────────────
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_URL}${path}`, {
-    ...init,
-    headers: { "Content-Type": "application/json", ...init?.headers },
-  });
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`API ${res.status}: ${text}`);
+  if (init?.method && init.method !== "GET") {
+    return apiMutate<T>(path, { method: init.method, body: init.body ? JSON.parse(init.body as string) : undefined });
   }
-  return res.json();
+  return apiClient<T>(path);
 }
 
 // ── Pipeline ───────────────────────────────────────────

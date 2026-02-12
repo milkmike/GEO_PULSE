@@ -1,4 +1,5 @@
-export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "";
+export { API_URL } from "./api-client";
+export { COUNTRY_CODES, COUNTRY_FLAGS, COUNTRY_NAMES } from "./constants";
 
 // ── Types ──────────────────────────────────────────────
 
@@ -257,22 +258,9 @@ export interface AdminScriptUsageResponse {
   scripts: AdminScriptUsage[];
 }
 
-// ── Fetch wrapper ──────────────────────────────────────
+// ── Fetch wrapper (delegates to unified api-client) ────
 
-async function apiFetch<T>(path: string, params?: Record<string, string | number>): Promise<T> {
-  const base = API_URL.startsWith("http") ? API_URL : `http://127.0.0.1:8100`;
-  const url = new URL(`${base}${path}`);
-  if (params) {
-    Object.entries(params).forEach(([k, v]) => {
-      if (v !== undefined && v !== null) url.searchParams.set(k, String(v));
-    });
-  }
-  // Client-side: use relative path; Server-side: use absolute URL
-  const fetchUrl = typeof window !== "undefined" ? `${API_URL}${path}${url.search}` : url.toString();
-  const res = await fetch(fetchUrl, { next: { revalidate: 300 } });
-  if (!res.ok) throw new Error(`API error: ${res.status} ${res.statusText}`);
-  return res.json();
-}
+import { api as apiFetch } from "./api-client";
 
 // ── API functions ──────────────────────────────────────
 
@@ -394,18 +382,7 @@ export function minutesAgo(dateStr: string): number {
   return Math.round((Date.now() - new Date(dateStr).getTime()) / 60000);
 }
 
-export const COUNTRY_CODES = ["KZ", "AM", "UZ", "KG", "TJ", "TM", "AZ", "GE", "MD", "BY"] as const;
-
-export const COUNTRY_FLAGS: Record<string, string> = {
-  KZ: "🇰🇿", AM: "🇦🇲", UZ: "🇺🇿", KG: "🇰🇬", TJ: "🇹🇯",
-  TM: "🇹🇲", AZ: "🇦🇿", GE: "🇬🇪", MD: "🇲🇩", BY: "🇧🇾",
-};
-
-export const COUNTRY_NAMES: Record<string, string> = {
-  KZ: "Казахстан", AM: "Армения", UZ: "Узбекистан", KG: "Кыргызстан",
-  TJ: "Таджикистан", TM: "Туркменистан", AZ: "Азербайджан",
-  GE: "Грузия", MD: "Молдова", BY: "Беларусь",
-};
+// COUNTRY_CODES, COUNTRY_FLAGS, COUNTRY_NAMES — re-exported from constants.ts
 
 // ── High-Impact Events ─────────────────────────────────
 

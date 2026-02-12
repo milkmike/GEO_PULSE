@@ -41,23 +41,7 @@ import {
   formatDate,
 } from "@/lib/api";
 
-const TIER_COLORS: Record<string, string> = {
-  official: "bg-red-500/20 text-red-400 border-red-500/30",
-  mainstream: "bg-blue-500/20 text-blue-400 border-blue-500/30",
-  independent: "bg-green-500/20 text-green-400 border-green-500/30",
-  domestic_opposition: "bg-yellow-500/20 text-yellow-400 border-yellow-500/30",
-  analytics: "bg-purple-500/20 text-purple-400 border-purple-500/30",
-  western_proxy: "bg-gray-500/20 text-gray-400 border-gray-500/30",
-};
-
-const TIER_LABELS: Record<string, string> = {
-  official: "Официальные",
-  mainstream: "Мейнстрим",
-  independent: "Независимые",
-  domestic_opposition: "Оппозиция",
-  analytics: "Аналитика",
-  western_proxy: "Западные",
-};
+import { TIER_BADGE_CLASSES as TIER_COLORS, TIER_LABELS } from "@/lib/constants";
 
 const EVENT_TYPE_COLORS: Record<string, string> = {
   diplomatic: "bg-blue-500/20 text-blue-400 border-blue-500/30",

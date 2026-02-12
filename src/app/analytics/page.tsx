@@ -97,25 +97,7 @@ function coverageIntensity(count: number, max: number): string {
   return "bg-emerald-600/90";
 }
 
-const TIER_COLORS: Record<string, string> = {
-  official: "#3b82f6",
-  mainstream: "#a78bfa",
-  analytics: "#22d3ee",
-  independent: "#34d399",
-  domestic_opposition: "#f97316",
-  western_proxy: "#ef4444",
-  social: "#fbbf24",
-};
-
-const TIER_LABELS_SHORT: Record<string, string> = {
-  official: "Офиц.",
-  mainstream: "Мейнстрим",
-  analytics: "Аналитика",
-  independent: "Независ.",
-  domestic_opposition: "Оппозиция",
-  western_proxy: "Запад",
-  social: "Соцсети",
-};
+import { TIER_CHART_COLORS as TIER_COLORS, TIER_LABELS_SHORT } from "@/lib/constants";
 
 // ── Page ────────────────────────────────────────────────
 
