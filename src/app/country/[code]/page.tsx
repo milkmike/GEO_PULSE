@@ -277,13 +277,6 @@ export default function CountryPage() {
 
       {/* Narrative Xray */}
       <ErrorBoundary name="Нарративный расклад">
-        <SectionHeader
-          icon="🔬"
-          title="Нарративный расклад"
-          description={glossary.tiers.short}
-          infoTitle="Тиры источников"
-          infoContent={glossary.tiers.detail}
-        />
         <NarrativeXrayExpanded code={code} days={PERIOD_DAYS[period] || 30} />
       </ErrorBoundary>
 
