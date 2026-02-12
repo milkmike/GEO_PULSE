@@ -87,13 +87,15 @@ export interface VoxChannel {
 // ── API Functions ──────────────────────────────────────
 
 async function voxFetch<T>(path: string, params?: Record<string, string | number>): Promise<T> {
-  const url = new URL(`${API_URL}${path}`);
+  const base = API_URL.startsWith("http") ? API_URL : `http://127.0.0.1:8100`;
+  const url = new URL(`${base}${path}`);
   if (params) {
     Object.entries(params).forEach(([k, v]) => {
       if (v !== undefined && v !== null) url.searchParams.set(k, String(v));
     });
   }
-  const res = await fetch(url.toString(), { next: { revalidate: 120 } });
+  const fetchUrl = typeof window !== "undefined" ? `${API_URL}${path}${url.search}` : url.toString();
+  const res = await fetch(fetchUrl, { next: { revalidate: 120 } });
   if (!res.ok) throw new Error(`VOX API error: ${res.status}`);
   return res.json();
 }
