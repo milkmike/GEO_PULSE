@@ -1,185 +1,302 @@
-# 🌡️ GEO PULSE — Quantitative Thermometer of CIS–Russia Relations
+# 🌡️ GEO PULSE — Медийный термометр отношений СНГ–Россия
 
-> Real-time monitoring of media temperature between 10 post-Soviet states and Russia.  
-> 149 sources · 11,000+ articles · 4-year historical depth · AI-powered sentiment analysis
+> Количественный мониторинг медийной температуры между 10 постсоветскими странами и Россией в реальном времени.
 
-![Dashboard](https://img.shields.io/badge/Dashboard-Live-brightgreen) ![Countries](https://img.shields.io/badge/Countries-10-blue) ![Sources](https://img.shields.io/badge/Sources-149-orange) ![Articles](https://img.shields.io/badge/Articles-11%2C243-red)
+![Status](https://img.shields.io/badge/Status-Production-brightgreen)
+![Countries](https://img.shields.io/badge/Countries-10-blue)
+![Sources](https://img.shields.io/badge/Sources-191-orange)
+![Articles](https://img.shields.io/badge/Articles-21%2C307-red)
 
----
-
-## What is this?
-
-GEO PULSE is a quantitative research platform that continuously monitors the media landscape of 10 post-Soviet countries, analyzes every article's sentiment toward Russia using LLM, and computes a "temperature" index ranging from **-60°** (hostility) to **+60°** (alliance).
-
-The system collects articles every 30 minutes from 149 media sources across 6 tiers — from official state agencies to independent outlets and Telegram channels — and processes them through a multi-stage AI pipeline.
-
-### Current Temperatures (Feb 2026)
-
-| Country | Temp | Zone | Trend |
-|---------|------|------|-------|
-| 🇧🇾 Belarus | +24° | Cooperation | ↘ |
-| 🇹🇯 Tajikistan | +10° | Neutrality | ↘ |
-| 🇹🇲 Turkmenistan | +2° | Neutrality | ↗ |
-| 🇰🇬 Kyrgyzstan | 0° | Neutrality | ↘ |
-| 🇺🇿 Uzbekistan | -0° | Neutrality | ↘ |
-| 🇦🇿 Azerbaijan | -5° | Neutrality | ↗ |
-| 🇰🇿 Kazakhstan | -13° | Cooling | ↘ |
-| 🇬🇪 Georgia | -17° | Cooling | ↘ |
-| 🇦🇲 Armenia | -21° | Cooling | ↗ |
-| 🇲🇩 Moldova | -34° | Tension | ↘ |
+**🔗 Live:** [Dashboard](http://YOUR_SERVER_IP:3333) · [API](http://YOUR_SERVER_IP:8100)
 
 ---
 
-## Key Research Findings
+## Что это?
 
-### 📡 Media leads diplomacy by 2–4 weeks
-Shifts in media tone consistently precede official diplomatic actions. Kazakh media began writing about "sovereignty" months before each exit from Russian integration frameworks.
+GEO PULSE — исследовательская платформа, которая непрерывно мониторит медиаполе 10 постсоветских стран, анализирует тональность каждой статьи к России через LLM и вычисляет индекс «температуры» от **-60°** (враждебность) до **+60°** (союзничество).
 
-### 🪞 Moldova & Georgia — geopolitical mirror antipodes
-Their temperature curves are nearly identical (-34° and -17°), creating a "Western-oriented corridor" across the map. Both follow similar patterns driven by EU integration trajectories.
+Система собирает статьи каждые 30 минут из **191 источника** по 7 тирам — от официальных государственных агентств до оппозиционных СМИ и Telegram-каналов — и пропускает через многоступенчатый AI-пайплайн.
 
-### 🟢 Belarus — the sole green zone
-The only country consistently above +20°, Belarus maintains stable cooperation temperature. Even here, micro-fluctuations track real diplomatic friction.
+### Текущие температуры (февраль 2026)
 
-### ⚖️ Central Asia — pragmatic neutrality band
-Kazakhstan, Uzbekistan, Kyrgyzstan, Tajikistan, and Turkmenistan cluster tightly around 0° (±15°), reflecting their strategy of balanced multivector foreign policy.
-
-### 🏛️ UN voting correlates — but nonlinearly
-Countries voting 70%+ with Russia at the UN (Belarus 81%, Azerbaijan 78%) can still show very different temperatures (+24° vs -5°), proving that formal alignment ≠ media sentiment.
+| Страна | Темп. | Зона | Тренд | Источников |
+|--------|-------|------|-------|------------|
+| 🇧🇾 Беларусь | +18.1° | Сотрудничество | ↘ | 20 |
+| 🇹🇲 Туркменистан | +6.0° | Нейтралитет | ↗ | 11 |
+| 🇹🇯 Таджикистан | +5.2° | Нейтралитет | ↘ | 14 |
+| 🇺🇿 Узбекистан | +1.7° | Нейтралитет | ↘ | 23 |
+| 🇰🇬 Кыргызстан | +1.5° | Нейтралитет | ↗ | 17 |
+| 🇦🇿 Азербайджан | -5.5° | Нейтралитет | ↘ | 24 |
+| 🇰🇿 Казахстан | -12.9° | Охлаждение | ↗ | 26 |
+| 🇦🇲 Армения | -15.1° | Охлаждение | ↗ | 23 |
+| 🇬🇪 Грузия | -26.1° | Напряжение | ↗ | 17 |
+| 🇲🇩 Молдова | -35.2° | Напряжение | ↗ | 16 |
 
 ---
 
-## Architecture
+## Ключевые находки
+
+### 📡 Медиа опережают дипломатию на 2–4 недели
+Сдвиги медийного тона стабильно предшествуют официальным дипломатическим действиям. Казахстанские СМИ начали писать о «суверенитете» за месяцы до каждого выхода из российских интеграционных структур.
+
+### 🪞 Молдова и Грузия — геополитические антиподы-зеркала
+Их температурные кривые почти идентичны (-35° и -26°), формируя «прозападный коридор» на карте. Обе следуют схожим паттернам, обусловленным траекторией евроинтеграции.
+
+### 🟢 Беларусь — единственная зелёная зона
+Единственная страна стабильно выше +15°, Беларусь поддерживает устойчивую температуру сотрудничества. Даже здесь микрофлуктуации отслеживают реальные дипломатические трения.
+
+### ⚖️ Центральная Азия — прагматичный пояс нейтралитета
+Казахстан, Узбекистан, Кыргызстан, Таджикистан и Туркменистан кучкуются вокруг 0° (±15°), отражая стратегию сбалансированной многовекторной политики.
+
+### 🔬 Аудиторный сплит — двуязычные СМИ пишут по-разному
+Источники типа Vlast.kz пишут одну и ту же новость по-разному для EN (-2.0) и RU (+1.0) аудиторий. 37 двуязычных источников показывают стабильное расхождение тональности. Молдова — самый большой сплит.
+
+---
+
+## Архитектура
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        DATA COLLECTION                          │
-│  RSS feeds · Web scraping · Telegram channels · Gov portals     │
-│  149 sources × 30-min polling cycle                             │
-└──────────────────────┬──────────────────────────────────────────┘
-                       ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      ANALYSIS PIPELINE                          │
-│  1. Keyword relevance filter (Russia-related)                   │
-│  2. pg_trgm deduplication (fuzzy matching, reprint counting)    │
-│  3. LLM sentiment analysis (Claude Sonnet via OpenRouter)       │
-│     → sentiment: -3 to +3                                       │
-│     → action_level: 1–6 (rhetoric → military)                  │
-│     → category: politics/economics/military/culture/energy      │
-│  4. Event clustering (related articles → story threads)         │
-└──────────────────────┬──────────────────────────────────────────┘
-                       ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                    TEMPERATURE ENGINE                            │
-│  • 14-day exponential decay window (τ=14d)                      │
-│  • Tier-weighted scoring (6 tiers: official → social)           │
-│  • Action level multipliers (AL1=×1 ... AL6=×15)               │
-│  • Cluster decay 0.2^n (diminishing returns for same story)     │
-│  • Scale: -100 to +100, display as -60° to +60°                │
-└──────────────────────┬──────────────────────────────────────────┘
-                       ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      PRESENTATION                               │
-│  Streamlit Dashboard · FastAPI REST · Weekly AI Digests          │
-│  Interactive map · Country deep-dives · Story threads            │
-│  UN voting correlation · Trade data overlay                     │
-└─────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                       СБОР ДАННЫХ                                │
+│  RSS · Web scraping · Telegram · Гос. порталы · Центробанки      │
+│  191 источник × цикл сбора каждые 30 мин                         │
+└─────────────────────┬────────────────────────────────────────────┘
+                      ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                    ПАЙПЛАЙН АНАЛИЗА                               │
+│  1. Фильтр релевантности (связь с Россией)                       │
+│  2. Дедупликация pg_trgm (нечёткое сравнение, подсчёт перепечаток)│
+│  3. LLM-анализ тональности (Claude Sonnet через OpenRouter)      │
+│     → sentiment: -3..+3                                           │
+│     → action_level: 1–6 (риторика → военные)                     │
+│     → category: politics/economics/military/culture/energy        │
+│  4. Определение языка (langdetect — для аудиторного сплита)       │
+│  5. Кластеризация в сюжеты (Jina AI embeddings + pgvector)       │
+│  6. Поиск аудиторных пар (bilingual source matching)              │
+└─────────────────────┬────────────────────────────────────────────┘
+                      ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                   ТЕМПЕРАТУРНЫЙ ДВИЖОК                            │
+│  • Экспоненциальное окно затухания 14 дней (τ=14d)               │
+│  • Взвешивание по тирам (7 тиров: официальные → соцсети)         │
+│  • Множители action level (AL1=×1 ... AL6=×15)                  │
+│  • Cluster decay 0.2^n (убывающая отдача от одного сюжета)       │
+│  • Компоненты: raw_sentiment, diplomatic, military, economic,    │
+│    cultural, security                                            │
+│  • Аномальный скор и определение паттернов                       │
+│  • Шкала: -100..+100, отображение как -60°..+60°                 │
+└─────────────────────┬────────────────────────────────────────────┘
+                      ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                     ПРЕДСТАВЛЕНИЕ                                │
+│  Next.js Dashboard · FastAPI REST API · AI-дайджесты              │
+│  Интерактивная карта · Сюжетные нити · Нарративный расклад        │
+│  UN voting · Trade data · Аудиторный сплит · Геопульс             │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## Source Tiers
+## Тиры источников
 
-| Tier | Type | Count | Examples |
-|------|------|-------|---------|
-| 1 | Official / State | 23 | Government portals, state news agencies |
-| 2 | Mainstream Media | 41 | Major national news outlets, TV portals |
-| 3 | Independent / Alternative | 19 | Independent journalism, investigative |
-| 4 | Domestic Opposition | 16 | Opposition-leaning media |
-| 5 | Analytics / Expert | 14 | Think tanks, analytical platforms |
-| 6 | Social / Telegram | 36 | Telegram channels, social media |
-
----
-
-## Dashboard Pages
-
-| Page | Description |
-|------|-------------|
-| 🌡️ **Overview** | Interactive map with temperature labels, country cards, weekly digests |
-| 🏳️ **Country** | Deep-dive per country: temperature chart, key events, article feed |
-| 🧵 **Story Threads** | Auto-clustered narratives showing how stories develop over time |
-| 📊 **Analytics** | UN voting correlation, trade data, objective indicators |
-| 📡 **Sources** | Full source catalog with tier, type, country, activity status |
-| ℹ️ **About** | Project methodology, origin story, key insights |
+| Тир | Тип | Кол-во | Описание |
+|-----|-----|--------|----------|
+| Official | Государственные | 81 | Гос. порталы, агентства, МИД, Минобороны, центробанки |
+| Mainstream | Мейнстрим | 39 | Крупные национальные СМИ, ТВ-порталы |
+| Independent | Независимые | 21 | Независимая журналистика, расследования |
+| Social | Соцсети / Telegram | 21 | Telegram-каналы, соцмедиа |
+| Domestic Opposition | Оппозиционные | 14 | Оппозиционно настроенные СМИ |
+| Western Proxy | Западные прокси | 9 | Западные медиа с фокусом на регион |
+| Analytics | Аналитика / Эксперты | 6 | Аналитические центры, экспертные платформы |
 
 ---
 
-## Tech Stack
+## Сервисы (Docker Compose)
 
-| Component | Technology |
+| Сервис | Описание | Статус |
+|--------|----------|--------|
+| **api** | FastAPI REST API (порт 8100) | ✅ Production |
+| **collector** | Сбор статей из RSS/Web каждые 30 мин | ✅ |
+| **analyzer** | LLM-анализ тональности (Claude Sonnet) | ✅ |
+| **temperature** | Пересчёт температур (ежечасно) | ✅ |
+| **threads** | Кластеризация статей в сюжетные нити | ✅ |
+| **digests** | AI-дайджесты по каждой стране (ежедневно) | ✅ |
+| **trade-loader** | Импорт торговых данных из IMF DOTS | ⚠️ IMF timeout |
+| **un-votes-loader** | Импорт голосований ООН | ✅ |
+| **db** | PostgreSQL + pgvector | ✅ |
+| **redis** | Очереди задач | ✅ |
+
+---
+
+## API Endpoints (40)
+
+### Основные
+
+| Endpoint | Описание |
+|----------|----------|
+| `GET /api/v1/countries?days=30` | Все страны с температурой, трендом, кол-вом статей |
+| `GET /api/v1/countries/{code}/temperature?days=30` | Временной ряд температуры с компонентами |
+| `GET /api/v1/countries/{code}/tiers?days=14` | Нарративный расклад по тирам |
+| `GET /api/v1/countries/{code}/tiers/daily?days=30` | Ежедневная динамика тиров |
+| `GET /api/v1/countries/{code}/events?days=30` | Ключевые события |
+| `GET /api/v1/countries/{code}/digest` | AI-дайджест |
+| `GET /api/v1/countries/{code}/threads` | Сюжетные нити страны |
+| `GET /api/v1/countries/{code}/un-votes` | Голосования в ООН |
+| `GET /api/v1/countries/{code}/trade` | Торговые данные |
+| `GET /api/v1/countries/{code}/resonance?days=14` | Резонансные события |
+| `GET /api/v1/countries/{code}/divergence/history?days=30` | История расхождения нарративов |
+| `GET /api/v1/countries/{code}/topics/divergence?days=30` | Расхождение по темам |
+
+### Аналитика
+
+| Endpoint | Описание |
+|----------|----------|
+| `GET /api/v1/headline` | Заголовок дня (самая горячая/холодная страна) |
+| `GET /api/v1/stats?days=30` | Статистика пайплайна |
+| `GET /api/v1/threads?limit=50&sort=importance` | Список сюжетных нитей |
+| `GET /api/v1/threads/{id}` | Детали сюжета с таймлайном |
+| `GET /api/v1/threads/{id}/related` | Связанные сюжеты |
+| `GET /api/v1/events/high-impact?days=14` | Высокорезонансные события |
+| `GET /api/v1/audience-split?days=30` | Аудиторный сплит двуязычных источников |
+| `GET /api/v1/analytics/coverage?days=30` | Покрытие источников |
+| `GET /api/v1/analytics/tier-divergence?days=14` | Расхождение нарративов по тирам |
+| `GET /api/v1/alerts` | Алерты и аномалии |
+| `GET /api/v1/compare?countries=KZ,AM,UZ` | Сравнение стран |
+| `GET /api/v1/un-votes/summary` | Сводка голосований ООН |
+
+### Администрирование
+
+| Endpoint | Описание |
+|----------|----------|
+| `GET /api/v1/sources` | Каталог источников |
+| `POST /api/v1/sources` | Добавить источник |
+| `PUT /api/v1/sources/{id}` | Обновить источник |
+| `DELETE /api/v1/sources/{id}` | Удалить источник |
+| `PATCH /api/v1/sources/{id}/toggle` | Вкл/выкл источник |
+| `GET /api/v1/pipeline/stats` | Статус пайплайна |
+| `GET /api/v1/admin/health` | Здоровье сервисов |
+| `GET /api/v1/admin/summary` | Сводка расходов API |
+| `GET /api/v1/admin/usage` | Детали использования API |
+| `GET /api/v1/admin/keys` | Информация об API-ключах |
+
+---
+
+## База данных
+
+| Таблица | Записей | Описание |
+|---------|---------|----------|
+| articles | 21,307 | Собранные статьи |
+| analysis | 19,622 | Результаты LLM-анализа |
+| temperature | 10,344 | Временной ряд температур |
+| sources | 191 | Каталог источников |
+| threads | 164 | Сюжетные нити |
+| thread_articles | 788 | Связи статья↔сюжет |
+| trade_data | 130 | Торговые данные IMF |
+| un_votes | 120 | Голосования ООН |
+| alerts | 102 | Алерты и аномалии |
+| digests | 87 | AI-дайджесты |
+| article_pairs | 38 | Пары двуязычных статей |
+| api_usage | 2,984 | Трекинг API-вызовов |
+
+---
+
+## Формула температуры
+
+```
+T(country, date) = Σ [ sentiment × action_multiplier × tier_weight × exp(-Δt/τ) × cluster_decay ]
+                   ─────────────────────────────────────────────────────────────────────────────────
+                                              Σ weights
+
+Где:
+  τ = 14 дней (период полураспада экспоненциального затухания)
+  action_multiplier: AL1=×1, AL2=×3, AL3=×5, AL4=×8, AL5=×12, AL6=×15
+  cluster_decay: 0.2^n (n = позиция статьи в кластере того же сюжета)
+  tier_weight: вес на основе тира источника
+
+Компоненты: raw_sentiment, diplomatic, military, economic, cultural, security
+Аномалии: anomaly_score + pattern_type (spike/shift/reversal)
+```
+
+---
+
+## Стек технологий
+
+| Компонент | Технология |
 |-----------|-----------|
-| Backend API | Python 3.11, FastAPI |
-| Dashboard | Streamlit (dark theme, mobile responsive) |
-| Database | PostgreSQL + TimescaleDB |
-| AI/LLM | Claude Sonnet 3.5 via OpenRouter |
-| Containerization | Docker Compose (7 services) |
-| Map | Plotly (equirectangular projection, custom tooltips) |
-| Scheduling | APScheduler (30-min collection, daily temperature recalc) |
+| Backend API | Python 3.11, FastAPI, Uvicorn |
+| Frontend | Next.js 16, React 19, TypeScript, Tailwind v4, shadcn/ui |
+| База данных | PostgreSQL + pgvector (Jina AI embeddings, 1024d) |
+| Кеширование | Redis |
+| AI/LLM | Claude Sonnet 4 через OpenRouter |
+| Embeddings | Jina AI (jina-embeddings-v3) |
+| Карта | Plotly.js (equirectangular projection) |
+| Графики | Recharts |
+| Деплой | Docker Compose (10 сервисов) + отдельный Next.js контейнер |
 
 ---
 
-## Quick Start
+## Быстрый старт
 
 ```bash
 git clone https://github.com/milkmike/GEO_PULSE.git
 cd GEO_PULSE
 cp .env.example .env
-# Set OPENROUTER_API_KEY in .env
+# Установить OPENROUTER_API_KEY и JINA_API_KEY в .env
 docker compose up -d
 ```
 
-**Services:**
-- 📊 Dashboard: `http://localhost:8101`
+**Сервисы:**
 - 🔗 API: `http://localhost:8100/api/v1/countries`
-- 🗄️ Database: PostgreSQL on port `5432`
+- 🗄️ База: PostgreSQL на порту `5432`
+
+**Фронтенд** (отдельный репо, ветка `nextjs`):
+- 📊 Dashboard: `http://localhost:3333`
 
 ---
 
-## API Endpoints
-
-| Endpoint | Description |
-|----------|-------------|
-| `GET /api/v1/countries` | All countries with current temperature, trend, article count |
-| `GET /api/v1/countries/{code}` | Detailed country data |
-| `GET /api/v1/countries/{code}/events` | Key events for a country |
-| `GET /api/v1/countries/{code}/digest` | AI-generated weekly digest |
-| `GET /api/v1/un-votes/summary` | UN voting agreement percentages |
-| `GET /api/v1/sources` | Source catalog |
-
----
-
-## Countries Covered
-
-🇰🇿 Kazakhstan · 🇦🇲 Armenia · 🇺🇿 Uzbekistan · 🇰🇬 Kyrgyzstan · 🇹🇯 Tajikistan · 🇹🇲 Turkmenistan · 🇦🇿 Azerbaijan · 🇬🇪 Georgia · 🇲🇩 Moldova · 🇧🇾 Belarus
-
----
-
-## Temperature Formula
+## Структура репозитория
 
 ```
-T(country, date) = Σ [ sentiment × action_multiplier × tier_weight × exp(-Δt/τ) × cluster_decay ]
-                   ─────────────────────────────────────────────────────────────────────────────
-                                              Σ weights
-
-Where:
-  τ = 14 days (exponential decay half-life)
-  action_multiplier: AL1=×1, AL2=×3, AL3=×5, AL4=×8, AL5=×12, AL6=×15
-  cluster_decay: 0.2^n (n = article position within same story cluster)
-  tier_weight: based on source credibility tier (1–6)
+GEO_PULSE/
+├── docker-compose.yml          # Оркестрация всех сервисов
+├── src/
+│   ├── api/
+│   │   ├── main.py             # FastAPI приложение (40 эндпоинтов)
+│   │   └── routes/
+│   │       ├── threads.py      # CRUD сюжетных нитей
+│   │       └── sources.py      # CRUD источников
+│   ├── collectors/
+│   │   ├── rss.py              # RSS-коллектор
+│   │   └── scraper.py          # Web-скрапер
+│   ├── pipeline/
+│   │   ├── sentiment.py        # LLM-анализ тональности
+│   │   ├── prompts.py          # Промпты для анализатора (v1.7)
+│   │   ├── filter.py           # Фильтр релевантности
+│   │   └── dedup.py            # Дедупликация
+│   ├── engine/
+│   │   └── index.py            # Температурный движок
+│   ├── embeddings.py           # Jina AI embeddings
+│   ├── config.py               # Конфигурация
+│   ├── db.py                   # Подключение к БД
+│   └── queue.py                # Redis очереди
+├── scripts/
+│   ├── collect.py              # Основной скрипт сбора
+│   ├── create_article_pairs.sql # SQL для создания пар статей
+│   ├── detect_languages.py     # Определение языков статей
+│   └── find_audience_splits.py # Поиск аудиторных сплитов
+└── Dockerfile                  # Multi-stage build
 ```
 
 ---
 
-## License
+## Страны
 
-Private research project. All rights reserved.
+🇰🇿 Казахстан · 🇦🇲 Армения · 🇺🇿 Узбекистан · 🇰🇬 Кыргызстан · 🇹🇯 Таджикистан · 🇹🇲 Туркменистан · 🇦🇿 Азербайджан · 🇬🇪 Грузия · 🇲🇩 Молдова · 🇧🇾 Беларусь
+
+---
+
+## Лицензия
+
+Частный исследовательский проект. Все права защищены.
+
+© 2026 GEO PULSE
