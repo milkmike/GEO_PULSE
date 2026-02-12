@@ -6,11 +6,11 @@ import {
   getVoxOverview,
   getVoxChannels,
   getEliteGap,
-  getCommentsFeed,
+  getVoxInsights,
   type VoxOverview,
   type VoxChannel,
   type EliteGapCountry,
-  type FeedComment,
+  type VoxInsights,
 } from "@/lib/vox-api";
 import SectionHeader from "@/components/SectionHeader";
 import InfoPopover from "@/components/InfoPopover";
@@ -198,17 +198,15 @@ export default function VoxPopuliPage() {
   const [eliteGap, setEliteGap] = useState<EliteGapCountry[]>([]);
   const [loading, setLoading] = useState(true);
   const [showChannels, setShowChannels] = useState(false);
-  const [comments, setComments] = useState<FeedComment[]>([]);
-  const [commentsTotal, setCommentsTotal] = useState(0);
-  const [commentsCountry, setCommentsCountry] = useState<string>("");
-  const [commentsLoading, setCommentsLoading] = useState(false);
-  /* VOX = comments only */
+  const [insights, setInsights] = useState<VoxInsights | null>(null);
+  const [insightsCountry, setInsightsCountry] = useState<string>("");
+  const [insightsLoading, setInsightsLoading] = useState(false);
 
-  const loadComments = (country?: string) => {
-    setCommentsLoading(true);
-    getCommentsFeed({ country: country || undefined, days: 999, limit: 100 })
-      .then(res => { setComments(res.comments); setCommentsTotal(res.total); setCommentsLoading(false); })
-      .catch(() => setCommentsLoading(false));
+  const loadInsights = (country?: string) => {
+    setInsightsLoading(true);
+    getVoxInsights({ country: country || undefined, days: 999 })
+      .then(res => { setInsights(res); setInsightsLoading(false); })
+      .catch(() => setInsightsLoading(false));
   };
 
   useEffect(() => {
@@ -222,7 +220,7 @@ export default function VoxPopuliPage() {
       setEliteGap(gap.countries);
       setLoading(false);
     });
-    loadComments();
+    loadInsights();
   }, []);
 
   if (loading) {
@@ -320,14 +318,14 @@ export default function VoxPopuliPage() {
           </div>
         </section>
 
-        {/* ── Comments Feed ── */}
+        {/* ── VOX Insights ── */}
         <section className="mb-8">
-          <SectionHeader icon="💬" title="Комментарии" />
+          <SectionHeader icon="🧠" title="Анализ комментариев" />
           <div className="mt-4">
             <div className="flex items-center gap-2 mb-4">
               <select
-                value={commentsCountry}
-                onChange={e => { setCommentsCountry(e.target.value); loadComments(e.target.value); }}
+                value={insightsCountry}
+                onChange={e => { setInsightsCountry(e.target.value); loadInsights(e.target.value); }}
                 className="bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 text-sm text-white focus:border-cyan-500 focus:outline-none"
               >
                 <option value="">Все страны</option>
@@ -335,86 +333,164 @@ export default function VoxPopuliPage() {
                   <option key={code} value={code}>{FLAG[code]} {name}</option>
                 ))}
               </select>
-              <span className="text-xs text-zinc-500">
-                {commentsTotal.toLocaleString()} комментариев
-              </span>
-            </div>
-
-            <div className="space-y-2 max-h-[500px] overflow-y-auto pr-1">
-              {commentsLoading ? (
-                <div className="text-center py-8 text-zinc-500 animate-pulse">Загрузка...</div>
-              ) : comments.length === 0 ? (
-                <div className="text-center py-12 text-zinc-500">
-                  <div className="text-4xl mb-3">💬</div>
-                  <p className="text-lg">Комментарии собираются...</p>
-                  <p className="text-sm mt-1">VOX collector работает, данные скоро появятся.</p>
-                </div>
-              ) : (
-                comments.map(c => (
-                  <div key={c.id} className="bg-zinc-900/40 border border-zinc-800 rounded-lg p-3">
-                    <div className="flex items-start gap-2">
-                      <span className="text-sm">{FLAG[c.country_code] || "🏳️"}</span>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 mb-1">
-                          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-purple-900/40 text-purple-400">
-                            {c.platform}
-                          </span>
-                          {c.emotion && (
-                            <span className="text-sm" title={c.emotion}>
-                              {EMOTION_EMOJI[c.emotion] || "❓"}
-                            </span>
-                          )}
-                          {c.sentiment !== null && (
-                            <span className={`text-[10px] font-mono ${
-                              c.sentiment > 0.2 ? "text-emerald-400" :
-                              c.sentiment < -0.2 ? "text-red-400" :
-                              "text-zinc-500"
-                            }`}>
-                              {c.sentiment > 0 ? "+" : ""}{c.sentiment.toFixed(2)}
-                            </span>
-                          )}
-                          {c.stance && c.stance !== "neutral" && (
-                            <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${
-                              c.stance === "pro_russia" ? "bg-blue-900/40 text-blue-400" :
-                              "bg-orange-900/40 text-orange-400"
-                            }`}>
-                              {c.stance === "pro_russia" ? "🇷🇺 pro" : "🇷🇺 anti"}
-                            </span>
-                          )}
-                          {c.bot_score !== null && c.bot_score >= 0.5 && (
-                            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-900/40 text-red-400">
-                              🤖 бот
-                            </span>
-                          )}
-                          <span className="text-xs text-zinc-600 ml-auto whitespace-nowrap">
-                            {c.published_at ? new Date(c.published_at).toLocaleString("ru", {
-                              day: "numeric", month: "short", hour: "2-digit", minute: "2-digit"
-                            }) : ""}
-                          </span>
-                        </div>
-                        <p className="text-sm text-zinc-300 leading-relaxed">
-                          {c.text}
-                        </p>
-                        {c.topics.length > 0 && (
-                          <div className="flex gap-1 mt-1 flex-wrap">
-                            {c.topics.map(t => (
-                              <span key={t} className="text-[10px] px-1.5 py-0.5 bg-zinc-800 rounded text-zinc-400">
-                                {t}
-                              </span>
-                            ))}
-                          </div>
-                        )}
-                        {c.likes > 0 && (
-                          <span className="text-xs text-zinc-500 mt-1 inline-block">
-                            ❤️ {c.likes}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                ))
+              {insights && (
+                <span className="text-xs text-zinc-500">
+                  {insights.total_analyzed} / {insights.total_comments} проанализировано
+                </span>
               )}
             </div>
+
+            {insightsLoading ? (
+              <div className="text-center py-8 text-zinc-500 animate-pulse">Загрузка...</div>
+            ) : !insights || insights.total_analyzed === 0 ? (
+              <div className="text-center py-12 text-zinc-500">
+                <div className="text-4xl mb-3">🧠</div>
+                <p className="text-lg">Анализ запущен...</p>
+                <p className="text-sm mt-1">Комментарии обрабатываются ИИ. Данные появятся после первого цикла.</p>
+              </div>
+            ) : (
+              <div className="space-y-6">
+                {/* ── Emotion Clusters ── */}
+                <div>
+                  <h4 className="text-sm font-medium text-zinc-400 mb-3">Эмоции</h4>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                    {insights.emotions.map(e => {
+                      const total = insights.emotions.reduce((s, x) => s + x.count, 0);
+                      const pct = total > 0 ? (e.count / total * 100) : 0;
+                      return (
+                        <div key={e.emotion} className="bg-zinc-900/60 border border-zinc-800 rounded-lg p-3 relative overflow-hidden">
+                          <div
+                            className="absolute inset-y-0 left-0 bg-gradient-to-r from-cyan-500/10 to-transparent"
+                            style={{ width: `${pct}%` }}
+                          />
+                          <div className="relative">
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className="text-lg">{EMOTION_EMOJI[e.emotion] || "❓"}</span>
+                              <span className="text-sm text-white capitalize">{e.emotion}</span>
+                            </div>
+                            <div className="flex items-baseline gap-1">
+                              <span className="text-lg font-bold text-white">{e.count}</span>
+                              <span className="text-xs text-zinc-500">{pct.toFixed(0)}%</span>
+                            </div>
+                          </div>
+                          {/* Sample quotes */}
+                          {insights.emotion_samples[e.emotion]?.slice(0, 1).map((s, i) => (
+                            <p key={i} className="relative text-[10px] text-zinc-500 mt-2 line-clamp-2 italic">
+                              &ldquo;{s.text}&rdquo;
+                            </p>
+                          ))}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* ── Sentiment Spectrum ── */}
+                <div>
+                  <h4 className="text-sm font-medium text-zinc-400 mb-3">Спектр настроений</h4>
+                  {(() => {
+                    const bucketOrder = ["very_negative", "negative", "neutral", "positive", "very_positive"];
+                    const bucketLabels: Record<string, string> = {
+                      very_negative: "🔴 Резко негатив",
+                      negative: "🟠 Негатив",
+                      neutral: "⚪ Нейтрально",
+                      positive: "🟢 Позитив",
+                      very_positive: "🔵 Резко позитив",
+                    };
+                    const bucketColors: Record<string, string> = {
+                      very_negative: "bg-red-500",
+                      negative: "bg-orange-500",
+                      neutral: "bg-zinc-500",
+                      positive: "bg-emerald-500",
+                      very_positive: "bg-cyan-500",
+                    };
+                    const total = insights.sentiment_buckets.reduce((s, b) => s + b.count, 0);
+                    return (
+                      <div>
+                        {/* Bar */}
+                        <div className="flex h-8 rounded-lg overflow-hidden mb-2">
+                          {bucketOrder.map(key => {
+                            const b = insights.sentiment_buckets.find(x => x.bucket === key);
+                            const pct = b && total > 0 ? (b.count / total * 100) : 0;
+                            if (pct === 0) return null;
+                            return (
+                              <div
+                                key={key}
+                                className={`${bucketColors[key]} flex items-center justify-center text-[10px] font-bold text-white transition-all`}
+                                style={{ width: `${pct}%` }}
+                                title={`${bucketLabels[key]}: ${b?.count} (${pct.toFixed(0)}%)`}
+                              >
+                                {pct >= 10 ? `${pct.toFixed(0)}%` : ""}
+                              </div>
+                            );
+                          })}
+                        </div>
+                        {/* Legend */}
+                        <div className="flex flex-wrap gap-3 justify-center">
+                          {bucketOrder.map(key => {
+                            const b = insights.sentiment_buckets.find(x => x.bucket === key);
+                            if (!b) return null;
+                            return (
+                              <span key={key} className="text-xs text-zinc-500">
+                                {bucketLabels[key]}: {b.count}
+                              </span>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </div>
+
+                {/* ── Stance toward Russia ── */}
+                <div>
+                  <h4 className="text-sm font-medium text-zinc-400 mb-3">Позиция к России</h4>
+                  <div className="flex gap-3">
+                    {insights.stances.map(s => {
+                      const total = insights.stances.reduce((sum, x) => sum + x.count, 0);
+                      const pct = total > 0 ? (s.count / total * 100) : 0;
+                      const icon = s.stance === "pro" ? "🇷🇺👍" : s.stance === "anti" ? "🇷🇺👎" : "🤷";
+                      const color = s.stance === "pro" ? "border-blue-500/30 bg-blue-900/20" :
+                                    s.stance === "anti" ? "border-orange-500/30 bg-orange-900/20" :
+                                    "border-zinc-700 bg-zinc-900/40";
+                      return (
+                        <div key={s.stance} className={`flex-1 border rounded-lg p-3 ${color}`}>
+                          <div className="text-center">
+                            <span className="text-xl">{icon}</span>
+                            <div className="text-lg font-bold text-white mt-1">{pct.toFixed(0)}%</div>
+                            <div className="text-xs text-zinc-400 capitalize">{s.stance}</div>
+                            <div className="text-xs text-zinc-600">{s.count} комм.</div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* ── Topic Cloud ── */}
+                <div>
+                  <h4 className="text-sm font-medium text-zinc-400 mb-3">Облако тем</h4>
+                  <div className="flex flex-wrap gap-2 justify-center">
+                    {insights.topics.map(t => {
+                      const maxCount = insights.topics[0]?.count || 1;
+                      const scale = 0.7 + (t.count / maxCount) * 0.8;
+                      const opacity = 0.4 + (t.count / maxCount) * 0.6;
+                      return (
+                        <span
+                          key={t.topic}
+                          className="px-2 py-1 rounded-full bg-cyan-900/30 text-cyan-300 border border-cyan-800/30 transition-all hover:bg-cyan-800/40 cursor-default"
+                          style={{ fontSize: `${scale}rem`, opacity }}
+                          title={`${t.count} упоминаний`}
+                        >
+                          {t.topic}
+                          {t.count > 1 && <sup className="ml-1 text-[9px] text-cyan-500">{t.count}</sup>}
+                        </span>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         </section>
 

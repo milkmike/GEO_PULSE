@@ -136,6 +136,25 @@ export interface ArticlesFeedResponse {
   offset: number;
 }
 
+// ── Insights ───────────────────────────────────────────
+
+export interface VoxInsights {
+  total_comments: number;
+  total_analyzed: number;
+  emotions: { emotion: string; count: number }[];
+  stances: { stance: string; count: number }[];
+  topics: { topic: string; count: number }[];
+  sentiment_buckets: { bucket: string; count: number }[];
+  emotion_samples: Record<string, { text: string; sentiment: number; country: string }[]>;
+}
+
+export async function getVoxInsights(params: { country?: string; days?: number } = {}) {
+  const p: Record<string, string | number> = {};
+  if (params.country) p.country = params.country;
+  if (params.days) p.days = params.days;
+  return voxFetch<VoxInsights>("/api/v1/vox/insights", p);
+}
+
 // ── Comments Feed ──────────────────────────────────────
 
 export interface FeedComment {
