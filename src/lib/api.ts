@@ -1,4 +1,4 @@
-export const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://YOUR_SERVER_IP:8100";
+export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "";
 
 // ── Types ──────────────────────────────────────────────
 
@@ -260,13 +260,16 @@ export interface AdminScriptUsageResponse {
 // ── Fetch wrapper ──────────────────────────────────────
 
 async function apiFetch<T>(path: string, params?: Record<string, string | number>): Promise<T> {
-  const url = new URL(`${API_URL}${path}`);
+  const base = API_URL.startsWith("http") ? API_URL : `http://127.0.0.1:8100`;
+  const url = new URL(`${base}${path}`);
   if (params) {
     Object.entries(params).forEach(([k, v]) => {
       if (v !== undefined && v !== null) url.searchParams.set(k, String(v));
     });
   }
-  const res = await fetch(url.toString(), { next: { revalidate: 300 } });
+  // Client-side: use relative path; Server-side: use absolute URL
+  const fetchUrl = typeof window !== "undefined" ? `${API_URL}${path}${url.search}` : url.toString();
+  const res = await fetch(fetchUrl, { next: { revalidate: 300 } });
   if (!res.ok) throw new Error(`API error: ${res.status} ${res.statusText}`);
   return res.json();
 }
