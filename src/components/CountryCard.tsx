@@ -106,6 +106,23 @@ export default function CountryCard({ country, sparklineData }: CountryCardProps
               />
             </div>
           </div>
+          {/* Quick links */}
+          <div className="mt-3 flex gap-2 text-[10px]">
+            <Link
+              href={`/threads?country=${country.code}&from=/`}
+              className="text-blue-400/70 hover:text-blue-400 transition-colors"
+              onClick={(e) => e.stopPropagation()}
+            >
+              🧵 Сюжеты →
+            </Link>
+            <Link
+              href={`/vox?country=${country.code}&from=/`}
+              className="text-blue-400/70 hover:text-blue-400 transition-colors"
+              onClick={(e) => e.stopPropagation()}
+            >
+              📢 VOX →
+            </Link>
+          </div>
         </CardContent>
       </Card>
     </Link>

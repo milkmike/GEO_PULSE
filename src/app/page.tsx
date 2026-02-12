@@ -27,6 +27,7 @@ import {
   type Thread,
   type TierDivergenceCountry,
 } from "@/lib/api";
+import { useDashboard } from "@/lib/dashboard-context";
 
 const GeoMap = dynamic(() => import("@/components/GeoMap"), {
   ssr: false,
@@ -38,6 +39,7 @@ const GeoMap = dynamic(() => import("@/components/GeoMap"), {
 });
 
 export default function OverviewPage() {
+  const { navigateWithFilters, buildFilteredUrl } = useDashboard();
   const [period, setPeriod] = useState("Год");
   const [countries, setCountries] = useState<Country[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
@@ -47,6 +49,11 @@ export default function OverviewPage() {
   const [divergence, setDivergence] = useState<TierDivergenceCountry[]>([]);
   const [selectedCountry, setSelectedCountry] = useState<string | null>(null);
   const [sparklines, setSparklines] = useState<Record<string, number[]>>({});
+
+  // Double-click on map country → drill into threads for that country
+  const handleCountryDrillDown = useCallback((code: string) => {
+    navigateWithFilters("/threads", { country: code });
+  }, [navigateWithFilters]);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -119,7 +126,7 @@ export default function OverviewPage() {
         <div className="grid gap-4 md:grid-cols-2">
           {/* Left: Hero thread */}
           {topThreads[0] && (
-            <Link href={`/threads/${topThreads[0].id}`}>
+            <Link href={buildFilteredUrl(`/threads/${topThreads[0].id}`)}>
               <div className="rounded-xl border border-red-500/15 bg-gradient-to-br from-red-500/5 to-transparent p-5 hover:border-red-500/30 transition-all cursor-pointer h-full">
                 <div className="flex items-center gap-2 mb-3">
                   <span className="text-[10px] font-semibold tracking-widest uppercase text-red-400/70">🔥 Главный сюжет</span>
@@ -143,7 +150,7 @@ export default function OverviewPage() {
             <div className="space-y-2">
               <span className="text-[10px] font-semibold tracking-widest uppercase text-white/30 px-1">🎯 В фокусе</span>
               {topThreads.slice(1, 4).map((thread) => (
-                <Link key={thread.id} href={`/threads/${thread.id}`}>
+                <Link key={thread.id} href={buildFilteredUrl(`/threads/${thread.id}`)}>
                   <div className="rounded-lg border border-white/[0.06] p-3 hover:border-white/15 transition-all cursor-pointer">
                     <div className="flex items-start gap-3">
                       <span className="text-sm mt-0.5 shrink-0">{COUNTRY_FLAGS[thread.country_code]}</span>
@@ -178,6 +185,7 @@ export default function OverviewPage() {
         countries={countries}
         selectedCountry={selectedCountry}
         onCountrySelect={setSelectedCountry}
+        onCountryDrillDown={handleCountryDrillDown}
         height={520}
       />
 
@@ -195,7 +203,7 @@ export default function OverviewPage() {
             />
             <div className="grid gap-3 md:grid-cols-3">
               {topDiv.map((c) => (
-                <Link key={c.code} href={`/country/${c.code}`}>
+                <Link key={c.code} href={buildFilteredUrl(`/country/${c.code}`)}>
                   <div className={`rounded-lg border p-4 hover:border-white/20 transition-all cursor-pointer ${
                     c.divergence >= 0.5 ? "border-red-500/20 bg-red-500/5" : c.divergence >= 0.2 ? "border-yellow-500/20 bg-yellow-500/5" : "border-white/8"
                   }`}>

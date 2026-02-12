@@ -47,6 +47,7 @@ interface GeoMapProps {
   countries: Country[];
   selectedCountry?: string | null;
   onCountrySelect?: (code: string | null) => void;
+  onCountryDrillDown?: (code: string) => void;
   height?: number;
 }
 
@@ -54,6 +55,7 @@ export default function GeoMap({
   countries,
   selectedCountry = null,
   onCountrySelect,
+  onCountryDrillDown,
   height = 520,
 }: GeoMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -315,6 +317,11 @@ export default function GeoMap({
         }
 
         if (code && COUNTRY_GEO[code]) {
+          // If same country clicked again → drill down into threads
+          if (selectedCountry === code && onCountryDrillDown) {
+            onCountryDrillDown(code);
+            return;
+          }
           // Zoom to country
           const newLayout = buildLayout(code);
           Plotly.relayout(containerRef.current!, {

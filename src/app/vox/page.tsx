@@ -2,6 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { COUNTRY_NAMES } from "@/lib/api";
+import { COUNTRY_FLAGS } from "@/lib/constants";
+import { useDashboard } from "@/lib/dashboard-context";
+import { Breadcrumbs } from "@/components/Breadcrumbs";
 import {
   getVoxOverview,
   getVoxChannels,
@@ -193,13 +196,14 @@ function VoxCountryCard({ c }: { c: {
 /* ══════════════════════════════════════════════════════ */
 
 export default function VoxPopuliPage() {
+  const { filters } = useDashboard();
   const [overview, setOverview] = useState<VoxOverview | null>(null);
   const [channels, setChannels] = useState<VoxChannel[]>([]);
   const [eliteGap, setEliteGap] = useState<EliteGapCountry[]>([]);
   const [loading, setLoading] = useState(true);
   const [showChannels, setShowChannels] = useState(false);
   const [insights, setInsights] = useState<VoxInsights | null>(null);
-  const [insightsCountry, setInsightsCountry] = useState<string>("");
+  const [insightsCountry, setInsightsCountry] = useState<string>(filters.countries[0] || "");
   const [insightsLoading, setInsightsLoading] = useState(false);
 
   const loadInsights = (country?: string) => {
@@ -220,8 +224,8 @@ export default function VoxPopuliPage() {
       setEliteGap(gap.countries);
       setLoading(false);
     });
-    loadInsights();
-  }, []);
+    loadInsights(filters.countries[0] || undefined);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (loading) {
     return (
@@ -239,6 +243,7 @@ export default function VoxPopuliPage() {
   return (
     <div className="min-h-screen bg-zinc-950 text-white">
       <div className="max-w-7xl mx-auto px-4 py-8">
+        <Breadcrumbs />
 
         {/* ── Header ── */}
         <div className="mb-8">
