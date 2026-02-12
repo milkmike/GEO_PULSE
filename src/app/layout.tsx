@@ -17,6 +17,7 @@ const navItems = [
   { href: "/", label: "🌡️ Обзор" },
   { href: "/country", label: "🏳️ Страна" },
   { href: "/threads", label: "🧵 Сюжеты" },
+  { href: "/vox", label: "📢 VOX" },
   { href: "/analytics", label: "📊 Аналитика" },
   { href: "/sources", label: "📡 Источники" },
   { href: "/about", label: "ℹ️ О проекте" },
