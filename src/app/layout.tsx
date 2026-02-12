@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
+import { Suspense } from "react";
 import Link from "next/link";
+import { DashboardProvider } from "@/lib/dashboard-context";
 import "./globals.css";
 
 const inter = Inter({
@@ -58,7 +60,11 @@ export default function RootLayout({
 
         {/* Content */}
         <main className="mx-auto max-w-7xl px-4 py-6">
-          {children}
+          <Suspense>
+            <DashboardProvider>
+              {children}
+            </DashboardProvider>
+          </Suspense>
         </main>
       </body>
     </html>

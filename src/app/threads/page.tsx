@@ -2,33 +2,16 @@
 
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
-import { getThread, formatDate, API_URL, type ThreadDetail, type ThreadTimelineArticle } from "@/lib/api";
+import { getThread, API_URL, type ThreadDetail, type ThreadTimelineArticle } from "@/lib/api";
+import { COUNTRY_FLAGS as FLAGS, COUNTRY_NAMES, COUNTRY_CODES, PHASE_CONFIG as PHASE_CFG, PHASE_ORDER, formatDate, sentimentColor } from "@/lib/constants";
+import { useDashboard } from "@/lib/dashboard-context";
 import SectionHeader from "@/components/SectionHeader";
+import { Breadcrumbs } from "@/components/Breadcrumbs";
 import { glossary } from "@/lib/glossary";
 
 // ── Constants ──────────────────────────────────────────
 
-const FLAGS: Record<string, string> = {
-  KZ: "🇰🇿", AM: "🇦🇲", UZ: "🇺🇿", KG: "🇰🇬", TJ: "🇹🇯",
-  TM: "🇹🇲", AZ: "🇦🇿", GE: "🇬🇪", MD: "🇲🇩", BY: "🇧🇾",
-};
-
-const COUNTRIES = [
-  { code: "KZ", name: "Казахстан" }, { code: "UZ", name: "Узбекистан" },
-  { code: "BY", name: "Беларусь" }, { code: "AZ", name: "Азербайджан" },
-  { code: "AM", name: "Армения" }, { code: "GE", name: "Грузия" },
-  { code: "KG", name: "Кыргызстан" }, { code: "TJ", name: "Таджикистан" },
-  { code: "TM", name: "Туркменистан" }, { code: "MD", name: "Молдова" },
-];
-
-const PHASE_CFG: Record<string, { emoji: string; color: string; label: string }> = {
-  emerging:   { emoji: "🌱", color: "#3b82f6", label: "Зарождение" },
-  escalating: { emoji: "📈", color: "#f59e0b", label: "Эскалация" },
-  peak:       { emoji: "🔥", color: "#ef4444", label: "Пик" },
-  cooling:    { emoji: "❄️", color: "#06b6d4", label: "Затухание" },
-  resolved:   { emoji: "✅", color: "#22c55e", label: "Завершён" },
-};
-const PHASE_ORDER = ["emerging", "escalating", "peak", "cooling", "resolved"];
+const COUNTRIES = COUNTRY_CODES.map((code) => ({ code, name: COUNTRY_NAMES[code] }));
 
 function sentColor(s: number): string {
   return s > 0.3 ? "#22c55e" : s > -0.3 ? "#eab308" : "#ef4444";
@@ -76,7 +59,7 @@ function StructuredSummary({ summary, compact }: { summary: any; compact?: boole
 // ── Arc bar ────────────────────────────────────────────
 
 function ArcBar({ phase, height }: { phase: string; height?: string }) {
-  const idx = PHASE_ORDER.indexOf(phase);
+  const idx = (PHASE_ORDER as readonly string[]).indexOf(phase);
   return (
     <div className="my-2">
       {/* Bar segments */}
@@ -324,8 +307,11 @@ function CompactCard({ thread }: { thread: any }) {
 export default function ThreadsPage() {
   const [allThreads, setAllThreads] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [filterCountry, setFilterCountry] = useState<string[]>([]);
-  const [filterStatus, setFilterStatus] = useState("");
+  const { filters, setFilters, toggleCountry } = useDashboard();
+  const filterCountry = filters.countries;
+  const filterStatus = filters.status;
+  const setFilterCountry = (countries: string[]) => setFilters({ countries });
+  const setFilterStatus = (status: string) => setFilters({ status });
 
   useEffect(() => {
     (async () => {
@@ -380,9 +366,7 @@ export default function ThreadsPage() {
   const escalating = threads.filter((t) => t.arc_phase === "escalating" || t.arc_phase === "peak").length;
   const totalArticles = threads.reduce((s, t) => s + t.article_count, 0);
 
-  const toggle = (code: string) => {
-    setFilterCountry((prev) => prev.includes(code) ? prev.filter((c) => c !== code) : [...prev, code]);
-  };
+  const toggle = (code: string) => toggleCountry(code);
 
   if (loading) {
     return (
@@ -394,6 +378,7 @@ export default function ThreadsPage() {
 
   return (
     <div className="space-y-8">
+      <Breadcrumbs />
       {/* Header */}
       <div className="flex items-end justify-between">
         <div>
