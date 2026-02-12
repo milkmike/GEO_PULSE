@@ -12,7 +12,7 @@ from src.api_tracker import track_api_call, track_duration
 logger = logging.getLogger(__name__)
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-MODEL = "anthropic/claude-sonnet-4"
+MODEL = "google/gemini-3-flash"
 
 
 def get_headers() -> dict | None:

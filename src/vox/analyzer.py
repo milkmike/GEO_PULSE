@@ -97,6 +97,8 @@ def call_llm(comments: list[dict], country: str) -> list[dict] | None:
         headers={
             "Content-Type": "application/json",
             "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+            "HTTP-Referer": "https://geopulse.app",
+            "X-Title": "GeoPulse VOX Analyzer",
         }
     )
 
@@ -197,7 +199,7 @@ def analyze_batch():
         else:
             log.warning(f"  → LLM returned no results for {country}")
 
-        time.sleep(1)  # rate limiting
+        time.sleep(2)  # rate limiting — Gemini is fast
 
     conn.close()
     return total_saved

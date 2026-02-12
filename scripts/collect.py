@@ -49,6 +49,9 @@ logger = logging.getLogger("collector")
 
 SKIP_YAML_SYNC = os.environ.get("SKIP_YAML_SYNC", "0") == "1"
 
+# Articles older than this threshold are marked as backfill
+BACKFILL_HOURS = int(os.environ.get("BACKFILL_HOURS", "48"))
+
 # Redis integration (optional, graceful fallback)
 _redis_available = False
 try:
@@ -82,7 +85,7 @@ def _update_collector_stats():
 def ensure_sources_in_db():
     """Sync sources from YAML config to database."""
     if SKIP_YAML_SYNC:
-        logger.info("SKIP_YAML_SYNC=1, skipping YAML source sync")
+
         return
 
     config = load_sources()
@@ -160,6 +163,10 @@ def collect_all():
                         session, title_norm, source.country_code, published_at
                     )
 
+                # Mark as backfill if article is older than threshold
+                age_hours = (datetime.now(timezone.utc) - published_at).total_seconds() / 3600
+                is_backfill = age_hours > BACKFILL_HOURS
+
                 article = Article(
                     source_id=source.id,
                     external_id=art["external_id"],
@@ -171,6 +178,7 @@ def collect_all():
                     title_normalized=title_norm,
                     is_duplicate=parent_id is not None,
                     duplicate_of=parent_id,
+                    is_backfill=is_backfill,
                 )
                 session.add(article)
                 session.flush()  # Get article.id for Redis enqueue

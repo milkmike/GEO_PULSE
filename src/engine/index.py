@@ -43,6 +43,7 @@ def calculate_temperature(country_code: str) -> dict | None:
                 WHERE s.country_code = :cc
                   AND a.is_relevant = true
                   AND a.sentiment IS NOT NULL
+                  AND ar.is_backfill = false
                   AND ar.published_at > NOW() - INTERVAL ':days days'
             """.replace(":days", str(WINDOW_DAYS))),
             {"cc": country_code},

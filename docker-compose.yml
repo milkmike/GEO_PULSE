@@ -37,6 +37,8 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL}
       REDIS_URL: redis://redis:6379/0
+      FIRECRAWL_URL: "http://172.18.0.1:3002"
+      FIRECRAWL_KEY: "fc-test"
     depends_on:
       db:
         condition: service_healthy
@@ -106,5 +108,75 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+
+  # === VOX POPULI ===
+  vox-collector:
+    build:
+      context: .
+      dockerfile: src/vox/Dockerfile
+    command: python -m src.vox.telegram_collector
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      TELEGRAM_API_ID: ${TELEGRAM_API_ID}
+      TELEGRAM_API_HASH: ${TELEGRAM_API_HASH}
+      TELEGRAM_SESSION: ${TELEGRAM_SESSION}
+      VOX_POSTS_PER_CHANNEL: "100"
+    volumes:
+      - ./sessions:/app/sessions
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  vox-analyzer:
+    build:
+      context: .
+      dockerfile: src/vox/Dockerfile
+    command: python -m src.vox.analyzer
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      VOX_MODEL: ${VOX_MODEL:-google/gemini-2.0-flash-001}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  vox-engine:
+    build:
+      context: .
+      dockerfile: src/vox/Dockerfile
+    command: python -m src.vox.engine
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+
+  tg-collector:
+    build:
+      context: .
+      dockerfile: Dockerfile.tg-collector
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: redis://redis:6379/0
+      FIRECRAWL_URL: "http://172.18.0.1:3002"
+      FIRECRAWL_KEY: "fc-test"
+      TELEGRAM_API_ID: ${TELEGRAM_API_ID}
+      TELEGRAM_API_HASH: ${TELEGRAM_API_HASH}
+      TELEGRAM_SESSION: ${TELEGRAM_SESSION:-geopulse_vox}
+      TG_SESSION_PATH: /app/sessions
+      TG_MODE: live
+      TG_COLLECT_INTERVAL: "900"
+      TG_MIN_POST_LENGTH: "80"
+      TG_BACKFILL_LIMIT: "50"
+    volumes:
+      - ./sessions:/app/sessions
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
 volumes:
   pgdata:
