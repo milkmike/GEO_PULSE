@@ -6,9 +6,11 @@ import {
   getVoxOverview,
   getVoxChannels,
   getEliteGap,
+  getArticlesFeed,
   type VoxOverview,
   type VoxChannel,
   type EliteGapCountry,
+  type FeedArticle,
 } from "@/lib/vox-api";
 import SectionHeader from "@/components/SectionHeader";
 import InfoPopover from "@/components/InfoPopover";
@@ -196,6 +198,28 @@ export default function VoxPopuliPage() {
   const [eliteGap, setEliteGap] = useState<EliteGapCountry[]>([]);
   const [loading, setLoading] = useState(true);
   const [showChannels, setShowChannels] = useState(false);
+  const [articles, setArticles] = useState<FeedArticle[]>([]);
+  const [articlesTotal, setArticlesTotal] = useState(0);
+  const [feedCountry, setFeedCountry] = useState<string>("");
+  const [feedType, setFeedType] = useState<string>("");
+  const [feedSearch, setFeedSearch] = useState<string>("");
+  const [feedLoading, setFeedLoading] = useState(false);
+  const [expandedArticle, setExpandedArticle] = useState<number | null>(null);
+
+  const loadArticles = (country?: string, source_type?: string, search?: string) => {
+    setFeedLoading(true);
+    getArticlesFeed({
+      country: country || undefined,
+      source_type: source_type || undefined,
+      search: search || undefined,
+      days: 3,
+      limit: 50,
+    }).then(res => {
+      setArticles(res.articles);
+      setArticlesTotal(res.total);
+      setFeedLoading(false);
+    }).catch(() => setFeedLoading(false));
+  };
 
   useEffect(() => {
     Promise.all([
@@ -208,6 +232,7 @@ export default function VoxPopuliPage() {
       setEliteGap(gap.countries);
       setLoading(false);
     });
+    loadArticles();
   }, []);
 
   if (loading) {
@@ -302,6 +327,116 @@ export default function VoxPopuliPage() {
                 </p>
               </div>
             )}
+          </div>
+        </section>
+
+        {/* ── Articles Feed ── */}
+        <section className="mb-8">
+          <SectionHeader icon="📰" title="Лента статей" />
+          <div className="mt-4">
+            {/* Filters */}
+            <div className="flex flex-wrap items-center gap-2 mb-4">
+              <select
+                value={feedCountry}
+                onChange={e => { setFeedCountry(e.target.value); loadArticles(e.target.value, feedType, feedSearch); }}
+                className="bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 text-sm text-white focus:border-cyan-500 focus:outline-none"
+              >
+                <option value="">Все страны</option>
+                {Object.entries(COUNTRY_NAMES).map(([code, name]) => (
+                  <option key={code} value={code}>{FLAG[code]} {name}</option>
+                ))}
+              </select>
+              <select
+                value={feedType}
+                onChange={e => { setFeedType(e.target.value); loadArticles(feedCountry, e.target.value, feedSearch); }}
+                className="bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 text-sm text-white focus:border-cyan-500 focus:outline-none"
+              >
+                <option value="">Все типы</option>
+                <option value="telegram">📱 Telegram</option>
+                <option value="rss">📡 RSS</option>
+                <option value="web">🌐 Web</option>
+              </select>
+              <div className="flex-1 min-w-[200px]">
+                <input
+                  type="text"
+                  placeholder="🔍 Поиск по заголовку..."
+                  value={feedSearch}
+                  onChange={e => setFeedSearch(e.target.value)}
+                  onKeyDown={e => e.key === "Enter" && loadArticles(feedCountry, feedType, feedSearch)}
+                  className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 text-sm text-white placeholder-zinc-500 focus:border-cyan-500 focus:outline-none"
+                />
+              </div>
+              <span className="text-xs text-zinc-500">
+                {articlesTotal.toLocaleString()} статей за 3 дня
+              </span>
+            </div>
+
+            {/* Articles List */}
+            <div className="space-y-2 max-h-[600px] overflow-y-auto pr-1">
+              {feedLoading ? (
+                <div className="text-center py-8 text-zinc-500 animate-pulse">Загрузка...</div>
+              ) : articles.length === 0 ? (
+                <div className="text-center py-8 text-zinc-500">Нет статей по фильтрам</div>
+              ) : (
+                articles.map(a => (
+                  <div
+                    key={a.id}
+                    className="bg-zinc-900/40 border border-zinc-800 rounded-lg p-3 hover:border-zinc-700 transition-colors cursor-pointer"
+                    onClick={() => setExpandedArticle(expandedArticle === a.id ? null : a.id)}
+                  >
+                    <div className="flex items-start gap-2">
+                      <span className="text-sm mt-0.5">{FLAG[a.country_code] || "🏳️"}</span>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${
+                            a.source_type === "telegram" ? "bg-cyan-900/50 text-cyan-400" :
+                            a.source_type === "rss" ? "bg-orange-900/50 text-orange-400" :
+                            "bg-zinc-800 text-zinc-400"
+                          }`}>
+                            {a.source_type === "telegram" ? "TG" : a.source_type.toUpperCase()}
+                          </span>
+                          <span className="text-xs text-zinc-500 truncate">{a.source_name}</span>
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${
+                            a.tier === "opposition" ? "bg-red-900/40 text-red-400" :
+                            a.tier === "state" ? "bg-blue-900/40 text-blue-400" :
+                            a.tier === "independent" ? "bg-emerald-900/40 text-emerald-400" :
+                            "bg-zinc-800 text-zinc-400"
+                          }`}>
+                            {a.tier}
+                          </span>
+                          <span className="text-xs text-zinc-600 ml-auto whitespace-nowrap">
+                            {a.published_at ? new Date(a.published_at).toLocaleString("ru", {
+                              day: "numeric", month: "short", hour: "2-digit", minute: "2-digit"
+                            }) : ""}
+                          </span>
+                        </div>
+                        <h4 className="text-sm text-white font-medium leading-tight line-clamp-2">
+                          {a.title || "(без заголовка)"}
+                        </h4>
+                        {expandedArticle === a.id && (
+                          <div className="mt-2">
+                            <p className="text-xs text-zinc-400 leading-relaxed whitespace-pre-line">
+                              {a.body}
+                            </p>
+                            {a.url && (
+                              <a
+                                href={a.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-block mt-2 text-xs text-cyan-400 hover:text-cyan-300"
+                                onClick={e => e.stopPropagation()}
+                              >
+                                Открыть источник →
+                              </a>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
           </div>
         </section>
 

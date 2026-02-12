@@ -113,3 +113,43 @@ export async function getEliteGap(days = 7) {
 export async function getVoxChannels() {
   return voxFetch<{ channels: VoxChannel[] }>("/api/v1/vox/channels");
 }
+
+// ── Articles Feed ──────────────────────────────────────
+
+export interface FeedArticle {
+  id: number;
+  title: string;
+  body: string;
+  url: string;
+  published_at: string | null;
+  language: string;
+  source_name: string;
+  country_code: string;
+  source_type: string;
+  tier: string;
+}
+
+export interface ArticlesFeedResponse {
+  articles: FeedArticle[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export async function getArticlesFeed(params: {
+  country?: string;
+  source_type?: string;
+  search?: string;
+  days?: number;
+  limit?: number;
+  offset?: number;
+} = {}) {
+  const p: Record<string, string | number> = {};
+  if (params.country) p.country = params.country;
+  if (params.source_type) p.source_type = params.source_type;
+  if (params.search) p.search = params.search;
+  if (params.days) p.days = params.days;
+  if (params.limit) p.limit = params.limit;
+  if (params.offset) p.offset = params.offset;
+  return voxFetch<ArticlesFeedResponse>("/api/v1/articles/feed", p);
+}
