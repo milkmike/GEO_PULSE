@@ -215,9 +215,9 @@ export default function VoxPopuliPage() {
 
   useEffect(() => {
     Promise.all([
-      getVoxOverview(7).catch(() => null),
+      getVoxOverview(999).catch(() => null),
       getVoxChannels().catch(() => ({ channels: [] })),
-      getEliteGap(7).catch(() => ({ countries: [] })),
+      getEliteGap(999).catch(() => ({ countries: [] })),
     ]).then(([vox, ch, gap]) => {
       if (vox) setOverview(vox);
       setChannels(ch.channels);
