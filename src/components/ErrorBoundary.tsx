@@ -1,6 +1,6 @@
 "use client";
 
-import React, { Component, type ReactNode } from "react";
+import { Component, type ReactNode } from "react";
 
 interface Props {
   children: ReactNode;
@@ -13,7 +13,7 @@ interface State {
   error: Error | null;
 }
 
-export default class ErrorBoundary extends Component<Props, State> {
+export class ErrorBoundary extends Component<Props, State> {
   constructor(props: Props) {
     super(props);
     this.state = { hasError: false, error: null };
@@ -23,24 +23,35 @@ export default class ErrorBoundary extends Component<Props, State> {
     return { hasError: true, error };
   }
 
-  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
-    console.error(`[ErrorBoundary${this.props.name ? `: ${this.props.name}` : ""}]`, error, errorInfo);
+  componentDidCatch(error: Error, info: React.ErrorInfo) {
+    console.error(`[ErrorBoundary${this.props.name ? `:${this.props.name}` : ""}]`, error, info.componentStack);
   }
 
   render() {
     if (this.state.hasError) {
       if (this.props.fallback) return this.props.fallback;
+
       return (
-        <div className="rounded-lg border border-red-500/20 bg-red-500/5 p-4 text-sm">
-          <div className="font-medium text-red-400 mb-1">
-            ⚠️ Ошибка в компоненте{this.props.name ? ` «${this.props.name}»` : ""}
-          </div>
-          <div className="text-xs text-red-400/60 font-mono break-all">
-            {this.state.error?.message || "Unknown error"}
+        <div className="flex flex-col items-center justify-center py-16 px-4">
+          <div className="rounded-xl border border-red-500/20 bg-red-500/5 p-8 max-w-lg text-center">
+            <div className="text-4xl mb-4">💥</div>
+            <h2 className="text-lg font-semibold text-foreground mb-2">Что-то пошло не так</h2>
+            <p className="text-sm text-muted-foreground mb-4">
+              {this.state.error?.message || "Неизвестная ошибка"}
+            </p>
+            <button
+              onClick={() => this.setState({ hasError: false, error: null })}
+              className="rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-sm text-foreground hover:bg-white/10 transition-colors"
+            >
+              🔄 Попробовать снова
+            </button>
           </div>
         </div>
       );
     }
+
     return this.props.children;
   }
 }
+
+export default ErrorBoundary;

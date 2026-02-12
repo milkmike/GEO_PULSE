@@ -3,6 +3,8 @@ import { Inter } from "next/font/google";
 import { Suspense } from "react";
 import Link from "next/link";
 import { DashboardProvider } from "@/lib/dashboard-context";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { ApiErrorToast } from "@/components/ApiErrorToast";
 import "./globals.css";
 
 const inter = Inter({
@@ -60,11 +62,14 @@ export default function RootLayout({
 
         {/* Content */}
         <main className="mx-auto max-w-7xl px-4 py-6">
-          <Suspense>
-            <DashboardProvider>
-              {children}
-            </DashboardProvider>
-          </Suspense>
+          <ErrorBoundary>
+            <Suspense>
+              <DashboardProvider>
+                {children}
+              </DashboardProvider>
+            </Suspense>
+          </ErrorBoundary>
+          <ApiErrorToast />
         </main>
       </body>
     </html>

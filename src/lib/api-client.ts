@@ -108,7 +108,14 @@ export async function api<T>(
   const res = await fetchWithRetry(url, init, retries);
 
   if (!res.ok) {
-    throw new ApiError(res.status, res.statusText, url);
+    const err = new ApiError(res.status, res.statusText, url);
+    // Show toast on client side
+    if (typeof window !== "undefined") {
+      import("@/components/ApiErrorToast").then(({ showApiError }) => {
+        showApiError(`API ${res.status}: ${path}`, res.status >= 500 ? "error" : "warning");
+      }).catch(() => {});
+    }
+    throw err;
   }
 
   return res.json();
