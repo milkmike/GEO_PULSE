@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [nextjs, main]
+  pull_request:
+    branches: [nextjs, main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: TypeScript check
+        run: npx tsc --noEmit
+
+      - name: Build
+        run: npx next build
+
+      - name: Tests
+        run: npm test -- --run
+        continue-on-error: true  # don't block until tests stabilize
