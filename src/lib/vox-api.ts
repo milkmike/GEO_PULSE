@@ -136,6 +136,46 @@ export interface ArticlesFeedResponse {
   offset: number;
 }
 
+// ── Comments Feed ──────────────────────────────────────
+
+export interface FeedComment {
+  id: number;
+  text: string;
+  published_at: string | null;
+  platform: string;
+  country_code: string;
+  likes: number;
+  channel_id: string;
+  sentiment: number | null;
+  emotion: string | null;
+  stance: string | null;
+  bot_score: number | null;
+  topics: string[];
+}
+
+export interface CommentsFeedResponse {
+  comments: FeedComment[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export async function getCommentsFeed(params: {
+  country?: string;
+  days?: number;
+  limit?: number;
+  offset?: number;
+} = {}) {
+  const p: Record<string, string | number> = {};
+  if (params.country) p.country = params.country;
+  if (params.days) p.days = params.days;
+  if (params.limit) p.limit = params.limit;
+  if (params.offset) p.offset = params.offset;
+  return voxFetch<CommentsFeedResponse>("/api/v1/vox/comments", p);
+}
+
+// ── Articles Feed ──────────────────────────────────────
+
 export async function getArticlesFeed(params: {
   country?: string;
   source_type?: string;

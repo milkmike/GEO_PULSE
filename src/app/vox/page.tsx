@@ -7,10 +7,12 @@ import {
   getVoxChannels,
   getEliteGap,
   getArticlesFeed,
+  getCommentsFeed,
   type VoxOverview,
   type VoxChannel,
   type EliteGapCountry,
   type FeedArticle,
+  type FeedComment,
 } from "@/lib/vox-api";
 import SectionHeader from "@/components/SectionHeader";
 import InfoPopover from "@/components/InfoPopover";
@@ -198,6 +200,10 @@ export default function VoxPopuliPage() {
   const [eliteGap, setEliteGap] = useState<EliteGapCountry[]>([]);
   const [loading, setLoading] = useState(true);
   const [showChannels, setShowChannels] = useState(false);
+  const [comments, setComments] = useState<FeedComment[]>([]);
+  const [commentsTotal, setCommentsTotal] = useState(0);
+  const [commentsCountry, setCommentsCountry] = useState<string>("");
+  const [commentsLoading, setCommentsLoading] = useState(false);
   const [articles, setArticles] = useState<FeedArticle[]>([]);
   const [articlesTotal, setArticlesTotal] = useState(0);
   const [feedCountry, setFeedCountry] = useState<string>("");
@@ -205,6 +211,13 @@ export default function VoxPopuliPage() {
   const [feedSearch, setFeedSearch] = useState<string>("");
   const [feedLoading, setFeedLoading] = useState(false);
   const [expandedArticle, setExpandedArticle] = useState<number | null>(null);
+
+  const loadComments = (country?: string) => {
+    setCommentsLoading(true);
+    getCommentsFeed({ country: country || undefined, days: 999, limit: 100 })
+      .then(res => { setComments(res.comments); setCommentsTotal(res.total); setCommentsLoading(false); })
+      .catch(() => setCommentsLoading(false));
+  };
 
   const loadArticles = (country?: string, source_type?: string, search?: string) => {
     setFeedLoading(true);
@@ -233,6 +246,7 @@ export default function VoxPopuliPage() {
       setLoading(false);
     });
     loadArticles();
+    loadComments();
   }, []);
 
   if (loading) {
@@ -327,6 +341,104 @@ export default function VoxPopuliPage() {
                 </p>
               </div>
             )}
+          </div>
+        </section>
+
+        {/* ── Comments Feed ── */}
+        <section className="mb-8">
+          <SectionHeader icon="💬" title="Комментарии" />
+          <div className="mt-4">
+            <div className="flex items-center gap-2 mb-4">
+              <select
+                value={commentsCountry}
+                onChange={e => { setCommentsCountry(e.target.value); loadComments(e.target.value); }}
+                className="bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 text-sm text-white focus:border-cyan-500 focus:outline-none"
+              >
+                <option value="">Все страны</option>
+                {Object.entries(COUNTRY_NAMES).map(([code, name]) => (
+                  <option key={code} value={code}>{FLAG[code]} {name}</option>
+                ))}
+              </select>
+              <span className="text-xs text-zinc-500">
+                {commentsTotal.toLocaleString()} комментариев
+              </span>
+            </div>
+
+            <div className="space-y-2 max-h-[500px] overflow-y-auto pr-1">
+              {commentsLoading ? (
+                <div className="text-center py-8 text-zinc-500 animate-pulse">Загрузка...</div>
+              ) : comments.length === 0 ? (
+                <div className="text-center py-12 text-zinc-500">
+                  <div className="text-4xl mb-3">💬</div>
+                  <p className="text-lg">Комментарии собираются...</p>
+                  <p className="text-sm mt-1">VOX collector работает, данные скоро появятся.</p>
+                </div>
+              ) : (
+                comments.map(c => (
+                  <div key={c.id} className="bg-zinc-900/40 border border-zinc-800 rounded-lg p-3">
+                    <div className="flex items-start gap-2">
+                      <span className="text-sm">{FLAG[c.country_code] || "🏳️"}</span>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-purple-900/40 text-purple-400">
+                            {c.platform}
+                          </span>
+                          {c.emotion && (
+                            <span className="text-sm" title={c.emotion}>
+                              {EMOTION_EMOJI[c.emotion] || "❓"}
+                            </span>
+                          )}
+                          {c.sentiment !== null && (
+                            <span className={`text-[10px] font-mono ${
+                              c.sentiment > 0.2 ? "text-emerald-400" :
+                              c.sentiment < -0.2 ? "text-red-400" :
+                              "text-zinc-500"
+                            }`}>
+                              {c.sentiment > 0 ? "+" : ""}{c.sentiment.toFixed(2)}
+                            </span>
+                          )}
+                          {c.stance && c.stance !== "neutral" && (
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${
+                              c.stance === "pro_russia" ? "bg-blue-900/40 text-blue-400" :
+                              "bg-orange-900/40 text-orange-400"
+                            }`}>
+                              {c.stance === "pro_russia" ? "🇷🇺 pro" : "🇷🇺 anti"}
+                            </span>
+                          )}
+                          {c.bot_score !== null && c.bot_score >= 0.5 && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-900/40 text-red-400">
+                              🤖 бот
+                            </span>
+                          )}
+                          <span className="text-xs text-zinc-600 ml-auto whitespace-nowrap">
+                            {c.published_at ? new Date(c.published_at).toLocaleString("ru", {
+                              day: "numeric", month: "short", hour: "2-digit", minute: "2-digit"
+                            }) : ""}
+                          </span>
+                        </div>
+                        <p className="text-sm text-zinc-300 leading-relaxed">
+                          {c.text}
+                        </p>
+                        {c.topics.length > 0 && (
+                          <div className="flex gap-1 mt-1 flex-wrap">
+                            {c.topics.map(t => (
+                              <span key={t} className="text-[10px] px-1.5 py-0.5 bg-zinc-800 rounded text-zinc-400">
+                                {t}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                        {c.likes > 0 && (
+                          <span className="text-xs text-zinc-500 mt-1 inline-block">
+                            ❤️ {c.likes}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
           </div>
         </section>
 
