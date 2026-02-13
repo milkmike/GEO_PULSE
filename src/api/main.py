@@ -43,89 +43,166 @@ def root():
 def get_countries(days: int = Query(default=0, ge=0, le=1460)):
     """List all countries with current temperature. days=0 means all time."""
     with get_session() as session:
-        results = []
-        date_filter = f"AND ar.published_at > NOW() - INTERVAL '{days} days'" if days > 0 else ""
-        date_filter_a = f"AND a.published_at > NOW() - INTERVAL '{days} days'" if days > 0 else ""
-
-        for code, name in COUNTRY_NAMES.items():
-            # Temperature: if days specified, compute average over period; otherwise latest snapshot
-            if days > 0:
-                row = session.execute(
-                    text(f"""
-                        SELECT AVG(temperature) as temperature,
-                               AVG(raw_sentiment) as raw_sentiment,
-                               MAX(time) as time,
-                               CASE
-                                   WHEN COUNT(*) >= 2 THEN
-                                       CASE WHEN (SELECT temperature FROM temperature
-                                                  WHERE country_code = :cc ORDER BY time DESC LIMIT 1) >
-                                                 (SELECT AVG(temperature) FROM temperature
-                                                  WHERE country_code = :cc
-                                                    AND time > NOW() - INTERVAL '{days} days')
-                                       THEN 'rising' ELSE 'falling' END
-                                   ELSE 'stable'
-                               END as trend,
-                               SUM(article_count) as article_count
+        # 1) Temperature snapshot/aggregate for all countries in one query
+        if days > 0:
+            temp_rows = session.execute(
+                text("""
+                    WITH period AS (
+                        SELECT country_code,
+                               AVG(temperature) AS avg_temperature,
+                               AVG(raw_sentiment) AS avg_raw_sentiment,
+                               MAX(time) AS last_time,
+                               SUM(article_count) AS article_count,
+                               COUNT(*) AS points
                         FROM temperature
-                        WHERE country_code = :cc
-                          AND time > NOW() - INTERVAL '{days} days'
-                    """),
-                    {"cc": code},
-                ).fetchone()
-            else:
-                row = session.execute(
-                    text("""
-                        SELECT temperature, raw_sentiment, trend, article_count, time
+                        WHERE time > NOW() - make_interval(days => :days)
+                        GROUP BY country_code
+                    ),
+                    latest AS (
+                        SELECT DISTINCT ON (country_code)
+                               country_code, temperature AS latest_temperature
                         FROM temperature
-                        WHERE country_code = :cc
-                        ORDER BY time DESC LIMIT 1
-                    """),
-                    {"cc": code},
-                ).fetchone()
-
-            art_count = session.execute(
-                text(f"""
-                    SELECT COUNT(*) FROM articles a
-                    JOIN sources s ON a.source_id = s.id
-                    WHERE s.country_code = :cc {date_filter_a}
+                        ORDER BY country_code, time DESC
+                    )
+                    SELECT p.country_code,
+                           p.avg_temperature AS temperature,
+                           p.avg_raw_sentiment AS raw_sentiment,
+                           p.last_time AS time,
+                           p.article_count,
+                           CASE
+                               WHEN p.points >= 2 AND l.latest_temperature IS NOT NULL THEN
+                                   CASE WHEN l.latest_temperature > p.avg_temperature THEN 'rising' ELSE 'falling' END
+                               ELSE 'stable'
+                           END AS trend
+                    FROM period p
+                    LEFT JOIN latest l ON l.country_code = p.country_code
                 """),
-                {"cc": code},
-            ).scalar()
-
-            # Tier divergence
-            divergence_interval = f"{days} days" if days > 0 else "14 days"
-            tier_rows = session.execute(
-                text(f"""
-                    SELECT COALESCE(s.tier, 'mainstream') AS tier,
-                           AVG(an.sentiment) AS avg_sent
-                    FROM analysis an
-                    JOIN articles ar ON an.article_id = ar.id
-                    JOIN sources s ON ar.source_id = s.id
-                    WHERE s.country_code = :cc
-                      AND an.is_relevant = true
-                      AND an.sentiment IS NOT NULL
-                      AND ar.published_at > NOW() - INTERVAL '{divergence_interval}'
-                    GROUP BY s.tier
-                """),
-                {"cc": code},
+                {"days": days},
             ).fetchall()
-            tier_sents = [float(r.avg_sent) for r in tier_rows if r.avg_sent is not None]
-            divergence = round(max(tier_sents) - min(tier_sents), 2) if len(tier_sents) >= 2 else 0.0
+        else:
+            temp_rows = session.execute(
+                text("""
+                    SELECT DISTINCT ON (country_code)
+                           country_code, temperature, raw_sentiment, trend, article_count, time
+                    FROM temperature
+                    ORDER BY country_code, time DESC
+                """),
+            ).fetchall()
 
+        temp_map = {r.country_code.strip(): r for r in temp_rows}
+
+        # 2) Article counts in one query
+        if days > 0:
+            article_rows = session.execute(
+                text("""
+                    SELECT s.country_code, COUNT(*) AS article_count
+                    FROM articles a
+                    JOIN sources s ON a.source_id = s.id
+                    WHERE a.published_at > NOW() - make_interval(days => :days)
+                    GROUP BY s.country_code
+                """),
+                {"days": days},
+            ).fetchall()
+        else:
+            article_rows = session.execute(
+                text("""
+                    SELECT s.country_code, COUNT(*) AS article_count
+                    FROM articles a
+                    JOIN sources s ON a.source_id = s.id
+                    GROUP BY s.country_code
+                """),
+            ).fetchall()
+        article_map = {r.country_code.strip(): r.article_count for r in article_rows}
+
+        # 3) Tier divergence in one query
+        divergence_days = days if days > 0 else 14
+        div_rows = session.execute(
+            text("""
+                SELECT s.country_code,
+                       COALESCE(s.tier, 'mainstream') AS tier,
+                       AVG(an.sentiment) AS avg_sent
+                FROM analysis an
+                JOIN articles ar ON an.article_id = ar.id
+                JOIN sources s ON ar.source_id = s.id
+                WHERE an.is_relevant = true
+                  AND an.sentiment IS NOT NULL
+                  AND ar.published_at > NOW() - make_interval(days => :days)
+                GROUP BY s.country_code, COALESCE(s.tier, 'mainstream')
+            """),
+            {"days": divergence_days},
+        ).fetchall()
+
+        div_map: dict[str, float] = {}
+        tier_sents_by_country: dict[str, list[float]] = {}
+        for r in div_rows:
+            cc = r.country_code.strip()
+            tier_sents_by_country.setdefault(cc, []).append(float(r.avg_sent))
+        for cc, sents in tier_sents_by_country.items():
+            div_map[cc] = round(max(sents) - min(sents), 2) if len(sents) >= 2 else 0.0
+
+        # 4) Top active thread in one query
+        top_thread_rows = session.execute(
+            text("""
+                SELECT * FROM (
+                    SELECT t.country_code, t.id, t.title, t.article_count, t.avg_sentiment,
+                           ROW_NUMBER() OVER (PARTITION BY t.country_code ORDER BY t.importance_score DESC) AS rn
+                    FROM threads t
+                    WHERE t.status IN ('developing', 'escalating', 'peak')
+                ) ranked
+                WHERE rn = 1
+            """),
+        ).fetchall()
+        top_thread_map = {r.country_code.strip(): r for r in top_thread_rows}
+
+        # 5) Active thread count in one query
+        active_thread_rows = session.execute(
+            text("""
+                SELECT country_code, COUNT(*) AS active_threads
+                FROM threads
+                WHERE status IN ('developing', 'escalating', 'peak')
+                GROUP BY country_code
+            """),
+        ).fetchall()
+        active_thread_map = {r.country_code.strip(): r.active_threads for r in active_thread_rows}
+
+        # 6) Sparkline (last 7 points) in one query
+        spark_rows = session.execute(
+            text("""
+                SELECT country_code,
+                       ARRAY_AGG(temperature ORDER BY time ASC) AS sparkline
+                FROM (
+                    SELECT country_code, temperature, time,
+                           ROW_NUMBER() OVER (PARTITION BY country_code ORDER BY time DESC) AS rn
+                    FROM temperature
+                ) t
+                WHERE rn <= 7
+                GROUP BY country_code
+            """),
+        ).fetchall()
+        spark_map = {
+            r.country_code.strip(): [float(v) for v in (r.sparkline or []) if v is not None]
+            for r in spark_rows
+        }
+
+        results = []
+        for code, name in COUNTRY_NAMES.items():
+            row = temp_map.get(code)
             entry = {
                 "code": code,
                 "name": name,
                 "iso3": COUNTRY_ISO3.get(code),
-                "article_count": art_count or 0,
+                "article_count": article_map.get(code, 0),
+                "divergence": div_map.get(code, 0.0),
+                "active_threads": active_thread_map.get(code, 0),
+                "sparkline": spark_map.get(code, []),
             }
 
             if row:
                 entry.update({
-                    "temperature": float(row.temperature) if row.temperature else None,
-                    "raw_sentiment": float(row.raw_sentiment) if row.raw_sentiment else None,
+                    "temperature": float(row.temperature) if row.temperature is not None else None,
+                    "raw_sentiment": float(row.raw_sentiment) if row.raw_sentiment is not None else None,
                     "trend": row.trend,
                     "last_updated": row.time.isoformat() if row.time else None,
-                    "divergence": divergence,
                 })
             else:
                 entry.update({
@@ -133,54 +210,18 @@ def get_countries(days: int = Query(default=0, ge=0, le=1460)):
                     "raw_sentiment": None,
                     "trend": None,
                     "last_updated": None,
-                    "divergence": divergence,
                 })
 
-            # Top thread (most important active)
-            top_thread = session.execute(
-                text("""
-                    SELECT t.id, t.title, t.article_count, t.status, t.avg_sentiment,
-                           t.importance_score
-                    FROM threads t
-                    WHERE t.country_code = :cc
-                      AND t.status IN ('developing', 'escalating', 'peak')
-                    ORDER BY t.importance_score DESC
-                    LIMIT 1
-                """),
-                {"cc": code},
-            ).fetchone()
-
+            top_thread = top_thread_map.get(code)
             if top_thread:
                 entry["top_thread"] = {
                     "id": top_thread.id,
                     "title": top_thread.title[:120] if top_thread.title else None,
                     "article_count": top_thread.article_count,
-                    "sentiment": float(top_thread.avg_sentiment) if top_thread.avg_sentiment else 0,
+                    "sentiment": float(top_thread.avg_sentiment) if top_thread.avg_sentiment is not None else 0,
                 }
             else:
                 entry["top_thread"] = None
-
-            # Active threads count
-            active_threads = session.execute(
-                text("""
-                    SELECT COUNT(*) FROM threads
-                    WHERE country_code = :cc
-                      AND status IN ('developing', 'escalating', 'peak')
-                """),
-                {"cc": code},
-            ).scalar()
-            entry["active_threads"] = active_threads or 0
-
-            # Temperature sparkline (last 7 data points)
-            spark_rows = session.execute(
-                text("""
-                    SELECT temperature FROM temperature
-                    WHERE country_code = :cc
-                    ORDER BY time DESC LIMIT 7
-                """),
-                {"cc": code},
-            ).fetchall()
-            entry["sparkline"] = [float(r.temperature) for r in reversed(spark_rows)] if spark_rows else []
 
             results.append(entry)
 
