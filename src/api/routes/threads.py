@@ -1,8 +1,9 @@
 """API routes for Narrative Threads v2."""
 import logging
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy import text
 
 from src.config import COUNTRY_NAMES
@@ -19,6 +20,60 @@ THREAD_FIELDS = """
     t.merged_keys, t.related_threads, t.summary_json,
     t.generated_at
 """
+
+
+class ThreadResponse(BaseModel):
+    id: int
+    country_code: str
+    country_name: str
+    thread_key: str
+    title: str
+    narrative: str | None
+    status: str
+    arc_phase: str
+    first_seen: str | None
+    last_seen: str | None
+    article_count: int
+    avg_sentiment: float | None
+    max_action_level: int | None
+    importance_score: float
+    velocity: float
+    sentiment_shift: float
+    merged_keys: list[str]
+    related_threads: list[int]
+    summary: dict[str, Any] | None
+    generated_at: str | None
+
+
+class ThreadTimelineItem(BaseModel):
+    article_id: int
+    title: str | None
+    url: str | None
+    published_at: str | None
+    sentiment: float | None
+    action_level: int
+    event_type: str | None
+    source: str
+    tier: str | None
+
+
+class ThreadsListResponse(BaseModel):
+    threads: list[ThreadResponse]
+
+
+class RelatedThreadsResponse(BaseModel):
+    related: list[ThreadResponse]
+
+
+class ThreadDetailResponse(ThreadResponse):
+    timeline: list[ThreadTimelineItem]
+    related: list[ThreadResponse] | None = None
+
+
+class CountryThreadsResponse(BaseModel):
+    country: str
+    name: str
+    threads: list[ThreadResponse]
 
 
 def thread_to_dict(r) -> dict:
@@ -48,7 +103,7 @@ def thread_to_dict(r) -> dict:
     return result
 
 
-@router.get("/threads")
+@router.get("/threads", response_model=ThreadsListResponse)
 def list_threads(
     country: Optional[str] = Query(default=None),
     status: Optional[str] = Query(default=None),
@@ -93,7 +148,7 @@ def list_threads(
         return {"threads": [thread_to_dict(r) for r in rows]}
 
 
-@router.get("/threads/{thread_id}")
+@router.get("/threads/{thread_id}", response_model=ThreadDetailResponse)
 def get_thread(thread_id: int):
     """Get thread with full details + article timeline."""
     with get_session() as session:
@@ -145,7 +200,7 @@ def get_thread(thread_id: int):
         return result
 
 
-@router.get("/threads/{thread_id}/related")
+@router.get("/threads/{thread_id}/related", response_model=RelatedThreadsResponse)
 def get_related_threads(thread_id: int):
     """Get threads related to this one (cross-country)."""
     with get_session() as session:
@@ -235,7 +290,7 @@ def merge_threads(thread_ids: list[int]):
         }
 
 
-@router.get("/countries/{code}/threads")
+@router.get("/countries/{code}/threads", response_model=CountryThreadsResponse)
 def get_country_threads(
     code: str,
     status: Optional[str] = Query(default=None),
