@@ -55,6 +55,17 @@ def _analyze_one(row) -> dict | None:
                 country_code=row.country_code,
             )
             if result:
+                # LLM said not relevant
+                if result.get("is_relevant") is False:
+                    logger.info(f"  [{row.country_code}] {title[:60]}... → LLM: not relevant")
+                    return {
+                        "article_id": row.id,
+                        "is_relevant": False,
+                        "relevance_score": 0.0,
+                        "model_used": result.get("model_used", ""),
+                        "prompt_version": result.get("prompt_version", ""),
+                        "raw_response": result.get("raw_response"),
+                    }
                 logger.info(
                     f"  [{row.country_code}] {title[:60]}... → "
                     f"sentiment={result['sentiment']}, type={result['event_type']}, "

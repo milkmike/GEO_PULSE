@@ -12,7 +12,7 @@ from src.api_tracker import track_api_call, track_duration
 logger = logging.getLogger(__name__)
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-MODEL = "google/gemini-3-flash"
+MODEL = "google/gemini-3-flash-preview"
 
 
 def get_headers() -> dict | None:
@@ -90,6 +90,21 @@ def analyze_sentiment(
             text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
         
         result = json.loads(text)
+
+        # Check LLM relevance verdict
+        llm_relevant = result.get("is_relevant", True)
+        if isinstance(llm_relevant, str):
+            llm_relevant = llm_relevant.lower() not in ("false", "0", "no")
+
+        if not llm_relevant:
+            logger.info(f"  LLM says not relevant: {result.get('reasoning', '')[:80]}")
+            return {
+                "is_relevant": False,
+                "relevance_score": 0.0,
+                "model_used": MODEL,
+                "prompt_version": PROMPT_VERSION,
+                "raw_response": result,
+            }
         
         # Validate sentiment
         sentiment = float(result.get("sentiment", 0))
