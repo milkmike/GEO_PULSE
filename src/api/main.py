@@ -3,9 +3,11 @@ import logging
 import os
 import time
 from datetime import datetime, timezone
+from typing import Literal
 
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 from sqlalchemy import text
 
 from src.config import COUNTRY_NAMES, COUNTRY_ISO3
@@ -34,12 +36,62 @@ app.include_router(vox_router)
 app.include_router(articles_router)
 
 
+class TopThreadResponse(BaseModel):
+    id: int
+    title: str | None
+    article_count: int
+    sentiment: float
+
+
+class CountryResponse(BaseModel):
+    code: str
+    name: str
+    iso3: str | None
+    article_count: int
+    divergence: float
+    active_threads: int
+    sparkline: list[float]
+    temperature: float | None
+    raw_sentiment: float | None
+    trend: str | None
+    last_updated: str | None
+    top_thread: TopThreadResponse | None
+
+
+class CountriesResponse(BaseModel):
+    countries: list[CountryResponse]
+
+
+class StatsResponse(BaseModel):
+    total_articles: int
+    total_analyzed: int
+    total_relevant: int
+    active_sources: int
+    total_duplicates: int
+    period_days: int | None
+    oldest_article: str | None
+    newest_article: str | None
+    last_temperature_update: str | None
+
+
+class AdminHealthServiceResponse(BaseModel):
+    service: str
+    status: Literal["ok", "degraded", "unreachable"]
+    http_code: int | None
+    latency_ms: int | None
+    error: str | None = None
+
+
+class AdminHealthResponse(BaseModel):
+    services: list[AdminHealthServiceResponse]
+
+
 @app.get("/")
 def root():
     return {"status": "ok", "service": "CIS Thermometer API", "version": "1.1.0"}
 
 
-@app.get("/api/v1/countries")
+@app.get("/api/v1/countries", response_model=CountriesResponse)
 def get_countries(days: int = Query(default=0, ge=0, le=1460)):
     """List all countries with current temperature. days=0 means all time."""
     with get_session() as session:
@@ -387,7 +439,7 @@ def get_alerts(limit: int = Query(default=50, le=200)):
         }
 
 
-@app.get("/api/v1/stats")
+@app.get("/api/v1/stats", response_model=StatsResponse)
 def get_stats(days: int = Query(default=0, ge=0, le=1460)):
     """Get overall system statistics. days=0 means all time."""
     with get_session() as session:
@@ -981,7 +1033,7 @@ def get_api_keys():
     return {"keys": result}
 
 
-@app.get("/api/v1/admin/health")
+@app.get("/api/v1/admin/health", response_model=AdminHealthResponse)
 def get_api_health():
     """Ping external services and return latency/status."""
     import httpx
