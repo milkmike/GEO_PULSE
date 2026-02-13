@@ -41,6 +41,7 @@ BLACKLIST = [
 VISIT_KEYWORDS = {
     "визит", "встреча", "поездка", "турне", "прибыл", "прибытие", "посетил", "переговоры"
 }
+CAUCASUS_KEYWORDS = {"кавказ", "южный", "южном", "баку", "азербайджан", "армения", "ереван"}
 VANCE_ALIASES = {"вэнс", "венс", "vance", "джейди", "джей", "ди", "jd"}
 
 
@@ -257,7 +258,8 @@ def _is_vance_visit_cluster(articles: list[dict]) -> bool:
     blob = _cluster_blob(articles)
     has_vance = any(alias in blob for alias in VANCE_ALIASES)
     has_visit = any(k in blob for k in VISIT_KEYWORDS)
-    return has_vance and has_visit
+    has_caucasus_context = any(k in blob for k in CAUCASUS_KEYWORDS)
+    return has_vance and (has_visit or has_caucasus_context)
 
 
 def _cluster_last_seen(articles: list[dict]) -> datetime:
