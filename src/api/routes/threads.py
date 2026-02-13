@@ -166,7 +166,7 @@ def get_thread(thread_id: int):
                    s.name AS source_name, s.tier
             FROM thread_articles ta
             JOIN articles ar ON ta.article_id = ar.id
-            JOIN analysis an ON an.article_id = ar.id
+            LEFT JOIN analysis an ON an.article_id = ar.id
             JOIN sources s ON ar.source_id = s.id
             WHERE ta.thread_id = :tid
             ORDER BY ar.published_at ASC
