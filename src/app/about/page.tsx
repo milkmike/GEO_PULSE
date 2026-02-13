@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { API_URL } from "@/lib/api";
+import { getStats, getSources } from "@/lib/api";
 
 /* ── Types ────────────────────────────────────────────── */
 interface LiveStats {
@@ -198,15 +198,13 @@ export default function AboutPage() {
 
   useEffect(() => {
     // Fetch live stats
-    fetch(`${API_URL}/api/v1/stats?days=0`)
-      .then(r => r.json())
-      .then(d => setStats(d))
+    getStats(0)
+      .then((d) => setStats(d))
       .catch(() => {});
 
     // Fetch sources to compute tier counts
-    fetch(`${API_URL}/api/v1/sources`)
-      .then(r => r.json())
-      .then(d => {
+    getSources()
+      .then((d) => {
         const sources: SourceInfo[] = d.sources || [];
         setTotalSources(sources.length);
         const counts: Record<string, number> = {};

@@ -7,7 +7,7 @@ import {
   LineChart, Line, XAxis, YAxis, Tooltip as RechartsTooltip, ResponsiveContainer,
   BarChart, Bar, Cell, CartesianGrid,
 } from "recharts";
-import { API_URL } from "@/lib/api";
+import { getCountryTiers, getDivergenceHistory, getTopicsDivergence, getTiersDaily } from "@/lib/api";
 
 /* ── Types ── */
 interface TierHeadline {
@@ -113,10 +113,7 @@ interface HeatmapRow {
 
 /* ── API fetch helpers ── */
 async function fetchDivergenceTimeline(code: string, days: number): Promise<TimelinePoint[]> {
-  const clampedDays = Math.min(days, 365);
-  const res = await fetch(`${API_URL}/api/v1/countries/${code}/divergence/history?days=${clampedDays}`);
-  if (!res.ok) return [];
-  const json = await res.json();
+  const json = await getDivergenceHistory(code, days);
   return (json.data || []).map((d: { date: string; divergence: number }) => ({
     date: new Date(d.date).toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit" }),
     divergence: d.divergence,
@@ -124,10 +121,7 @@ async function fetchDivergenceTimeline(code: string, days: number): Promise<Time
 }
 
 async function fetchTopicBreakdown(code: string, days: number): Promise<TopicPoint[]> {
-  const clampedDays = Math.min(days, 365);
-  const res = await fetch(`${API_URL}/api/v1/countries/${code}/topics/divergence?days=${clampedDays}`);
-  if (!res.ok) return [];
-  const json = await res.json();
+  const json = await getTopicsDivergence(code, days);
   return (json.data || []).map((d: { topic: string; label: string; divergence: number }) => ({
     topic: d.topic,
     label: d.label,
@@ -137,10 +131,7 @@ async function fetchTopicBreakdown(code: string, days: number): Promise<TopicPoi
 }
 
 async function fetchHeatmapData(code: string, days: number): Promise<HeatmapRow[]> {
-  const clampedDays = Math.min(days, 365);
-  const res = await fetch(`${API_URL}/api/v1/countries/${code}/tiers/daily?days=${clampedDays}`);
-  if (!res.ok) return [];
-  const json = await res.json();
+  const json = await getTiersDaily(code, days);
   const dayList: string[] = (json.days || []).map((d: string) =>
     new Date(d).toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit" })
   );
@@ -165,12 +156,10 @@ export default function NarrativeXrayExpanded({ code, days }: NarrativeXrayExpan
 
   useEffect(() => {
     setLoading(true);
-    const clampedDays = Math.min(days, 365);
-    fetch(`${API_URL}/api/v1/countries/${code}/tiers?days=${clampedDays}`)
-      .then((r) => r.json())
+    getCountryTiers(code, days)
       .then((d) => {
         if (d && d.tiers) {
-          setData(d);
+          setData(d as TiersData);
         } else {
           setData(null);
         }

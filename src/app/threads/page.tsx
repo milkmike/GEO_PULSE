@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
-import { getThread, API_URL, type ThreadDetail, type ThreadTimelineArticle } from "@/lib/api";
+import { getThread, getThreads, type ThreadDetail, type ThreadTimelineArticle } from "@/lib/api";
 import { COUNTRY_FLAGS as FLAGS, COUNTRY_NAMES, COUNTRY_CODES, PHASE_CONFIG as PHASE_CFG, PHASE_ORDER, formatDate, sentimentColor } from "@/lib/constants";
 import { useDashboard } from "@/lib/dashboard-context";
 import SectionHeader from "@/components/SectionHeader";
@@ -317,8 +317,7 @@ export default function ThreadsPage() {
     (async () => {
       setLoading(true);
       try {
-        const res = await fetch(`${API_URL}/api/v1/threads?limit=50&sort=importance`);
-        const data = await res.json();
+        const data = await getThreads({ limit: 50, sort: "importance" });
         setAllThreads(data.threads || []);
       } catch { setAllThreads([]); }
       finally { setLoading(false); }

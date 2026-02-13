@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { ThreadDetail, ThreadTimelineArticle, getThread, API_URL } from "@/lib/api";
+import { ThreadDetail, ThreadTimelineArticle, getThread, getRelatedThreads } from "@/lib/api";
 import { COUNTRY_FLAGS, PHASE_CONFIG, PHASE_ORDER, formatDate } from "@/lib/constants";
 
 function sentimentColor(s: number): string {
@@ -41,8 +41,7 @@ export default function ThreadDetailPage() {
       .then((data) => {
         setThread(data);
         // Fetch related threads
-        fetch(`${API_URL}/api/v1/threads/${id}/related`)
-          .then((r) => r.ok ? r.json() : { threads: [] })
+        getRelatedThreads(id)
           .then((d) => setRelatedThreads(d.threads || []))
           .catch(() => setRelatedThreads([]));
       })

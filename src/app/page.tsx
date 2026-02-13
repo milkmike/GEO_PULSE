@@ -16,7 +16,7 @@ import {
   getStats,
   getTierDivergence,
   getCountryTemperature,
-  API_URL,
+  getThreads,
   PERIOD_DAYS,
   COUNTRY_FLAGS,
   formatDate,
@@ -62,7 +62,7 @@ export default function OverviewPage() {
       const [countriesData, statsData, threadsRes, divRes] = await Promise.all([
         getCountries(days),
         getStats(days),
-        fetch(`${API_URL}/api/v1/threads?limit=5&sort=importance`).then(r => r.json()).catch(() => ({ threads: [] })),
+        getThreads({ limit: 5, sort: "importance" }).catch(() => ({ threads: [] })),
         getTierDivergence(14).catch(() => ({ countries: [] })),
       ]);
       setCountries(countriesData.countries);

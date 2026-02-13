@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { API_URL } from "@/lib/api";
+import { getAudienceSplit } from "@/lib/api";
 import InfoPopover from "@/components/InfoPopover";
 import { glossary } from "@/lib/glossary";
 
@@ -89,22 +89,13 @@ export default function AudienceSplit({
   const [expanded, setExpanded] = useState<string | null>(null);
 
   useEffect(() => {
-    const params = new URLSearchParams();
-    params.set("days", String(days));
-    if (country) params.set("country", country);
-    if (source) params.set("source", source);
-
     setLoading(true);
-    fetch(`${API_URL}/api/v1/audience-split?${params}`)
-      .then((r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.json();
-      })
+    getAudienceSplit({ days, country, source })
       .then((d) => {
-        setData(d);
+        setData(d as AudienceSplitResponse);
         setError(null);
       })
-      .catch((e) => setError(e.message))
+      .catch((e: Error) => setError(e.message))
       .finally(() => setLoading(false));
   }, [country, source, days]);
 

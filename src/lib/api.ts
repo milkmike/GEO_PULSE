@@ -288,6 +288,122 @@ export async function getCountryThreads(code: string, params?: { status?: string
   return apiFetch<ThreadsResponse>(`/api/v1/countries/${code}/threads`, params as Record<string, string | number>);
 }
 
+export async function getThreads(params?: { limit?: number; sort?: string; country?: string; status?: string }) {
+  return apiFetch<ThreadsResponse>("/api/v1/threads", params as Record<string, string | number>);
+}
+
+export async function getRelatedThreads(id: number) {
+  return apiFetch<ThreadsResponse>(`/api/v1/threads/${id}/related`);
+}
+
+export interface HeadlineResponse {
+  headline: string | null;
+  subline: string | null;
+  country_code?: string;
+  type?: string;
+  generated?: boolean;
+}
+
+export async function getHeadline() {
+  return apiFetch<HeadlineResponse>("/api/v1/headline");
+}
+
+export interface TierHeadline {
+  title: string;
+  url: string;
+  sentiment: number;
+  source: string;
+}
+
+export interface TierData {
+  tier: string;
+  label: string;
+  sentiment: number;
+  article_count: number;
+  sources: string[];
+  headlines: TierHeadline[];
+}
+
+export interface CountryTiersResponse {
+  country_code: string;
+  country_name: string;
+  overall_sentiment: number;
+  tiers: TierData[];
+  divergence: number;
+}
+
+export async function getCountryTiers(code: string, days = 14) {
+  return apiFetch<CountryTiersResponse>(`/api/v1/countries/${code}/tiers`, { days: Math.min(days, 365) });
+}
+
+export interface DivergenceHistoryResponse {
+  data: Array<{ date: string; divergence: number }>;
+}
+
+export async function getDivergenceHistory(code: string, days = 30) {
+  return apiFetch<DivergenceHistoryResponse>(`/api/v1/countries/${code}/divergence/history`, {
+    days: Math.min(days, 365),
+  });
+}
+
+export interface TopicsDivergenceResponse {
+  data: Array<{ topic: string; label: string; divergence: number }>;
+}
+
+export async function getTopicsDivergence(code: string, days = 30) {
+  return apiFetch<TopicsDivergenceResponse>(`/api/v1/countries/${code}/topics/divergence`, {
+    days: Math.min(days, 365),
+  });
+}
+
+export interface TiersDailyResponse {
+  days: string[];
+  tiers: Array<{ tier: string; label: string; values: Array<number | null> }>;
+}
+
+export async function getTiersDaily(code: string, days = 30) {
+  return apiFetch<TiersDailyResponse>(`/api/v1/countries/${code}/tiers/daily`, {
+    days: Math.min(days, 365),
+  });
+}
+
+export interface AudienceSplitArticle {
+  id: number;
+  title: string;
+  sentiment: number;
+  url: string;
+  body_preview: string;
+}
+
+export interface AudienceSplitPair {
+  similarity: number;
+  delta: number;
+  published_at: string | null;
+  [key: string]: unknown;
+}
+
+export interface AudienceSplitSource {
+  source: string;
+  country_code: string;
+  pairs_count: number;
+  delta: number;
+  pairs: AudienceSplitPair[];
+  [key: string]: unknown;
+}
+
+export interface AudienceSplitResponse {
+  splits: AudienceSplitSource[];
+  summary: {
+    total_bilingual_sources: number;
+    sources_with_significant_split: number;
+    avg_split: number;
+  };
+}
+
+export async function getAudienceSplit(params: { days?: number; country?: string; source?: string } = {}) {
+  return apiFetch<AudienceSplitResponse>("/api/v1/audience-split", params as Record<string, string | number>);
+}
+
 export async function getCountryTemperature(code: string, days = 30) {
   return apiFetch<TemperatureResponse>(`/api/v1/countries/${code}/temperature`, { days: Math.min(days, 365) });
 }

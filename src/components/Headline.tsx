@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { temperatureColor, COUNTRY_FLAGS, API_URL, type Country } from "@/lib/api";
+import { temperatureColor, COUNTRY_FLAGS, getHeadline, type Country } from "@/lib/api";
 import InfoPopover from "@/components/InfoPopover";
 import { glossary } from "@/lib/glossary";
 
@@ -24,8 +24,7 @@ export default function Headline({ countries }: HeadlineProps) {
   const router = useRouter();
 
   useEffect(() => {
-    fetch(`${API_URL}/api/v1/headline`)
-      .then((r) => r.json())
+    getHeadline()
       .then((d) => {
         if (d.headline) setData(d);
         setLoading(false);
