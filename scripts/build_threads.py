@@ -1131,6 +1131,13 @@ def cleanup_old_threads(session):
           AND last_seen < NOW() - INTERVAL '30 days'
     """))
 
+    # Delete stale threads without linked articles (defensive cleanup)
+    session.execute(text("""
+        DELETE FROM threads
+        WHERE article_count <= 0
+           OR id NOT IN (SELECT DISTINCT thread_id FROM thread_articles)
+    """))
+
 
 # ── Main ────────────────────────────────────────────────
 
