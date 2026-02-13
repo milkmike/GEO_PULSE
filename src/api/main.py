@@ -136,6 +136,52 @@ def get_countries(days: int = Query(default=0, ge=0, le=1460)):
                     "divergence": divergence,
                 })
 
+            # Top thread (most important active)
+            top_thread = session.execute(
+                text("""
+                    SELECT t.id, t.title, t.article_count, t.status, t.avg_sentiment,
+                           t.importance_score
+                    FROM threads t
+                    WHERE t.country_code = :cc
+                      AND t.status IN ('developing', 'escalating', 'peak')
+                    ORDER BY t.importance_score DESC
+                    LIMIT 1
+                """),
+                {"cc": code},
+            ).fetchone()
+
+            if top_thread:
+                entry["top_thread"] = {
+                    "id": top_thread.id,
+                    "title": top_thread.title[:120] if top_thread.title else None,
+                    "article_count": top_thread.article_count,
+                    "sentiment": float(top_thread.avg_sentiment) if top_thread.avg_sentiment else 0,
+                }
+            else:
+                entry["top_thread"] = None
+
+            # Active threads count
+            active_threads = session.execute(
+                text("""
+                    SELECT COUNT(*) FROM threads
+                    WHERE country_code = :cc
+                      AND status IN ('developing', 'escalating', 'peak')
+                """),
+                {"cc": code},
+            ).scalar()
+            entry["active_threads"] = active_threads or 0
+
+            # Temperature sparkline (last 7 data points)
+            spark_rows = session.execute(
+                text("""
+                    SELECT temperature FROM temperature
+                    WHERE country_code = :cc
+                    ORDER BY time DESC LIMIT 7
+                """),
+                {"cc": code},
+            ).fetchall()
+            entry["sparkline"] = [float(r.temperature) for r in reversed(spark_rows)] if spark_rows else []
+
             results.append(entry)
 
         return {"countries": results}
