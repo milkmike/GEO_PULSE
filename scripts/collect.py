@@ -13,6 +13,7 @@ from src.collectors.scraper import scrape_web
 from src.config import load_sources
 from src.db import get_session, wait_for_db, Source, Article
 from src.pipeline.dedup import normalize_title, find_duplicate
+from src.pipeline.title_cleaner import clean_title
 
 # Language detection helpers
 import unicodedata
@@ -152,8 +153,15 @@ def collect_all():
                     total_skipped += 1
                     continue
 
+                # Clean and validate title
+                cleaned_title = clean_title(art.get("title"))
+                if cleaned_title is None:
+                    logger.debug(f"  [{source.country_code}] Skipped garbage title: {art.get('title', '')[:60]}")
+                    total_skipped += 1
+                    continue
+
                 # Normalize title for fuzzy dedup
-                title_norm = normalize_title(art["title"])
+                title_norm = normalize_title(cleaned_title)
                 published_at = art["published_at"]
 
                 # Check for cross-source duplicate
@@ -170,7 +178,7 @@ def collect_all():
                 article = Article(
                     source_id=source.id,
                     external_id=art["external_id"],
-                    title=art["title"],
+                    title=cleaned_title,
                     body=art.get("body", ""),
                     url=art.get("url", ""),
                     published_at=published_at,

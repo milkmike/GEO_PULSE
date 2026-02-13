@@ -367,20 +367,25 @@ def get_stats(days: int = Query(default=0, ge=0, le=1460)):
 
 TIER_LABELS = {
     "official": "🏛️ Официальный",
+    "state": "🏛️ Государственный",
     "mainstream": "📰 Mainstream",
     "analytics": "🔍 Аналитика",
+    "independent": "📋 Независимые",
     "social": "💬 Соцсети",
     "opposition": "📢 Оппозиция",
+    "western_proxy": "🌐 Западные прокси",
+    "domestic_opposition": "📢 Внутренняя оппозиция",
 }
 
-TIER_ORDER = ["official", "mainstream", "analytics", "social", "opposition"]
+TIER_ORDER = ["official", "state", "mainstream", "analytics", "independent", "social", "opposition", "western_proxy", "domestic_opposition"]
 
 
 @app.get("/api/v1/countries/{code}/tiers")
 def get_country_tiers(code: str, days: int = Query(default=14, le=365)):
-    """Get sentiment breakdown by source tier for a country."""
+    """Get sentiment breakdown by source tier for a country, with headlines."""
     code = code.upper()
     with get_session() as session:
+        # Main aggregation query
         rows = session.execute(
             text("""
                 SELECT COALESCE(s.tier, 'mainstream') AS tier,
@@ -393,10 +398,46 @@ def get_country_tiers(code: str, days: int = Query(default=14, le=365)):
                 WHERE s.country_code = :cc
                   AND an.is_relevant = true
                   AND an.sentiment IS NOT NULL
-                  AND ar.published_at > NOW() - INTERVAL ':days days'
-            """.replace(":days", str(days))),
-            {"cc": code},
+                  AND ar.published_at > NOW() - make_interval(days => :days)
+            """),
+            {"cc": code, "days": days},
         ).fetchall()
+
+        # Headlines query: top articles per tier by |sentiment|
+        headline_rows = session.execute(
+            text("""
+                SELECT COALESCE(s.tier, 'mainstream') AS tier,
+                       ar.title,
+                       ar.url,
+                       an.sentiment,
+                       s.name AS source_name,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY COALESCE(s.tier, 'mainstream')
+                           ORDER BY ABS(an.sentiment) DESC, ar.published_at DESC
+                       ) AS rn
+                FROM analysis an
+                JOIN articles ar ON an.article_id = ar.id
+                JOIN sources s ON ar.source_id = s.id
+                WHERE s.country_code = :cc
+                  AND an.is_relevant = true
+                  AND an.sentiment IS NOT NULL
+                  AND ar.title IS NOT NULL
+                  AND ar.title != ''
+                  AND ar.published_at > NOW() - make_interval(days => :days)
+            """),
+            {"cc": code, "days": days},
+        ).fetchall()
+
+        # Group headlines by tier (top 5)
+        tier_headlines = {}
+        for hr in headline_rows:
+            if hr.rn <= 5:
+                tier_headlines.setdefault(hr.tier, []).append({
+                    "title": hr.title or "",
+                    "url": hr.url or "",
+                    "sentiment": round(float(hr.sentiment), 2),
+                    "source": hr.source_name,
+                })
 
         # Aggregate by tier
         tier_data = {}
@@ -408,28 +449,51 @@ def get_country_tiers(code: str, days: int = Query(default=14, le=365)):
             tier_data[t]["sources"].add(row.source_name)
 
         tiers = []
-        sentiments_all = []
+        reliable_sentiments = []  # Only tiers with >= 3 articles for divergence
         for t in TIER_ORDER:
             if t in tier_data:
                 d = tier_data[t]
                 avg = sum(d["sentiments"]) / len(d["sentiments"])
-                sentiments_all.append(avg)
+                count = len(d["sentiments"])
+                is_reliable = count >= 3
+                if is_reliable:
+                    reliable_sentiments.append(avg)
                 tiers.append({
                     "tier": t,
                     "label": TIER_LABELS.get(t, t),
                     "sentiment": round(avg, 2),
-                    "article_count": len(d["sentiments"]),
+                    "article_count": count,
                     "sources": sorted(d["sources"]),
+                    "headlines": tier_headlines.get(t, []),
+                    "low_data": not is_reliable,
+                })
+        # Include tiers not in TIER_ORDER
+        for t in tier_data:
+            if t not in TIER_ORDER:
+                d = tier_data[t]
+                avg = sum(d["sentiments"]) / len(d["sentiments"])
+                count = len(d["sentiments"])
+                is_reliable = count >= 3
+                if is_reliable:
+                    reliable_sentiments.append(avg)
+                tiers.append({
+                    "tier": t,
+                    "label": TIER_LABELS.get(t, t),
+                    "sentiment": round(avg, 2),
+                    "article_count": count,
+                    "sources": sorted(d["sources"]),
+                    "headlines": tier_headlines.get(t, []),
+                    "low_data": not is_reliable,
                 })
 
         # Overall
         all_sentiments = [float(r.sentiment) for r in rows]
         overall = round(sum(all_sentiments) / len(all_sentiments), 2) if all_sentiments else 0
 
-        # Divergence
+        # Divergence (only from reliable tiers with >= 3 articles)
         divergence = 0.0
-        if sentiments_all:
-            divergence = round(max(sentiments_all) - min(sentiments_all), 2)
+        if len(reliable_sentiments) >= 2:
+            divergence = round(max(reliable_sentiments) - min(reliable_sentiments), 2)
 
         return {
             "country_code": code,
@@ -974,6 +1038,124 @@ def get_usage_by_script(days: int = Query(default=7, ge=1, le=90)):
         }
 
 
+
+
+@app.get("/api/v1/countries/{code}/tiers/narrative")
+def get_tiers_narrative(code: str, days: int = Query(default=14, le=365)):
+    """Get narrative breakdown: per topic, show tier sentiments + top headlines.
+    This powers the 'key divergences' section of the Narrative widget."""
+    code = code.upper()
+    with get_session() as session:
+        # Per topic per tier: avg sentiment + count
+        rows = session.execute(
+            text("""
+                SELECT an.event_type AS topic,
+                       COALESCE(s.tier, 'mainstream') AS tier,
+                       AVG(an.sentiment) AS avg_sentiment,
+                       COUNT(*) AS article_count
+                FROM analysis an
+                JOIN articles ar ON an.article_id = ar.id
+                JOIN sources s ON ar.source_id = s.id
+                WHERE s.country_code = :cc
+                  AND an.is_relevant = true
+                  AND an.sentiment IS NOT NULL
+                  AND an.event_type IS NOT NULL
+                  AND an.event_type != ''
+                  AND ar.published_at > NOW() - make_interval(days => :days)
+                GROUP BY an.event_type, COALESCE(s.tier, 'mainstream')
+                HAVING COUNT(*) >= 1
+                ORDER BY an.event_type, tier
+            """),
+            {"cc": code, "days": days},
+        ).fetchall()
+
+        # Top headline per topic per tier
+        headline_rows = session.execute(
+            text("""
+                SELECT sub.topic, sub.tier, sub.title, sub.url, sub.sentiment, sub.source_name
+                FROM (
+                    SELECT an.event_type AS topic,
+                           COALESCE(s.tier, 'mainstream') AS tier,
+                           ar.title,
+                           ar.url,
+                           an.sentiment,
+                           s.name AS source_name,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY an.event_type, COALESCE(s.tier, 'mainstream')
+                               ORDER BY ABS(an.sentiment) DESC, ar.published_at DESC
+                           ) AS rn
+                    FROM analysis an
+                    JOIN articles ar ON an.article_id = ar.id
+                    JOIN sources s ON ar.source_id = s.id
+                    WHERE s.country_code = :cc
+                      AND an.is_relevant = true
+                      AND an.sentiment IS NOT NULL
+                      AND an.event_type IS NOT NULL
+                      AND an.event_type != ''
+                      AND ar.title IS NOT NULL
+                      AND ar.title != ''
+                                                  AND ar.published_at > NOW() - make_interval(days => :days)
+                ) sub
+                WHERE sub.rn = 1
+            """),
+            {"cc": code, "days": days},
+        ).fetchall()
+
+        # Index headlines
+        hl_index = {}
+        for hr in headline_rows:
+            hl_index[(hr.topic, hr.tier)] = {
+                "title": hr.title or "",
+                "url": hr.url or "",
+                "sentiment": round(float(hr.sentiment), 2),
+                "source": hr.source_name,
+            }
+
+        event_labels = {
+            "economic": "Экономика", "military": "Военные", "diplomatic": "Дипломатия",
+            "cultural": "Культура", "security": "Безопасность", "political": "Политика",
+            "social": "Социальное", "energy": "Энергетика", "trade": "Торговля",
+            "humanitarian": "Гуманитарное",
+        }
+
+        # Group by topic
+        topics = {}
+        for r in rows:
+            topic = r.topic
+            if topic not in topics:
+                topics[topic] = {"tiers": [], "max_sent": -999, "min_sent": 999}
+            avg_s = round(float(r.avg_sentiment), 2)
+            topics[topic]["tiers"].append({
+                "tier": r.tier,
+                "label": TIER_LABELS.get(r.tier, r.tier),
+                "sentiment": avg_s,
+                "article_count": r.article_count,
+                "headline": hl_index.get((topic, r.tier)),
+            })
+            if avg_s > topics[topic]["max_sent"]:
+                topics[topic]["max_sent"] = avg_s
+                topics[topic]["max_tier"] = r.tier
+            if avg_s < topics[topic]["min_sent"]:
+                topics[topic]["min_sent"] = avg_s
+                topics[topic]["min_tier"] = r.tier
+
+        # Build result sorted by divergence
+        result = []
+        for topic, data in topics.items():
+            if len(data["tiers"]) < 2:
+                continue
+            div = round(data["max_sent"] - data["min_sent"], 2)
+            result.append({
+                "topic": topic,
+                "label": event_labels.get(topic, topic.replace("_", " ").title()),
+                "divergence": div,
+                "most_positive_tier": data.get("max_tier"),
+                "most_negative_tier": data.get("min_tier"),
+                "tiers": sorted(data["tiers"], key=lambda t: -t["sentiment"]),
+            })
+        result.sort(key=lambda x: -x["divergence"])
+
+        return {"country_code": code, "topics": result}
 
 
 @app.get("/api/v1/countries/{code}/tiers/daily")

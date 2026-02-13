@@ -1,4 +1,5 @@
 """RSS feed collector."""
+import html
 import logging
 from datetime import datetime, timezone
 from time import mktime
@@ -55,9 +56,9 @@ def collect_rss(source_url: str, source_name: str = "") -> list[dict]:
             # Strip HTML tags (basic)
             from bs4 import BeautifulSoup
             if body:
-                body = BeautifulSoup(body, "lxml").get_text(separator=" ", strip=True)
+                body = html.unescape(BeautifulSoup(body, "lxml").get_text(separator=" ", strip=True))
 
-            title = getattr(entry, "title", "") or ""
+            title = html.unescape(getattr(entry, "title", "") or "")
 
             if not title and not body:
                 continue

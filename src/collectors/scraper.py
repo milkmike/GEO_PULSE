@@ -1,4 +1,5 @@
 """Generic web scraper using trafilatura + Firecrawl fallback for JS-heavy sites."""
+import html
 import json
 import logging
 import os
@@ -92,7 +93,7 @@ def _firecrawl_scrape(url: str) -> dict | None:
         if len(markdown) < 100 or "security verification" in markdown.lower():
             return None
 
-        title = metadata.get("title", "").strip() or metadata.get("ogTitle", "").strip()
+        title = html.unescape(metadata.get("title", "").strip() or metadata.get("ogTitle", "").strip())
         # Extract first heading as title if metadata is empty
         if not title and markdown:
             for line in markdown.split("\n"):
@@ -255,8 +256,8 @@ def extract_article(url: str) -> dict | None:
             return None
 
         data = json.loads(result)
-        title = data.get("title", "").strip()
-        body = data.get("text", "").strip()
+        title = html.unescape(data.get("title", "").strip())
+        body = html.unescape(data.get("text", "").strip())
 
         if not title and not body:
             return None
