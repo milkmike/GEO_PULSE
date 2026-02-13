@@ -13,6 +13,14 @@ export interface Country {
   trend: "rising" | "falling" | "stable";
   last_updated: string;
   divergence: number;
+  top_thread?: {
+    id: number;
+    title: string;
+    article_count: number;
+    sentiment: number;
+  } | null;
+  active_threads?: number;
+  sparkline?: number[];
 }
 
 export interface CountriesResponse {

@@ -254,7 +254,7 @@ export default function OverviewPage() {
             {countries
               .sort((a, b) => b.temperature - a.temperature)
               .map((country) => (
-                <CountryCard key={country.code} country={country} sparklineData={sparklines[country.code]} />
+                <CountryCard key={country.code} country={country} />
               ))}
           </div>
         )}

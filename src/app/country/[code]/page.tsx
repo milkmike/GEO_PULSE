@@ -12,7 +12,7 @@ import TemperatureChart from "@/components/TemperatureChart";
 import UNVotesChart from "@/components/UNVotesChart";
 import TradeChart from "@/components/TradeChart";
 import InfoPopover from "@/components/InfoPopover";
-import NarrativeXrayExpanded from "@/components/NarrativeXrayExpanded";
+import NarrativeWidget from "@/components/NarrativeWidget";
 import AudienceSplit from "@/components/AudienceSplit";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import { glossary } from "@/lib/glossary";
@@ -261,7 +261,7 @@ export default function CountryPage() {
 
       {/* Narrative Xray */}
       <ErrorBoundary name="Нарративный расклад">
-        <NarrativeXrayExpanded code={code} days={PERIOD_DAYS[period] || 30} />
+        <NarrativeWidget code={code} days={PERIOD_DAYS[period] || 30} />
       </ErrorBoundary>
 
       {/* Audience Split */}
