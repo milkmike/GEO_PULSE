@@ -38,6 +38,11 @@ BLACKLIST = [
     'новости мира', 'важные новости', 'последние новости',
 ]
 
+VISIT_KEYWORDS = {
+    "визит", "встреча", "поездка", "турне", "прибыл", "прибытие", "посетил", "переговоры"
+}
+VANCE_ALIASES = {"вэнс", "венс", "vance", "джейди", "джей", "ди", "jd"}
+
 
 def get_headers() -> dict | None:
     if not OPENROUTER_API_KEY:
@@ -229,13 +234,73 @@ _TRANSLIT_MAP = {
 
 def normalize_event_key(key: str) -> str:
     """Normalize event key: remove stopwords, unify transliterations."""
-    words = key.lower().strip().split()
+    words = _re.sub(r"[^\w\s-]", " ", key.lower()).strip().split()
     normalized = []
     for w in words:
         w = _TRANSLIT_MAP.get(w, w)
         if w not in _STOPWORDS and len(w) > 1:
             normalized.append(w)
     return " ".join(normalized)
+
+
+def _cluster_blob(articles: list[dict]) -> str:
+    parts = []
+    for a in articles[:20]:
+        if a.get("event_key") and a["event_key"] != "(no key)":
+            parts.append(str(a["event_key"]))
+        if a.get("title"):
+            parts.append(str(a["title"]))
+    return " ".join(parts).lower()
+
+
+def _is_vance_visit_cluster(articles: list[dict]) -> bool:
+    blob = _cluster_blob(articles)
+    has_vance = any(alias in blob for alias in VANCE_ALIASES)
+    has_visit = any(k in blob for k in VISIT_KEYWORDS)
+    return has_vance and has_visit
+
+
+def _cluster_last_seen(articles: list[dict]) -> datetime:
+    dates = [a.get("published_at") for a in articles if a.get("published_at")]
+    if not dates:
+        return datetime.min.replace(tzinfo=timezone.utc)
+    return max(dates)
+
+
+def premerge_special_cases(cc_clusters: list[tuple[str, list[dict]]]) -> tuple[list[tuple[str, list[dict]]], int]:
+    """Deterministic pre-merge for known hard cases before LLM pass."""
+    merged_count = 0
+    used = set()
+    output: list[tuple[str, list[dict]]] = []
+
+    # Case: Vance visit storyline split into multiple near-duplicate threads
+    vance_candidates = [
+        (cid, arts) for cid, arts in cc_clusters
+        if _is_vance_visit_cluster(arts)
+    ]
+
+    if len(vance_candidates) >= 2:
+        vance_candidates = sorted(vance_candidates, key=lambda x: _cluster_last_seen(x[1]))
+        base_id, base_articles = vance_candidates[0]
+        combined = list(base_articles)
+        used.add(base_id)
+
+        base_last = _cluster_last_seen(base_articles)
+        for cid, arts in vance_candidates[1:]:
+            last = _cluster_last_seen(arts)
+            # Merge only nearby story windows (avoid accidental global merges)
+            if abs((last - base_last).total_seconds()) <= 14 * 24 * 3600:
+                combined.extend(arts)
+                used.add(cid)
+                merged_count += 1
+
+        output.append((base_id, combined))
+
+    for cid, arts in cc_clusters:
+        if cid not in used:
+            output.append((cid, arts))
+
+    return output, merged_count
 
 
 # ── Step 2: Clustering ──────────────────────────────────
@@ -551,6 +616,11 @@ def cluster_pass2_llm(clusters: dict[str, list[dict]]) -> dict[str, list[dict]]:
     merge_count = 0
 
     for cc, cc_clusters in by_country.items():
+        cc_clusters, premerged = premerge_special_cases(cc_clusters)
+        if premerged:
+            logger.info(f"  Pre-merged {premerged} special-case clusters in {cc}")
+            merge_count += premerged
+
         if len(cc_clusters) <= 1:
             for cid, arts in cc_clusters:
                 merged[cid] = arts
