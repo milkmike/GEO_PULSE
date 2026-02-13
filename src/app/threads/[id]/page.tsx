@@ -42,7 +42,7 @@ export default function ThreadDetailPage() {
         setThread(data);
         // Fetch related threads
         getRelatedThreads(id)
-          .then((d) => setRelatedThreads(d.threads || []))
+          .then((d) => setRelatedThreads(d.related || []))
           .catch(() => setRelatedThreads([]));
       })
       .catch(() => setError("Не удалось загрузить сюжет"))

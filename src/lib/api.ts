@@ -292,8 +292,12 @@ export async function getThreads(params?: { limit?: number; sort?: string; count
   return apiFetch<ThreadsResponse>("/api/v1/threads", params as Record<string, string | number>);
 }
 
+export interface RelatedThreadsResponse {
+  related: Thread[];
+}
+
 export async function getRelatedThreads(id: number) {
-  return apiFetch<ThreadsResponse>(`/api/v1/threads/${id}/related`);
+  return apiFetch<RelatedThreadsResponse>(`/api/v1/threads/${id}/related`);
 }
 
 export interface HeadlineResponse {
