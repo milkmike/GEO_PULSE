@@ -20,11 +20,11 @@ CREATE TABLE sources (
 CREATE TABLE articles (
     id SERIAL PRIMARY KEY,
     source_id INTEGER REFERENCES sources(id),
-    external_id VARCHAR(500),
+    external_id TEXT,
     title TEXT,
     body TEXT,
     summary TEXT,
-    url VARCHAR(1000),
+    url TEXT,
     published_at TIMESTAMPTZ NOT NULL,
     collected_at TIMESTAMPTZ DEFAULT NOW(),
     language VARCHAR(5),

@@ -117,11 +117,11 @@ def article_detail(article_id: int):
             SELECT a.id, a.title, a.body, a.url, a.published_at, a.language,
                    a.external_id,
                    s.name as source_name, s.country_code, s.source_type, s.tier, s.url as source_url,
-                   an.sentiment, an.action_level, an.topics, an.summary as ai_summary,
-                   an.narrative_alignment
+                   an.sentiment, an.action_level, an.event_type, an.event_key,
+                   an.model_used, an.prompt_version, an.raw_response
             FROM articles a
             JOIN sources s ON s.id = a.source_id
-            LEFT JOIN analyses an ON an.article_id = a.id
+            LEFT JOIN analysis an ON an.article_id = a.id
             WHERE a.id = :id
         """), {"id": article_id}).fetchone()
 
@@ -141,10 +141,12 @@ def article_detail(article_id: int):
             "tier": row.tier,
             "source_url": row.source_url,
             "analysis": {
-                "sentiment": float(row.sentiment) if row.sentiment else None,
+                "sentiment": float(row.sentiment) if row.sentiment is not None else None,
                 "action_level": row.action_level,
-                "topics": list(row.topics) if row.topics else [],
-                "summary": row.ai_summary,
-                "narrative_alignment": row.narrative_alignment,
-            } if row.sentiment else None,
+                "event_type": row.event_type,
+                "event_key": row.event_key,
+                "model_used": row.model_used,
+                "prompt_version": row.prompt_version,
+                "reasoning": (row.raw_response or {}).get("reasoning", "") if row.raw_response else "",
+            } if row.sentiment is not None else None,
         }
