@@ -1021,6 +1021,46 @@ def cleanup_duplicate_threads(session):
         dupes = []
         seen_pairs = set()
 
+        # Method 0: deterministic rule for known Vance-visit split cases
+        try:
+            rule_dupes = session.execute(text("""
+                SELECT t1.id AS keep_id, t2.id AS remove_id,
+                       t1.title AS keep_title, t2.title AS remove_title,
+                       t1.article_count AS keep_count, t2.article_count AS remove_count
+                FROM threads t1
+                JOIN threads t2 ON t1.country_code = t2.country_code AND t1.id < t2.id
+                WHERE t1.status != 'resolved' AND t2.status != 'resolved'
+                  AND (
+                    LOWER(COALESCE(t1.thread_key, '')) LIKE '%вэнс%'
+                    OR LOWER(COALESCE(t1.title, '')) LIKE '%вэнс%'
+                    OR LOWER(COALESCE(t1.thread_key, '')) LIKE '%vance%'
+                    OR LOWER(COALESCE(t1.title, '')) LIKE '%vance%'
+                  )
+                  AND (
+                    LOWER(COALESCE(t2.thread_key, '')) LIKE '%вэнс%'
+                    OR LOWER(COALESCE(t2.title, '')) LIKE '%вэнс%'
+                    OR LOWER(COALESCE(t2.thread_key, '')) LIKE '%vance%'
+                    OR LOWER(COALESCE(t2.title, '')) LIKE '%vance%'
+                  )
+                  AND ABS(EXTRACT(EPOCH FROM (COALESCE(t1.last_seen, NOW()) - COALESCE(t2.last_seen, NOW())))) < 1209600
+            """)).fetchall()
+            for d in rule_dupes:
+                pair = (min(d.keep_id, d.remove_id), max(d.keep_id, d.remove_id))
+                if pair not in seen_pairs:
+                    seen_pairs.add(pair)
+                    dupes.append({
+                        "keep_id": d.keep_id,
+                        "remove_id": d.remove_id,
+                        "sim": 0.95,
+                        "method": "vance_rule",
+                        "keep_title": d.keep_title,
+                        "remove_title": d.remove_title,
+                        "keep_count": d.keep_count,
+                        "remove_count": d.remove_count,
+                    })
+        except Exception as e:
+            logger.debug(f"rule-based vance dedup skipped: {e}")
+
         # Method 1: Embedding-based (avg embedding per thread)
         try:
             emb_dupes = session.execute(text("""
