@@ -113,7 +113,7 @@ def list_threads(
     limit: int = Query(default=30, le=100),
 ):
     """List narrative threads with filters and sorting."""
-    conditions = ["t.importance_score >= :min_imp"]
+    conditions = ["t.importance_score >= :min_imp", "t.article_count > 0"]
     params: dict = {"lim": limit, "min_imp": min_importance}
 
     if country:
@@ -301,7 +301,7 @@ def get_country_threads(
     if code not in COUNTRY_NAMES:
         raise HTTPException(status_code=404, detail="Unknown country code")
 
-    conditions = ["t.country_code = :cc"]
+    conditions = ["t.country_code = :cc", "t.article_count > 0"]
     params: dict = {"cc": code, "lim": limit}
 
     if status:
