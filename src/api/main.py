@@ -86,6 +86,15 @@ class AdminHealthResponse(BaseModel):
     services: list[AdminHealthServiceResponse]
 
 
+class AdminIntegrityResponse(BaseModel):
+    total_links: int
+    broken_article_links: int
+    broken_thread_links: int
+    empty_threads: int
+    count_mismatches: int
+    status: Literal["ok", "degraded"]
+
+
 @app.get("/")
 def root():
     return {"status": "ok", "service": "CIS Thermometer API", "version": "1.1.0"}
@@ -1087,6 +1096,58 @@ def get_api_health():
             })
 
     return {"services": results}
+
+
+@app.get("/api/v1/admin/integrity", response_model=AdminIntegrityResponse)
+def get_admin_integrity():
+    """Check thread/article linkage integrity."""
+    with get_session() as session:
+        row = session.execute(text("""
+            SELECT
+                (SELECT COUNT(*) FROM thread_articles) AS total_links,
+                (SELECT COUNT(*)
+                 FROM thread_articles ta
+                 LEFT JOIN articles a ON a.id = ta.article_id
+                 WHERE a.id IS NULL) AS broken_article_links,
+                (SELECT COUNT(*)
+                 FROM thread_articles ta
+                 LEFT JOIN threads t ON t.id = ta.thread_id
+                 WHERE t.id IS NULL) AS broken_thread_links,
+                (SELECT COUNT(*)
+                 FROM threads t
+                 WHERE NOT EXISTS (
+                     SELECT 1 FROM thread_articles ta WHERE ta.thread_id = t.id
+                 )) AS empty_threads,
+                (SELECT COUNT(*)
+                 FROM (
+                     SELECT t.id, COALESCE(cnt.c, 0) AS actual_count, t.article_count AS stored_count
+                     FROM threads t
+                     LEFT JOIN (
+                         SELECT thread_id, COUNT(*) AS c
+                         FROM thread_articles
+                         GROUP BY thread_id
+                     ) cnt ON cnt.thread_id = t.id
+                 ) q
+                 WHERE COALESCE(stored_count, 0) != actual_count) AS count_mismatches
+        """)).fetchone()
+
+        broken_article_links = int(row.broken_article_links or 0)
+        broken_thread_links = int(row.broken_thread_links or 0)
+        empty_threads = int(row.empty_threads or 0)
+        count_mismatches = int(row.count_mismatches or 0)
+
+        status = "ok"
+        if broken_article_links > 0 or broken_thread_links > 0 or empty_threads > 0 or count_mismatches > 0:
+            status = "degraded"
+
+        return {
+            "total_links": int(row.total_links or 0),
+            "broken_article_links": broken_article_links,
+            "broken_thread_links": broken_thread_links,
+            "empty_threads": empty_threads,
+            "count_mismatches": count_mismatches,
+            "status": status,
+        }
 
 
 @app.get("/api/v1/admin/summary")

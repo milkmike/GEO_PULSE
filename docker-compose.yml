@@ -87,6 +87,18 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  integrity:
+    build:
+      context: .
+      dockerfile: Dockerfile.temperature
+    command: python scripts/check_integrity.py --loop --interval 86400 --apply
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
   api:
     build:
       context: .
