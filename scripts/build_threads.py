@@ -1061,7 +1061,48 @@ def cleanup_duplicate_threads(session):
         except Exception as e:
             logger.debug(f"rule-based vance dedup skipped: {e}")
 
-        # Method 1: Embedding-based (avg embedding per thread)
+        # Method 1: article-overlap based (high-confidence duplicates)
+        try:
+            overlap_dupes = session.execute(text("""
+                WITH pair_overlap AS (
+                    SELECT ta1.thread_id AS t1, ta2.thread_id AS t2, COUNT(*) AS overlap
+                    FROM thread_articles ta1
+                    JOIN thread_articles ta2
+                      ON ta1.article_id = ta2.article_id
+                     AND ta1.thread_id < ta2.thread_id
+                    GROUP BY ta1.thread_id, ta2.thread_id
+                )
+                SELECT th1.id AS keep_id, th2.id AS remove_id,
+                       th1.title AS keep_title, th2.title AS remove_title,
+                       th1.article_count AS keep_count, th2.article_count AS remove_count,
+                       po.overlap::float / GREATEST(LEAST(th1.article_count, th2.article_count), 1) AS sim
+                FROM pair_overlap po
+                JOIN threads th1 ON th1.id = po.t1
+                JOIN threads th2 ON th2.id = po.t2
+                WHERE th1.country_code = th2.country_code
+                  AND th1.status != 'resolved' AND th2.status != 'resolved'
+                  AND po.overlap >= 3
+                  AND po.overlap::float / GREATEST(LEAST(th1.article_count, th2.article_count), 1) >= 0.70
+                  AND ABS(EXTRACT(EPOCH FROM (COALESCE(th1.last_seen, NOW()) - COALESCE(th2.last_seen, NOW())))) < 1814400
+            """)).fetchall()
+            for d in overlap_dupes:
+                pair = (min(d.keep_id, d.remove_id), max(d.keep_id, d.remove_id))
+                if pair not in seen_pairs:
+                    seen_pairs.add(pair)
+                    dupes.append({
+                        "keep_id": d.keep_id,
+                        "remove_id": d.remove_id,
+                        "sim": d.sim,
+                        "method": "article_overlap",
+                        "keep_title": d.keep_title,
+                        "remove_title": d.remove_title,
+                        "keep_count": d.keep_count,
+                        "remove_count": d.remove_count,
+                    })
+        except Exception as e:
+            logger.debug(f"article-overlap dedup skipped: {e}")
+
+        # Method 2: Embedding-based (avg embedding per thread)
         try:
             emb_dupes = session.execute(text("""
                 WITH thread_emb AS (
@@ -1096,7 +1137,7 @@ def cleanup_duplicate_threads(session):
         except Exception as e:
             logger.debug(f"Embedding dedup skipped: {e}")
 
-        # Method 2: thread_key trgm similarity
+        # Method 3: thread_key trgm similarity
         try:
             trgm_key_dupes = session.execute(text("""
                 SELECT t1.id AS keep_id, t2.id AS remove_id,
@@ -1119,7 +1160,7 @@ def cleanup_duplicate_threads(session):
         except Exception as e:
             logger.debug(f"trgm key dedup skipped: {e}")
 
-        # Method 3: title similarity (catches cases where keys differ but titles are about same event)
+        # Method 4: title similarity (catches cases where keys differ but titles are about same event)
         try:
             trgm_title_dupes = session.execute(text("""
                 SELECT t1.id AS keep_id, t2.id AS remove_id,
@@ -1145,7 +1186,7 @@ def cleanup_duplicate_threads(session):
         if not dupes:
             return
 
-        # Method 4: LLM judge for borderline cases (sim 0.35-0.80)
+        # Method 5: LLM judge for borderline cases (sim 0.35-0.80)
         borderline = [d for d in dupes if d["sim"] < 0.80]
         auto_merge = [d for d in dupes if d["sim"] >= 0.80]
 
