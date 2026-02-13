@@ -897,98 +897,168 @@ def link_related_threads(session):
 # ── Step 7: Cleanup old threads ─────────────────────────
 
 def cleanup_duplicate_threads(session):
-    """Remove duplicate threads using embedding similarity + trgm fallback."""
+    """Remove duplicate threads using embedding similarity + trgm + title similarity + LLM judge."""
     try:
-        # Method 1: Embedding-based — find threads whose articles are semantically similar
-        # Average embedding per thread, then compare
-        emb_dupes = session.execute(text("""
-            WITH thread_emb AS (
-                SELECT ta.thread_id, AVG(an.embedding) AS avg_emb
-                FROM thread_articles ta
-                JOIN analysis an ON an.article_id = ta.article_id
-                WHERE an.embedding IS NOT NULL
-                GROUP BY ta.thread_id
-                HAVING COUNT(an.embedding) >= 1
-            )
-            SELECT t1.thread_id AS keep_id, t2.thread_id AS remove_id,
-                   th1.thread_key AS keep_key, th2.thread_key AS remove_key,
-                   th1.article_count AS keep_count, th2.article_count AS remove_count,
-                   1 - (t1.avg_emb <=> t2.avg_emb) AS sim
-            FROM thread_emb t1
-            JOIN thread_emb t2 ON t1.thread_id < t2.thread_id
-            JOIN threads th1 ON th1.id = t1.thread_id
-            JOIN threads th2 ON th2.id = t2.thread_id
-            WHERE th1.country_code = th2.country_code
-              AND th1.status != 'resolved'
-              AND th2.status != 'resolved'
-              AND 1 - (t1.avg_emb <=> t2.avg_emb) > 0.85
-        """)).fetchall()
-
-        # Method 2: trgm fallback for threads without embeddings
-        trgm_dupes = session.execute(text("""
-            SELECT t1.id AS keep_id, t2.id AS remove_id,
-                   t1.thread_key AS keep_key, t2.thread_key AS remove_key,
-                   t1.article_count AS keep_count, t2.article_count AS remove_count,
-                   similarity(t1.thread_key, t2.thread_key) AS sim
-            FROM threads t1
-            JOIN threads t2 ON t1.country_code = t2.country_code
-                           AND t1.id < t2.id
-            WHERE similarity(t1.thread_key, t2.thread_key) > 0.45
-              AND t1.status != 'resolved'
-              AND t2.status != 'resolved'
-        """)).fetchall()
-
-        # Combine, deduplicate pairs
-        seen_pairs = set()
         dupes = []
-        for d in list(emb_dupes) + list(trgm_dupes):
-            pair = (min(d.keep_id, d.remove_id), max(d.keep_id, d.remove_id))
-            if pair not in seen_pairs:
-                seen_pairs.add(pair)
-                dupes.append(d)
+        seen_pairs = set()
 
+        # Method 1: Embedding-based (avg embedding per thread)
+        try:
+            emb_dupes = session.execute(text("""
+                WITH thread_emb AS (
+                    SELECT ta.thread_id, AVG(an.embedding) AS avg_emb
+                    FROM thread_articles ta
+                    JOIN analysis an ON an.article_id = ta.article_id
+                    WHERE an.embedding IS NOT NULL
+                    GROUP BY ta.thread_id
+                    HAVING COUNT(an.embedding) >= 1
+                )
+                SELECT t1.thread_id AS keep_id, t2.thread_id AS remove_id,
+                       th1.thread_key AS keep_key, th2.thread_key AS remove_key,
+                       th1.title AS keep_title, th2.title AS remove_title,
+                       th1.article_count AS keep_count, th2.article_count AS remove_count,
+                       1 - (t1.avg_emb <=> t2.avg_emb) AS sim
+                FROM thread_emb t1
+                JOIN thread_emb t2 ON t1.thread_id < t2.thread_id
+                JOIN threads th1 ON th1.id = t1.thread_id
+                JOIN threads th2 ON th2.id = t2.thread_id
+                WHERE th1.country_code = th2.country_code
+                  AND th1.status != 'resolved'
+                  AND th2.status != 'resolved'
+                  AND 1 - (t1.avg_emb <=> t2.avg_emb) > 0.80
+            """)).fetchall()
+            for d in emb_dupes:
+                pair = (min(d.keep_id, d.remove_id), max(d.keep_id, d.remove_id))
+                if pair not in seen_pairs:
+                    seen_pairs.add(pair)
+                    dupes.append({"keep_id": d.keep_id, "remove_id": d.remove_id, "sim": d.sim, "method": "embedding",
+                                  "keep_title": d.keep_title, "remove_title": d.remove_title,
+                                  "keep_count": d.keep_count, "remove_count": d.remove_count})
+        except Exception as e:
+            logger.debug(f"Embedding dedup skipped: {e}")
+
+        # Method 2: thread_key trgm similarity
+        try:
+            trgm_key_dupes = session.execute(text("""
+                SELECT t1.id AS keep_id, t2.id AS remove_id,
+                       t1.thread_key AS keep_key, t2.thread_key AS remove_key,
+                       t1.title AS keep_title, t2.title AS remove_title,
+                       t1.article_count AS keep_count, t2.article_count AS remove_count,
+                       similarity(t1.thread_key, t2.thread_key) AS sim
+                FROM threads t1
+                JOIN threads t2 ON t1.country_code = t2.country_code AND t1.id < t2.id
+                WHERE similarity(t1.thread_key, t2.thread_key) > 0.40
+                  AND t1.status != 'resolved' AND t2.status != 'resolved'
+            """)).fetchall()
+            for d in trgm_key_dupes:
+                pair = (min(d.keep_id, d.remove_id), max(d.keep_id, d.remove_id))
+                if pair not in seen_pairs:
+                    seen_pairs.add(pair)
+                    dupes.append({"keep_id": d.keep_id, "remove_id": d.remove_id, "sim": d.sim, "method": "trgm_key",
+                                  "keep_title": d.keep_title, "remove_title": d.remove_title,
+                                  "keep_count": d.keep_count, "remove_count": d.remove_count})
+        except Exception as e:
+            logger.debug(f"trgm key dedup skipped: {e}")
+
+        # Method 3: title similarity (catches cases where keys differ but titles are about same event)
+        try:
+            trgm_title_dupes = session.execute(text("""
+                SELECT t1.id AS keep_id, t2.id AS remove_id,
+                       t1.thread_key AS keep_key, t2.thread_key AS remove_key,
+                       t1.title AS keep_title, t2.title AS remove_title,
+                       t1.article_count AS keep_count, t2.article_count AS remove_count,
+                       similarity(t1.title, t2.title) AS sim
+                FROM threads t1
+                JOIN threads t2 ON t1.country_code = t2.country_code AND t1.id < t2.id
+                WHERE similarity(t1.title, t2.title) > 0.35
+                  AND t1.status != 'resolved' AND t2.status != 'resolved'
+            """)).fetchall()
+            for d in trgm_title_dupes:
+                pair = (min(d.keep_id, d.remove_id), max(d.keep_id, d.remove_id))
+                if pair not in seen_pairs:
+                    seen_pairs.add(pair)
+                    dupes.append({"keep_id": d.keep_id, "remove_id": d.remove_id, "sim": d.sim, "method": "trgm_title",
+                                  "keep_title": d.keep_title, "remove_title": d.remove_title,
+                                  "keep_count": d.keep_count, "remove_count": d.remove_count})
+        except Exception as e:
+            logger.debug(f"trgm title dedup skipped: {e}")
+
+        if not dupes:
+            return
+
+        # Method 4: LLM judge for borderline cases (sim 0.35-0.80)
+        borderline = [d for d in dupes if d["sim"] < 0.80]
+        auto_merge = [d for d in dupes if d["sim"] >= 0.80]
+
+        if borderline and get_headers():
+            # Batch LLM call
+            pairs_text = "\n".join(
+                f"[{d['keep_id']} vs {d['remove_id']}] sim={d['sim']:.2f} ({d['method']}): "
+                f"\"{d['keep_title'][:100]}\" ({d['keep_count']} ст.) vs \"{d['remove_title'][:100]}\" ({d['remove_count']} ст.)"
+                for d in borderline[:20]
+            )
+            prompt = f"""Ты аналитик медиа. Ниже пары сюжетов (threads), которые ВОЗМОЖНО дублируют друг друга.
+Для каждой пары определи: это ОДИН сюжет (merge) или РАЗНЫЕ (split)?
+
+МЕРЖИ если: один и тот же инцидент/событие, даже если формулировка разная.
+НЕ мержи если: разные события, даже если про одну тему/страну.
+
+Пары:
+{pairs_text}
+
+Верни JSON: {{"decisions": [{{"pair": [id1, id2], "action": "merge"|"split"}}]}}"""
+
+            result = llm_json(prompt, max_tokens=500)
+            if result and "decisions" in result:
+                merge_set = set()
+                for dec in result["decisions"]:
+                    if dec.get("action") == "merge" and "pair" in dec:
+                        merge_set.add(tuple(sorted(dec["pair"])))
+                
+                for d in borderline:
+                    pair = tuple(sorted([d["keep_id"], d["remove_id"]]))
+                    if pair in merge_set:
+                        auto_merge.append(d)
+                        logger.info(f"  LLM approved merge: {d['keep_title'][:50]} ↔ {d['remove_title'][:50]}")
+            else:
+                # If LLM fails, only auto-merge high-confidence pairs
+                logger.warning("LLM judge failed, using only high-confidence pairs")
+        
+        # Execute merges
         removed = 0
         already_removed = set()
-        for d in dupes:
-            # Skip if either thread was already removed in this pass
-            if d.keep_id in already_removed or d.remove_id in already_removed:
+        for d in auto_merge:
+            keep_id = d["keep_id"] if d["keep_count"] >= d["remove_count"] else d["remove_id"]
+            remove_id = d["remove_id"] if keep_id == d["keep_id"] else d["keep_id"]
+
+            if keep_id in already_removed or remove_id in already_removed:
                 continue
 
-            # Keep the one with more articles or higher importance
-            if d.keep_count >= d.remove_count:
-                remove_id, keep_id = d.remove_id, d.keep_id
-            else:
-                remove_id, keep_id = d.keep_id, d.remove_id
-
-            # Verify both threads still exist
-            exists = session.execute(text(
-                "SELECT COUNT(*) FROM threads WHERE id IN (:k, :r)"
-            ), {"k": keep_id, "r": remove_id}).scalar()
+            exists = session.execute(text("SELECT COUNT(*) FROM threads WHERE id IN (:k, :r)"), {"k": keep_id, "r": remove_id}).scalar()
             if exists < 2:
                 continue
 
-            # Move articles from removed thread to kept thread
+            # Move articles
             session.execute(text("""
                 INSERT INTO thread_articles (thread_id, article_id)
-                SELECT :keep_id, article_id FROM thread_articles
-                WHERE thread_id = :remove_id
+                SELECT :keep_id, article_id FROM thread_articles WHERE thread_id = :remove_id
                 ON CONFLICT DO NOTHING
             """), {"keep_id": keep_id, "remove_id": remove_id})
 
-            # Update article count on kept thread
-            new_count = session.execute(text(
-                "SELECT COUNT(*) FROM thread_articles WHERE thread_id = :tid"
-            ), {"tid": keep_id}).scalar()
-            session.execute(text(
-                "UPDATE threads SET article_count = :cnt WHERE id = :tid"
-            ), {"cnt": new_count, "tid": keep_id})
+            # Merge merged_keys
+            keep_t = session.execute(text("SELECT merged_keys FROM threads WHERE id = :id"), {"id": keep_id}).fetchone()
+            rem_t = session.execute(text("SELECT thread_key, merged_keys FROM threads WHERE id = :id"), {"id": remove_id}).fetchone()
+            all_keys = list(set((keep_t.merged_keys or []) + (rem_t.merged_keys or []) + [rem_t.thread_key]))
+            
+            new_count = session.execute(text("SELECT COUNT(*) FROM thread_articles WHERE thread_id = :tid"), {"tid": keep_id}).scalar()
+            session.execute(text("UPDATE threads SET article_count = :cnt, merged_keys = :keys WHERE id = :tid"),
+                          {"cnt": new_count, "tid": keep_id, "keys": all_keys})
 
-            # Delete duplicate
             session.execute(text("DELETE FROM thread_articles WHERE thread_id = :tid"), {"tid": remove_id})
             session.execute(text("DELETE FROM threads WHERE id = :tid"), {"tid": remove_id})
             already_removed.add(remove_id)
             removed += 1
-            logger.info(f"  Deduped: removed thread {remove_id} (merged into {keep_id}, sim={d.sim:.2f})")
+            logger.info(f"  Deduped: #{remove_id} → #{keep_id} (sim={d['sim']:.2f}, {d['method']})")
 
         if removed:
             logger.info(f"Cleaned up {removed} duplicate threads")
@@ -1068,7 +1138,11 @@ def build_threads():
         except Exception as e:
             logger.warning(f"Failed to link related threads: {e}")
 
-        # 6. Cleanup
+        # 6. Dedup existing threads (embedding + trgm + title + LLM)
+        cleanup_duplicate_threads(session)
+        logger.info("Thread dedup pass done")
+
+        # 7. Cleanup old threads
         cleanup_old_threads(session)
         logger.info("Cleanup done")
 
