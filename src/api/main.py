@@ -974,9 +974,13 @@ def get_api_health():
             start = time.time()
             resp = httpx.get(svc["url"], headers=svc["headers"], timeout=10.0)
             latency_ms = int((time.time() - start) * 1000)
+            if 200 <= resp.status_code < 400:
+                status = "ok"
+            else:
+                status = "degraded"
             results.append({
                 "service": svc["service"],
-                "status": "ok" if resp.status_code < 500 else "degraded",
+                "status": status,
                 "http_code": resp.status_code,
                 "latency_ms": latency_ms,
             })

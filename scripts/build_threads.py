@@ -50,17 +50,25 @@ def get_headers() -> dict | None:
     }
 
 
-def llm_call(prompt: str, max_tokens: int = 500) -> str | None:
+def llm_call(prompt: str, max_tokens: int = 500, force_json: bool = False) -> str | None:
     """Make LLM API call. Returns response text or None."""
     headers = get_headers()
     if not headers:
         return None
     try:
+        payload = {
+            "model": MODEL,
+            "max_tokens": max_tokens,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        if force_json:
+            payload["response_format"] = {"type": "json_object"}
+
         with track_duration() as timer:
             resp = httpx.post(
                 OPENROUTER_URL,
                 headers=headers,
-                json={"model": MODEL, "max_tokens": max_tokens, "messages": [{"role": "user", "content": prompt}]},
+                json=payload,
                 timeout=60.0,
             )
             resp.raise_for_status()
@@ -84,22 +92,57 @@ def llm_call(prompt: str, max_tokens: int = 500) -> str | None:
         return None
 
 
+def _extract_json_text(raw: str) -> str | None:
+    text_clean = raw.strip()
+    if "```json" in text_clean:
+        text_clean = text_clean.split("```json", 1)[1].split("```", 1)[0]
+    elif "```" in text_clean:
+        text_clean = text_clean.split("```", 1)[1].split("```", 1)[0]
+
+    text_clean = text_clean.strip()
+    if text_clean.startswith("{") and text_clean.endswith("}"):
+        return text_clean
+
+    start = text_clean.find("{")
+    end = text_clean.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        return text_clean[start:end + 1]
+    return None
+
+
 def llm_json(prompt: str, max_tokens: int = 800) -> dict | None:
     """LLM call expecting JSON response."""
-    raw = llm_call(prompt, max_tokens)
+    strict_prompt = (
+        f"{prompt}\n\n"
+        "IMPORTANT: Return strictly valid JSON object only. "
+        "No explanations, no markdown fences, no extra text."
+    )
+    raw = llm_call(strict_prompt, max_tokens, force_json=True)
     if not raw:
         return None
-    # Extract JSON from response (handle ```json blocks)
-    text_clean = raw
-    if "```json" in text_clean:
-        text_clean = text_clean.split("```json")[1].split("```")[0]
-    elif "```" in text_clean:
-        text_clean = text_clean.split("```")[1].split("```")[0]
-    try:
-        return json.loads(text_clean.strip())
-    except json.JSONDecodeError:
-        logger.warning(f"Failed to parse LLM JSON: {raw[:200]}")
-        return None
+
+    extracted = _extract_json_text(raw)
+    if extracted:
+        try:
+            return json.loads(extracted)
+        except json.JSONDecodeError:
+            pass
+
+    repair_prompt = (
+        "Convert the following text into a valid JSON object without any additional text.\n\n"
+        f"TEXT:\n{raw}"
+    )
+    repaired = llm_call(repair_prompt, max_tokens=400, force_json=True)
+    if repaired:
+        extracted_repaired = _extract_json_text(repaired)
+        if extracted_repaired:
+            try:
+                return json.loads(extracted_repaired)
+            except json.JSONDecodeError:
+                pass
+
+    logger.warning(f"Failed to parse LLM JSON: {raw[:300]}")
+    return None
 
 
 # ── Step 1: Fetch articles ──────────────────────────────

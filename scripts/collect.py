@@ -175,36 +175,44 @@ def collect_all():
                 age_hours = (datetime.now(timezone.utc) - published_at).total_seconds() / 3600
                 is_backfill = age_hours > BACKFILL_HOURS
 
-                article = Article(
-                    source_id=source.id,
-                    external_id=art["external_id"],
-                    title=cleaned_title,
-                    body=art.get("body", ""),
-                    url=art.get("url", ""),
-                    published_at=published_at,
-                    language=_detect_language(art['title']),
-                    title_normalized=title_norm,
-                    is_duplicate=parent_id is not None,
-                    duplicate_of=parent_id,
-                    is_backfill=is_backfill,
-                )
-                session.add(article)
-                session.flush()  # Get article.id for Redis enqueue
+                try:
+                    with session.begin_nested():
+                        article = Article(
+                            source_id=source.id,
+                            external_id=art["external_id"],
+                            title=cleaned_title,
+                            body=art.get("body", ""),
+                            url=art.get("url", ""),
+                            published_at=published_at,
+                            language=_detect_language(art['title']),
+                            title_normalized=title_norm,
+                            is_duplicate=parent_id is not None,
+                            duplicate_of=parent_id,
+                            is_backfill=is_backfill,
+                        )
+                        session.add(article)
+                        session.flush()  # Get article.id for Redis enqueue
 
-                if parent_id:
-                    # Increment reprint_count on the parent article
-                    session.execute(
-                        text("UPDATE articles SET reprint_count = reprint_count + 1 WHERE id = :pid"),
-                        {"pid": parent_id},
+                        if parent_id:
+                            # Increment reprint_count on the parent article
+                            session.execute(
+                                text("UPDATE articles SET reprint_count = reprint_count + 1 WHERE id = :pid"),
+                                {"pid": parent_id},
+                            )
+                            dupe_count += 1
+                            logger.info(
+                                f"  [{source.country_code}] DUPE: \"{art['title'][:60]}...\" → parent #{parent_id}"
+                            )
+                        else:
+                            new_count += 1
+                            # Enqueue new non-duplicate articles to Redis for analysis
+                            _enqueue_article(article.id, source.country_code)
+                except Exception as e:
+                    total_skipped += 1
+                    logger.warning(
+                        f"  [{source.country_code}] Failed to persist article '{cleaned_title[:80]}': {e}"
                     )
-                    dupe_count += 1
-                    logger.info(
-                        f"  [{source.country_code}] DUPE: \"{art['title'][:60]}...\" → parent #{parent_id}"
-                    )
-                else:
-                    new_count += 1
-                    # Enqueue new non-duplicate articles to Redis for analysis
-                    _enqueue_article(article.id, source.country_code)
+                    continue
 
         total_new += new_count
         total_dupes += dupe_count

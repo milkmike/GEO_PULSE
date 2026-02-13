@@ -46,11 +46,11 @@ class Article(Base):
     __tablename__ = "articles"
     id = Column(Integer, primary_key=True)
     source_id = Column(Integer, nullable=False)
-    external_id = Column(String(500))
+    external_id = Column(Text)
     title = Column(Text)
     body = Column(Text)
     summary = Column(Text)
-    url = Column(String(1000))
+    url = Column(Text)
     published_at = Column(DateTime(timezone=True), nullable=False)
     collected_at = Column(DateTime(timezone=True), default=datetime.utcnow)
     language = Column(String(5))
