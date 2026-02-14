@@ -91,7 +91,7 @@ export default function ThreadDetailPage() {
               color: thread.importance_score >= 20 ? "#ef4444" : thread.importance_score >= 10 ? "#f59e0b" : "#3b82f6",
             }}
           >
-            ★ {thread.importance_score.toFixed(0)}
+            ★ {(thread.importance_score ?? 0).toFixed(0)}
           </span>
         </div>
         <h1 className="text-2xl font-bold">{thread.title}</h1>
@@ -142,7 +142,7 @@ export default function ThreadDetailPage() {
         {[
           { label: "Статей", value: thread.article_count, icon: "📰" },
           { label: "Макс. действие", value: `${actionIcon(thread.max_action_level)} ${thread.max_action_level}`, icon: "" },
-          { label: "Тональность", value: thread.avg_sentiment.toFixed(2), icon: "", color: sentimentColor(thread.avg_sentiment) },
+          { label: "Тональность", value: (thread.avg_sentiment ?? 0).toFixed(2), icon: "", color: sentimentColor(thread.avg_sentiment ?? 0) },
           { label: "Статус", value: thread.status === "developing" ? "🔄 Развивается" : thread.status === "resolved" ? "✅ Завершён" : "💤 Неактивен", icon: "" },
         ].map((m) => (
           <div
@@ -220,7 +220,7 @@ export default function ThreadDetailPage() {
                       {actionIcon(a.action_level)} {a.action_level}
                     </td>
                     <td className="py-2 text-right text-xs" style={{ color: sentimentColor(a.sentiment) }}>
-                      {a.sentiment > 0 ? "+" : ""}{a.sentiment.toFixed(2)}
+                      {(a.sentiment ?? 0) > 0 ? "+" : ""}{(a.sentiment ?? 0).toFixed(2)}
                     </td>
                   </tr>
                 ))}

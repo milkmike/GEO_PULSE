@@ -202,46 +202,69 @@ export default function NarrativeWidget({ code, days }: Props) {
           </div>
         </div>
 
-        {/* ② SPECTRUM BAR */}
+        {/* ② SPECTRUM BAR — clean dots + legend below */}
         <div className="px-6 py-5 border-t border-white/[0.04]">
-          <div className="relative h-14 mb-2">
+          {/* Bar with dots only — no inline labels */}
+          <div className="relative h-10 mb-1">
             {/* Background gradient bar */}
-            <div className="absolute top-6 left-0 right-0 h-2 rounded-full bg-gradient-to-r from-red-500/20 via-white/5 to-green-500/20" />
+            <div className="absolute top-4 left-0 right-0 h-2 rounded-full bg-gradient-to-r from-red-500/20 via-white/5 to-green-500/20" />
             {/* Center line */}
-            <div className="absolute top-4 left-1/2 w-px h-6 bg-white/10" />
+            <div className="absolute top-2 left-1/2 w-px h-6 bg-white/10" />
 
-            {/* Tier dots */}
+            {/* Tier dots — tooltip on hover */}
             {sorted.map((tier) => {
               const x = sentimentToX(tier.sentiment);
               const color = TIER_COLORS[tier.tier] || "#888";
+              const isActive = expandedTier === tier.tier;
               return (
                 <div
                   key={tier.tier}
-                  className={`absolute transition-all duration-500 cursor-pointer group/m ${tier.low_data ? "opacity-40" : ""}`}
+                  className={`absolute transition-all duration-500 cursor-pointer group/dot ${tier.low_data ? "opacity-40" : ""}`}
                   style={{ left: `${x}%`, top: 0, transform: "translateX(-50%)" }}
-                  onClick={() => setExpandedTier(expandedTier === tier.tier ? null : tier.tier)}
+                  onClick={() => setExpandedTier(isActive ? null : tier.tier)}
                 >
                   <div
-                    className="w-4 h-4 rounded-full border-2 border-zinc-900 shadow-lg relative top-5 group-hover/m:scale-125 transition-transform"
+                    className={`w-5 h-5 rounded-full border-2 shadow-lg relative top-3 transition-transform ${isActive ? "scale-125 border-white/40" : "border-zinc-900 hover:scale-125"}`}
                     style={{ backgroundColor: color }}
                   />
-                  <div className="absolute top-11 left-1/2 -translate-x-1/2 whitespace-nowrap text-center">
-                    <div className="text-[10px] font-medium" style={{ color }}>
-                      {tier.label.replace(/^[^\s]+\s/, "")}
-                    </div>
-                    <div className="text-[10px] text-white/30">
-                      {tier.sentiment >= 0 ? "+" : ""}{tier.sentiment.toFixed(2)}
-                      {tier.low_data && " ⚠"}
-                    </div>
+                  {/* Hover tooltip */}
+                  <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2.5 py-1.5 rounded-lg bg-zinc-900/95 border border-white/10 backdrop-blur-sm whitespace-nowrap opacity-0 group-hover/dot:opacity-100 pointer-events-none transition-opacity duration-200 z-30 shadow-xl">
+                    <div className="text-[11px] font-medium" style={{ color }}>{tier.label.replace(/^[^\s]+\s/, "")}</div>
+                    <div className="text-[10px] text-white/50">{tier.sentiment >= 0 ? "+" : ""}{tier.sentiment.toFixed(2)} · {tier.article_count} ст.</div>
                   </div>
                 </div>
               );
             })}
           </div>
-          <div className="flex justify-between mt-10 text-[10px] text-white/20">
+          <div className="flex justify-between text-[10px] text-white/20 mb-4">
             <span>← Негативный</span>
             <span>0</span>
             <span>Позитивный →</span>
+          </div>
+
+          {/* Legend grid — all tiers listed cleanly */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-1.5">
+            {sorted.map((tier) => {
+              const color = TIER_COLORS[tier.tier] || "#888";
+              const isActive = expandedTier === tier.tier;
+              return (
+                <button
+                  key={tier.tier}
+                  onClick={() => setExpandedTier(isActive ? null : tier.tier)}
+                  className={`flex items-center gap-2 px-2 py-1 rounded-md text-left transition-all ${
+                    isActive ? "bg-white/[0.06] ring-1 ring-white/10" : "hover:bg-white/[0.03]"
+                  } ${tier.low_data ? "opacity-50" : ""}`}
+                >
+                  <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: color }} />
+                  <span className="text-[11px] text-white/60 truncate">{tier.label.replace(/^[^\s]+\s/, "")}</span>
+                  <span className={`text-[11px] tabular-nums ml-auto shrink-0 ${
+                    tier.sentiment > 0.05 ? "text-green-400/70" : tier.sentiment < -0.05 ? "text-red-400/70" : "text-white/30"
+                  }`}>
+                    {tier.sentiment >= 0 ? "+" : ""}{tier.sentiment.toFixed(2)}
+                  </span>
+                </button>
+              );
+            })}
           </div>
         </div>
 
