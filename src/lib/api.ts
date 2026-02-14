@@ -308,7 +308,16 @@ export async function getRelatedThreads(id: number) {
   return apiFetch<RelatedThreadsResponse>(`/api/v1/threads/${id}/related`);
 }
 
+export interface HeadlineSlide {
+  headline: string;
+  subline: string;
+  country_code?: string;
+  type?: string;
+  emoji?: string;
+}
+
 export interface HeadlineResponse {
+  slides?: HeadlineSlide[];
   headline: string | null;
   subline: string | null;
   country_code?: string;
