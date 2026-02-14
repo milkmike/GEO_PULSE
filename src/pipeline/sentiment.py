@@ -9,6 +9,30 @@ from src.config import OPENROUTER_API_KEY, COUNTRY_NAMES
 from src.pipeline.prompts import PROMPT_VERSION, SENTIMENT_PROMPT, ACTION_LEVEL_PROMPT
 from src.api_tracker import track_api_call, track_duration
 
+# Generic event_keys that are too broad for meaningful clustering
+GENERIC_KEY_PATTERNS = [
+    'сотрудничество', 'отношения', 'двусторонние', 'многовекторная',
+    'мониторинг', 'развитие', 'перспективы', 'обсуждение',
+]
+
+def validate_event_key(event_key: str, title: str, is_relevant: bool) -> str:
+    """Validate and clean event_key. Return empty string if invalid."""
+    if not is_relevant:
+        return ""
+    if not event_key or not event_key.strip():
+        return ""
+    key = event_key.strip().lower()
+    # Too short
+    if len(key) < 8:
+        return ""
+    # Too generic — just a broad topic without specifics
+    words = key.split()
+    if len(words) <= 2:
+        for pattern in GENERIC_KEY_PATTERNS:
+            if pattern in key:
+                return ""
+    return key
+
 logger = logging.getLogger(__name__)
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
@@ -127,7 +151,11 @@ def analyze_sentiment(
             "event_type": event_type,
             "action_level": action_level,
             "reasoning": result.get("reasoning", ""),
-            "event_key": result.get("event_key", ""),
+            "event_key": validate_event_key(
+                result.get("event_key", ""),
+                title,
+                True,  # already checked is_relevant above
+            ),
             "model_used": MODEL,
             "prompt_version": PROMPT_VERSION,
             "raw_response": result,
