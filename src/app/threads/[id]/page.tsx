@@ -18,7 +18,7 @@ function actionIcon(level: number): string {
 
 function tierLabel(tier: string): string {
   const map: Record<string, string> = {
-    mainstream: "🏛 Основной",
+    mainstream: "📰 Основной",
     regional: "📍 Региональный",
     niche: "🔹 Нишевый",
     state: "🏛 Государственный",
