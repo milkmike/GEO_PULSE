@@ -1519,49 +1519,143 @@ def get_topics_divergence(code: str, days: int = Query(default=30, ge=1, le=365)
 
 @app.get("/api/v1/headline")
 def get_headline():
-    """Generate a dynamic headline based on the most anomalous country."""
+    """Generate multiple dynamic headlines for hero carousel."""
     with get_session() as session:
-        row = session.execute(text("""
+        # Current snapshot — all countries
+        rows = session.execute(text("""
             SELECT country_code, temperature, anomaly_score, trend
             FROM temperature
-            WHERE time = (SELECT MAX(time) FROM temperature)
-            ORDER BY ABS(anomaly_score) DESC NULLS LAST, ABS(temperature) DESC
-            LIMIT 1
-        """)).fetchone()
+            WHERE time > (SELECT MAX(time) FROM temperature) - interval '60 seconds'
+            ORDER BY country_code
+        """)).fetchall()
 
-        if not row:
-            return {"headline": None, "subline": None}
+        if not rows:
+            return {"slides": [], "headline": None, "subline": None}
 
-        code = row[0]
-        temp = float(row[1]) if row[1] else 0
-        anomaly = float(row[2]) if row[2] else 0
-        name = COUNTRY_NAMES.get(code, code)
+        # Previous snapshot for delta calculation
+        prev_rows = session.execute(text("""
+            SELECT DISTINCT ON (country_code) country_code, temperature
+            FROM temperature
+            WHERE time < (SELECT MAX(time) FROM temperature)
+            ORDER BY country_code, time DESC
+        """)).fetchall()
+        prev_map = {r[0]: float(r[1]) if r[1] else 0 for r in prev_rows}
 
-        headline_type = "anomaly" if abs(anomaly) > 2 else "temperature"
+        # Top thread per country for richer context
+        thread_rows = session.execute(text("""
+            SELECT DISTINCT ON (t.country_code)
+                   t.country_code, t.title, t.article_count, t.importance_score
+            FROM threads t
+            WHERE t.status = 'active' AND t.country_code IS NOT NULL
+            ORDER BY t.country_code, t.importance_score DESC NULLS LAST
+        """)).fetchall()
+        top_threads = {r[0]: {"title": r[1], "articles": r[2], "importance": float(r[3]) if r[3] else 0} for r in thread_rows}
 
-        if anomaly > 3:
-            headline = f"{name}: аномальный рост напряжённости"
-            subline = f"Температура {temp:+.1f}° при аномалии {anomaly:.1f}σ — статистическое отклонение превышает три стандартных отклонения."
-        elif anomaly < -3:
-            headline = f"{name} в медийном штопоре"
-            subline = f"Показывает критические аномалии с температурой {temp:+.1f}°. Отклонение {abs(anomaly):.1f}σ — рекордный показатель среди стран СНГ."
-        elif temp < -20:
-            headline = f"{name}: глубокая заморозка отношений"
-            subline = f"Температура опустилась до {temp:+.1f}° — одна из самых холодных точек на карте СНГ."
-        elif temp > 20:
-            headline = f"{name}: пик позитивной динамики"
-            subline = f"Температура {temp:+.1f}° — самый тёплый показатель среди отслеживаемых стран."
-        else:
-            headline = f"{name}: {temp:+.1f}° — ключевой сигнал дня"
-            subline = f"Аномалия {anomaly:.1f}σ при температуре {temp:+.1f}°. Требует внимания аналитиков."
+        countries = []
+        for r in rows:
+            code = r[0]
+            temp = float(r[1]) if r[1] else 0
+            anomaly = float(r[2]) if r[2] else 0
+            trend = r[3] or "stable"
+            prev_temp = prev_map.get(code, temp)
+            delta = temp - prev_temp
+            countries.append({
+                "code": code,
+                "name": COUNTRY_NAMES.get(code, code),
+                "temp": temp,
+                "anomaly": anomaly,
+                "trend": trend,
+                "delta": delta,
+                "thread": top_threads.get(code),
+            })
 
+        slides = []
+        used_codes = set()
+
+        def add_slide(type_tag, emoji, c, headline, subline):
+            slides.append({
+                "headline": headline,
+                "subline": subline,
+                "country_code": c["code"],
+                "type": type_tag,
+                "emoji": emoji,
+            })
+            used_codes.add(c["code"])
+
+        # 1. Hottest country
+        hottest = max(countries, key=lambda c: c["temp"])
+        thread_hint = ""
+        if hottest.get("thread"):
+            thread_hint = f" Главная тема: {hottest['thread']['title'][:80]}."
+        add_slide("hot", "🔥", hottest,
+            f"{hottest['name']}: {hottest['temp']:+.1f}° — самая горячая точка",
+            f"Лидирует по позитивной динамике среди всех отслеживаемых стран.{thread_hint}")
+
+        # 2. Coldest country (different from hottest)
+        coldest = min(countries, key=lambda c: c["temp"])
+        if coldest["code"] != hottest["code"]:
+            thread_hint_cold = ""
+            if coldest.get("thread"):
+                thread_hint_cold = f" Главная тема: {coldest['thread']['title'][:80]}."
+            add_slide("cold", "🥶", coldest,
+                f"{coldest['name']}: {coldest['temp']:+.1f}° — глубокая заморозка",
+                f"Самый холодный показатель на карте.{thread_hint_cold}")
+
+        # 3. Biggest anomaly (different country)
+        remaining = [c for c in countries if c["code"] not in used_codes]
+        if remaining:
+            top_anom = max(remaining, key=lambda c: abs(c["anomaly"]))
+            if abs(top_anom["anomaly"]) > 1.0:
+                if top_anom["anomaly"] > 0:
+                    add_slide("anomaly", "⚡", top_anom,
+                        f"{top_anom['name']}: аномальный всплеск {top_anom['anomaly']:+.1f}σ",
+                        f"Статистически значимое отклонение от нормы. Температура {top_anom['temp']:+.1f}°.")
+                else:
+                    add_slide("anomaly", "⚡", top_anom,
+                        f"{top_anom['name']}: аномальное затишье {top_anom['anomaly']:+.1f}σ",
+                        f"Необычно низкая активность для этой страны. Температура {top_anom['temp']:+.1f}°.")
+
+        # 4. Biggest 24h swing (different country)
+        remaining = [c for c in countries if c["code"] not in used_codes]
+        if remaining:
+            swing = max(remaining, key=lambda c: abs(c["delta"]))
+            if abs(swing["delta"]) > 1:
+                direction = "потепление" if swing["delta"] > 0 else "охлаждение"
+                arrow = "📈" if swing["delta"] > 0 else "📉"
+                add_slide("swing", arrow, swing,
+                    f"{swing['name']}: резкое {direction} {swing['delta']:+.1f}°",
+                    f"Заметное изменение за последний час. Текущая температура {swing['temp']:+.1f}°.")
+
+        # 5. Top thread from unused country
+        remaining = [c for c in countries if c["code"] not in used_codes and c.get("thread")]
+        if remaining:
+            top_thread_c = max(remaining, key=lambda c: c["thread"]["importance"])
+            t = top_thread_c["thread"]
+            add_slide("thread", "📌", top_thread_c,
+                t["title"][:120],
+                f"{t['articles']} источников отслеживают эту тему. Температура страны: {top_thread_c['temp']:+.1f}°.")
+
+        # Ensure we have at least 3 slides
+        if len(slides) < 3:
+            remaining = [c for c in countries if c["code"] not in used_codes]
+            for c in sorted(remaining, key=lambda x: abs(x["temp"]), reverse=True):
+                if len(slides) >= 5:
+                    break
+                add_slide("temperature", "🌡️", c,
+                    f"{c['name']}: температура {c['temp']:+.1f}°",
+                    f"Аномалия {c['anomaly']:+.1f}σ, тренд: {c['trend']}.")
+
+        # Backward compat: first slide as flat fields
+        first = slides[0] if slides else {"headline": None, "subline": None, "country_code": None, "type": None}
         return {
-            "headline": headline,
-            "subline": subline,
-            "country_code": code,
-            "type": headline_type,
-            "generated": True
+            "slides": slides,
+            "headline": first.get("headline"),
+            "subline": first.get("subline"),
+            "country_code": first.get("country_code"),
+            "type": first.get("type"),
+            "generated": True,
         }
+
 
 
 @app.get("/api/v1/events/high-impact")
