@@ -87,3 +87,9 @@ CREATE INDEX IF NOT EXISTS idx_briefs_scope ON briefs(scope, created_at DESC);
 -- Topic taxonomy breakdown on analysis (multi-label, prompt v2.0+)
 ALTER TABLE analysis ADD COLUMN IF NOT EXISTS topics TEXT[];
 CREATE INDEX IF NOT EXISTS idx_analysis_topics ON analysis USING gin(topics);
+
+-- Legacy columns that older installs may lack (idempotent)
+ALTER TABLE articles ADD COLUMN IF NOT EXISTS is_backfill BOOLEAN DEFAULT FALSE;
+ALTER TABLE analysis ADD COLUMN IF NOT EXISTS event_key VARCHAR(200);
+ALTER TABLE analysis ADD COLUMN IF NOT EXISTS action_level INTEGER DEFAULT 1;
+ALTER TABLE analysis ADD COLUMN IF NOT EXISTS entities JSONB;
