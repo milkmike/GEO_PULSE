@@ -16,11 +16,12 @@ from src.api.routes.sources import router as sources_router
 from src.api.routes.threads import router as threads_router
 from src.api.routes.vox import router as vox_router
 from src.api.routes.articles import router as articles_router
+from src.api.routes.world import router as world_router
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="CIS Thermometer API", version="1.1.0")
+app = FastAPI(title="GEO PULSE API", version="2.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -34,6 +35,7 @@ app.include_router(sources_router)
 app.include_router(threads_router)
 app.include_router(vox_router)
 app.include_router(articles_router)
+app.include_router(world_router)
 
 
 class TopThreadResponse(BaseModel):
