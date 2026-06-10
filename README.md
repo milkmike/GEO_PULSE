@@ -131,7 +131,9 @@ boost      — события action level ≥ 5 за последние 14 дн
 | `GET /api/v2/countries/{code}/brief` | AI-досье страны (кеш 6ч, `?refresh=true`) |
 | `GET /api/v2/brief` | Мировой брифинг «Россия и мир» |
 | `GET /api/v2/signals?country=&signal_type=&active_only=` | Лента сигналов |
+| `GET /api/v2/entities` · `/entities/{key}/mentions` | Реестр сущностей РФ-орбиты (43) + упоминания по странам |
 | `GET /api/v2/map` | Choropleth-данные для карты мира |
+| `GET /world` | **Встроенный дашборд**: карта мира → клик по стране → досье |
 | `GET /api/v2/health` · `/health/sources` | Вердикт свежести данных, статусы источников |
 | `GET /api/v2/meta` | Реестр: страны, регионы, темы, уровни |
 
@@ -166,6 +168,8 @@ docker compose up -d
 ```
 
 Существующая база: примените миграцию `scripts/migrations/008_world_expansion.sql`.
+
+**Встроенный мировой дашборд:** `http://localhost:8100/world` — интерактивная карта 99 стран, клик по стране открывает досье (индекс, слагаемые, темы, заголовки, сигналы, AI-брифинг).
 
 Первичный прогон мирового контура:
 
