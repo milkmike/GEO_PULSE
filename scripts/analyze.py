@@ -79,6 +79,7 @@ def _analyze_one(row) -> dict | None:
                     "sentiment": result["sentiment"],
                     "sentiment_confidence": result["confidence"],
                     "event_type": result["event_type"],
+                    "topics": result.get("topics") or None,
                     "action_level": result["action_level"],
                     "model_used": result["model_used"],
                     "prompt_version": result["prompt_version"],
