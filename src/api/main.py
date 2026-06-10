@@ -3,10 +3,12 @@ import logging
 import os
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Literal
 
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -36,6 +38,14 @@ app.include_router(threads_router)
 app.include_router(vox_router)
 app.include_router(articles_router)
 app.include_router(world_router)
+
+_STATIC_DIR = Path(__file__).parent / "static"
+
+
+@app.get("/world", include_in_schema=False)
+def world_dashboard():
+    """Built-in world dashboard: map + country dossiers + signals + brief."""
+    return FileResponse(_STATIC_DIR / "world.html", media_type="text/html")
 
 
 class TopThreadResponse(BaseModel):

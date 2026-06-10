@@ -15,6 +15,7 @@ from sqlalchemy import text
 from src.countries import COUNTRIES, REGIONS, country_name_ru
 from src.db import get_session
 from src.engine.health import health_summary, source_health
+from src.entities import CATEGORIES as ENTITY_CATEGORIES, ENTITIES, get_entity
 from src.pipeline.topics import TOPICS
 
 logger = logging.getLogger(__name__)
@@ -382,6 +383,74 @@ def list_signals(days: int = Query(3, ge=1, le=30),
             for r in rows
         ],
         "total": len(rows),
+    }
+
+
+@router.get("/entities")
+def list_entities(category: Optional[str] = None):
+    """Russia-orbit entity registry (actors, blocs, companies, concepts)."""
+    items = list(ENTITIES.values())
+    if category:
+        items = [e for e in items if e["category"] == category]
+    return {"entities": items, "categories": ENTITY_CATEGORIES, "total": len(items)}
+
+
+@router.get("/entities/{key}/mentions")
+def entity_mentions(key: str, days: int = Query(30, ge=1, le=180),
+                    limit: int = Query(15, ge=1, le=50)):
+    """Where and how an entity is mentioned: per-country volume + tone."""
+    entity = get_entity(key)
+    if not entity:
+        raise HTTPException(404, f"Unknown entity: {key}")
+
+    patterns = {f"a{i}": f"%{alias}%" for i, alias in enumerate(entity["aliases"])}
+    like_clause = " OR ".join(f"ar.title ILIKE :{name}" for name in patterns)
+
+    with get_session() as session:
+        by_country = session.execute(
+            text(f"""
+                SELECT s.country_code, COUNT(*) AS n, AVG(a.sentiment) AS avg_sent,
+                       MAX(ar.published_at) AS last_seen
+                FROM articles ar
+                JOIN sources s ON ar.source_id = s.id
+                LEFT JOIN analysis a ON a.article_id = ar.id AND a.is_relevant = TRUE
+                WHERE ar.published_at > NOW() - make_interval(days => :days)
+                  AND ({like_clause})
+                GROUP BY s.country_code ORDER BY n DESC
+            """),
+            {"days": days, **patterns},
+        ).fetchall()
+
+        recent = session.execute(
+            text(f"""
+                SELECT ar.title, ar.url, ar.published_at, s.country_code, a.sentiment
+                FROM articles ar
+                JOIN sources s ON ar.source_id = s.id
+                LEFT JOIN analysis a ON a.article_id = ar.id
+                WHERE ar.published_at > NOW() - make_interval(days => :days)
+                  AND ({like_clause})
+                ORDER BY ar.published_at DESC LIMIT :lim
+            """),
+            {"days": days, "lim": limit, **patterns},
+        ).fetchall()
+
+    return {
+        "entity": entity,
+        "days": days,
+        "by_country": [
+            {"country_code": r.country_code,
+             "country_name": country_name_ru(r.country_code),
+             "mentions": int(r.n),
+             "avg_sentiment": round(float(r.avg_sent), 2) if r.avg_sent is not None else None,
+             "last_seen": r.last_seen.isoformat()}
+            for r in by_country
+        ],
+        "recent": [
+            {"title": r.title, "url": r.url, "country_code": r.country_code,
+             "published_at": r.published_at.isoformat(),
+             "sentiment": float(r.sentiment) if r.sentiment is not None else None}
+            for r in recent
+        ],
     }
 
 
