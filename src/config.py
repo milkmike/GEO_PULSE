@@ -11,8 +11,10 @@ API_URL = os.environ.get("API_URL", "http://localhost:8000")
 # Paths
 BASE_DIR = Path(__file__).parent.parent
 SOURCES_PATH = BASE_DIR / "src" / "collectors" / "sources.yaml"
+WORLD_SOURCES_PATH = BASE_DIR / "src" / "collectors" / "sources_world.yaml"
 
-# Country names
+# Country names — tier-1 deep-coverage set (CIS). For the full world registry
+# (99 countries, regions, memberships) see src/countries.py.
 COUNTRY_NAMES = {
     "KZ": "Казахстан",
     "AM": "Армения",
@@ -44,6 +46,17 @@ EVENT_TYPE_WEIGHTS = {
 
 
 def load_sources() -> dict:
-    """Load sources configuration from YAML."""
+    """Load sources configuration from YAML (CIS + world catalogs merged)."""
     with open(SOURCES_PATH) as f:
-        return yaml.safe_load(f)
+        config = yaml.safe_load(f)
+
+    if WORLD_SOURCES_PATH.exists():
+        with open(WORLD_SOURCES_PATH) as f:
+            world = yaml.safe_load(f) or {}
+        for code, data in (world.get("countries") or {}).items():
+            if code in config["countries"]:
+                config["countries"][code]["sources"].extend(data.get("sources", []))
+            else:
+                config["countries"][code] = data
+
+    return config
