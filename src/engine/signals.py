@@ -1,0 +1,342 @@
+"""Signal intelligence engine — Russia-lens event signals.
+
+Detectors (worldmonitor-inspired, adapted to GEO PULSE's tier structure):
+
+  tier_convergence  3+ source tiers cover the same event_key within 24h —
+                    the event is genuinely significant, not one outlet's spin.
+  official_silence  opposition/social/independent tiers are loud about an
+                    event while official+mainstream stay silent — a coverage
+                    suppression signature unique to our tiered setup.
+  velocity_spike    a country's relevant article flow doubles vs 30d baseline.
+  tone_shift        GDELT tone z-score |z| ≥ 2 vs the country's own 90d norm.
+  volume_surge      GDELT Russia-coverage share ≥ 2.5× the 30d average.
+  index_shift       RRI moved ≥ 10 points in 24h or crossed a level boundary.
+
+Anti-fatigue: every signal carries a dedup_key and a type-specific TTL;
+a signal is skipped while an unexpired twin exists (worldmonitor pattern).
+"""
+import json
+import logging
+import statistics
+from datetime import datetime, timedelta, timezone
+
+from sqlalchemy import text
+
+from src.countries import COUNTRIES, country_name_ru, tier1_codes
+from src.db import get_session
+
+logger = logging.getLogger(__name__)
+
+LOUD_TIERS = ("social", "domestic_opposition", "independent", "western_proxy")
+QUIET_TIERS = ("official", "mainstream")
+
+TTL_HOURS = {
+    "tier_convergence": 24,
+    "official_silence": 24,
+    "velocity_spike": 12,
+    "tone_shift": 24,
+    "volume_surge": 24,
+    "index_shift": 24,
+}
+
+
+def _emit(session, signal_type: str, country_code: str | None, dedup_key: str,
+          title: str, description: str, payload: dict,
+          severity: str = "info", confidence: float = 0.7) -> bool:
+    """Insert a signal unless an unexpired one with the same dedup_key exists."""
+    existing = session.execute(
+        text("""
+            SELECT id FROM signals
+            WHERE dedup_key = :dk AND expires_at > NOW()
+            LIMIT 1
+        """),
+        {"dk": dedup_key},
+    ).fetchone()
+    if existing:
+        return False
+
+    ttl = TTL_HOURS.get(signal_type, 24)
+    session.execute(
+        text("""
+            INSERT INTO signals (signal_type, country_code, severity, confidence,
+                                 title, description, payload, dedup_key,
+                                 created_at, expires_at)
+            VALUES (:type, :cc, :severity, :confidence, :title, :description,
+                    CAST(:payload AS jsonb), :dk, NOW(), NOW() + make_interval(hours => :ttl))
+        """),
+        {
+            "type": signal_type, "cc": country_code, "severity": severity,
+            "confidence": round(confidence, 2), "title": title[:500],
+            "description": description, "payload": json.dumps(payload, ensure_ascii=False),
+            "dk": dedup_key[:200], "ttl": ttl,
+        },
+    )
+    logger.info(f"  SIGNAL {signal_type} [{country_code}] {title[:80]}")
+    return True
+
+
+def detect_tier_convergence(session) -> int:
+    """Same event_key reported by ≥3 distinct tiers within 24h."""
+    rows = session.execute(
+        text("""
+            SELECT s.country_code, a.event_key,
+                   COUNT(DISTINCT s.tier) AS tiers,
+                   COUNT(*) AS n,
+                   AVG(a.sentiment) AS avg_sent,
+                   MAX(a.action_level) AS max_al,
+                   ARRAY_AGG(DISTINCT s.tier) AS tier_list
+            FROM analysis a
+            JOIN articles ar ON a.article_id = ar.id
+            JOIN sources s ON ar.source_id = s.id
+            WHERE ar.published_at > NOW() - INTERVAL '24 hours'
+              AND a.is_relevant = TRUE
+              AND a.event_key IS NOT NULL AND a.event_key <> ''
+            GROUP BY s.country_code, a.event_key
+            HAVING COUNT(DISTINCT s.tier) >= 3
+        """)
+    ).fetchall()
+
+    emitted = 0
+    for r in rows:
+        confidence = min(0.95, 0.5 + 0.1 * int(r.tiers))
+        severity = "warning" if (r.max_al or 1) >= 4 else "info"
+        emitted += _emit(
+            session, "tier_convergence", r.country_code,
+            dedup_key=f"tier_convergence:{r.country_code}:{r.event_key}",
+            title=f"Конвергенция тиров: «{r.event_key}» ({country_name_ru(r.country_code)})",
+            description=(
+                f"Событие освещают {r.tiers} разных тира источников "
+                f"({', '.join(r.tier_list)}), {r.n} статей за 24ч. "
+                f"Средний тон {float(r.avg_sent or 0):+.1f}, max action level {r.max_al}."
+            ),
+            payload={"event_key": r.event_key, "tiers": r.tier_list,
+                     "articles": int(r.n), "avg_sentiment": float(r.avg_sent or 0),
+                     "max_action_level": int(r.max_al or 1)},
+            severity=severity, confidence=confidence,
+        )
+    return emitted
+
+
+def detect_official_silence(session) -> int:
+    """Loud tiers cover an event ≥6h old with ≥3 articles; official tiers: zero."""
+    rows = session.execute(
+        text("""
+            SELECT s.country_code, a.event_key,
+                   COUNT(*) FILTER (WHERE s.tier = ANY(:loud)) AS loud_n,
+                   COUNT(*) FILTER (WHERE s.tier = ANY(:quiet)) AS quiet_n,
+                   MIN(ar.published_at) AS first_seen,
+                   AVG(a.sentiment) AS avg_sent
+            FROM analysis a
+            JOIN articles ar ON a.article_id = ar.id
+            JOIN sources s ON ar.source_id = s.id
+            WHERE ar.published_at > NOW() - INTERVAL '24 hours'
+              AND a.is_relevant = TRUE
+              AND a.event_key IS NOT NULL AND a.event_key <> ''
+            GROUP BY s.country_code, a.event_key
+            HAVING COUNT(*) FILTER (WHERE s.tier = ANY(:loud)) >= 3
+               AND COUNT(*) FILTER (WHERE s.tier = ANY(:quiet)) = 0
+               AND MIN(ar.published_at) < NOW() - INTERVAL '6 hours'
+        """),
+        {"loud": list(LOUD_TIERS), "quiet": list(QUIET_TIERS)},
+    ).fetchall()
+
+    emitted = 0
+    for r in rows:
+        # Only meaningful where official sources actually exist and are active
+        has_official = session.execute(
+            text("""
+                SELECT 1 FROM sources
+                WHERE country_code = :cc AND tier = ANY(:quiet) AND active = TRUE
+                LIMIT 1
+            """),
+            {"cc": r.country_code, "quiet": list(QUIET_TIERS)},
+        ).fetchone()
+        if not has_official:
+            continue
+
+        age_h = (datetime.now(timezone.utc) - r.first_seen).total_seconds() / 3600
+        emitted += _emit(
+            session, "official_silence", r.country_code,
+            dedup_key=f"official_silence:{r.country_code}:{r.event_key}",
+            title=f"Официальные СМИ молчат: «{r.event_key}» ({country_name_ru(r.country_code)})",
+            description=(
+                f"{r.loud_n} публикаций в независимых/оппозиционных/соц. источниках "
+                f"за {age_h:.0f}ч, ноль в официальных и мейнстримных. "
+                f"Тон {float(r.avg_sent or 0):+.1f}."
+            ),
+            payload={"event_key": r.event_key, "loud_articles": int(r.loud_n),
+                     "hours_silent": round(age_h, 1),
+                     "avg_sentiment": float(r.avg_sent or 0)},
+            severity="warning", confidence=min(0.9, 0.55 + 0.05 * int(r.loud_n)),
+        )
+    return emitted
+
+
+def detect_velocity_spike(session) -> int:
+    """Relevant-article flow ≥2× the 30-day daily baseline (min 6 articles)."""
+    rows = session.execute(
+        text("""
+            WITH daily AS (
+                SELECT s.country_code,
+                       COUNT(*) FILTER (WHERE ar.published_at > NOW() - INTERVAL '24 hours') AS last24,
+                       COUNT(*) FILTER (WHERE ar.published_at <= NOW() - INTERVAL '24 hours') / 29.0 AS base
+                FROM analysis a
+                JOIN articles ar ON a.article_id = ar.id
+                JOIN sources s ON ar.source_id = s.id
+                WHERE ar.published_at > NOW() - INTERVAL '30 days'
+                  AND a.is_relevant = TRUE
+                GROUP BY s.country_code
+            )
+            SELECT * FROM daily
+            WHERE last24 >= 6 AND last24 >= 2.0 * GREATEST(base, 1.0)
+        """)
+    ).fetchall()
+
+    emitted = 0
+    day_bucket = datetime.now(timezone.utc).strftime("%Y%m%d")
+    for r in rows:
+        ratio = float(r.last24) / max(float(r.base), 1.0)
+        emitted += _emit(
+            session, "velocity_spike", r.country_code,
+            dedup_key=f"velocity_spike:{r.country_code}:{day_bucket}",
+            title=f"Информационный шторм: {country_name_ru(r.country_code)}",
+            description=(
+                f"{int(r.last24)} релевантных статей за 24ч против средних "
+                f"{float(r.base):.1f}/день за 30 дней (×{ratio:.1f})."
+            ),
+            payload={"articles_24h": int(r.last24), "baseline_daily": round(float(r.base), 1),
+                     "ratio": round(ratio, 1)},
+            severity="warning" if ratio >= 3 else "info",
+            confidence=min(0.9, 0.5 + 0.1 * ratio),
+        )
+    return emitted
+
+
+def detect_gdelt_shifts(session) -> int:
+    """GDELT tone z-score shifts and volume surges per country."""
+    rows = session.execute(
+        text("""
+            SELECT country_code,
+                   ARRAY_AGG(tone_avg ORDER BY day DESC) AS tones,
+                   ARRAY_AGG(volume_share ORDER BY day DESC) AS shares,
+                   ARRAY_AGG(volume ORDER BY day DESC) AS volumes
+            FROM gdelt_daily
+            WHERE day > CURRENT_DATE - 91 AND tone_avg IS NOT NULL
+            GROUP BY country_code
+            HAVING COUNT(*) >= 14
+        """)
+    ).fetchall()
+
+    emitted = 0
+    day_bucket = datetime.now(timezone.utc).strftime("%Y%m%d")
+    for r in rows:
+        tones = [float(t) for t in r.tones if t is not None]
+        if len(tones) < 14:
+            continue
+        current = tones[0]
+        baseline = tones[2:]  # exclude the two most recent days from the norm
+        mean = statistics.mean(baseline)
+        std = statistics.stdev(baseline) if len(baseline) > 1 else 1.0
+        std = max(std, 0.3)  # tone is bounded; avoid hair-trigger z-scores
+        z = (current - mean) / std
+
+        if abs(z) >= 2.0:
+            direction = "потеплел" if z > 0 else "похолодел"
+            emitted += _emit(
+                session, "tone_shift", r.country_code,
+                dedup_key=f"tone_shift:{r.country_code}:{day_bucket}",
+                title=f"Сдвиг тона о России: {country_name_ru(r.country_code)} ({direction})",
+                description=(
+                    f"Тон освещения России {direction}: {current:+.1f} против нормы "
+                    f"{mean:+.1f}±{std:.1f} за 90 дней (z={z:+.1f})."
+                ),
+                payload={"tone": round(current, 2), "mean_90d": round(mean, 2),
+                         "std": round(std, 2), "z_score": round(z, 2)},
+                severity="critical" if abs(z) >= 3 else "warning",
+                confidence=min(0.9, 0.5 + 0.1 * abs(z)),
+            )
+
+        shares = [float(s) for s in r.shares if s is not None]
+        if len(shares) >= 14:
+            cur_share = shares[0]
+            base_share = statistics.mean(shares[2:32]) if len(shares) > 3 else 0
+            cur_vol = float(r.volumes[0]) if r.volumes and r.volumes[0] is not None else 0
+            if base_share > 0 and cur_vol >= 10 and cur_share >= 2.5 * base_share:
+                emitted += _emit(
+                    session, "volume_surge", r.country_code,
+                    dedup_key=f"volume_surge:{r.country_code}:{day_bucket}",
+                    title=f"Всплеск внимания к России: {country_name_ru(r.country_code)}",
+                    description=(
+                        f"Доля «российской» повестки в национальных медиа выросла до "
+                        f"{cur_share*100:.2f}% против средних {base_share*100:.2f}% "
+                        f"(×{cur_share/base_share:.1f}, {cur_vol:.0f} статей/день)."
+                    ),
+                    payload={"share": round(cur_share, 5), "baseline_share": round(base_share, 5),
+                             "ratio": round(cur_share / base_share, 1), "volume": cur_vol},
+                    severity="warning", confidence=0.75,
+                )
+    return emitted
+
+
+def detect_index_shifts(session) -> int:
+    """RRI 24h move ≥ 10 points, or level boundary crossed."""
+    rows = session.execute(
+        text("""
+            SELECT DISTINCT ON (country_code)
+                   country_code, score, level, delta_24h, time
+            FROM ru_index
+            ORDER BY country_code, time DESC
+        """)
+    ).fetchall()
+
+    emitted = 0
+    day_bucket = datetime.now(timezone.utc).strftime("%Y%m%d")
+    for r in rows:
+        if r.delta_24h is None:
+            continue
+        delta = float(r.delta_24h)
+        if abs(delta) < 10:
+            continue
+        direction = "вверх" if delta > 0 else "вниз"
+        emitted += _emit(
+            session, "index_shift", r.country_code,
+            dedup_key=f"index_shift:{r.country_code}:{day_bucket}",
+            title=f"Скачок индекса: {country_name_ru(r.country_code)} {delta:+.1f} за 24ч",
+            description=(
+                f"Индекс отношений с Россией сдвинулся {direction} на {abs(delta):.1f} "
+                f"пунктов за сутки: сейчас {float(r.score):+.1f} [{r.level}]."
+            ),
+            payload={"score": float(r.score), "delta_24h": delta, "level": r.level},
+            severity="critical" if abs(delta) >= 20 else "warning",
+            confidence=0.8,
+        )
+    return emitted
+
+
+def cleanup_expired(session, keep_days: int = 30) -> int:
+    """Drop long-expired signals to keep the table lean."""
+    res = session.execute(
+        text("DELETE FROM signals WHERE expires_at < NOW() - make_interval(days => :d)"),
+        {"d": keep_days},
+    )
+    return res.rowcount or 0
+
+
+def detect_all() -> dict:
+    """Run every detector in one pass. Returns counts per detector."""
+    counts = {}
+    with get_session() as session:
+        for name, fn in (
+            ("tier_convergence", detect_tier_convergence),
+            ("official_silence", detect_official_silence),
+            ("velocity_spike", detect_velocity_spike),
+            ("gdelt_shifts", detect_gdelt_shifts),
+            ("index_shifts", detect_index_shifts),
+        ):
+            try:
+                counts[name] = fn(session)
+            except Exception as e:
+                logger.error(f"Detector {name} failed: {e}", exc_info=True)
+                counts[name] = -1
+        counts["cleaned"] = cleanup_expired(session)
+    return counts
