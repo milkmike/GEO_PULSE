@@ -32,6 +32,7 @@ CREATE TABLE articles (
     is_duplicate BOOLEAN DEFAULT FALSE,
     duplicate_of INTEGER REFERENCES articles(id),
     reprint_count INTEGER DEFAULT 0,
+    is_backfill BOOLEAN DEFAULT FALSE,
     UNIQUE(source_id, external_id)
 );
 
@@ -43,6 +44,9 @@ CREATE TABLE analysis (
     sentiment DECIMAL(3,1),
     sentiment_confidence DECIMAL(3,2),
     event_type VARCHAR(20),
+    event_key VARCHAR(200),
+    action_level INTEGER DEFAULT 1,
+    entities JSONB,
     model_used VARCHAR(50),
     prompt_version VARCHAR(20),
     raw_response JSONB,

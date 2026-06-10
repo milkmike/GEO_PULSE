@@ -112,16 +112,18 @@ def structural_baseline(country: dict, session) -> tuple[float, dict]:
         score += country["baseline_adj"]
         detail["curated_adj"] = country["baseline_adj"]
 
-    # UN voting alignment refinement (graceful if table absent/empty)
+    # UN voting alignment refinement (graceful if table absent/empty);
+    # savepoint keeps the outer transaction usable when the table is missing
     try:
-        row = session.execute(
-            text("""
-                SELECT AVG(agreement_pct) AS pct FROM un_votes
-                WHERE country_code = :cc
-                  AND year >= EXTRACT(YEAR FROM NOW()) - 3
-            """),
-            {"cc": country["code"]},
-        ).fetchone()
+        with session.begin_nested():
+            row = session.execute(
+                text("""
+                    SELECT AVG(agreement_pct) AS pct FROM un_votes
+                    WHERE country_code = :cc
+                      AND year >= EXTRACT(YEAR FROM NOW()) - 3
+                """),
+                {"cc": country["code"]},
+            ).fetchone()
         if row and row.pct is not None:
             # 50% agreement = neutral; 100% = +span, 0% = -span
             un_component = round((float(row.pct) - 50.0) / 50.0 * UN_VOTES_SPAN, 1)
@@ -185,20 +187,21 @@ def media_component(country: dict, session) -> tuple[float | None, dict]:
 def event_boost(code: str, session) -> tuple[float, dict]:
     """Recent high-action events (AL≥5) from the deep pipeline shift the index."""
     try:
-        rows = session.execute(
-            text("""
-                SELECT a.sentiment, a.action_level, COUNT(*) AS n
-                FROM analysis a
-                JOIN articles ar ON a.article_id = ar.id
-                JOIN sources s ON ar.source_id = s.id
-                WHERE s.country_code = :cc
-                  AND a.is_relevant = TRUE
-                  AND a.action_level >= 5
-                  AND ar.published_at > NOW() - make_interval(days => :days)
-                GROUP BY a.sentiment, a.action_level
-            """),
-            {"cc": code, "days": BOOST_WINDOW_DAYS},
-        ).fetchall()
+        with session.begin_nested():
+            rows = session.execute(
+                text("""
+                    SELECT a.sentiment, a.action_level, COUNT(*) AS n
+                    FROM analysis a
+                    JOIN articles ar ON a.article_id = ar.id
+                    JOIN sources s ON ar.source_id = s.id
+                    WHERE s.country_code = :cc
+                      AND a.is_relevant = TRUE
+                      AND a.action_level >= 5
+                      AND ar.published_at > NOW() - make_interval(days => :days)
+                    GROUP BY a.sentiment, a.action_level
+                """),
+                {"cc": code, "days": BOOST_WINDOW_DAYS},
+            ).fetchall()
     except Exception:
         return 0.0, {}
 

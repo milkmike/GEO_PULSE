@@ -323,20 +323,25 @@ def cleanup_expired(session, keep_days: int = 30) -> int:
 
 
 def detect_all() -> dict:
-    """Run every detector in one pass. Returns counts per detector."""
+    """Run every detector in its own session so one failure can't poison
+    the others' transaction. Returns counts per detector."""
     counts = {}
-    with get_session() as session:
-        for name, fn in (
-            ("tier_convergence", detect_tier_convergence),
-            ("official_silence", detect_official_silence),
-            ("velocity_spike", detect_velocity_spike),
-            ("gdelt_shifts", detect_gdelt_shifts),
-            ("index_shifts", detect_index_shifts),
-        ):
-            try:
+    for name, fn in (
+        ("tier_convergence", detect_tier_convergence),
+        ("official_silence", detect_official_silence),
+        ("velocity_spike", detect_velocity_spike),
+        ("gdelt_shifts", detect_gdelt_shifts),
+        ("index_shifts", detect_index_shifts),
+    ):
+        try:
+            with get_session() as session:
                 counts[name] = fn(session)
-            except Exception as e:
-                logger.error(f"Detector {name} failed: {e}", exc_info=True)
-                counts[name] = -1
-        counts["cleaned"] = cleanup_expired(session)
+        except Exception as e:
+            logger.error(f"Detector {name} failed: {e}", exc_info=True)
+            counts[name] = -1
+    try:
+        with get_session() as session:
+            counts["cleaned"] = cleanup_expired(session)
+    except Exception as e:
+        logger.error(f"Signal cleanup failed: {e}")
     return counts
