@@ -54,6 +54,8 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      LLM_MODELS: ${LLM_MODELS:-}
+      OLLAMA_URL: ${OLLAMA_URL:-}
       REDIS_URL: redis://redis:6379/0
     depends_on:
       db:
@@ -96,6 +98,65 @@ services:
       DATABASE_URL: ${DATABASE_URL}
     depends_on:
       db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # === WORLD EXPANSION ===
+  gdelt-collector:
+    build:
+      context: .
+      dockerfile: Dockerfile.temperature
+    command: python scripts/collect_gdelt.py --loop --interval 21600
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  ru-index:
+    build:
+      context: .
+      dockerfile: Dockerfile.temperature
+    command: python scripts/calc_ru_index.py --loop --interval 3600
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  signals:
+    build:
+      context: .
+      dockerfile: Dockerfile.temperature
+    command: python scripts/detect_signals.py --loop --interval 1800
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  briefs:
+    build:
+      context: .
+      dockerfile: Dockerfile.analyzer
+    command: python scripts/generate_briefs.py --loop --interval 7200
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      LLM_MODELS: ${LLM_MODELS:-}
+      OLLAMA_URL: ${OLLAMA_URL:-}
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     restart: unless-stopped
 

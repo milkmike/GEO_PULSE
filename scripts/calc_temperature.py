@@ -3,8 +3,11 @@ import argparse
 import logging
 import time
 
+from sqlalchemy import text
+
 from src.config import COUNTRY_NAMES
-from src.db import wait_for_db
+from src.countries import COUNTRY_NAMES_ALL
+from src.db import get_session, wait_for_db
 from src.engine.index import calculate_temperature, save_temperature
 
 logging.basicConfig(
@@ -14,16 +17,27 @@ logging.basicConfig(
 logger = logging.getLogger("temperature")
 
 
+def countries_with_sources() -> list[str]:
+    """Every country that has active media sources gets a temperature."""
+    with get_session() as session:
+        rows = session.execute(
+            text("SELECT DISTINCT country_code FROM sources WHERE active = TRUE")
+        ).fetchall()
+    codes = {r.country_code for r in rows} | set(COUNTRY_NAMES)
+    return sorted(codes)
+
+
 def calc_all():
-    """Calculate temperature for all countries."""
-    for code in COUNTRY_NAMES:
+    """Calculate temperature for all countries with own media coverage."""
+    for code in countries_with_sources():
+        name = COUNTRY_NAMES_ALL.get(code, code)
         try:
             result = calculate_temperature(code)
             if result:
                 save_temperature(result)
-                logger.info(f"  {code} ({COUNTRY_NAMES[code]}): {result['temperature']}°")
+                logger.info(f"  {code} ({name}): {result['temperature']}°")
             else:
-                logger.info(f"  {code} ({COUNTRY_NAMES[code]}): no data yet")
+                logger.info(f"  {code} ({name}): no data yet")
         except Exception as e:
             logger.error(f"  {code}: error calculating temperature: {e}", exc_info=True)
 
