@@ -31,6 +31,12 @@ countries:
         weight: 1.3
         language: en
         tier: mainstream
+      - name: NPR World
+        type: rss
+        url: https://feeds.npr.org/1004/rss.xml
+        weight: 1.2
+        language: en
+        tier: official
 
   GB:
     name: Великобритания
@@ -50,6 +56,12 @@ countries:
       - name: Sky News World
         type: rss
         url: https://feeds.skynews.com/feeds/rss/world.xml
+        weight: 1.1
+        language: en
+        tier: mainstream
+      - name: The Telegraph
+        type: rss
+        url: https://www.telegraph.co.uk/news/rss.xml
         weight: 1.1
         language: en
         tier: mainstream
@@ -75,6 +87,12 @@ countries:
         weight: 1.3
         language: de
         tier: mainstream
+      - name: FAZ
+        type: rss
+        url: https://www.faz.net/rss/aktuell/
+        weight: 1.2
+        language: de
+        tier: mainstream
 
   FR:
     name: Франция
@@ -97,6 +115,12 @@ countries:
         weight: 1.1
         language: fr
         tier: official
+      - name: Le Figaro
+        type: rss
+        url: https://www.lefigaro.fr/rss/figaro_actualites.xml
+        weight: 1.1
+        language: fr
+        tier: mainstream
 
   IT:
     name: Италия
@@ -105,6 +129,12 @@ countries:
         type: rss
         url: https://www.ansa.it/sito/ansait_rss.xml
         weight: 1.3
+        language: it
+        tier: mainstream
+      - name: Corriere della Sera
+        type: rss
+        url: https://xml2.corriereobjects.it/rss/homepage.xml
+        weight: 1.2
         language: it
         tier: mainstream
 
@@ -145,6 +175,12 @@ countries:
         weight: 1.2
         language: en
         tier: independent
+      - name: РБК-Украина
+        type: rss
+        url: https://www.rbc.ua/static/rss/all.rus.rss.xml
+        weight: 1.1
+        language: ru
+        tier: mainstream
 
   TR:
     name: Турция
@@ -181,6 +217,12 @@ countries:
         type: rss
         url: https://www.cgtn.com/subscribe/rss/section/world.xml
         weight: 1.3
+        language: en
+        tier: official
+      - name: People's Daily EN
+        type: rss
+        url: http://en.people.cn/rss/90777.xml
+        weight: 1.2
         language: en
         tier: official
 
@@ -221,6 +263,12 @@ countries:
         weight: 1.1
         language: en
         tier: official
+      - name: IRNA EN
+        type: rss
+        url: https://en.irna.ir/rss
+        weight: 1.1
+        language: en
+        tier: official
 
   IL:
     name: Израиль
@@ -235,6 +283,12 @@ countries:
         type: rss
         url: https://rss.jpost.com/rss/rssfeedsfrontpage.aspx
         weight: 1.2
+        language: en
+        tier: mainstream
+      - name: Ynet News
+        type: rss
+        url: https://www.ynetnews.com/Integration/StoryRss3082.xml
+        weight: 1.1
         language: en
         tier: mainstream
 
@@ -273,6 +327,12 @@ countries:
         weight: 1.2
         language: pt
         tier: official
+      - name: Folha Mundo
+        type: rss
+        url: https://feeds.folha.uol.com.br/mundo/rss091.xml
+        weight: 1.2
+        language: pt
+        tier: mainstream
 
   RS:
     name: Сербия
@@ -307,5 +367,855 @@ countries:
         type: rss
         url: https://www.aljazeera.com/xml/rss/all.xml
         weight: 1.4
+        language: en
+        tier: official
+      - name: Doha News
+        type: rss
+        url: https://dohanews.co/feed/
+        weight: 1.0
+        language: en
+        tier: independent
+
+  # ═══ Арабский пул ═══
+  SA:
+    name: Саудовская Аравия
+    sources:
+      - name: Arab News
+        type: rss
+        url: https://www.arabnews.com/rss.xml
+        weight: 1.3
+        language: en
+        tier: mainstream
+      - name: Asharq Al-Awsat EN
+        type: rss
+        url: https://english.aawsat.com/feed
+        weight: 1.2
+        language: en
+        tier: mainstream
+
+  AE:
+    name: ОАЭ
+    sources:
+      - name: Gulf News
+        type: rss
+        url: https://gulfnews.com/rss
+        weight: 1.2
+        language: en
+        tier: mainstream
+      - name: The National
+        type: rss
+        url: https://www.thenationalnews.com/rss
+        weight: 1.2
+        language: en
+        tier: mainstream
+
+  EG:
+    name: Египет
+    sources:
+      - name: Egypt Independent
+        type: rss
+        url: https://www.egyptindependent.com/feed/
+        weight: 1.1
+        language: en
+        tier: mainstream
+      - name: Daily News Egypt
+        type: rss
+        url: https://www.dailynewsegypt.com/feed/
+        weight: 1.0
+        language: en
+        tier: independent
+
+  IQ:
+    name: Ирак
+    sources:
+      - name: Shafaq News
+        type: rss
+        url: https://shafaq.com/en/rss
+        weight: 1.1
+        language: en
+        tier: mainstream
+      - name: Rudaw
+        type: rss
+        url: https://www.rudaw.net/rss
+        weight: 1.0
+        language: en
+        tier: independent
+
+  SY:
+    name: Сирия
+    sources:
+      - name: SANA EN
+        type: rss
+        url: https://sana.sy/en/?feed=rss2
+        weight: 1.2
+        language: en
+        tier: official
+      - name: Enab Baladi EN
+        type: rss
+        url: https://english.enabbaladi.net/feed/
+        weight: 1.0
+        language: en
+        tier: independent
+
+  # ═══ Испанский / Латинская Америка ═══
+  ES:
+    name: Испания
+    sources:
+      - name: El País
+        type: rss
+        url: https://feeds.elpais.com/mrss-s/pages/ep/site/elpais.com/portada
+        weight: 1.4
+        language: es
+        tier: mainstream
+      - name: El Mundo
+        type: rss
+        url: https://e00-elmundo.uecdn.es/elmundo/rss/portada.xml
+        weight: 1.2
+        language: es
+        tier: mainstream
+
+  MX:
+    name: Мексика
+    sources:
+      - name: El Universal
+        type: rss
+        url: https://www.eluniversal.com.mx/rss.xml
+        weight: 1.2
+        language: es
+        tier: mainstream
+      - name: Aristegui Noticias
+        type: rss
+        url: https://aristeguinoticias.com/feed/
+        weight: 1.0
+        language: es
+        tier: independent
+
+  AR:
+    name: Аргентина
+    sources:
+      - name: Clarín
+        type: rss
+        url: https://www.clarin.com/rss/lo-ultimo/
+        weight: 1.2
+        language: es
+        tier: mainstream
+      - name: Infobae
+        type: rss
+        url: https://www.infobae.com/feeds/rss/
+        weight: 1.2
+        language: es
+        tier: mainstream
+      - name: Página/12
+        type: rss
+        url: https://www.pagina12.com.ar/rss/portada
+        weight: 1.0
+        language: es
+        tier: independent
+
+  CL:
+    name: Чили
+    sources:
+      - name: La Tercera
+        type: rss
+        url: https://www.latercera.com/arcio/rss/
+        weight: 1.1
+        language: es
+        tier: mainstream
+
+  CO:
+    name: Колумбия
+    sources:
+      - name: El Tiempo
+        type: rss
+        url: https://www.eltiempo.com/rss/mundo.xml
+        weight: 1.1
+        language: es
+        tier: mainstream
+      - name: El Espectador
+        type: rss
+        url: https://www.elespectador.com/arc/outboundfeeds/rss/?outputType=xml
+        weight: 1.0
+        language: es
+        tier: mainstream
+
+  PE:
+    name: Перу
+    sources:
+      - name: El Comercio
+        type: rss
+        url: https://elcomercio.pe/arcio/rss/
+        weight: 1.1
+        language: es
+        tier: mainstream
+      - name: RPP
+        type: rss
+        url: https://rpp.pe/feed
+        weight: 1.0
+        language: es
+        tier: mainstream
+
+  VE:
+    name: Венесуэла
+    sources:
+      - name: Últimas Noticias
+        type: rss
+        url: https://ultimasnoticias.com.ve/feed/
+        weight: 1.1
+        language: es
+        tier: mainstream
+      - name: Efecto Cocuyo
+        type: rss
+        url: https://efectococuyo.com/feed/
+        weight: 1.0
+        language: es
+        tier: domestic_opposition
+
+  CU:
+    name: Куба
+    sources:
+      - name: Granma
+        type: rss
+        url: https://www.granma.cu/feed
+        weight: 1.2
+        language: es
+        tier: official
+      - name: Cubadebate
+        type: rss
+        url: http://www.cubadebate.cu/feed/
+        weight: 1.1
+        language: es
+        tier: official
+      - name: 14ymedio
+        type: rss
+        url: https://www.14ymedio.com/rss
+        weight: 1.0
+        language: es
+        tier: domestic_opposition
+
+  NI:
+    name: Никарагуа
+    sources:
+      - name: Confidencial
+        type: rss
+        url: https://confidencial.digital/feed/
+        weight: 1.0
+        language: es
+        tier: domestic_opposition
+
+  # ═══ Африканский пул ═══
+  ZA:
+    name: ЮАР
+    sources:
+      - name: Daily Maverick
+        type: rss
+        url: https://www.dailymaverick.co.za/dmrss/
+        weight: 1.2
+        language: en
+        tier: independent
+      - name: AllAfrica South Africa
+        type: rss
+        url: https://allafrica.com/tools/headlines/rdf/southafrica/headlines.rdf
+        weight: 1.0
+        language: en
+        tier: mainstream
+
+  NG:
+    name: Нигерия
+    sources:
+      - name: Punch
+        type: rss
+        url: https://punchng.com/feed/
+        weight: 1.1
+        language: en
+        tier: mainstream
+      - name: Premium Times
+        type: rss
+        url: https://www.premiumtimesng.com/feed
+        weight: 1.1
+        language: en
+        tier: independent
+
+  KE:
+    name: Кения
+    sources:
+      - name: The Standard
+        type: rss
+        url: https://www.standardmedia.co.ke/rss/headlines.php
+        weight: 1.0
+        language: en
+        tier: mainstream
+      - name: AllAfrica Kenya
+        type: rss
+        url: https://allafrica.com/tools/headlines/rdf/kenya/headlines.rdf
+        weight: 1.0
+        language: en
+        tier: mainstream
+
+  ET:
+    name: Эфиопия
+    sources:
+      - name: Addis Standard
+        type: rss
+        url: https://addisstandard.com/feed/
+        weight: 1.1
+        language: en
+        tier: independent
+      - name: Fana BC
+        type: rss
+        url: https://www.fanabc.com/english/feed/
+        weight: 1.0
+        language: en
+        tier: official
+
+  SD:
+    name: Судан
+    sources:
+      - name: Sudan Tribune
+        type: rss
+        url: https://sudantribune.com/feed/
+        weight: 1.1
+        language: en
+        tier: independent
+
+  ML:
+    name: Мали
+    sources:
+      - name: Maliweb
+        type: rss
+        url: https://www.maliweb.net/feed
+        weight: 1.0
+        language: fr
+        tier: mainstream
+      - name: AllAfrica Mali
+        type: rss
+        url: https://allafrica.com/tools/headlines/rdf/mali/headlines.rdf
+        weight: 1.0
+        language: fr
+        tier: mainstream
+
+  NE:
+    name: Нигер
+    sources:
+      - name: AllAfrica Niger
+        type: rss
+        url: https://allafrica.com/tools/headlines/rdf/niger/headlines.rdf
+        weight: 1.0
+        language: fr
+        tier: mainstream
+
+  BF:
+    name: Буркина-Фасо
+    sources:
+      - name: LeFaso.net
+        type: rss
+        url: https://lefaso.net/spip.php?page=backend
+        weight: 1.0
+        language: fr
+        tier: mainstream
+      - name: AllAfrica Burkina Faso
+        type: rss
+        url: https://allafrica.com/tools/headlines/rdf/burkinafaso/headlines.rdf
+        weight: 1.0
+        language: fr
+        tier: mainstream
+
+  CF:
+    name: ЦАР
+    sources:
+      - name: AllAfrica CAR
+        type: rss
+        url: https://allafrica.com/tools/headlines/rdf/centralafricanrepublic/headlines.rdf
+        weight: 1.0
+        language: fr
+        tier: mainstream
+
+  DZ:
+    name: Алжир
+    sources:
+      - name: TSA Algérie
+        type: rss
+        url: https://www.tsa-algerie.com/feed/
+        weight: 1.0
+        language: fr
+        tier: independent
+      - name: AllAfrica Algeria
+        type: rss
+        url: https://allafrica.com/tools/headlines/rdf/algeria/headlines.rdf
+        weight: 1.0
+        language: fr
+        tier: mainstream
+
+  MA:
+    name: Марокко
+    sources:
+      - name: Morocco World News
+        type: rss
+        url: https://www.moroccoworldnews.com/feed/
+        weight: 1.1
+        language: en
+        tier: mainstream
+      - name: Hespress EN
+        type: rss
+        url: https://en.hespress.com/feed
+        weight: 1.0
+        language: en
+        tier: mainstream
+
+  TN:
+    name: Тунис
+    sources:
+      - name: AllAfrica Tunisia
+        type: rss
+        url: https://allafrica.com/tools/headlines/rdf/tunisia/headlines.rdf
+        weight: 1.0
+        language: fr
+        tier: mainstream
+
+  LY:
+    name: Ливия
+    sources:
+      - name: AllAfrica Libya
+        type: rss
+        url: https://allafrica.com/tools/headlines/rdf/libya/headlines.rdf
+        weight: 1.0
+        language: en
+        tier: mainstream
+
+  # ═══ Азия (добор) ═══
+  VN:
+    name: Вьетнам
+    sources:
+      - name: VnExpress International
+        type: rss
+        url: https://e.vnexpress.net/rss/news.rss
+        weight: 1.2
+        language: en
+        tier: mainstream
+
+  TH:
+    name: Таиланд
+    sources:
+      - name: Bangkok Post
+        type: rss
+        url: https://www.bangkokpost.com/rss/data/topstories.xml
+        weight: 1.2
+        language: en
+        tier: mainstream
+      - name: Thai PBS World
+        type: rss
+        url: https://www.thaipbsworld.com/feed/
+        weight: 1.0
+        language: en
+        tier: official
+
+  ID:
+    name: Индонезия
+    sources:
+      - name: Antara News EN
+        type: rss
+        url: https://en.antaranews.com/rss/news.xml
+        weight: 1.2
+        language: en
+        tier: official
+      - name: Jakarta Globe
+        type: rss
+        url: https://jakartaglobe.id/feed
+        weight: 1.0
+        language: en
+        tier: mainstream
+
+  MY:
+    name: Малайзия
+    sources:
+      - name: The Star
+        type: rss
+        url: https://www.thestar.com.my/rss/News
+        weight: 1.1
+        language: en
+        tier: mainstream
+      - name: Malay Mail
+        type: rss
+        url: https://www.malaymail.com/feed/rss/malaysia
+        weight: 1.0
+        language: en
+        tier: mainstream
+
+  PH:
+    name: Филиппины
+    sources:
+      - name: Inquirer
+        type: rss
+        url: https://www.inquirer.net/fullfeed/
+        weight: 1.1
+        language: en
+        tier: mainstream
+      - name: Rappler
+        type: rss
+        url: https://www.rappler.com/feed/
+        weight: 1.0
+        language: en
+        tier: independent
+
+  PK:
+    name: Пакистан
+    sources:
+      - name: Dawn
+        type: rss
+        url: https://www.dawn.com/feeds/home
+        weight: 1.2
+        language: en
+        tier: mainstream
+      - name: Express Tribune
+        type: rss
+        url: https://tribune.com.pk/feed/home
+        weight: 1.0
+        language: en
+        tier: mainstream
+
+  BD:
+    name: Бангладеш
+    sources:
+      - name: The Daily Star
+        type: rss
+        url: https://www.thedailystar.net/frontpage/rss.xml
+        weight: 1.1
+        language: en
+        tier: mainstream
+      - name: Dhaka Tribune
+        type: rss
+        url: https://www.dhakatribune.com/feed
+        weight: 1.0
+        language: en
+        tier: mainstream
+
+  LK:
+    name: Шри-Ланка
+    sources:
+      - name: Ada Derana
+        type: rss
+        url: http://www.adaderana.lk/rss.php
+        weight: 1.0
+        language: en
+        tier: mainstream
+
+  MM:
+    name: Мьянма
+    sources:
+      - name: The Irrawaddy
+        type: rss
+        url: https://www.irrawaddy.com/feed
+        weight: 1.1
+        language: en
+        tier: independent
+
+  MN:
+    name: Монголия
+    sources:
+      - name: Montsame EN
+        type: rss
+        url: https://montsame.mn/en/rss
+        weight: 1.1
+        language: en
+        tier: official
+
+  TW:
+    name: Тайвань
+    sources:
+      - name: Taipei Times
+        type: rss
+        url: https://www.taipeitimes.com/xml/index.rss
+        weight: 1.1
+        language: en
+        tier: mainstream
+
+  AF:
+    name: Афганистан
+    sources:
+      - name: Khaama Press
+        type: rss
+        url: https://www.khaama.com/feed/
+        weight: 1.0
+        language: en
+        tier: independent
+
+  # ═══ Европа (добор) ═══
+  NL:
+    name: Нидерланды
+    sources:
+      - name: NOS
+        type: rss
+        url: https://feeds.nos.nl/nosnieuwsalgemeen
+        weight: 1.2
+        language: nl
+        tier: official
+      - name: DutchNews
+        type: rss
+        url: https://www.dutchnews.nl/feed/
+        weight: 1.0
+        language: en
+        tier: independent
+
+  BE:
+    name: Бельгия
+    sources:
+      - name: Brussels Times
+        type: rss
+        url: https://www.brusselstimes.com/feed
+        weight: 1.0
+        language: en
+        tier: mainstream
+
+  AT:
+    name: Австрия
+    sources:
+      - name: ORF
+        type: rss
+        url: https://rss.orf.at/news.xml
+        weight: 1.2
+        language: de
+        tier: official
+      - name: Der Standard
+        type: rss
+        url: https://www.derstandard.at/rss
+        weight: 1.1
+        language: de
+        tier: mainstream
+
+  CH:
+    name: Швейцария
+    sources:
+      - name: SwissInfo EN
+        type: rss
+        url: https://www.swissinfo.ch/eng/rss
+        weight: 1.1
+        language: en
+        tier: official
+
+  SE:
+    name: Швеция
+    sources:
+      - name: SVT
+        type: rss
+        url: https://www.svt.se/nyheter/rss.xml
+        weight: 1.2
+        language: sv
+        tier: official
+
+  "NO":
+    name: Норвегия
+    sources:
+      - name: NRK
+        type: rss
+        url: https://www.nrk.no/nyheter/siste.rss
+        weight: 1.2
+        language: no
+        tier: official
+
+  FI:
+    name: Финляндия
+    sources:
+      - name: Yle News EN
+        type: rss
+        url: https://feeds.yle.fi/uutiset/v1/recent.rss?publisherIds=YLE_NEWS
+        weight: 1.2
+        language: en
+        tier: official
+
+  DK:
+    name: Дания
+    sources:
+      - name: DR
+        type: rss
+        url: https://www.dr.dk/nyheder/service/feeds/allenyheder
+        weight: 1.2
+        language: da
+        tier: official
+
+  GR:
+    name: Греция
+    sources:
+      - name: eKathimerini
+        type: rss
+        url: https://www.ekathimerini.com/feed/
+        weight: 1.1
+        language: en
+        tier: mainstream
+
+  CY:
+    name: Кипр
+    sources:
+      - name: Cyprus Mail
+        type: rss
+        url: https://cyprus-mail.com/feed/
+        weight: 1.0
+        language: en
+        tier: mainstream
+
+  RO:
+    name: Румыния
+    sources:
+      - name: G4Media
+        type: rss
+        url: https://www.g4media.ro/feed
+        weight: 1.0
+        language: ro
+        tier: independent
+      - name: Romania Insider
+        type: rss
+        url: https://www.romania-insider.com/feed
+        weight: 1.0
+        language: en
+        tier: mainstream
+
+  BG:
+    name: Болгария
+    sources:
+      - name: Novinite
+        type: rss
+        url: https://www.novinite.com/services/news_rdf.php
+        weight: 1.0
+        language: en
+        tier: mainstream
+
+  CZ:
+    name: Чехия
+    sources:
+      - name: iROZHLAS
+        type: rss
+        url: https://www.irozhlas.cz/rss/irozhlas
+        weight: 1.1
+        language: cs
+        tier: official
+
+  SK:
+    name: Словакия
+    sources:
+      - name: Slovak Spectator
+        type: rss
+        url: https://spectator.sme.sk/rss
+        weight: 1.0
+        language: en
+        tier: independent
+
+  HR:
+    name: Хорватия
+    sources:
+      - name: Croatia Week
+        type: rss
+        url: https://www.croatiaweek.com/feed/
+        weight: 1.0
+        language: en
+        tier: mainstream
+
+  BA:
+    name: Босния и Герцеговина
+    sources:
+      - name: Sarajevo Times
+        type: rss
+        url: https://sarajevotimes.com/feed/
+        weight: 1.0
+        language: en
+        tier: mainstream
+
+  EE:
+    name: Эстония
+    sources:
+      - name: ERR News
+        type: rss
+        url: https://news.err.ee/rss
+        weight: 1.2
+        language: en
+        tier: official
+
+  LV:
+    name: Латвия
+    sources:
+      - name: LSM EN
+        type: rss
+        url: https://eng.lsm.lv/rss/
+        weight: 1.2
+        language: en
+        tier: official
+
+  LT:
+    name: Литва
+    sources:
+      - name: LRT
+        type: rss
+        url: https://www.lrt.lt/rss
+        weight: 1.2
+        language: lt
+        tier: official
+
+  IE:
+    name: Ирландия
+    sources:
+      - name: RTÉ
+        type: rss
+        url: https://www.rte.ie/feeds/rss/?index=/news/
+        weight: 1.1
+        language: en
+        tier: official
+
+  PT:
+    name: Португалия
+    sources:
+      - name: The Portugal News
+        type: rss
+        url: https://www.theportugalnews.com/rss
+        weight: 1.0
+        language: en
+        tier: mainstream
+
+  IS:
+    name: Исландия
+    sources:
+      - name: Iceland Review
+        type: rss
+        url: https://www.icelandreview.com/feed/
+        weight: 1.0
+        language: en
+        tier: mainstream
+
+  # ═══ Северная Америка и Океания ═══
+  CA:
+    name: Канада
+    sources:
+      - name: CBC World
+        type: rss
+        url: https://www.cbc.ca/webfeed/rss/rss-world
+        weight: 1.3
+        language: en
+        tier: official
+      - name: Globe and Mail
+        type: rss
+        url: https://www.theglobeandmail.com/arc/outboundfeeds/rss/category/world/
+        weight: 1.1
+        language: en
+        tier: mainstream
+
+  AU:
+    name: Австралия
+    sources:
+      - name: ABC News
+        type: rss
+        url: https://www.abc.net.au/news/feed/51120/rss.xml
+        weight: 1.3
+        language: en
+        tier: official
+      - name: SMH World
+        type: rss
+        url: https://www.smh.com.au/rss/world.xml
+        weight: 1.1
+        language: en
+        tier: mainstream
+
+  NZ:
+    name: Новая Зеландия
+    sources:
+      - name: RNZ World
+        type: rss
+        url: https://www.rnz.co.nz/rss/world.xml
+        weight: 1.2
         language: en
         tier: official
