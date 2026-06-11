@@ -487,6 +487,40 @@ def list_signals(days: int = Query(3, ge=1, le=30),
     }
 
 
+@router.get("/topics/{topic}/countries")
+def topic_countries(topic: str, days: int = Query(30, ge=1, le=180)):
+    """Topic lens: which countries discuss this topic, how much and in what tone."""
+    if topic not in TOPICS:
+        raise HTTPException(404, f"Unknown topic: {topic}")
+
+    with get_session() as session:
+        rows = session.execute(
+            text("""
+                SELECT s.country_code, COUNT(*) AS n, AVG(a.sentiment) AS avg_sent
+                FROM analysis a
+                JOIN articles ar ON a.article_id = ar.id
+                JOIN sources s ON ar.source_id = s.id
+                WHERE a.is_relevant = TRUE AND :topic = ANY(a.topics)
+                  AND ar.published_at > NOW() - make_interval(days => :days)
+                GROUP BY s.country_code ORDER BY n DESC
+            """),
+            {"topic": topic, "days": days},
+        ).fetchall()
+
+    return {
+        "topic": topic,
+        "label": TOPICS[topic],
+        "days": days,
+        "countries": [
+            {"country_code": r.country_code,
+             "country_name": country_name_ru(r.country_code),
+             "articles": int(r.n),
+             "avg_sentiment": round(float(r.avg_sent), 2) if r.avg_sent is not None else None}
+            for r in rows
+        ],
+    }
+
+
 @router.get("/entities")
 def list_entities(category: Optional[str] = None):
     """Russia-orbit entity registry (actors, blocs, companies, concepts)."""

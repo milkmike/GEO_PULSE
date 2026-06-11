@@ -4,5 +4,5 @@ RUN apt-get update && apt-get install -y --no-install-recommends gcc libpq-dev &
 COPY requirements-base.txt requirements-temperature.txt ./
 RUN pip install --no-cache-dir -r requirements-temperature.txt
 COPY src/ src/
-COPY scripts/calc_temperature.py scripts/build_threads.py scripts/generate_digests.py scripts/check_integrity.py scripts/collect_gdelt.py scripts/calc_ru_index.py scripts/detect_signals.py scripts/
+COPY scripts/calc_temperature.py scripts/build_threads.py scripts/generate_digests.py scripts/check_integrity.py scripts/collect_gdelt.py scripts/calc_ru_index.py scripts/detect_signals.py scripts/collect_fx.py scripts/
 ENV PYTHONPATH=/app PYTHONUNBUFFERED=1 LANG=C.UTF-8
