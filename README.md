@@ -8,7 +8,7 @@
 ![Sources](https://img.shields.io/badge/Sources-230%2B-orange)
 ![License](https://img.shields.io/badge/License-AGPL--3.0-red)
 
-**🔗 Live:** [Dashboard](http://YOUR_SERVER_IP:3333) · [API](http://YOUR_SERVER_IP:8100)
+**🔗 Self-host:** дашборд `/world` и API поднимаются одной командой — см. [deploy/](deploy/README.md).
 
 ---
 
