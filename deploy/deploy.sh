@@ -22,7 +22,7 @@ APP_DIR="${APP_DIR:-/opt/geopulse}"
 WITH_TELEGRAM="${WITH_TELEGRAM:-0}"
 GDELT_BACKFILL_DAYS="${GDELT_BACKFILL_DAYS:-90}"
 
-CORE_SERVICES="db redis collector analyzer temperature threads integrity api gdelt-collector ru-index signals briefs"
+CORE_SERVICES="db redis collector analyzer temperature threads integrity api gdelt-collector ru-index signals briefs fx-collector web"
 TG_SERVICES="vox-collector vox-analyzer vox-engine tg-collector"
 
 log() { printf '\n\033[1;36m▸ %s\033[0m\n' "$*"; }
@@ -83,12 +83,14 @@ for i in $(seq 1 30); do
   [ "$i" = "30" ] && die "БД не поднялась за 60с — смотрите: docker compose logs db"
 done
 
-# ── 5. Миграция world-контура (идемпотентна) ───────────────────────────────
-log "Применяю миграцию 008_world_expansion…"
-docker compose exec -T db psql -U thermo -d cis_thermometer \
-  < scripts/migrations/008_world_expansion.sql >/dev/null 2>&1 \
-  && echo "  Миграция применена." \
-  || echo "  (миграция уже была применена либо схема создана init.sql — это норм)"
+# ── 5. Миграции world-контура (идемпотентны) ───────────────────────────────
+for mig in 008_world_expansion 009_entities_fx; do
+  log "Применяю миграцию ${mig}…"
+  docker compose exec -T db psql -U thermo -d cis_thermometer \
+    < "scripts/migrations/${mig}.sql" >/dev/null 2>&1 \
+    && echo "  ${mig}: применена." \
+    || echo "  ${mig}: уже применена либо схема создана init.sql (это норм)"
+done
 
 # ── 6. Бэкфилл GDELT (первичное наполнение мирового контура) ────────────────
 if [ "$GDELT_BACKFILL_DAYS" != "0" ]; then
@@ -103,14 +105,21 @@ IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 log "Готово."
 cat <<EOF
 
-  Дашборд мира:   http://${IP:-<server-ip>}:8100/world
-  API v2:         http://${IP:-<server-ip>}:8100/api/v2/countries
-  Статус:         docker compose ps
-  Логи индекса:   docker compose logs -f ru-index
-  Логи сигналов:  docker compose logs -f signals
+  Next.js-дашборд: http://${IP:-<server-ip>}:3334
+  Мини-дашборд:    http://${IP:-<server-ip>}:8100/world
+  API v2:          http://${IP:-<server-ip>}:8100/api/v2/countries
+  Статус:          docker compose ps
+  Логи индекса:    docker compose logs -f ru-index
+  Логи сигналов:   docker compose logs -f signals
 
   Если бэкфилл GDELT не стартовал — запустите вручную:
     docker compose run --rm gdelt-collector python scripts/collect_gdelt.py --days 90
+
+  Бэкфилл валют за год (опционально, ~5 мин):
+    docker compose run --rm fx-collector python scripts/collect_fx.py --backfill-days 365
+
+  Голосования ООН по 98 странам (опционально):
+    docker compose run --rm ru-index python scripts/load_un_votes.py
 
   Первый расчёт RRI пройдёт автоматически в течение часа; чтобы сразу:
     docker compose run --rm ru-index python scripts/calc_ru_index.py
