@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Load UN General Assembly voting agreement data (Russia vs CIS countries).
+"""Load UN General Assembly voting agreement data (Russia vs the world).
 
 Source: Harvard Dataverse - Erik Voeten UN Voting Dataset
-Uses pre-computed agreement scores (AgreementScoresAll_Jun2024.csv)
+Uses pre-computed agreement scores (AgreementScoresAll_Jun2024.csv).
+Covers every UN-member country in the GEO PULSE registry (98 of 99;
+Taiwan is not a UN member). Feeds the structural layer of the RRI.
 """
 import csv
 import os
@@ -11,20 +13,35 @@ import urllib.request
 
 import psycopg2
 
-DB_URL = os.environ.get("DATABASE_URL", "postgresql://thermo:oIa-pEx6jdhrjZK4AZWqUpvrKNT5GYt7@localhost:5432/cis_thermometer")
+DB_URL = os.environ.get("DATABASE_URL", "postgresql://thermo:thermo@localhost:5432/cis_thermometer")
 
-# COW (Correlates of War) country codes -> our ISO2
+# COW (Correlates of War) country codes -> our ISO2 (full registry coverage)
 COW_TO_ISO2 = {
-    705: "KZ",  # Kazakhstan
-    371: "AM",  # Armenia
-    704: "UZ",  # Uzbekistan
-    703: "KG",  # Kyrgyzstan
-    702: "TJ",  # Tajikistan
-    701: "TM",  # Turkmenistan
-    373: "AZ",  # Azerbaijan
-    372: "GE",  # Georgia
-    359: "MD",  # Moldova
-    370: "BY",  # Belarus
+    # Постсоветское пространство
+    705: "KZ", 371: "AM", 704: "UZ", 703: "KG", 702: "TJ",
+    701: "TM", 373: "AZ", 372: "GE", 359: "MD", 370: "BY", 369: "UA",
+    # Европа
+    200: "GB", 205: "IE", 210: "NL", 211: "BE", 220: "FR", 225: "CH",
+    230: "ES", 235: "PT", 255: "DE", 290: "PL", 305: "AT", 310: "HU",
+    316: "CZ", 317: "SK", 325: "IT", 339: "AL", 341: "ME", 343: "MK",
+    344: "HR", 345: "RS", 346: "BA", 349: "SI", 350: "GR", 352: "CY",
+    355: "BG", 360: "RO", 366: "EE", 367: "LV", 368: "LT", 375: "FI",
+    380: "SE", 385: "NO", 390: "DK", 395: "IS",
+    # Америки
+    2: "US", 20: "CA", 40: "CU", 70: "MX", 93: "NI", 100: "CO",
+    101: "VE", 135: "PE", 140: "BR", 145: "BO", 155: "CL", 160: "AR",
+    # Африка
+    432: "ML", 436: "NE", 439: "BF", 475: "NG", 482: "CF", 501: "KE",
+    530: "ET", 560: "ZA", 600: "MA", 615: "DZ", 616: "TN", 620: "LY",
+    625: "SD",
+    # Ближний Восток
+    630: "IR", 640: "TR", 645: "IQ", 651: "EG", 652: "SY", 666: "IL",
+    670: "SA", 694: "QA", 696: "AE",
+    # Азия и Океания
+    700: "AF", 710: "CN", 712: "MN", 731: "KP", 732: "KR", 740: "JP",
+    750: "IN", 770: "PK", 771: "BD", 775: "MM", 780: "LK", 800: "TH",
+    816: "VN", 820: "MY", 830: "SG", 840: "PH", 850: "ID",
+    900: "AU", 920: "NZ",
 }
 RU_COW = 365
 

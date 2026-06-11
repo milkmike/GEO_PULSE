@@ -133,3 +133,17 @@ def match_confidence(text: str, entity: dict) -> float:
         if alias in t:
             return 0.90
     return 0.0
+
+
+def match_entities(title: str, body: str = "") -> list[str]:
+    """Pipeline-time matching: which registry entities does an article mention.
+
+    Lowercased substring match over title + body head; alias lists already
+    carry word-boundary guards where needed (e.g. " rt "). Returns entity keys.
+    """
+    blob = f" {title or ''} {(body or '')[:2500]} ".lower()
+    found = []
+    for key, e in ENTITIES.items():
+        if any(alias in blob for alias in e["aliases"]):
+            found.append(key)
+    return found

@@ -109,6 +109,107 @@ def world_map():
     }
 
 
+@router.get("/map/history")
+def world_map_history(days: int = Query(90, ge=2, le=365)):
+    """Per-day index scores for all countries — feeds the map timelapse."""
+    with get_session() as session:
+        rows = session.execute(
+            text("""
+                SELECT country_code, date_trunc('day', time)::date AS day,
+                       round(AVG(score), 2) AS score
+                FROM ru_index
+                WHERE time > NOW() - make_interval(days => :days)
+                GROUP BY country_code, day
+                ORDER BY day
+            """),
+            {"days": days},
+        ).fetchall()
+
+    frames: dict[str, dict] = {}
+    for r in rows:
+        c = COUNTRIES.get(r.country_code)
+        if not c:
+            continue
+        frame = frames.setdefault(r.day.isoformat(), {"iso3": [], "scores": []})
+        frame["iso3"].append(c["iso3"])
+        frame["scores"].append(float(r.score))
+
+    return {
+        "days": [{"day": day, **frame} for day, frame in sorted(frames.items())],
+        "total_days": len(frames),
+    }
+
+
+@router.get("/countries/{code}/fx")
+def country_fx(code: str, days: int = Query(90, ge=1, le=730)):
+    """Currency series vs RUB for the country (CBR daily rates)."""
+    from src.collectors.fx import COUNTRY_CURRENCY
+
+    code = code.upper()
+    if code not in COUNTRIES:
+        raise HTTPException(404, f"Unknown country: {code}")
+    currency = COUNTRY_CURRENCY.get(code)
+    if not currency:
+        return {"country_code": code, "currency": None, "series": [],
+                "note": "Валюта страны не входит в ежедневный список ЦБ РФ"}
+
+    with get_session() as session:
+        rows = session.execute(
+            text("""
+                SELECT day, rate_to_rub, change_1d_pct FROM fx_rates
+                WHERE currency = :cur AND day > CURRENT_DATE - make_interval(days => :days)
+                ORDER BY day
+            """),
+            {"cur": currency, "days": days},
+        ).fetchall()
+
+    return {
+        "country_code": code,
+        "currency": currency,
+        "series": [
+            {"day": r.day.isoformat(), "rate_to_rub": float(r.rate_to_rub),
+             "change_1d_pct": float(r.change_1d_pct) if r.change_1d_pct is not None else None}
+            for r in rows
+        ],
+    }
+
+
+@router.get("/countries/{code}/entities")
+def country_entities(code: str, days: int = Query(30, ge=1, le=180)):
+    """Top Russia-orbit entities in this country's coverage (pipeline-matched)."""
+    code = code.upper()
+    if code not in COUNTRIES:
+        raise HTTPException(404, f"Unknown country: {code}")
+
+    with get_session() as session:
+        rows = session.execute(
+            text("""
+                SELECT ek AS entity_key, COUNT(*) AS n, AVG(a.sentiment) AS avg_sent
+                FROM analysis a
+                JOIN articles ar ON a.article_id = ar.id
+                JOIN sources s ON ar.source_id = s.id
+                CROSS JOIN LATERAL jsonb_array_elements_text(a.entities) AS ek
+                WHERE s.country_code = :cc AND a.is_relevant = TRUE
+                  AND a.entities IS NOT NULL
+                  AND ar.published_at > NOW() - make_interval(days => :days)
+                GROUP BY ek ORDER BY n DESC LIMIT 25
+            """),
+            {"cc": code, "days": days},
+        ).fetchall()
+
+    out = []
+    for r in rows:
+        e = ENTITIES.get(r.entity_key)
+        out.append({
+            "key": r.entity_key,
+            "name": e["name_ru"] if e else r.entity_key,
+            "category": e["category"] if e else None,
+            "mentions": int(r.n),
+            "avg_sentiment": round(float(r.avg_sent), 2) if r.avg_sent is not None else None,
+        })
+    return {"country_code": code, "days": days, "entities": out}
+
+
 @router.get("/countries/{code}")
 def country_dossier(code: str, days: int = Query(30, ge=1, le=365)):
     """Full dossier: index history, components, structural detail, signals."""
