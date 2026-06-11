@@ -173,6 +173,17 @@ CREATE TABLE briefs (
 
 ALTER TABLE analysis ADD COLUMN topics TEXT[];
 
+CREATE TABLE fx_rates (
+    day DATE NOT NULL,
+    currency CHAR(3) NOT NULL,
+    rate_to_rub DECIMAL(14,6) NOT NULL,
+    change_1d_pct DECIMAL(8,4),
+    fetched_at TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (day, currency)
+);
+CREATE INDEX idx_fx_rates_currency ON fx_rates(currency, day DESC);
+CREATE INDEX idx_analysis_entities ON analysis USING gin(entities jsonb_path_ops);
+
 CREATE INDEX idx_ru_index_country ON ru_index(country_code, time DESC);
 CREATE INDEX idx_gdelt_daily_country ON gdelt_daily(country_code, day DESC);
 CREATE INDEX idx_signals_active ON signals(expires_at DESC, created_at DESC);

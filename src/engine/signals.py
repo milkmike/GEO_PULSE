@@ -37,6 +37,7 @@ TTL_HOURS = {
     "tone_shift": 24,
     "volume_surge": 24,
     "index_shift": 24,
+    "fx_move": 24,
 }
 
 
@@ -313,6 +314,64 @@ def detect_index_shifts(session) -> int:
     return emitted
 
 
+def detect_fx_moves(session) -> int:
+    """Currency moved ≥2% vs RUB in a day — did media signals precede it?
+
+    «Медиа ведут рынки»: if a tone_shift/volume_surge fired for the currency's
+    countries within the prior 72h, the move was "predicted"; otherwise it's a
+    silent move worth attention.
+    """
+    from src.collectors.fx import CURRENCY_COUNTRIES
+
+    rows = session.execute(
+        text("""
+            SELECT DISTINCT ON (currency) currency, day, rate_to_rub, change_1d_pct
+            FROM fx_rates
+            WHERE day > CURRENT_DATE - 3 AND change_1d_pct IS NOT NULL
+            ORDER BY currency, day DESC
+        """)
+    ).fetchall()
+
+    emitted = 0
+    for r in rows:
+        change = float(r.change_1d_pct)
+        if abs(change) < 2.0:
+            continue
+        countries = CURRENCY_COUNTRIES.get(r.currency, [])
+        media = session.execute(
+            text("""
+                SELECT COUNT(*) AS n FROM signals
+                WHERE signal_type IN ('tone_shift', 'volume_surge', 'velocity_spike')
+                  AND country_code = ANY(:codes)
+                  AND created_at > NOW() - INTERVAL '72 hours'
+            """),
+            {"codes": countries or ["--"]},
+        ).fetchone()
+        predicted = bool(media and media.n)
+
+        direction = "укрепилась к рублю" if change > 0 else "ослабла к рублю"
+        names = ", ".join(country_name_ru(c) for c in countries[:4]) or r.currency
+        emitted += _emit(
+            session, "fx_move", countries[0] if countries else None,
+            dedup_key=f"fx_move:{r.currency}:{r.day}",
+            title=(f"Валютный сдвиг {r.currency} {change:+.1f}% — "
+                   + ("медиа предупреждали" if predicted else "тихий сдвиг")),
+            description=(
+                f"{r.currency} ({names}) {direction} на {abs(change):.1f}% за день, "
+                f"курс {float(r.rate_to_rub):.4f} ₽. "
+                + ("Медиа-сигналы по стране были в предыдущие 72ч — медиа вели рынок."
+                   if predicted else
+                   "Медиа-сигналов по стране не было — сдвиг без информационного следа.")
+            ),
+            payload={"currency": r.currency, "change_1d_pct": change,
+                     "rate_to_rub": float(r.rate_to_rub), "countries": countries,
+                     "media_preceded": predicted},
+            severity="warning" if abs(change) >= 4 else "info",
+            confidence=0.8 if predicted else 0.65,
+        )
+    return emitted
+
+
 def cleanup_expired(session, keep_days: int = 30) -> int:
     """Drop long-expired signals to keep the table lean."""
     res = session.execute(
@@ -332,6 +391,7 @@ def detect_all() -> dict:
         ("velocity_spike", detect_velocity_spike),
         ("gdelt_shifts", detect_gdelt_shifts),
         ("index_shifts", detect_index_shifts),
+        ("fx_moves", detect_fx_moves),
     ):
         try:
             with get_session() as session:

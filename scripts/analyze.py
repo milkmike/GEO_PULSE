@@ -10,6 +10,7 @@ from sqlalchemy import text
 from src.config import OPENROUTER_API_KEY
 from src.db import get_session, wait_for_db, Analysis
 from src.embeddings import generate_embeddings_batch, prepare_embedding_text
+from src.entities import match_entities
 from src.pipeline.filter import is_relevant
 from src.pipeline.sentiment import analyze_sentiment
 
@@ -80,6 +81,7 @@ def _analyze_one(row) -> dict | None:
                     "sentiment_confidence": result["confidence"],
                     "event_type": result["event_type"],
                     "topics": result.get("topics") or None,
+                    "entities": match_entities(title, body) or None,
                     "action_level": result["action_level"],
                     "model_used": result["model_used"],
                     "prompt_version": result["prompt_version"],
