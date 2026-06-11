@@ -17,7 +17,7 @@
 #   GDELT_BACKFILL_DAYS  default: 90 (set 0 to skip the initial backfill)
 set -euo pipefail
 
-BRANCH="${BRANCH:-claude/cool-allen-flyikw}"
+BRANCH="${BRANCH:-main}"
 APP_DIR="${APP_DIR:-/opt/geopulse}"
 WITH_TELEGRAM="${WITH_TELEGRAM:-0}"
 GDELT_BACKFILL_DAYS="${GDELT_BACKFILL_DAYS:-90}"
