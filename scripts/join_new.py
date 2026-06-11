@@ -1,3 +1,4 @@
+import os
 #!/usr/bin/env python3
 import asyncio, time, os, sys
 sys.path.insert(0, '/opt/cis-thermometer')
@@ -19,8 +20,8 @@ async def main():
 
     client = TelegramClient(
         '/opt/cis-thermometer/sessions/geopulse_vox',
-        REDACTED_TG_ID,
-        'REDACTED_TG_HASH'
+        int(os.environ.get('TELEGRAM_API_ID', '0')),
+        os.environ.get('TELEGRAM_API_HASH', '')
     )
     await client.start()
 

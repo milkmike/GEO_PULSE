@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 DB_PARAMS = {
     "host": "db", "port": 5432,
     "dbname": "cis_thermometer", "user": "thermo",
-    "password": "REDACTED_DB_PASSWORD",
+    "password": "thermo",
 }
 
 API_KEY = os.environ.get("OPENROUTER_API_KEY", "")

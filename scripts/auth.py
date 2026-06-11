@@ -1,11 +1,12 @@
+import os
 import asyncio
 from telethon import TelegramClient
 
 async def main():
     client = TelegramClient(
         'sessions/geopulse_vox',
-        REDACTED_TG_ID,
-        'REDACTED_TG_HASH'
+        int(os.environ.get('TELEGRAM_API_ID', '0')),
+        os.environ.get('TELEGRAM_API_HASH', '')
     )
     await client.start()
     me = await client.get_me()

@@ -11,7 +11,7 @@ import re
 
 import psycopg2
 
-DB_URL = os.environ.get("DATABASE_URL", "postgresql://thermo:REDACTED_DB_PASSWORD@localhost:5432/cis_thermometer")
+DB_URL = os.environ.get("DATABASE_URL", "postgresql://thermo:thermo@localhost:5432/cis_thermometer")
 
 # Trade data: Russia exports to / imports from each country (millions USD)
 # Sources: Russian Federal Customs Service, UN Comtrade, trademap.org

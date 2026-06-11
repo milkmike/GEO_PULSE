@@ -1,3 +1,4 @@
+import os
 import asyncio
 from telethon import TelegramClient
 from telethon.tl.functions.channels import JoinChannelRequest
@@ -28,7 +29,7 @@ CHANNELS = [
 ]
 
 async def main():
-    client = TelegramClient('sessions/geopulse_vox', REDACTED_TG_ID, 'REDACTED_TG_HASH')
+    client = TelegramClient('sessions/geopulse_vox', int(os.environ.get('TELEGRAM_API_ID', '0')), os.environ.get('TELEGRAM_API_HASH', ''))
     await client.start()
     me = await client.get_me()
     print('Logged in as: ' + (me.first_name or '') + ' id=' + str(me.id))

@@ -10,7 +10,7 @@ import psycopg2
 DB_PARAMS = {
     "host": "db", "port": 5432,
     "dbname": "cis_thermometer", "user": "thermo",
-    "password": "REDACTED_DB_PASSWORD",
+    "password": "thermo",
 }
 
 # === AZ: Comtrade data unreliable 2015-2024, replace with ФТС data ===

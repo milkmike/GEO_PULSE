@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 DB_URL = os.environ.get(
     "DATABASE_URL",
-    "postgresql://thermo:REDACTED_DB_PASSWORD@localhost:5432/cis_thermometer",
+    "postgresql://thermo:thermo@localhost:5432/cis_thermometer",
 )
 
 # Russia ISO3 numeric code for Comtrade

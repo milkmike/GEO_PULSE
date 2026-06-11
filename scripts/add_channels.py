@@ -107,8 +107,8 @@ async def subscribe_channels():
         return
     
     session_path = "/opt/cis-thermometer/sessions/geopulse_vox"
-    api_id = int(os.environ.get("TELEGRAM_API_ID", "REDACTED_TG_ID"))
-    api_hash = os.environ.get("TELEGRAM_API_HASH", "REDACTED_TG_HASH")
+    api_id = int(os.environ.get("TELEGRAM_API_ID", "0"))
+    api_hash = os.environ.get("TELEGRAM_API_HASH", "")
     
     client = TelegramClient(session_path, api_id, api_hash)
     await client.start()

@@ -6,7 +6,7 @@ import psycopg2
 DB_PARAMS = {
     "host": "db", "port": 5432,
     "dbname": "cis_thermometer", "user": "thermo",
-    "password": "REDACTED_DB_PASSWORD",
+    "password": "thermo",
 }
 
 # Format: (country_code, name, url, tier, language)
