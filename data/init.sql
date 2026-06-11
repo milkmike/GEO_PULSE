@@ -32,6 +32,7 @@ CREATE TABLE articles (
     is_duplicate BOOLEAN DEFAULT FALSE,
     duplicate_of INTEGER REFERENCES articles(id),
     reprint_count INTEGER DEFAULT 0,
+    is_backfill BOOLEAN DEFAULT FALSE,
     UNIQUE(source_id, external_id)
 );
 
@@ -43,6 +44,9 @@ CREATE TABLE analysis (
     sentiment DECIMAL(3,1),
     sentiment_confidence DECIMAL(3,2),
     event_type VARCHAR(20),
+    event_key VARCHAR(200),
+    action_level INTEGER DEFAULT 1,
+    entities JSONB,
     model_used VARCHAR(50),
     prompt_version VARCHAR(20),
     raw_response JSONB,
@@ -92,6 +96,101 @@ CREATE TABLE alerts (
     created_at TIMESTAMPTZ DEFAULT NOW(),
     acknowledged BOOLEAN DEFAULT FALSE
 );
+
+-- === World expansion (see scripts/migrations/008_world_expansion.sql) ===
+
+CREATE TABLE countries (
+    code CHAR(2) PRIMARY KEY,
+    name_ru VARCHAR(100) NOT NULL,
+    name_en VARCHAR(100) NOT NULL,
+    iso3 CHAR(3) NOT NULL,
+    fips CHAR(2),
+    flag VARCHAR(8),
+    region VARCHAR(30) NOT NULL,
+    tier SMALLINT NOT NULL DEFAULT 2,
+    memberships TEXT[] DEFAULT '{}',
+    unfriendly BOOLEAN DEFAULT FALSE,
+    sanctions_on_russia BOOLEAN DEFAULT FALSE,
+    war_with_russia BOOLEAN DEFAULT FALSE,
+    baseline_adj SMALLINT DEFAULT 0,
+    baseline_note TEXT,
+    active BOOLEAN DEFAULT TRUE,
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE ru_index (
+    time TIMESTAMPTZ NOT NULL,
+    country_code CHAR(2) NOT NULL,
+    score DECIMAL(6,2) NOT NULL,
+    structural DECIMAL(6,2),
+    media DECIMAL(6,2),
+    boost DECIMAL(6,2),
+    level VARCHAR(12),
+    delta_24h DECIMAL(6,2),
+    delta_7d DECIMAL(6,2),
+    article_count INTEGER,
+    gdelt_volume DECIMAL(12,2),
+    gdelt_tone DECIMAL(6,2),
+    version VARCHAR(8) DEFAULT 'v1',
+    details JSONB,
+    PRIMARY KEY (time, country_code)
+);
+
+CREATE TABLE gdelt_daily (
+    day DATE NOT NULL,
+    country_code CHAR(2) NOT NULL,
+    volume DECIMAL(12,2),
+    volume_share DECIMAL(10,6),
+    tone_avg DECIMAL(6,2),
+    article_samples JSONB,
+    fetched_at TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (day, country_code)
+);
+
+CREATE TABLE signals (
+    id SERIAL PRIMARY KEY,
+    signal_type VARCHAR(30) NOT NULL,
+    country_code CHAR(2),
+    severity VARCHAR(10) DEFAULT 'info',
+    confidence DECIMAL(3,2) DEFAULT 0.70,
+    title VARCHAR(500),
+    description TEXT,
+    payload JSONB,
+    dedup_key VARCHAR(200) NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    expires_at TIMESTAMPTZ
+);
+
+CREATE TABLE briefs (
+    id SERIAL PRIMARY KEY,
+    scope VARCHAR(10) NOT NULL DEFAULT 'world',
+    content TEXT NOT NULL,
+    model VARCHAR(80),
+    source_hash VARCHAR(64),
+    meta JSONB,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+ALTER TABLE analysis ADD COLUMN topics TEXT[];
+
+CREATE TABLE fx_rates (
+    day DATE NOT NULL,
+    currency CHAR(3) NOT NULL,
+    rate_to_rub DECIMAL(14,6) NOT NULL,
+    change_1d_pct DECIMAL(8,4),
+    fetched_at TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (day, currency)
+);
+CREATE INDEX idx_fx_rates_currency ON fx_rates(currency, day DESC);
+CREATE INDEX idx_analysis_entities ON analysis USING gin(entities jsonb_path_ops);
+
+CREATE INDEX idx_ru_index_country ON ru_index(country_code, time DESC);
+CREATE INDEX idx_gdelt_daily_country ON gdelt_daily(country_code, day DESC);
+CREATE INDEX idx_signals_active ON signals(expires_at DESC, created_at DESC);
+CREATE INDEX idx_signals_country ON signals(country_code, created_at DESC);
+CREATE INDEX idx_signals_dedup ON signals(dedup_key, created_at DESC);
+CREATE INDEX idx_briefs_scope ON briefs(scope, created_at DESC);
+CREATE INDEX idx_analysis_topics ON analysis USING gin(topics);
 
 CREATE INDEX idx_articles_source_published ON articles(source_id, published_at DESC);
 CREATE INDEX idx_articles_published ON articles(published_at DESC);

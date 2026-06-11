@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GEO PULSE — Мир ↔ Россия</title>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
+<style>
+  :root {
+    --bg: #0b0f14; --panel: #11161d; --panel2: #161d26; --border: #1f2937;
+    --text: #d1d5db; --dim: #6b7280; --accent: #38bdf8;
+    --ally: #10b981; --partner: #34d399; --neutral: #9ca3af;
+    --cooling: #fbbf24; --tension: #f97316; --hostile: #ef4444;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body { background: var(--bg); color: var(--text); font: 14px/1.45 -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { display: flex; align-items: center; gap: 14px; padding: 10px 18px; border-bottom: 1px solid var(--border); }
+  header h1 { font-size: 16px; letter-spacing: .06em; }
+  header h1 span { color: var(--accent); }
+  .badge { font-size: 11px; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--border); color: var(--dim); }
+  .badge.HEALTHY { color: var(--ally); border-color: var(--ally); }
+  .badge.WARNING { color: var(--cooling); border-color: var(--cooling); }
+  .badge.DEGRADED, .badge.UNHEALTHY { color: var(--hostile); border-color: var(--hostile); }
+  #updated { margin-left: auto; color: var(--dim); font-size: 12px; }
+  main { display: grid; grid-template-columns: 1fr 390px; grid-template-rows: minmax(420px, 56vh) auto; gap: 10px; padding: 10px 14px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+  .card h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .1em; color: var(--dim); padding: 10px 14px 6px; }
+  #map { width: 100%; height: 100%; }
+  #side { display: flex; flex-direction: column; min-height: 0; }
+  #side .scroll { overflow-y: auto; flex: 1; padding: 0 8px 10px; }
+  .row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 7px; cursor: pointer; }
+  .row:hover { background: var(--panel2); }
+  .row .name { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .score { font-variant-numeric: tabular-nums; font-weight: 600; }
+  .delta { font-size: 11px; color: var(--dim); width: 48px; text-align: right; font-variant-numeric: tabular-nums; }
+  .lvl { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .lvl.ally { background: var(--ally); } .lvl.partner { background: var(--partner); }
+  .lvl.neutral { background: var(--neutral); } .lvl.cooling { background: var(--cooling); }
+  .lvl.tension { background: var(--tension); } .lvl.hostile { background: var(--hostile); }
+  #bottom { grid-column: 1 / -1; display: grid; grid-template-columns: 1.2fr 1fr; gap: 10px; }
+  .feed { max-height: 320px; overflow-y: auto; padding: 0 14px 12px; }
+  .sig { padding: 8px 10px; border-left: 3px solid var(--border); margin: 6px 0; background: var(--panel2); border-radius: 0 7px 7px 0; }
+  .sig.warning { border-left-color: var(--cooling); } .sig.critical { border-left-color: var(--hostile); }
+  .sig .t { font-weight: 600; font-size: 13px; }
+  .sig .d { color: var(--dim); font-size: 12px; margin-top: 2px; }
+  .sig .m { color: var(--dim); font-size: 11px; margin-top: 3px; }
+  #brief { padding: 0 16px 14px; max-height: 320px; overflow-y: auto; font-size: 13px; }
+  #brief h2x, #brief :is(h1,h2,h3) { font-size: 13px; color: var(--accent); margin: 10px 0 4px; }
+  #brief ul { padding-left: 18px; } #brief li { margin: 3px 0; }
+  /* dossier overlay */
+  #dossier { position: fixed; inset: 0; background: rgba(4,8,12,.72); display: none; z-index: 50; }
+  #dossier.open { display: flex; justify-content: flex-end; }
+  #dpanel { width: min(560px, 96vw); height: 100%; background: var(--panel); border-left: 1px solid var(--border); overflow-y: auto; padding: 18px 20px 30px; }
+  #dpanel .close { float: right; cursor: pointer; color: var(--dim); font-size: 22px; line-height: 1; }
+  #dpanel h2 { font-size: 20px; padding: 0; text-transform: none; letter-spacing: 0; color: var(--text); }
+  #dpanel .sub { color: var(--dim); font-size: 12px; margin: 2px 0 12px; }
+  .bigscore { font-size: 42px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .pill { display: inline-block; font-size: 11px; padding: 2px 10px; border-radius: 999px; margin-left: 10px; vertical-align: middle; border: 1px solid; }
+  .comps { display: flex; gap: 18px; margin: 10px 0 6px; font-size: 12px; color: var(--dim); }
+  .comps b { color: var(--text); font-size: 15px; display: block; }
+  #dhist { height: 170px; }
+  .sect { margin-top: 16px; }
+  .sect h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .1em; color: var(--dim); margin-bottom: 6px; }
+  .topic { display: flex; justify-content: space-between; padding: 4px 0; border-bottom: 1px dashed var(--border); font-size: 13px; }
+  .hl { padding: 6px 0; border-bottom: 1px dashed var(--border); font-size: 13px; }
+  .hl a { color: var(--text); text-decoration: none; } .hl a:hover { color: var(--accent); }
+  .hl .meta { color: var(--dim); font-size: 11px; }
+  .mono { font-variant-numeric: tabular-nums; }
+  .pos { color: var(--ally); } .neg { color: var(--hostile); }
+  .briefbox { background: var(--panel2); border-radius: 8px; padding: 10px 12px; font-size: 13px; }
+  .dimnote { color: var(--dim); font-size: 12px; padding: 8px 14px; }
+  @media (max-width: 980px) { main { grid-template-columns: 1fr; } #bottom { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>🌍 GEO PULSE <span>МИР ↔ РОССИЯ</span></h1>
+  <span class="badge" id="health">…</span>
+  <span id="updated"></span>
+</header>
+
+<main>
+  <div class="card"><div id="map"></div></div>
+
+  <div class="card" id="side">
+    <h2>Страны по индексу отношений</h2>
+    <div class="scroll" id="countries"></div>
+  </div>
+
+  <div id="bottom">
+    <div class="card">
+      <h2>Сигналы медиаполя</h2>
+      <div class="feed" id="signals"><div class="dimnote">Загрузка…</div></div>
+    </div>
+    <div class="card">
+      <h2>Брифинг «Россия и мир»</h2>
+      <div id="brief"><div class="dimnote">Загрузка…</div></div>
+    </div>
+  </div>
+</main>
+
+<div id="dossier" onclick="if(event.target===this)closeDossier()">
+  <div id="dpanel"></div>
+</div>
+
+<script>
+const LEVEL_RU = { ally:'союзник', partner:'партнёр', neutral:'нейтралитет',
+                   cooling:'охлаждение', tension:'напряжение', hostile:'враждебность' };
+const LEVEL_COLOR = { ally:'#10b981', partner:'#34d399', neutral:'#9ca3af',
+                      cooling:'#fbbf24', tension:'#f97316', hostile:'#ef4444' };
+const SIG_RU = { tier_convergence:'конвергенция тиров', official_silence:'официальные молчат',
+                 velocity_spike:'информационный шторм', tone_shift:'сдвиг тона',
+                 volume_surge:'всплеск внимания', index_shift:'скачок индекса' };
+const fmt = v => (v == null ? '—' : (v > 0 ? '+' : '') + (+v).toFixed(1));
+const esc = s => (s || '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const api = p => fetch(p).then(r => r.ok ? r.json() : Promise.reject(r.status));
+
+let BY_ISO3 = {};
+
+async function loadMap() {
+  const { map } = await api('/api/v2/map');
+  map.forEach(m => BY_ISO3[m.iso3] = m);
+  const trace = {
+    type: 'choropleth',
+    locations: map.map(m => m.iso3),
+    z: map.map(m => m.score),
+    zmin: -100, zmax: 100,
+    text: map.map(m => `${m.name}<br>индекс ${fmt(m.score)} · ${LEVEL_RU[m.level] || m.level}` +
+                       (m.delta_24h != null ? `<br>за 24ч: ${fmt(m.delta_24h)}` : '')),
+    hovertemplate: '%{text}<extra></extra>',
+    colorscale: [
+      [0, '#7f1d1d'], [0.15, '#ef4444'], [0.30, '#f97316'],
+      [0.425, '#4b5563'], [0.5, '#6b7280'], [0.575, '#4b5563'],
+      [0.70, '#34d399'], [0.85, '#10b981'], [1, '#047857']
+    ],
+    marker: { line: { color: '#0b0f14', width: 0.5 } },
+    colorbar: { title: { text: 'RRI', font: { color: '#9ca3af' } }, thickness: 10,
+                tickfont: { color: '#9ca3af' }, outlinewidth: 0, len: 0.8 },
+  };
+  const layout = {
+    geo: { projection: { type: 'natural earth' }, bgcolor: 'rgba(0,0,0,0)',
+           showframe: false, showcoastlines: false, showcountries: true,
+           countrycolor: '#1f2937', landcolor: '#161d26', oceancolor: '#0b0f14',
+           showocean: true, showlakes: false },
+    paper_bgcolor: 'rgba(0,0,0,0)', margin: { t: 6, b: 6, l: 6, r: 6 },
+    dragmode: 'pan',
+  };
+  Plotly.newPlot('map', [trace], layout, { displayModeBar: false, responsive: true });
+  document.getElementById('map').on('plotly_click', ev => {
+    const iso3 = ev.points?.[0]?.location;
+    if (iso3 && BY_ISO3[iso3]) openDossier(BY_ISO3[iso3].code);
+  });
+}
+
+async function loadCountries() {
+  const { countries } = await api('/api/v2/countries');
+  const el = document.getElementById('countries');
+  el.innerHTML = countries.map(c => `
+    <div class="row" onclick="openDossier('${c.code}')">
+      <span class="lvl ${c.level}"></span>
+      <span>${c.flag || ''}</span>
+      <span class="name">${esc(c.name)}</span>
+      <span class="delta">${c.delta_24h != null ? fmt(c.delta_24h) : ''}</span>
+      <span class="score" style="color:${LEVEL_COLOR[c.level] || 'var(--text)'}">${fmt(c.score)}</span>
+    </div>`).join('');
+  const ts = countries[0]?.updated_at;
+  if (ts) document.getElementById('updated').textContent =
+    'обновлено ' + new Date(ts).toLocaleString('ru-RU', { hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short' });
+}
+
+async function loadSignals() {
+  try {
+    const { signals } = await api('/api/v2/signals?days=3&limit=40');
+    const el = document.getElementById('signals');
+    if (!signals.length) { el.innerHTML = '<div class="dimnote">Активных сигналов нет</div>'; return; }
+    el.innerHTML = signals.map(s => `
+      <div class="sig ${s.severity}">
+        <div class="t">${esc(s.title)}</div>
+        <div class="d">${esc(s.description || '')}</div>
+        <div class="m">${SIG_RU[s.type] || s.type} · ${new Date(s.created_at).toLocaleString('ru-RU')}</div>
+      </div>`).join('');
+  } catch { document.getElementById('signals').innerHTML = '<div class="dimnote">Сигналы недоступны</div>'; }
+}
+
+function md(text) {  // tiny markdown: headers, bold, lists
+  return esc(text)
+    .replace(/^### (.*)$/gm, '<h3>$1</h3>').replace(/^## (.*)$/gm, '<h2x>$1</h2x>')
+    .replace(/^# (.*)$/gm, '<h2x>$1</h2x>')
+    .replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')
+    .replace(/^[-*] (.*)$/gm, '<li>$1</li>')
+    .replace(/(<li>[\s\S]*?<\/li>)(?!\s*<li>)/g, '<ul>$1</ul>')
+    .replace(/\n{2,}/g, '<br>');
+}
+
+async function loadBrief() {
+  try {
+    const b = await api('/api/v2/brief');
+    document.getElementById('brief').innerHTML =
+      md(b.content) + `<div class="dimnote">${esc(b.model || '')} · ${new Date(b.created_at).toLocaleString('ru-RU')}</div>`;
+  } catch { document.getElementById('brief').innerHTML = '<div class="dimnote">Брифинг ещё не сгенерирован</div>'; }
+}
+
+async function loadHealth() {
+  try {
+    const h = await api('/api/v2/health');
+    const el = document.getElementById('health');
+    el.textContent = h.verdict + ` · ${h.sources_ok}/${h.sources_total} источников`;
+    el.className = 'badge ' + h.verdict;
+  } catch { document.getElementById('health').textContent = 'health n/a'; }
+}
+
+async function openDossier(code) {
+  const box = document.getElementById('dossier');
+  const p = document.getElementById('dpanel');
+  box.classList.add('open');
+  p.innerHTML = '<div class="dimnote">Загрузка досье…</div>';
+  let d;
+  try { d = await api(`/api/v2/countries/${code}?days=90`); }
+  catch { p.innerHTML = '<div class="dimnote">Не удалось загрузить досье</div>'; return; }
+
+  const i = d.index, c = d.country;
+  const color = LEVEL_COLOR[i?.level] || '#9ca3af';
+  p.innerHTML = `
+    <span class="close" onclick="closeDossier()">✕</span>
+    <h2>${c.flag || ''} ${esc(c.name)} <span style="color:var(--dim);font-weight:400">↔ Россия</span></h2>
+    <div class="sub">${esc(c.region_name || c.region)} · ${c.tier === 1 ? 'глубокое покрытие' : 'GDELT-мониторинг'}
+      ${c.memberships?.length ? ' · ' + c.memberships.join(', ').toUpperCase() : ''}
+      ${c.sanctions_on_russia ? ' · санкции против РФ' : ''}</div>
+    ${i ? `
+      <div><span class="bigscore" style="color:${color}">${fmt(i.score)}</span>
+        <span class="pill" style="color:${color};border-color:${color}">${LEVEL_RU[i.level] || i.level}</span></div>
+      <div class="comps">
+        <div>структурный<b class="mono">${fmt(i.structural)}</b></div>
+        <div>медиа<b class="mono">${fmt(i.media)}</b></div>
+        <div>буст<b class="mono">${fmt(i.boost)}</b></div>
+        <div>24ч<b class="mono ${i.delta_24h > 0 ? 'pos' : i.delta_24h < 0 ? 'neg' : ''}">${fmt(i.delta_24h)}</b></div>
+        <div>7д<b class="mono ${i.delta_7d > 0 ? 'pos' : i.delta_7d < 0 ? 'neg' : ''}">${fmt(i.delta_7d)}</b></div>
+      </div>` : '<div class="dimnote">Индекс ещё не рассчитан</div>'}
+    <div id="dhist"></div>
+    <div class="sect" id="dtopics"></div>
+    <div class="sect" id="dheads"></div>
+    <div class="sect"><h3>Сигналы (90 дней)</h3>
+      ${d.signals.length ? d.signals.slice(0, 8).map(s => `
+        <div class="sig ${s.severity}"><div class="t">${esc(s.title)}</div>
+        <div class="m">${SIG_RU[s.type] || s.type} · ${new Date(s.created_at).toLocaleDateString('ru-RU')}</div></div>`).join('')
+      : '<div class="dimnote">Нет сигналов</div>'}</div>
+    <div class="sect" id="dbrief"><h3>AI-досье</h3><div class="dimnote">Загрузка…</div></div>`;
+
+  if (d.index_history?.length > 1) {
+    Plotly.newPlot('dhist', [{
+      x: d.index_history.map(h => h.day), y: d.index_history.map(h => h.score),
+      mode: 'lines', line: { color, width: 2 }, fill: 'tozeroy',
+      fillcolor: color + '22', hovertemplate: '%{x}: %{y:+.1f}<extra></extra>',
+    }], {
+      paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
+      margin: { t: 10, b: 24, l: 34, r: 8 }, height: 170,
+      xaxis: { color: '#6b7280', gridcolor: '#1f2937' },
+      yaxis: { color: '#6b7280', gridcolor: '#1f2937', zerolinecolor: '#374151' },
+    }, { displayModeBar: false, responsive: true });
+  }
+
+  api(`/api/v2/countries/${code}/topics?days=30`).then(t => {
+    if (!t.topics.length) return;
+    document.getElementById('dtopics').innerHTML = '<h3>Темы (30 дней)</h3>' +
+      t.topics.map(x => `<div class="topic"><span>${esc(x.label)}</span>
+        <span class="mono">${x.articles} ст. · <span class="${x.avg_sentiment > 0 ? 'pos' : x.avg_sentiment < 0 ? 'neg' : ''}">${fmt(x.avg_sentiment)}</span></span></div>`).join('');
+  }).catch(() => {});
+
+  api(`/api/v2/countries/${code}/headlines?days=3&limit=10`).then(h => {
+    if (!h.headlines.length) return;
+    document.getElementById('dheads').innerHTML =
+      `<h3>Заголовки (${h.source === 'gdelt' ? 'GDELT' : 'свои источники'})</h3>` +
+      h.headlines.map(x => `<div class="hl"><a href="${esc(x.url || '#')}" target="_blank" rel="noopener">${esc(x.title)}</a>
+        <div class="meta">${esc(x.source || '')}${x.sentiment != null ? ` · тон ${fmt(x.sentiment)}` : ''}</div></div>`).join('');
+  }).catch(() => {});
+
+  api(`/api/v2/countries/${code}/brief`).then(b => {
+    document.getElementById('dbrief').innerHTML = '<h3>AI-досье</h3><div class="briefbox">' + md(b.content) + '</div>';
+  }).catch(() => {
+    document.getElementById('dbrief').innerHTML = '<h3>AI-досье</h3><div class="dimnote">Недостаточно данных</div>';
+  });
+}
+
+function closeDossier() { document.getElementById('dossier').classList.remove('open'); }
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeDossier(); });
+
+loadMap(); loadCountries(); loadSignals(); loadBrief(); loadHealth();
+setInterval(() => { loadCountries(); loadSignals(); loadHealth(); }, 120000);
+</script>
+</body>
+</html>

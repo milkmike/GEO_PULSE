@@ -3,10 +3,12 @@ import logging
 import os
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Literal
 
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -16,11 +18,12 @@ from src.api.routes.sources import router as sources_router
 from src.api.routes.threads import router as threads_router
 from src.api.routes.vox import router as vox_router
 from src.api.routes.articles import router as articles_router
+from src.api.routes.world import router as world_router
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="CIS Thermometer API", version="1.1.0")
+app = FastAPI(title="GEO PULSE API", version="2.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -34,6 +37,15 @@ app.include_router(sources_router)
 app.include_router(threads_router)
 app.include_router(vox_router)
 app.include_router(articles_router)
+app.include_router(world_router)
+
+_STATIC_DIR = Path(__file__).parent / "static"
+
+
+@app.get("/world", include_in_schema=False)
+def world_dashboard():
+    """Built-in world dashboard: map + country dossiers + signals + brief."""
+    return FileResponse(_STATIC_DIR / "world.html", media_type="text/html")
 
 
 class TopThreadResponse(BaseModel):

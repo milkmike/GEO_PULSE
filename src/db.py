@@ -4,10 +4,10 @@ from contextlib import contextmanager
 from datetime import datetime
 
 from sqlalchemy import (
-    Boolean, Column, DateTime, Integer, Numeric, String, Text,
+    Boolean, Column, Date, DateTime, Integer, Numeric, SmallInteger, String, Text,
     UniqueConstraint, create_engine, text,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 try:
@@ -80,6 +80,7 @@ class Analysis(Base):
     # Embedding for semantic clustering (text-embedding-3-small, 1536 dims)
     # Column managed via raw SQL (pgvector vector type)
     entities = Column(JSONB)  # Future: extracted entities for Graphiti integration
+    topics = Column(ARRAY(Text))  # Topic taxonomy labels (prompt v2.0+)
 
 
 class Temperature(Base):
@@ -98,6 +99,81 @@ class Temperature(Base):
     trend = Column(String(10))
     anomaly_score = Column(Numeric(4, 2))
     pattern_type = Column(String(20))
+
+
+class Country(Base):
+    __tablename__ = "countries"
+    code = Column(String(2), primary_key=True)
+    name_ru = Column(String(100), nullable=False)
+    name_en = Column(String(100), nullable=False)
+    iso3 = Column(String(3), nullable=False)
+    fips = Column(String(2))
+    flag = Column(String(8))
+    region = Column(String(30), nullable=False)
+    tier = Column(SmallInteger, default=2)
+    memberships = Column(ARRAY(Text), default=[])
+    unfriendly = Column(Boolean, default=False)
+    sanctions_on_russia = Column(Boolean, default=False)
+    war_with_russia = Column(Boolean, default=False)
+    baseline_adj = Column(SmallInteger, default=0)
+    baseline_note = Column(Text)
+    active = Column(Boolean, default=True)
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class RuIndex(Base):
+    __tablename__ = "ru_index"
+    time = Column(DateTime(timezone=True), primary_key=True)
+    country_code = Column(String(2), primary_key=True)
+    score = Column(Numeric(6, 2), nullable=False)
+    structural = Column(Numeric(6, 2))
+    media = Column(Numeric(6, 2))
+    boost = Column(Numeric(6, 2))
+    level = Column(String(12))
+    delta_24h = Column(Numeric(6, 2))
+    delta_7d = Column(Numeric(6, 2))
+    article_count = Column(Integer)
+    gdelt_volume = Column(Numeric(12, 2))
+    gdelt_tone = Column(Numeric(6, 2))
+    version = Column(String(8), default="v1")
+    details = Column(JSONB)
+
+
+class GdeltDaily(Base):
+    __tablename__ = "gdelt_daily"
+    day = Column(Date, primary_key=True)
+    country_code = Column(String(2), primary_key=True)
+    volume = Column(Numeric(12, 2))
+    volume_share = Column(Numeric(10, 6))
+    tone_avg = Column(Numeric(6, 2))
+    article_samples = Column(JSONB)
+    fetched_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class Signal(Base):
+    __tablename__ = "signals"
+    id = Column(Integer, primary_key=True)
+    signal_type = Column(String(30), nullable=False)
+    country_code = Column(String(2))
+    severity = Column(String(10), default="info")
+    confidence = Column(Numeric(3, 2), default=0.70)
+    title = Column(String(500))
+    description = Column(Text)
+    payload = Column(JSONB)
+    dedup_key = Column(String(200), nullable=False)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    expires_at = Column(DateTime(timezone=True))
+
+
+class Brief(Base):
+    __tablename__ = "briefs"
+    id = Column(Integer, primary_key=True)
+    scope = Column(String(10), nullable=False, default="world")
+    content = Column(Text, nullable=False)
+    model = Column(String(80))
+    source_hash = Column(String(64))
+    meta = Column(JSONB)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
 
 
 class Alert(Base):

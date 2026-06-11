@@ -109,6 +109,7 @@ def ensure_sources_in_db():
                         weight=src.get("weight", 1.0),
                         language=src.get("language", "ru"),
                         config=src.get("config", {}),
+                        tier=src.get("tier", "mainstream"),
                     )
                     session.add(source)
                     logger.info(f"Added source: {src['name']} ({country_code})")
