@@ -22,7 +22,9 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v2", tags=["world"])
 
 KNOWN_TIERS = {"official", "mainstream", "independent", "social",
-               "domestic_opposition", "western_proxy", "analytics"}
+               "domestic_opposition", "western_proxy", "analytics",
+               # legacy v1 tier labels still present in the sources table
+               "state", "opposition"}
 
 
 def _cache_get(key: str):
