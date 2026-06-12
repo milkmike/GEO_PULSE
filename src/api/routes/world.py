@@ -16,6 +16,7 @@ from src.countries import COUNTRIES, REGIONS, country_name_ru
 from src.db import get_session
 from src.engine.health import health_summary, source_health
 from src.entities import CATEGORIES as ENTITY_CATEGORIES, ENTITIES, get_entity
+from src.pipeline.agreements import group_agreements
 from src.pipeline.topics import TOPICS
 
 logger = logging.getLogger(__name__)
@@ -214,6 +215,80 @@ def country_entities(code: str, days: int = Query(30, ge=1, le=180)):
             "avg_sentiment": round(float(r.avg_sent), 2) if r.avg_sent is not None else None,
         })
     return {"country_code": code, "days": days, "entities": out}
+
+
+@router.get("/countries/{code}/un-votes")
+def country_un_votes(code: str):
+    """UN GA voting agreement with Russia by year."""
+    code = code.upper()
+    if code not in COUNTRIES:
+        raise HTTPException(404, f"Unknown country: {code}")
+    with get_session() as session:
+        rows = session.execute(
+            text("""SELECT year, total_votes, agree_with_russia,
+                           disagree_with_russia, abstain, agreement_pct
+                    FROM un_votes WHERE country_code = :cc ORDER BY year"""),
+            {"cc": code}).fetchall()
+    return {"country_code": code, "data": [
+        {"year": r.year, "total_votes": r.total_votes,
+         "agree_with_russia": r.agree_with_russia,
+         "disagree_with_russia": r.disagree_with_russia, "abstain": r.abstain,
+         "agreement_pct": float(r.agreement_pct) if r.agreement_pct is not None else None}
+        for r in rows]}
+
+
+@router.get("/countries/{code}/trade")
+def country_trade(code: str):
+    """Russia trade volumes by year."""
+    code = code.upper()
+    if code not in COUNTRIES:
+        raise HTTPException(404, f"Unknown country: {code}")
+    with get_session() as session:
+        rows = session.execute(
+            text("""SELECT year, ru_export_usd, ru_import_usd, total_trade_usd,
+                           trade_balance_usd, yoy_change_pct
+                    FROM trade_data WHERE country_code = :cc ORDER BY year"""),
+            {"cc": code}).fetchall()
+    return {"country_code": code, "data": [
+        {"year": r.year,
+         "ru_export_usd": int(r.ru_export_usd) if r.ru_export_usd is not None else None,
+         "ru_import_usd": int(r.ru_import_usd) if r.ru_import_usd is not None else None,
+         "total_trade_usd": int(r.total_trade_usd) if r.total_trade_usd is not None else None,
+         "trade_balance_usd": int(r.trade_balance_usd) if r.trade_balance_usd is not None else None,
+         "yoy_change_pct": float(r.yoy_change_pct) if r.yoy_change_pct is not None else None}
+        for r in rows]}
+
+
+@router.get("/countries/{code}/agreements")
+def country_agreements(code: str, days: int = Query(180, ge=7, le=365)):
+    """Diplomatic/economic high-action events grouped by event_key."""
+    code = code.upper()
+    if code not in COUNTRIES:
+        raise HTTPException(404, f"Unknown country: {code}")
+    with get_session() as session:
+        rows = session.execute(
+            text("""
+                SELECT a.event_key, a.event_type, a.action_level,
+                       ar.title, ar.url, s.name AS source,
+                       ar.published_at
+                FROM analysis a
+                JOIN articles ar ON a.article_id = ar.id
+                JOIN sources s ON ar.source_id = s.id
+                WHERE s.country_code = :cc
+                  AND a.event_type IN ('diplomatic', 'economic')
+                  AND a.action_level >= 3
+                  AND a.event_key IS NOT NULL AND a.event_key != ''
+                  AND ar.is_duplicate = FALSE
+                  AND ar.published_at > NOW() - make_interval(days => :days)
+                ORDER BY ar.published_at DESC
+                LIMIT 500
+            """), {"cc": code, "days": days}).fetchall()
+    flat = [{"event_key": r.event_key, "event_type": r.event_type,
+             "action_level": r.action_level, "title": r.title, "url": r.url,
+             "source": r.source,
+             "published_at": r.published_at.isoformat() if r.published_at else ""}
+            for r in rows]
+    return {"country_code": code, "agreements": group_agreements(flat)}
 
 
 @router.get("/countries/{code}")
