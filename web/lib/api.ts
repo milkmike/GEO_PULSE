@@ -37,6 +37,8 @@ export const api = {
     get<FxSeries>(`/api/v2/countries/${code}/fx?days=${days}`),
   countryBrief: (code: string) => get<Brief>(`/api/v2/countries/${code}/brief`),
   worldBrief: () => get<Brief>("/api/v2/brief"),
+  worldHeadlines: (hours = 24, limit = 20) =>
+    get<{ headlines: Headline[]; total: number }>(`/api/v2/headlines?hours=${hours}&limit=${limit}`),
   signals: (params = "") =>
     get<{ signals: Signal[]; total: number }>(`/api/v2/signals?days=7&limit=200${params}`),
   health: () => get<Health>("/api/v2/health"),

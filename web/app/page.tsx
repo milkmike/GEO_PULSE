@@ -5,16 +5,18 @@ import Link from "next/link";
 import CountryRanking from "@/components/CountryRanking";
 import Filters, { type FilterState } from "@/components/Filters";
 import HealthBadge from "@/components/HealthBadge";
+import HeadlinesFeed from "@/components/HeadlinesFeed";
 import Markdown from "@/components/Markdown";
 import SignalFeed from "@/components/SignalFeed";
 import WorldMap from "@/components/WorldMap";
 import { api } from "@/lib/api";
 import { fmtDate } from "@/lib/format";
-import type { Brief, CountrySummary, Meta, Signal } from "@/lib/types";
+import type { Brief, CountrySummary, Headline, Meta, Signal } from "@/lib/types";
 
 export default function HomePage() {
   const [countries, setCountries] = useState<CountrySummary[]>([]);
   const [signals, setSignals] = useState<Signal[]>([]);
+  const [headlines, setHeadlines] = useState<Headline[]>([]);
   const [brief, setBrief] = useState<Brief | null>(null);
   const [meta, setMeta] = useState<Meta | null>(null);
   const [filters, setFilters] = useState<FilterState>({ region: null, level: null, topic: null });
@@ -25,6 +27,7 @@ export default function HomePage() {
     const load = () => {
       api.countries().then((d) => setCountries(d.countries)).catch(() => {});
       api.signals().then((d) => setSignals(d.signals)).catch(() => {});
+      api.worldHeadlines().then((d) => setHeadlines(d.headlines)).catch(() => {});
     };
     load();
     api.worldBrief().then(setBrief).catch(() => {});
@@ -111,7 +114,14 @@ export default function HomePage() {
         </section>
       </div>
 
-      <div className="mt-3 grid gap-3 lg:grid-cols-2">
+      <div className="mt-3 grid gap-3 lg:grid-cols-3">
+        <section className="card">
+          <div className="card-title px-4 pb-1 pt-3">Главные новости дня</div>
+          <div className="max-h-[340px] overflow-y-auto">
+            <HeadlinesFeed items={headlines} />
+          </div>
+        </section>
+
         <section className="card">
           <div className="card-title flex items-baseline justify-between px-4 pb-1 pt-3">
             <span>Сигналы медиаполя</span>
@@ -129,7 +139,7 @@ export default function HomePage() {
           <div className="max-h-[340px] overflow-y-auto px-4 pb-3">
             {brief ? (
               <>
-                <Markdown text={brief.content} />
+                <Markdown text={brief.content} citations={brief.citations ?? brief.meta?.citations} />
                 <div className="mt-2 text-[11px] text-dim">
                   {brief.model} · {fmtDate(brief.created_at)}
                 </div>

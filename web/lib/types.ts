@@ -87,6 +87,18 @@ export interface Headline {
   sentiment?: number | null;
   action_level?: number | null;
   topics?: string[] | null;
+  country_code?: string;
+  country_name?: string;
+  flag?: string;
+}
+
+export interface Citation {
+  n: number;
+  title: string;
+  url: string;
+  source: string;
+  country: string;
+  used?: boolean;
 }
 
 export interface EntityStat {
@@ -109,6 +121,8 @@ export interface Brief {
   model: string | null;
   created_at: string;
   cached?: boolean;
+  meta?: { citations?: Citation[] } | null;
+  citations?: Citation[] | null;
 }
 
 export interface Health {

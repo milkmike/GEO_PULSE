@@ -300,7 +300,7 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
           <div className="max-h-[300px] overflow-y-auto px-4 pb-3">
             {brief ? (
               <>
-                <Markdown text={brief.content} />
+                <Markdown text={brief.content} citations={brief.citations ?? brief.meta?.citations} />
                 <div className="mt-2 text-[11px] text-dim">
                   {brief.model} · {fmtDate(brief.created_at)}
                 </div>
