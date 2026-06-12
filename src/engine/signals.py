@@ -321,6 +321,12 @@ def detect_index_shifts(session) -> int:
         delta = float(r.delta_24h)
         if abs(delta) < 7:
             continue
+        # Upper sanity cap: a genuine 24h RRI move can't exceed the boost layer's
+        # ±15 reach by much. Anything beyond 18 points in a day is data instability
+        # (e.g. a fresh baseline after a bulk re-analysis), not real diplomacy —
+        # skip it instead of crying wolf with a critical "Скачок индекса".
+        if abs(delta) > 18:
+            continue
         direction = "вверх" if delta > 0 else "вниз"
         emitted += _emit(
             session, "index_shift", r.country_code,
@@ -331,7 +337,7 @@ def detect_index_shifts(session) -> int:
                 f"пунктов за сутки: сейчас {float(r.score):+.1f} [{r.level}]."
             ),
             payload={"score": float(r.score), "delta_24h": delta, "level": r.level},
-            severity="critical" if abs(delta) >= 20 else "warning",
+            severity="critical" if abs(delta) >= 14 else "warning",
             confidence=0.8,
         )
     return emitted
