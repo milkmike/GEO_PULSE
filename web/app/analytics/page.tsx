@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import HeadlinesFeed from "@/components/HeadlinesFeed";
+import SiteHeader from "@/components/SiteHeader";
 import { apiBase } from "@/lib/api";
 import type { Headline } from "@/lib/types";
 
@@ -25,13 +26,12 @@ export default function AnalyticsPage() {
 
   return (
     <main className="mx-auto max-w-[900px] px-3 pb-8">
-      <header className="flex flex-wrap items-center gap-3 py-3">
-        <h1 className="text-base font-semibold tracking-wider">🔍 Аналитические центры о России</h1>
-        <nav className="ml-auto text-xs text-dim">
-          <Link href="/" className="hover:text-accent">← на главную</Link>
-        </nav>
-      </header>
-      <p className="mb-3 text-[13px] text-dim">
+      <SiteHeader active="/analytics" />
+
+      <div className="reveal reveal-1 pt-8">
+        <h1 className="display text-[30px] leading-tight">Аналитические центры о&nbsp;России</h1>
+      </div>
+      <p className="lead reveal reveal-2 mb-5 mt-2 !text-[16px]">
         Публикации think tanks и OSINT-расследователей за неделю. Это не новости,
         а аналитика — у каждого центра своя оптика и свои спонсоры; читайте с поправкой.
       </p>

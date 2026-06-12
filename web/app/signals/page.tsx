@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
 import SignalFeed from "@/components/SignalFeed";
+import SiteHeader from "@/components/SiteHeader";
 import { api } from "@/lib/api";
 import { SIGNAL_RU } from "@/lib/format";
 import type { Signal } from "@/lib/types";
@@ -34,11 +34,14 @@ export default function SignalsPage() {
 
   return (
     <main className="mx-auto max-w-3xl px-3 pb-10">
-      <header className="flex items-center gap-3 py-3">
-        <Link href="/" className="text-xs text-dim hover:text-accent">← карта</Link>
-        <h1 className="text-base font-semibold">Сигналы медиаполя · 7 дней</h1>
-        <span className="ml-auto text-xs text-dim">{filtered.length} из {signals.length}</span>
-      </header>
+      <SiteHeader active="/signals" />
+
+      <div className="reveal reveal-1 flex items-baseline gap-3 pb-4 pt-8">
+        <h1 className="display text-[30px] leading-tight">Сигналы медиаполя</h1>
+        <span className="tnum ml-auto text-xs text-dim">
+          7 дней · {filtered.length} из {signals.length}
+        </span>
+      </div>
 
       <div className="mb-3 flex flex-wrap gap-2">
         <input

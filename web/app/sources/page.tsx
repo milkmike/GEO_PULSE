@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import SiteHeader from "@/components/SiteHeader";
 import { api } from "@/lib/api";
 import { fmtDate, safeHttpUrl } from "@/lib/format";
 import type { Meta, SourceHealthRow, SourceRow } from "@/lib/types";
@@ -110,21 +111,17 @@ export default function SourcesPage() {
 
   return (
     <main className="mx-auto max-w-[1200px] px-3 pb-8">
-      <header className="flex flex-wrap items-center gap-3 py-3">
-        <h1 className="text-base font-semibold tracking-wider">📡 Источники</h1>
-        <nav className="ml-auto text-xs text-dim">
-          <Link href="/" className="hover:text-accent">
-            ← на главную
-          </Link>
-        </nav>
-      </header>
+      <SiteHeader active="/sources" />
 
-      <p className="mb-3 max-w-3xl text-[13px] text-dim">
-        Все источники платформы — с тиром доверия, языком и живостью. Мы показываем
-        и работающие, и замолчавшие фиды: прозрачность важнее красивой статистики.
-      </p>
+      <div className="reveal reveal-1 pt-8">
+        <h1 className="display text-[30px] leading-tight">Источники</h1>
+        <p className="lead mt-2 max-w-3xl !text-[16px]">
+          Все источники платформы — с тиром доверия, языком и живостью. Мы показываем
+          и работающие, и замолчавшие фиды: прозрачность важнее красивой статистики.
+        </p>
+      </div>
 
-      <div className="mb-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="reveal reveal-2 mb-3 mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {(
           [
             ["Источников", sources.length],

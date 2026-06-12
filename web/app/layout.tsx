@@ -1,5 +1,21 @@
 import type { Metadata } from "next";
+import { Golos_Text, JetBrains_Mono, Piazzolla } from "next/font/google";
 import "./globals.css";
+
+const piazzolla = Piazzolla({
+  subsets: ["cyrillic", "latin"],
+  variable: "--font-piazzolla",
+});
+
+const golos = Golos_Text({
+  subsets: ["cyrillic", "latin"],
+  variable: "--font-golos",
+});
+
+const jbMono = JetBrains_Mono({
+  subsets: ["cyrillic", "latin"],
+  variable: "--font-jbmono",
+});
 
 export const metadata: Metadata = {
   title: "GEO PULSE — Мир ↔ Россия",
@@ -9,7 +25,7 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="ru">
+    <html lang="ru" className={`${piazzolla.variable} ${golos.variable} ${jbMono.variable}`}>
       <body className="min-h-screen antialiased">{children}</body>
     </html>
   );

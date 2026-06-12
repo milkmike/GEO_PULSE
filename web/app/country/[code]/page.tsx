@@ -2,6 +2,7 @@
 
 import { use, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import SiteHeader from "@/components/SiteHeader";
 import AgreementsPanel from "@/components/AgreementsPanel";
 import Markdown from "@/components/Markdown";
 import Plot from "@/components/Plot";
@@ -136,19 +137,20 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
 
   return (
     <main className="mx-auto max-w-[1100px] px-3 pb-10">
-      <header className="flex flex-wrap items-center gap-3 py-3">
-        <Link href="/" className="text-xs text-dim hover:text-accent">← карта</Link>
-        <h1 className="text-lg font-semibold">
+      <SiteHeader />
+
+      <div className="reveal reveal-1 flex flex-wrap items-baseline gap-3 pb-3 pt-8">
+        <h1 className="display text-[32px] leading-tight">
           {country.flag} {country.name}{" "}
           <span className="font-normal text-dim">↔ Россия</span>
         </h1>
         <button
           onClick={() => setShowEmbed(!showEmbed)}
-          className="ml-auto rounded-md border border-line px-2.5 py-1 text-[11px] text-dim hover:text-accent"
+          className="ml-auto rounded-md border border-line px-2.5 py-1 text-[11px] text-dim transition-colors hover:border-ru-blue hover:text-ru-white"
         >
           {"</> embed"}
         </button>
-      </header>
+      </div>
 
       {showEmbed && (
         <div className="card mb-3 px-4 py-3">

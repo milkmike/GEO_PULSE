@@ -8,6 +8,7 @@ import HealthBadge from "@/components/HealthBadge";
 import HeadlinesFeed from "@/components/HeadlinesFeed";
 import Markdown from "@/components/Markdown";
 import SignalFeed from "@/components/SignalFeed";
+import SiteHeader from "@/components/SiteHeader";
 import WorldMap from "@/components/WorldMap";
 import { api } from "@/lib/api";
 import { fmtDate } from "@/lib/format";
@@ -87,19 +88,19 @@ export default function HomePage() {
 
   return (
     <main className="mx-auto max-w-[1500px] px-3 pb-8">
-      <header className="flex flex-wrap items-center gap-3 py-3">
-        <h1 className="text-base font-semibold tracking-wider">
-          🌍 GEO PULSE <span className="text-accent">МИР ↔ РОССИЯ</span>
-        </h1>
-        <HealthBadge />
-        <nav className="ml-auto flex items-center gap-4 text-xs text-dim">
-          <Link href="/about" className="hover:text-accent">о проекте</Link>
-          <Link href="/sources" className="hover:text-accent">источники</Link>
-          <Link href="/analytics" className="hover:text-accent">аналитика</Link>
-          <Link href="/signals" className="hover:text-accent">все сигналы</Link>
-          {updatedAt && <span>обновлено {fmtDate(updatedAt)}</span>}
-        </nav>
-      </header>
+      <SiteHeader
+        active="/"
+        right={
+          <span className="flex items-center gap-3">
+            <HealthBadge />
+            {updatedAt && (
+              <span className="tnum text-[10px] text-dim">
+                обновлено {fmtDate(updatedAt)}
+              </span>
+            )}
+          </span>
+        }
+      />
 
       {meta && (
         <Filters
@@ -110,7 +111,7 @@ export default function HomePage() {
         />
       )}
 
-      <div className="grid gap-3 lg:grid-cols-[1fr_380px]">
+      <div className="reveal reveal-2 grid gap-3 lg:grid-cols-[1fr_380px]">
         <section className="card min-h-[420px] lg:h-[58vh]">
           <WorldMap entries={mapEntries} />
         </section>
@@ -125,7 +126,7 @@ export default function HomePage() {
         </section>
       </div>
 
-      <div className="mt-3 grid gap-3 lg:grid-cols-3">
+      <div className="reveal reveal-4 mt-3 grid gap-3 lg:grid-cols-3">
         <section className="card">
           <div className="card-title px-4 pb-1 pt-3">
             {filters.region && meta

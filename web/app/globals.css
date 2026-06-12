@@ -1,45 +1,201 @@
 @import "tailwindcss";
 
 @theme {
-  --color-bg: #0b0f14;
-  --color-panel: #11161d;
-  --color-panel2: #161d26;
-  --color-line: #1f2937;
-  --color-dim: #6b7280;
-  --color-accent: #38bdf8;
+  /* ink-dark base */
+  --color-bg: #0a0d12;
+  --color-panel: #10151c;
+  --color-panel2: #151c25;
+  --color-line: #1e2836;
+  --color-dim: #74808f;
+  --color-fg: #d6dae1;
+
+  /* Russian tricolor, tuned for dark ink */
+  --color-ru-white: #f2efe6;
+  --color-ru-blue: #4d7fd6;
+  --color-ru-red: #d94f43;
+
+  /* interactive accent now rides the tricolor blue */
+  --color-accent: #6b9be8;
+
+  /* data semantics (RRI levels) — unchanged scale */
   --color-ally: #10b981;
   --color-partner: #34d399;
   --color-neutral: #9ca3af;
   --color-cooling: #fbbf24;
   --color-tension: #f97316;
   --color-hostile: #ef4444;
+
+  /* typography */
+  --font-display: var(--font-piazzolla), Georgia, serif;
+  --font-body: var(--font-golos), -apple-system, sans-serif;
+  --font-mono: var(--font-jbmono), ui-monospace, monospace;
 }
 
 html {
   background: var(--color-bg);
-  color: #d1d5db;
+  color: var(--color-fg);
 }
 
 body {
-  font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-family: var(--font-body);
   font-size: 14px;
+  /* faint cold glow at the top so the dark isn't flat */
+  background-image: radial-gradient(
+      ellipse 80% 50% at 50% -10%,
+      rgba(77, 127, 214, 0.06),
+      transparent
+    );
 }
 
+/* ── cards ─────────────────────────────────────────────── */
 .card {
   background: var(--color-panel);
   border: 1px solid var(--color-line);
   border-radius: 10px;
+  transition: border-color 0.25s ease, transform 0.25s ease;
+}
+.card:hover {
+  border-color: #2a3a4f;
 }
 
 .card-title {
+  font-family: var(--font-mono);
   font-size: 11px;
   text-transform: uppercase;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.14em;
   color: var(--color-dim);
 }
 
-.tnum { font-variant-numeric: tabular-nums; }
+.tnum {
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-mono);
+}
 
+/* ── tricolor thread: the house graphic signature ──────── */
+.tricolor {
+  display: block;
+  height: 3px;
+  width: 100%;
+  background: linear-gradient(
+    to right,
+    var(--color-ru-white) 0 33.3%,
+    var(--color-ru-blue) 33.3% 66.6%,
+    var(--color-ru-red) 66.6% 100%
+  );
+  border-radius: 2px;
+}
+.tricolor-draw {
+  transform-origin: left center;
+  animation: drawIn 0.9s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* ── editorial typography ──────────────────────────────── */
+.display {
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--color-ru-white);
+}
+.lead {
+  font-family: var(--font-display);
+  font-weight: 400;
+  font-size: 19px;
+  line-height: 1.65;
+  color: #b9c0ca;
+}
+.prose-editorial {
+  font-size: 15.5px;
+  line-height: 1.75;
+  color: #c3c9d2;
+}
+.prose-editorial b {
+  color: var(--color-ru-white);
+  font-weight: 600;
+}
+.dropcap::first-letter {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 3.4em;
+  float: left;
+  line-height: 0.82;
+  padding-right: 0.12em;
+  color: var(--color-ru-red);
+}
+.section-num {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.2em;
+  color: var(--color-ru-red);
+}
+.pull-quote {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 500;
+  font-size: 24px;
+  line-height: 1.45;
+  color: var(--color-ru-white);
+}
+
+/* ── motion ────────────────────────────────────────────── */
+@keyframes fadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes drawIn {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+@keyframes pulseDot {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(217, 79, 67, 0.55);
+  }
+  60% {
+    box-shadow: 0 0 0 7px rgba(217, 79, 67, 0);
+  }
+}
+
+.reveal {
+  animation: fadeUp 0.7s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.reveal-1 { animation-delay: 0.06s; }
+.reveal-2 { animation-delay: 0.14s; }
+.reveal-3 { animation-delay: 0.22s; }
+.reveal-4 { animation-delay: 0.3s; }
+.reveal-5 { animation-delay: 0.38s; }
+.reveal-6 { animation-delay: 0.46s; }
+.reveal-7 { animation-delay: 0.54s; }
+.reveal-8 { animation-delay: 0.62s; }
+
+.live-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 9999px;
+  background: var(--color-ru-red);
+  animation: pulseDot 2.4s ease-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reveal,
+  .reveal-1, .reveal-2, .reveal-3, .reveal-4,
+  .reveal-5, .reveal-6, .reveal-7, .reveal-8,
+  .tricolor-draw,
+  .live-dot {
+    animation: none;
+  }
+}
+
+/* ── scrollbar ─────────────────────────────────────────── */
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-thumb { background: #283342; border-radius: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
