@@ -28,9 +28,9 @@ export default function HomePage() {
       api.countries().then((d) => setCountries(d.countries)).catch(() => {});
       api.signals().then((d) => setSignals(d.signals)).catch(() => {});
       api.worldHeadlines().then((d) => setHeadlines(d.headlines)).catch(() => {});
+      api.worldBrief().then(setBrief).catch(() => {});
     };
     load();
-    api.worldBrief().then(setBrief).catch(() => {});
     api.meta().then(setMeta).catch(() => {});
     const t = setInterval(load, 120_000);
     return () => clearInterval(t);

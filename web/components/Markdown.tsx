@@ -3,6 +3,7 @@
  *  Citation refs like [1] become clickable superscript links when a citations
  *  map is provided. Citation urls are validated to http/https only. */
 import type { Citation } from "@/lib/types";
+import { safeHttpUrl } from "@/lib/format";
 
 function escAttr(s: string): string {
   return s
@@ -11,15 +12,6 @@ function escAttr(s: string): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
-}
-
-function safeHttpUrl(u: string): string | null {
-  try {
-    const parsed = new URL(u);
-    return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.href : null;
-  } catch {
-    return null;
-  }
 }
 
 function mdToHtml(text: string, cites?: Map<number, Citation>): string {

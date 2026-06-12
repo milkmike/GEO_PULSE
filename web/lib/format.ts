@@ -39,6 +39,17 @@ export const fmtDate = (iso: string): string =>
 export const fmtDay = (iso: string): string =>
   new Date(iso).toLocaleDateString("ru-RU", { day: "numeric", month: "short" });
 
+/** Returns the URL if it parses as http/https, otherwise null.
+ *  Use for third-party URLs (RSS headlines, citations) before putting them in href. */
+export function safeHttpUrl(u: string): string | null {
+  try {
+    const parsed = new URL(u);
+    return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.href : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Plotly colorscale for scores −100..+100 (red → gray → green). */
 export const SCORE_COLORSCALE: [number, string][] = [
   [0, "#7f1d1d"], [0.15, "#ef4444"], [0.3, "#f97316"],
