@@ -14,6 +14,8 @@ CREATE TABLE sources (
     config JSONB DEFAULT '{}',
     active BOOLEAN DEFAULT TRUE,
     tier VARCHAR(20) DEFAULT 'mainstream',
+    state_affiliated BOOLEAN DEFAULT FALSE,
+    propaganda_risk VARCHAR(10) DEFAULT 'low',
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 

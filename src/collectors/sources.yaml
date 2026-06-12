@@ -123,3 +123,5 @@ countries:
         url: https://belta.by/rss/
         weight: 0.8
         language: ru
+        state_affiliated: true
+        propaganda_risk: high

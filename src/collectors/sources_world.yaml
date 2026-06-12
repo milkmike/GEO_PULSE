@@ -7,6 +7,94 @@ countries:
   US:
     name: США
     sources:
+      - name: Jamestown Foundation
+        type: rss
+        url: https://jamestown.org/feed/
+        weight: 1.0
+        language: en
+        tier: analytics
+        state_affiliated: false
+        propaganda_risk: low
+      - name: War on the Rocks
+        type: rss
+        url: https://warontherocks.com/feed/
+        weight: 1.0
+        language: en
+        tier: analytics
+        state_affiliated: false
+        propaganda_risk: low
+      - name: ISW
+        type: rss
+        url: https://news.google.com/rss/search?q=site:understandingwar.org+russia&hl=en-US&gl=US&ceid=US:en
+        weight: 1.0
+        language: en
+        tier: analytics
+        state_affiliated: false
+        propaganda_risk: low
+      - name: Carnegie Endowment
+        type: rss
+        url: https://news.google.com/rss/search?q=site:carnegieendowment.org&hl=en-US&gl=US&ceid=US:en
+        weight: 1.0
+        language: en
+        tier: analytics
+        state_affiliated: false
+        propaganda_risk: low
+      - name: CSIS
+        type: rss
+        url: https://news.google.com/rss/search?q=site:csis.org&hl=en-US&gl=US&ceid=US:en
+        weight: 1.0
+        language: en
+        tier: analytics
+        state_affiliated: false
+        propaganda_risk: low
+      - name: FPRI
+        type: rss
+        url: https://news.google.com/rss/search?q=site:fpri.org&hl=en-US&gl=US&ceid=US:en
+        weight: 1.0
+        language: en
+        tier: analytics
+        state_affiliated: false
+        propaganda_risk: low
+      - name: Atlantic Council
+        type: rss
+        url: https://news.google.com/rss/search?q=site:atlanticcouncil.org&hl=en-US&gl=US&ceid=US:en
+        weight: 1.0
+        language: en
+        tier: analytics
+        state_affiliated: false
+        propaganda_risk: low
+      - name: Responsible Statecraft
+        type: rss
+        url: https://responsiblestatecraft.org/feed/
+        weight: 1.0
+        language: en
+        tier: analytics
+        state_affiliated: false
+        propaganda_risk: low
+      - name: Brookings
+        type: rss
+        url: https://news.google.com/rss/search?q=site:brookings.edu&hl=en-US&gl=US&ceid=US:en
+        weight: 1.0
+        language: en
+        tier: analytics
+        state_affiliated: false
+        propaganda_risk: low
+      - name: RAND
+        type: rss
+        url: https://news.google.com/rss/search?q=site:rand.org&hl=en-US&gl=US&ceid=US:en
+        weight: 1.0
+        language: en
+        tier: analytics
+        state_affiliated: false
+        propaganda_risk: low
+      - name: OCCRP
+        type: rss
+        url: https://www.occrp.org/en/feed
+        weight: 1.0
+        language: en
+        tier: analytics
+        state_affiliated: false
+        propaganda_risk: low
       - name: NYT World
         type: rss
         url: https://rss.nytimes.com/services/xml/rss/nyt/World.xml
@@ -41,6 +129,22 @@ countries:
   GB:
     name: Великобритания
     sources:
+      - name: RUSI
+        type: rss
+        url: https://news.google.com/rss/search?q=site:rusi.org&hl=en-US&gl=US&ceid=US:en
+        weight: 1.0
+        language: en
+        tier: analytics
+        state_affiliated: false
+        propaganda_risk: low
+      - name: Chatham House
+        type: rss
+        url: https://news.google.com/rss/search?q=site:chathamhouse.org&hl=en-US&gl=US&ceid=US:en
+        weight: 1.0
+        language: en
+        tier: analytics
+        state_affiliated: false
+        propaganda_risk: low
       - name: BBC World
         type: rss
         url: http://feeds.bbci.co.uk/news/world/rss.xml
@@ -69,6 +173,14 @@ countries:
   DE:
     name: Германия
     sources:
+      - name: ECFR
+        type: rss
+        url: https://news.google.com/rss/search?q=site:ecfr.eu&hl=en-US&gl=DE&ceid=DE:en
+        weight: 1.0
+        language: en
+        tier: analytics
+        state_affiliated: false
+        propaganda_risk: low
       - name: Deutsche Welle
         type: rss
         url: https://rss.dw.com/rdf/rss-de-all
@@ -942,6 +1054,14 @@ countries:
   NL:
     name: Нидерланды
     sources:
+      - name: Bellingcat
+        type: rss
+        url: https://www.bellingcat.com/feed/
+        weight: 1.0
+        language: en
+        tier: analytics
+        state_affiliated: false
+        propaganda_risk: low
       - name: NOS
         type: rss
         url: https://feeds.nos.nl/nosnieuwsalgemeen

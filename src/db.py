@@ -39,6 +39,8 @@ class Source(Base):
     config = Column(JSONB, default={})
     active = Column(Boolean, default=True)
     tier = Column(String(20), default="mainstream")
+    state_affiliated = Column(Boolean, default=False)
+    propaganda_risk = Column(String(10), default="low")
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
 
 

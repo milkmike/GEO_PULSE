@@ -110,6 +110,8 @@ def ensure_sources_in_db():
                         language=src.get("language", "ru"),
                         config=src.get("config", {}),
                         tier=src.get("tier", "mainstream"),
+                        state_affiliated=src.get("state_affiliated", False),
+                        propaganda_risk=src.get("propaganda_risk", "low"),
                     )
                     session.add(source)
                     session.flush()

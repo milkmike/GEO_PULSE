@@ -95,6 +95,7 @@ export default function HomePage() {
         <nav className="ml-auto flex items-center gap-4 text-xs text-dim">
           <Link href="/about" className="hover:text-accent">о проекте</Link>
           <Link href="/sources" className="hover:text-accent">источники</Link>
+          <Link href="/analytics" className="hover:text-accent">аналитика</Link>
           <Link href="/signals" className="hover:text-accent">все сигналы</Link>
           {updatedAt && <span>обновлено {fmtDate(updatedAt)}</span>}
         </nav>
