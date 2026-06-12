@@ -1,14 +1,15 @@
 """FastAPI application."""
 import logging
 import os
+import secrets
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -31,6 +32,27 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Admin/write guard — the API is internet-facing and otherwise unauthenticated.
+# Admin endpoints (key/cost metadata) and every write method require a secret
+# header matching ADMIN_API_KEY. Fail-closed: if ADMIN_API_KEY is unset, admin
+# and writes are denied to everyone, so a public deploy is safe by default.
+# The read-only dashboard is unaffected (it only issues GET).
+ADMIN_API_KEY = os.environ.get("ADMIN_API_KEY", "")
+_WRITE_METHODS = {"POST", "PUT", "DELETE", "PATCH"}
+
+
+@app.middleware("http")
+async def guard_admin_and_writes(request: Request, call_next):
+    path = request.url.path
+    is_admin = path.startswith("/api/v1/admin")
+    is_write = request.method in _WRITE_METHODS
+    if is_admin or is_write:
+        provided = request.headers.get("x-admin-key", "")
+        if not ADMIN_API_KEY or not secrets.compare_digest(provided, ADMIN_API_KEY):
+            return JSONResponse({"detail": "forbidden"}, status_code=403)
+    return await call_next(request)
+
 
 # Register routes
 app.include_router(sources_router)
