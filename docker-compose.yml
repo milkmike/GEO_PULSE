@@ -173,6 +173,18 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  un-votes-loader:
+    build:
+      context: .
+      dockerfile: Dockerfile.loaders
+    command: python scripts/load_un_votes.py --loop
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
   web:
     build:
       context: ./web
