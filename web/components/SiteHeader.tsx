@@ -19,7 +19,7 @@ export default function SiteHeader({
   right?: ReactNode;
 }) {
   return (
-    <header className="reveal pt-4">
+    <header className="reveal sticky top-0 z-40 bg-bg/85 pb-2 pt-4 backdrop-blur-sm">
       <div className="flex flex-wrap items-baseline gap-x-4 gap-y-2">
         <Link href="/" className="group flex items-end gap-2">
           <TowerLogo />

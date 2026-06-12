@@ -121,14 +121,24 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
 
   if (error) {
     return (
-      <main className="mx-auto max-w-3xl px-4 py-10 text-center">
-        <p className="text-dim">Страна не найдена или API недоступен.</p>
-        <Link href="/" className="text-accent">← на карту</Link>
+      <main className="mx-auto max-w-[1100px] px-3 pb-10">
+        <SiteHeader />
+        <div className="reveal reveal-1 px-1 py-10 text-center">
+          <p className="text-dim">Страна не найдена или API недоступен.</p>
+          <Link href="/" className="text-accent">← на карту</Link>
+        </div>
       </main>
     );
   }
   if (!dossier) {
-    return <main className="px-4 py-10 text-center text-dim">Загрузка досье…</main>;
+    return (
+      <main className="mx-auto max-w-[1100px] px-3 pb-10">
+        <SiteHeader />
+        <div className="reveal reveal-1 px-1 py-10 text-center text-dim">
+          Загрузка досье…
+        </div>
+      </main>
+    );
   }
 
   const { country, index } = dossier;

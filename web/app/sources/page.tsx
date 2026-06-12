@@ -99,11 +99,6 @@ export default function SourcesPage() {
     });
   }, [meta, sources]);
 
-  if (loading)
-    return (
-      <main className="mx-auto max-w-[1200px] px-3 py-8 text-dim">Загрузка…</main>
-    );
-
   const chip = (active: boolean) =>
     `cursor-pointer rounded px-2 py-0.5 text-[11px] ${
       active ? "bg-accent/20 text-accent" : "bg-white/5 text-dim hover:text-fg"
@@ -131,7 +126,7 @@ export default function SourcesPage() {
           ] as [string, string | number][]
         ).map(([label, v]) => (
           <div key={label} className="card px-4 py-3">
-            <div className="text-xl font-semibold">{v}</div>
+            <div className="text-xl font-semibold">{loading ? "…" : v}</div>
             <div className="text-[11px] uppercase text-dim">{label}</div>
           </div>
         ))}
@@ -139,12 +134,13 @@ export default function SourcesPage() {
 
       <section className="card mb-3 px-4 py-3">
         <button
-          className="text-[13px] text-accent"
+          className="text-[13px] text-accent disabled:opacity-40"
+          disabled={loading}
           onClick={() => setShowMatrix(!showMatrix)}
         >
           {showMatrix ? "▾" : "▸"} Матрица языкового покрытия (ru / en / native)
         </button>
-        {showMatrix && (
+        {showMatrix && !loading && (
           <div className="mt-2 grid max-h-[300px] grid-cols-2 gap-x-6 overflow-y-auto sm:grid-cols-3 lg:grid-cols-4">
             {matrix.map((r) => (
               <button
@@ -221,7 +217,13 @@ export default function SourcesPage() {
       </div>
 
       <section className="card divide-y divide-white/5">
-        {filtered.map((s) => {
+        {loading
+          ? Array.from({ length: 8 }).map((_, i) => (
+              <div key={i} className="px-4 py-2">
+                <div className="h-9 animate-pulse rounded bg-panel2/60" />
+              </div>
+            ))
+          : filtered.map((s) => {
           const h = health.get(s.id);
           const t = TIERS[s.tier] ?? { label: s.tier, cls: "bg-white/5 text-dim" };
           const safeUrl = s.url ? safeHttpUrl(s.url) : null;

@@ -1,4 +1,5 @@
 """CRUD API for managing sources."""
+import json
 import logging
 from datetime import datetime, timezone
 from typing import Optional
@@ -14,6 +15,26 @@ from src.db import get_session, Source
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/sources", tags=["sources"])
+
+_CACHE_KEY = "cache:v1:sources"
+_CACHE_TTL = 300
+
+
+def _cache_get(key):
+    try:
+        from src.queue import get_redis
+        v = get_redis().get(key)
+        return json.loads(v) if v else None
+    except Exception:
+        return None
+
+
+def _cache_set(key, payload, ttl):
+    try:
+        from src.queue import get_redis
+        get_redis().setex(key, ttl, json.dumps(payload))
+    except Exception:
+        pass
 
 
 # ---------- Schemas ----------
@@ -84,31 +105,35 @@ def source_to_dict(row) -> dict:
 # ---------- Routes ----------
 @router.get("")
 def list_sources():
-    """List all sources with article stats."""
+    """List all sources with article stats (cached 5 min)."""
+    cached = _cache_get(_CACHE_KEY)
+    if cached is not None:
+        return cached
+
     with get_session() as session:
         sources = session.execute(text("""
+            WITH art AS (
+                SELECT source_id, COUNT(*) AS article_count, MAX(collected_at) AS last_collected
+                FROM articles GROUP BY source_id
+            ),
+            rel AS (
+                SELECT a.source_id, COUNT(*) AS relevant_count, AVG(an.sentiment) AS avg_sentiment
+                FROM analysis an JOIN articles a ON an.article_id = a.id
+                WHERE an.is_relevant = true
+                GROUP BY a.source_id
+            )
             SELECT s.*,
-                   COALESCE(stats.article_count, 0) AS article_count,
-                   stats.last_collected,
+                   COALESCE(art.article_count, 0) AS article_count,
+                   art.last_collected,
                    COALESCE(rel.relevant_count, 0) AS relevant_count,
                    rel.avg_sentiment
             FROM sources s
-            LEFT JOIN LATERAL (
-                SELECT COUNT(*) AS article_count,
-                       MAX(a.collected_at) AS last_collected
-                FROM articles a WHERE a.source_id = s.id
-            ) stats ON true
-            LEFT JOIN LATERAL (
-                SELECT COUNT(*) AS relevant_count,
-                       AVG(an.sentiment) AS avg_sentiment
-                FROM analysis an
-                JOIN articles a2 ON an.article_id = a2.id
-                WHERE a2.source_id = s.id AND an.is_relevant = true
-            ) rel ON true
+            LEFT JOIN art ON art.source_id = s.id
+            LEFT JOIN rel ON rel.source_id = s.id
             ORDER BY s.country_code, s.name
         """)).fetchall()
 
-        return {
+        payload = {
             "sources": [
                 {
                     "id": r.id,
@@ -130,6 +155,9 @@ def list_sources():
                 for r in sources
             ]
         }
+
+    _cache_set(_CACHE_KEY, payload, _CACHE_TTL)
+    return payload
 
 
 @router.get("/{source_id}")
