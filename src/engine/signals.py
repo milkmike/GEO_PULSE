@@ -35,6 +35,19 @@ logger = logging.getLogger(__name__)
 LOUD_TIERS = ("social", "domestic_opposition", "independent", "western_proxy")
 QUIET_TIERS = ("official", "mainstream")
 
+# Russian labels for the pipeline's event_type taxonomy.
+EVENT_TYPE_RU = {
+    "diplomatic": "дипломатия",
+    "military": "военное",
+    "economic": "экономика",
+    "cultural": "культура",
+    "security": "безопасность",
+}
+
+# Mirror the global-headlines demotion: high-action-level (war) coverage from
+# these countries would otherwise permanently occupy the top of the feed.
+NOTABLE_DEMOTED = ("UA",)
+
 TTL_HOURS = {
     "tier_convergence": 24,
     "official_silence": 24,
@@ -43,6 +56,7 @@ TTL_HOURS = {
     "volume_surge": 24,
     "index_shift": 24,
     "fx_move": 24,
+    "notable_event": 48,
 }
 
 
@@ -322,6 +336,77 @@ def detect_index_shifts(session) -> int:
     return emitted
 
 
+def detect_notable_events(session) -> int:
+    """Surface real high-action events (AL≥4, last 48h, not backfill) into the feed.
+
+    Picks one representative article per event_key (highest action_level, then most
+    reprinted, then newest), ranks globally by impact, and diversifies so no single
+    country floods the feed: ≤3 per country, ≤2 for Ukraine, and Ukraine is sorted
+    after every non-UA event (mirrors the global-headlines demotion).
+    """
+    rows = session.execute(
+        text("""
+            SELECT DISTINCT ON (a.event_key)
+                   a.event_key, a.event_type, a.action_level, a.sentiment,
+                   ar.title, ar.reprint_count, ar.published_at, s.country_code
+            FROM analysis a
+            JOIN articles ar ON a.article_id = ar.id
+            JOIN sources s ON ar.source_id = s.id
+            WHERE a.is_relevant = TRUE
+              AND ar.is_backfill = FALSE
+              AND a.action_level >= 4
+              AND a.event_key IS NOT NULL AND a.event_key != ''
+              AND ar.published_at > NOW() - INTERVAL '48 hours'
+            ORDER BY a.event_key, a.action_level DESC,
+                     ar.reprint_count DESC NULLS LAST, ar.published_at DESC
+        """)
+    ).fetchall()
+
+    # Rank by impact: demoted countries last, then action_level, then reprints.
+    ranked = sorted(
+        rows,
+        key=lambda r: (
+            1 if r.country_code in NOTABLE_DEMOTED else 0,
+            -int(r.action_level or 0),
+            -int(r.reprint_count or 0),
+        ),
+    )
+
+    # Diversify: ≤3 per country, ≤2 for Ukraine, ≤45 total.
+    per_country: dict[str | None, int] = {}
+    kept = []
+    for r in ranked:
+        cc = r.country_code
+        cap = 2 if cc in NOTABLE_DEMOTED else 3
+        if per_country.get(cc, 0) >= cap:
+            continue
+        per_country[cc] = per_country.get(cc, 0) + 1
+        kept.append(r)
+        if len(kept) >= 45:
+            break
+
+    emitted = 0
+    for r in kept:
+        title = (r.title or "").strip() or r.event_key
+        al = int(r.action_level or 0)
+        severity = "critical" if al >= 6 else "warning" if al == 5 else "info"
+        emitted += _emit(
+            session, "notable_event", r.country_code,
+            dedup_key=f"notable:{r.event_key}"[:200],
+            title=title,
+            description=(
+                f"{country_name_ru(r.country_code)} · "
+                f"{EVENT_TYPE_RU.get(r.event_type, r.event_type)}"
+            ),
+            payload={"event_key": r.event_key, "action_level": al,
+                     "event_type": r.event_type,
+                     "sentiment": float(r.sentiment) if r.sentiment is not None else None},
+            severity=severity,
+            confidence=min(0.9, 0.55 + 0.07 * al),
+        )
+    return emitted
+
+
 def detect_fx_moves(session) -> int:
     """Currency moved ≥2% vs RUB in a day — did media signals precede it?
 
@@ -399,6 +484,7 @@ def detect_all() -> dict:
         ("velocity_spike", detect_velocity_spike),
         ("gdelt_shifts", detect_gdelt_shifts),
         ("index_shifts", detect_index_shifts),
+        ("notable_events", detect_notable_events),
         ("fx_moves", detect_fx_moves),
     ):
         try:

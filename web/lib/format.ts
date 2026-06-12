@@ -26,6 +26,7 @@ export const SIGNAL_RU: Record<string, string> = {
   volume_surge: "всплеск внимания",
   index_shift: "скачок индекса",
   fx_move: "валютный сдвиг",
+  notable_event: "значимое событие",
 };
 
 export const fmt = (v: number | null | undefined, digits = 1): string =>
