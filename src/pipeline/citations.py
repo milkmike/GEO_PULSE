@@ -11,14 +11,21 @@ _CITE_RE = re.compile(r"\[(\d+)\]")
 
 
 def apply_citations(content: str, valid_numbers: Set[int]) -> Tuple[str, Set[int]]:
-    """Strip phantom [n] markers; return (cleaned content, used numbers)."""
+    """Strip phantom [n] markers; return (cleaned content, used numbers).
+
+    Numbering starts at [1]: [0] is always treated as phantom, even if
+    0 appears in valid_numbers. Runs of spaces left behind by stripped
+    markers are collapsed to a single space.
+    """
     used: Set[int] = set()
 
     def repl(m: "re.Match[str]") -> str:
         n = int(m.group(1))
-        if n in valid_numbers:
+        if n >= 1 and n in valid_numbers:
             used.add(n)
             return m.group(0)
         return ""
 
-    return _CITE_RE.sub(repl, content), used
+    cleaned = _CITE_RE.sub(repl, content)
+    cleaned = re.sub(r" {2,}", " ", cleaned)
+    return cleaned, used
