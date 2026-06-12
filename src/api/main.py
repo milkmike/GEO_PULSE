@@ -26,9 +26,12 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="GEO PULSE API", version="2.0.0")
 
+_ALLOWED_ORIGINS = [
+    o.strip() for o in os.environ.get("CORS_ORIGINS", "*").split(",") if o.strip()
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_ALLOWED_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )

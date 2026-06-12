@@ -110,6 +110,7 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL}
       REDIS_URL: redis://redis:6379/0
+      GDELT_PAUSE_SEC: ${GDELT_PAUSE_SEC:-5}
     depends_on:
       db:
         condition: service_healthy
