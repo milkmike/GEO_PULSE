@@ -355,8 +355,14 @@ def detect_notable_events(session) -> int:
             WHERE a.is_relevant = TRUE
               AND ar.is_backfill = FALSE
               AND a.action_level >= 4
+              AND a.event_type IN ('diplomatic', 'economic', 'military', 'security')
               AND a.event_key IS NOT NULL AND a.event_key != ''
               AND ar.published_at > NOW() - INTERVAL '48 hours'
+              -- Russia anchor: the relevance filter has false positives on local
+              -- crime/court news; require an explicit Russia-orbit mention so the
+              -- signal feed stays genuinely about Russia relations.
+              AND (ar.title || ' ' || COALESCE(ar.body, '')) ~*
+                  'russia|росси|кремл|kreml|putin|путин|moscow|москв|лавров|lavrov|одкб|csto|еаэс|eaeu|\mснг\M|\mсоюз'
             ORDER BY a.event_key, a.action_level DESC,
                      ar.reprint_count DESC NULLS LAST, ar.published_at DESC
         """)

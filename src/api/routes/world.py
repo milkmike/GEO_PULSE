@@ -552,7 +552,10 @@ def list_signals(days: int = Query(3, ge=1, le=30),
                        title, description, payload, created_at, expires_at
                 FROM signals
                 WHERE {' AND '.join(conditions)}
-                ORDER BY created_at DESC LIMIT :lim
+                ORDER BY CASE severity WHEN 'critical' THEN 0
+                                       WHEN 'warning' THEN 1 ELSE 2 END,
+                         created_at DESC
+                LIMIT :lim
             """),
             params,
         ).fetchall()
