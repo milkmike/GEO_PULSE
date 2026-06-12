@@ -7,10 +7,15 @@ Detectors (worldmonitor-inspired, adapted to GEO PULSE's tier structure):
   official_silence  opposition/social/independent tiers are loud about an
                     event while official+mainstream stay silent — a coverage
                     suppression signature unique to our tiered setup.
-  velocity_spike    a country's relevant article flow doubles vs 30d baseline.
-  tone_shift        GDELT tone z-score |z| ≥ 2 vs the country's own 90d norm.
-  volume_surge      GDELT Russia-coverage share ≥ 2.5× the 30d average.
-  index_shift       RRI moved ≥ 10 points in 24h or crossed a level boundary.
+  velocity_spike    a country's relevant article flow ≥ 1.5× the 30d baseline.
+  tone_shift        GDELT tone z-score |z| ≥ 1.6 vs the country's own 90d norm.
+  volume_surge      GDELT Russia-coverage share ≥ 2.0× the 30d average.
+  index_shift       RRI moved ≥ 7 points in 24h or crossed a level boundary.
+
+Article-volume detectors (tier_convergence, official_silence, velocity_spike)
+exclude is_backfill rows so a historical archive backfill (old published_at,
+ingested today) can't masquerade as a live information storm. GDELT-, FX- and
+index-based detectors read aggregate tables and never see backfill.
 
 Anti-fatigue: every signal carries a dedup_key and a type-specific TTL;
 a signal is skipped while an unexpired twin exists (worldmonitor pattern).
@@ -90,6 +95,7 @@ def detect_tier_convergence(session) -> int:
             JOIN articles ar ON a.article_id = ar.id
             JOIN sources s ON ar.source_id = s.id
             WHERE ar.published_at > NOW() - INTERVAL '24 hours'
+              AND ar.is_backfill = FALSE
               AND a.is_relevant = TRUE
               AND a.event_key IS NOT NULL AND a.event_key <> ''
             GROUP BY s.country_code, a.event_key
@@ -131,6 +137,7 @@ def detect_official_silence(session) -> int:
             JOIN articles ar ON a.article_id = ar.id
             JOIN sources s ON ar.source_id = s.id
             WHERE ar.published_at > NOW() - INTERVAL '24 hours'
+              AND ar.is_backfill = FALSE
               AND a.is_relevant = TRUE
               AND a.event_key IS NOT NULL AND a.event_key <> ''
             GROUP BY s.country_code, a.event_key
@@ -185,11 +192,12 @@ def detect_velocity_spike(session) -> int:
                 JOIN articles ar ON a.article_id = ar.id
                 JOIN sources s ON ar.source_id = s.id
                 WHERE ar.published_at > NOW() - INTERVAL '30 days'
+                  AND ar.is_backfill = FALSE
                   AND a.is_relevant = TRUE
                 GROUP BY s.country_code
             )
             SELECT * FROM daily
-            WHERE last24 >= 6 AND last24 >= 2.0 * GREATEST(base, 1.0)
+            WHERE last24 >= 5 AND last24 >= 1.5 * GREATEST(base, 1.0)
         """)
     ).fetchall()
 
@@ -241,7 +249,7 @@ def detect_gdelt_shifts(session) -> int:
         std = max(std, 0.3)  # tone is bounded; avoid hair-trigger z-scores
         z = (current - mean) / std
 
-        if abs(z) >= 2.0:
+        if abs(z) >= 1.6:
             direction = "потеплел" if z > 0 else "похолодел"
             emitted += _emit(
                 session, "tone_shift", r.country_code,
@@ -262,7 +270,7 @@ def detect_gdelt_shifts(session) -> int:
             cur_share = shares[0]
             base_share = statistics.mean(shares[2:32]) if len(shares) > 3 else 0
             cur_vol = float(r.volumes[0]) if r.volumes and r.volumes[0] is not None else 0
-            if base_share > 0 and cur_vol >= 10 and cur_share >= 2.5 * base_share:
+            if base_share > 0 and cur_vol >= 10 and cur_share >= 2.0 * base_share:
                 emitted += _emit(
                     session, "volume_surge", r.country_code,
                     dedup_key=f"volume_surge:{r.country_code}:{day_bucket}",
@@ -296,7 +304,7 @@ def detect_index_shifts(session) -> int:
         if r.delta_24h is None:
             continue
         delta = float(r.delta_24h)
-        if abs(delta) < 10:
+        if abs(delta) < 7:
             continue
         direction = "вверх" if delta > 0 else "вниз"
         emitted += _emit(

@@ -195,6 +195,7 @@ def event_boost(code: str, session) -> tuple[float, dict]:
                     JOIN articles ar ON a.article_id = ar.id
                     JOIN sources s ON ar.source_id = s.id
                     WHERE s.country_code = :cc
+                      AND ar.is_backfill = FALSE
                       AND a.is_relevant = TRUE
                       AND a.action_level >= 5
                       AND ar.published_at > NOW() - make_interval(days => :days)
