@@ -22,6 +22,7 @@ a signal is skipped while an unexpired twin exists (worldmonitor pattern).
 """
 import json
 import logging
+import re
 import statistics
 from datetime import datetime, timedelta, timezone
 
@@ -394,8 +395,15 @@ def detect_notable_events(session) -> int:
     emitted = 0
     for r in kept:
         title = (r.title or "").strip() or r.event_key
+        # Some source titles carry raw markdown link syntax [text](url) — unwrap to text.
+        title = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", title).strip()
         al = int(r.action_level or 0)
-        severity = "critical" if al >= 6 else "warning" if al == 5 else "info"
+        # Demoted countries (Ukraine) are capped at "warning" so their war coverage
+        # never leads the feed as red criticals (consistent with the headlines policy).
+        if r.country_code in NOTABLE_DEMOTED:
+            severity = "warning" if al >= 5 else "info"
+        else:
+            severity = "critical" if al >= 6 else "warning" if al == 5 else "info"
         emitted += _emit(
             session, "notable_event", r.country_code,
             dedup_key=f"notable:{r.event_key}"[:200],
