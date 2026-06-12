@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "lucide-react": "^1.18.0",
+    "motion": "^12.40.0",
     "next": "^15.3.3",
     "plotly.js-dist-min": "^2.35.2",
     "react": "^19.1.0",
