@@ -573,6 +573,7 @@ def world_headlines(hours: int = Query(24, ge=1, le=168),
                     tier: Optional[str] = None,
                     country: Optional[str] = None,
                     region: Optional[str] = None,
+                    topic: Optional[str] = None,
                     limit: int = Query(20, ge=1, le=100)):
     """Top relevant headlines across all countries (main page 'news of the day').
 
@@ -584,12 +585,17 @@ def world_headlines(hours: int = Query(24, ge=1, le=168),
     param), diversity caps are applied: ≤ 2 articles per source and ≤ 4 per
     country, so no single country monopolises the feed.
 
+    `topic` filters to articles tagged with that topic key (taxonomy from TOPICS);
+    unknown topic key → 400.
+
     `total` is the number of returned rows (capped by `limit`).
     """
     if tier and tier not in KNOWN_TIERS:
         raise HTTPException(400, f"Unknown tier: {tier}")
     if region and region not in REGIONS:
         raise HTTPException(400, f"Unknown region: {region}")
+    if topic and topic not in TOPICS:
+        raise HTTPException(400, f"Unknown topic: {topic}")
 
     conditions = ["a.is_relevant = TRUE",
                   "ar.is_duplicate = FALSE",
@@ -606,6 +612,9 @@ def world_headlines(hours: int = Query(24, ge=1, le=168),
         region_codes = [c for c, v in COUNTRIES.items() if v["region"] == region]
         conditions.append("s.country_code = ANY(:region_codes)")
         params["region_codes"] = region_codes
+    if topic:
+        conditions.append(":topic = ANY(a.topics)")
+        params["topic"] = topic
 
     where_clause = " AND ".join(conditions)
 
@@ -667,6 +676,18 @@ def world_headlines(hours: int = Query(24, ge=1, le=168),
          "sentiment": float(r.sentiment) if r.sentiment is not None else None,
          "action_level": int(r.action_level or 1)}
         for r in rows], "total": len(rows)}
+
+
+@router.get("/topics/{topic}/brief")
+def topic_brief(topic: str, refresh: bool = False):
+    """AI brief for a topic lens (cached 6h)."""
+    if topic not in TOPICS:
+        raise HTTPException(404, f"Unknown topic: {topic}")
+    from src.pipeline.briefs import generate_topic_brief
+    brief = generate_topic_brief(topic, force=refresh)
+    if not brief:
+        raise HTTPException(404, "Недостаточно данных для брифинга по теме")
+    return {"topic": topic, "label": TOPICS[topic], **brief}
 
 
 @router.get("/topics/{topic}/countries")

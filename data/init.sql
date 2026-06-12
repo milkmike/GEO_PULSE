@@ -165,7 +165,7 @@ CREATE TABLE signals (
 
 CREATE TABLE briefs (
     id SERIAL PRIMARY KEY,
-    scope VARCHAR(10) NOT NULL DEFAULT 'world',
+    scope VARCHAR(40) NOT NULL DEFAULT 'world',
     content TEXT NOT NULL,
     model VARCHAR(80),
     source_hash VARCHAR(64),

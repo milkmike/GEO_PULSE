@@ -23,6 +23,8 @@ export default function HomePage() {
   const [filters, setFilters] = useState<FilterState>({ region: null, level: null, topic: null });
   const [topicCounts, setTopicCounts] =
     useState<Record<string, { articles: number; avg_sentiment: number | null }> | null>(null);
+  const [topicBrief, setTopicBrief] = useState<(Brief & { label?: string }) | null>(null);
+  const [topicBriefLoading, setTopicBriefLoading] = useState(false);
 
   useEffect(() => {
     const load = () => {
@@ -38,12 +40,12 @@ export default function HomePage() {
 
   useEffect(() => {
     const loadHeadlines = () => {
-      api.worldHeadlines(24, 20, filters.region).then((d) => setHeadlines(d.headlines)).catch(() => {});
+      api.worldHeadlines(24, 20, filters.region, filters.topic).then((d) => setHeadlines(d.headlines)).catch(() => {});
     };
     loadHeadlines();
     const t = setInterval(loadHeadlines, 120_000);
     return () => clearInterval(t);
-  }, [filters.region]);
+  }, [filters.region, filters.topic]);
 
   useEffect(() => {
     if (!filters.topic) {
@@ -63,6 +65,19 @@ export default function HomePage() {
         ),
       )
       .catch(() => setTopicCounts({}));
+  }, [filters.topic]);
+
+  useEffect(() => {
+    if (!filters.topic) {
+      setTopicBrief(null);
+      return;
+    }
+    setTopicBriefLoading(true);
+    api
+      .topicBrief(filters.topic)
+      .then(setTopicBrief)
+      .catch(() => setTopicBrief(null))
+      .finally(() => setTopicBriefLoading(false));
   }, [filters.topic]);
 
   const filtered = useMemo(
@@ -129,9 +144,13 @@ export default function HomePage() {
       <div className="reveal reveal-4 mt-3 grid gap-3 lg:grid-cols-3">
         <section className="card">
           <div className="card-title px-4 pb-1 pt-3">
-            {filters.region && meta
-              ? `Новости дня · ${meta.regions[filters.region]}`
-              : "Главные новости дня"}
+            {[
+              "Главные новости дня",
+              filters.region && meta ? `${meta.regions[filters.region]}` : null,
+              filters.topic && meta ? `${meta.topics[filters.topic]}` : null,
+            ]
+              .filter(Boolean)
+              .join(" · ")}
           </div>
           <div className="max-h-[340px] overflow-y-auto">
             <HeadlinesFeed items={headlines} />
@@ -151,9 +170,28 @@ export default function HomePage() {
         </section>
 
         <section className="card">
-          <div className="card-title px-4 pb-1 pt-3">Брифинг «Россия и мир»</div>
+          <div className="card-title px-4 pb-1 pt-3">
+            {filters.topic && meta
+              ? `Брифинг · ${meta.topics[filters.topic]}`
+              : "Брифинг «Россия и мир»"}
+          </div>
           <div className="max-h-[340px] overflow-y-auto px-4 pb-3">
-            {brief ? (
+            {filters.topic ? (
+              topicBriefLoading ? (
+                <div className="px-4 py-3 text-xs text-dim">
+                  Готовлю тематический брифинг — первые ~10 секунд при смене линзы…
+                </div>
+              ) : topicBrief ? (
+                <>
+                  <Markdown text={topicBrief.content} citations={topicBrief.citations ?? topicBrief.meta?.citations} />
+                  <div className="mt-2 text-[11px] text-dim">
+                    {topicBrief.model} · {fmtDate(topicBrief.created_at)}
+                  </div>
+                </>
+              ) : (
+                <div className="py-2 text-xs text-dim">Недостаточно данных по теме</div>
+              )
+            ) : brief ? (
               <>
                 <Markdown text={brief.content} citations={brief.citations ?? brief.meta?.citations} />
                 <div className="mt-2 text-[11px] text-dim">

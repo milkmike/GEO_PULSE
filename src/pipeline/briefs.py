@@ -14,6 +14,7 @@ from sqlalchemy import text
 from src.countries import COUNTRIES, country_name_ru
 from src.db import get_session
 from src.llm import LLMError, chat
+from src.pipeline.topics import TOPICS
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +65,28 @@ COUNTRY_BRIEF_PROMPT = """Ты — аналитик платформы GEO PULSE
 Используй ТОЛЬКО номера из данных, не выдумывай. Утверждения из индексов и
 сигналов сносок не требуют.
 Пиши сжато и фактологично. Не выдумывай события, которых нет в данных."""
+
+
+TOPIC_BRIEF_PROMPT = """Ты — аналитик платформы GEO PULSE. Составь тематический брифинг по теме «{topic_label}» в отношениях стран мира с Россией на основе машинной сводки.
+
+ДАННЫЕ:
+{data}
+
+Структура (markdown, на русском):
+## Главное
+3-4 пункта по теме за период.
+## Страны в фокусе
+Где тема звучит сильнее всего (с цифрами).
+## Тональность
+Как тема окрашена в разных странах.
+## Следить
+1-2 сюжета, которые могут развиться.
+
+Заголовки в данных пронумерованы полем "n". Каждое фактическое утверждение,
+основанное на заголовке, помечай сноской [n] (например: «...растёт напряжённость [3]»).
+Используй ТОЛЬКО номера из данных, не выдумывай. Утверждения из статистики
+сносок не требуют.
+Пиши сжато, фактологично. Не выдумывай события, которых нет в данных."""
 
 
 def _hash_inputs(data: dict) -> str:
@@ -371,6 +394,129 @@ def generate_country_brief(code: str, max_age_hours: float = 6.0,
         _save_brief(session, code, content, model, source_hash,
                     {"citations": citations_meta})
     logger.info(f"Country brief generated for {code} ({model})")
+    return {"content": content, "model": model,
+            "created_at": now.isoformat(), "cached": False,
+            "citations": citations_meta}
+
+
+def gather_topic_inputs(session, topic: str) -> dict:
+    """Headlines and country stats for a topic-lens brief."""
+    headlines = session.execute(
+        text("""
+            SELECT s.country_code, ar.title, ar.url, s.name AS source_name,
+                   a.sentiment, a.action_level
+            FROM analysis a
+            JOIN articles ar ON a.article_id = ar.id
+            JOIN sources s ON ar.source_id = s.id
+            WHERE a.is_relevant = TRUE AND ar.is_duplicate = FALSE
+              AND :topic = ANY(a.topics)
+              AND ar.published_at > NOW() - INTERVAL '7 days'
+            ORDER BY a.action_level DESC NULLS LAST,
+                     ar.reprint_count DESC NULLS LAST,
+                     ar.published_at DESC
+            LIMIT 20
+        """),
+        {"topic": topic},
+    ).fetchall()
+
+    country_stats = session.execute(
+        text("""
+            SELECT s.country_code, COUNT(*) AS articles, AVG(a.sentiment) AS avg_sentiment
+            FROM analysis a
+            JOIN articles ar ON a.article_id = ar.id
+            JOIN sources s ON ar.source_id = s.id
+            WHERE a.is_relevant = TRUE AND :topic = ANY(a.topics)
+              AND ar.published_at > NOW() - INTERVAL '14 days'
+            GROUP BY s.country_code
+            ORDER BY articles DESC
+            LIMIT 12
+        """),
+        {"topic": topic},
+    ).fetchall()
+
+    citations = []
+
+    def _cite(title, url, source, country):
+        n = len(citations) + 1
+        citations.append({"n": n, "title": title, "url": url,
+                          "source": source, "country": country})
+        return n
+
+    numbered_headlines = []
+    for r in headlines:
+        entry = {"country": country_name_ru(r.country_code), "title": r.title,
+                 "sentiment": float(r.sentiment or 0),
+                 "action_level": int(r.action_level or 1)}
+        if r.url:
+            entry["n"] = _cite(r.title, r.url, r.source_name, r.country_code)
+        numbered_headlines.append(entry)
+
+    stats = []
+    for r in country_stats:
+        stats.append({
+            "country": country_name_ru(r.country_code),
+            "articles": int(r.articles),
+            "avg_sentiment": round(float(r.avg_sentiment), 2) if r.avg_sentiment is not None else None,
+        })
+
+    return {
+        "topic": topic,
+        "label": TOPICS.get(topic, topic),
+        "headlines": numbered_headlines,
+        "country_stats": stats,
+        "citations": citations,
+    }
+
+
+def generate_topic_brief(topic: str, max_age_hours: float = 6.0,
+                         force: bool = False) -> dict | None:
+    """Generate (or reuse) a topic-lens brief."""
+    scope = f"topic:{topic}"
+    now = datetime.now(timezone.utc)
+
+    with get_session() as session:
+        last = _last_brief(session, scope)
+        if last and not force:
+            age_h = (now - last.created_at).total_seconds() / 3600
+            if age_h < max_age_hours:
+                return {"content": last.content, "model": last.model,
+                        "created_at": last.created_at.isoformat(), "cached": True,
+                        "citations": (last.meta or {}).get("citations", [])}
+
+        inputs = gather_topic_inputs(session, topic)
+        if not inputs.get("headlines") and not inputs.get("country_stats"):
+            return None
+
+        # Pop citations before hashing so url availability doesn't cause
+        # spurious cache misses when headline content is unchanged.
+        citations = inputs.pop("citations", [])
+
+        source_hash = _hash_inputs(inputs)
+        if last and last.source_hash == source_hash and not force:
+            return {"content": last.content, "model": last.model,
+                    "created_at": last.created_at.isoformat(), "cached": True,
+                    "citations": (last.meta or {}).get("citations", [])}
+
+        prompt = TOPIC_BRIEF_PROMPT.format(
+            topic_label=TOPICS.get(topic, topic),
+            data=json.dumps(inputs, ensure_ascii=False, indent=1)[:12000],
+        )
+
+    try:
+        content, model = chat(prompt, max_tokens=1000, temperature=0.3, script="briefs.py")
+    except LLMError as e:
+        logger.error(f"Topic brief LLM failed for {topic}: {e}")
+        return None
+
+    from src.pipeline.citations import apply_citations
+    content, used = apply_citations(content, {c["n"] for c in citations})
+
+    citations_meta = [{**c, "used": c["n"] in used} for c in citations]
+
+    with get_session() as session:
+        _save_brief(session, scope, content, model, source_hash,
+                    {"citations": citations_meta})
+    logger.info(f"Topic brief generated for {topic} ({model})")
     return {"content": content, "model": model,
             "created_at": now.isoformat(), "cached": False,
             "citations": citations_meta}
