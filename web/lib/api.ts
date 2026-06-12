@@ -1,6 +1,6 @@
 import type {
   AgreementGroup, Brief, CountrySummary, Dossier, EntityStat, FxSeries, Headline, Health,
-  MapEntry, MapHistoryFrame, Meta, Signal, SourceHealthRow, SourceRow, TopicStat, TradeYear,
+  MapEntry, Meta, Signal, SourceHealthRow, SourceRow, TopicStat, TradeYear,
   UNVoteYear,
 } from "./types";
 
@@ -23,8 +23,6 @@ export const api = {
   countries: () =>
     get<{ countries: CountrySummary[]; total: number }>("/api/v2/countries"),
   map: () => get<{ map: MapEntry[] }>("/api/v2/map"),
-  mapHistory: (days = 90) =>
-    get<{ days: MapHistoryFrame[]; total_days: number }>(`/api/v2/map/history?days=${days}`),
   dossier: (code: string, days = 90) =>
     get<Dossier>(`/api/v2/countries/${code}?days=${days}`),
   topics: (code: string, days = 30) =>
