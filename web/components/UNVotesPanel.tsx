@@ -1,6 +1,7 @@
 "use client";
 
 import Plot from "@/components/Plot";
+import MotionCard from "@/components/MotionCard";
 import type { UNVoteYear } from "@/lib/types";
 
 export default function UNVotesPanel({ data }: { data: UNVoteYear[] }) {
@@ -10,7 +11,7 @@ export default function UNVotesPanel({ data }: { data: UNVoteYear[] }) {
   const pctCls = pct == null ? "text-dim"
     : pct >= 60 ? "text-emerald-400" : pct >= 40 ? "text-yellow-400" : "text-red-400";
   return (
-    <section className="card">
+    <MotionCard>
       <div className="card-title px-4 pb-1 pt-3">Голосования ООН (совпадение с РФ)</div>
       <div className="grid grid-cols-2 gap-2 px-4 pt-1 sm:grid-cols-4">
         <div><div className={`text-lg font-semibold ${pctCls}`}>{pct != null ? `${pct.toFixed(0)}%` : "—"}</div>
@@ -38,6 +39,6 @@ export default function UNVotesPanel({ data }: { data: UNVoteYear[] }) {
           shapes: [{ type: "line", x0: data[0].year, x1: last.year, y0: 50, y1: 50,
                      line: { color: "rgba(255,255,255,0.25)", dash: "dot", width: 1 } }],
         }} />
-    </section>
+    </MotionCard>
   );
 }

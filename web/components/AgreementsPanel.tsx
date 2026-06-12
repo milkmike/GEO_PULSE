@@ -1,18 +1,28 @@
+"use client";
+
+import { motion, useReducedMotion } from "motion/react";
 import type { AgreementGroup } from "@/lib/types";
 import { fmtDate, safeHttpUrl } from "@/lib/format";
+import MotionCard from "@/components/MotionCard";
 
 const TYPE_LABEL: Record<string, string> = {
   diplomatic: "дипломатия", economic: "экономика",
 };
 
 export default function AgreementsPanel({ items }: { items: AgreementGroup[] }) {
+  const reduce = useReducedMotion();
   if (!items.length) return null;
   return (
-    <section className="card">
+    <MotionCard>
       <div className="card-title px-4 pb-1 pt-3">Договоры и намерения (180 дней)</div>
       <div className="max-h-[360px] divide-y divide-white/5 overflow-y-auto">
         {items.map((g) => (
-          <div key={g.event_key} className="px-4 py-2">
+          <motion.div
+            key={g.event_key}
+            className="px-4 py-2"
+            whileHover={reduce ? undefined : { x: 2 }}
+            transition={{ duration: 0.15, ease: "easeOut" }}
+          >
             <div className="flex items-baseline gap-2 text-[13px]">
               <span className="font-medium">{g.event_key}</span>
               <span className="rounded bg-white/5 px-1.5 text-[10px] text-dim">
@@ -39,9 +49,9 @@ export default function AgreementsPanel({ items }: { items: AgreementGroup[] }) 
             {g.articles_total > g.articles.length && (
               <div className="text-[10px] text-zinc-600">+{g.articles_total - g.articles.length} статей</div>
             )}
-          </div>
+          </motion.div>
         ))}
       </div>
-    </section>
+    </MotionCard>
   );
 }

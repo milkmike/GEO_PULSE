@@ -1,6 +1,7 @@
 "use client";
 
 import Plot from "@/components/Plot";
+import MotionCard from "@/components/MotionCard";
 import type { TradeYear } from "@/lib/types";
 
 function fmtUsd(v: number | null): string {
@@ -16,7 +17,7 @@ export default function TradePanel({ data }: { data: TradeYear[] }) {
   const last = data[data.length - 1];
   const yoy = last.yoy_change_pct;
   return (
-    <section className="card">
+    <MotionCard>
       <div className="card-title px-4 pb-1 pt-3">Торговля с Россией</div>
       <div className="grid grid-cols-2 gap-2 px-4 pt-1 sm:grid-cols-4">
         <div><div className="text-lg font-semibold">{fmtUsd(last.total_trade_usd)}</div>
@@ -47,6 +48,6 @@ export default function TradePanel({ data }: { data: TradeYear[] }) {
           yaxis: { gridcolor: "rgba(255,255,255,0.06)" },
           xaxis: { gridcolor: "rgba(255,255,255,0.06)" },
         }} />
-    </section>
+    </MotionCard>
   );
 }

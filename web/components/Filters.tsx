@@ -1,5 +1,6 @@
 "use client";
 
+import { motion, useReducedMotion } from "motion/react";
 import { LEVEL_COLOR, LEVEL_RU } from "@/lib/format";
 import type { Level } from "@/lib/types";
 
@@ -22,6 +23,7 @@ export default function Filters({
   value: FilterState;
   onChange: (next: FilterState) => void;
 }) {
+  const reduce = useReducedMotion();
   return (
     <div className="flex flex-wrap items-center gap-2 px-1 py-2">
       <select
@@ -36,20 +38,33 @@ export default function Filters({
       </select>
 
       <div className="flex flex-wrap gap-1">
-        {LEVELS.map((lvl) => (
-          <button
-            key={lvl}
-            onClick={() => onChange({ ...value, level: value.level === lvl ? null : lvl })}
-            className="rounded-full border px-2.5 py-0.5 text-[11px] transition-colors"
-            style={{
-              borderColor: value.level === lvl ? LEVEL_COLOR[lvl] : "#1f2937",
-              color: value.level === lvl ? LEVEL_COLOR[lvl] : "#6b7280",
-              background: value.level === lvl ? `${LEVEL_COLOR[lvl]}1a` : "transparent",
-            }}
-          >
-            {LEVEL_RU[lvl]}
-          </button>
-        ))}
+        {LEVELS.map((lvl) => {
+          const active = value.level === lvl;
+          return (
+            <motion.button
+              key={lvl}
+              onClick={() => onChange({ ...value, level: active ? null : lvl })}
+              className="relative rounded-full border px-2.5 py-0.5 text-[11px] transition-colors"
+              style={{
+                borderColor: active ? LEVEL_COLOR[lvl] : "#1f2937",
+                color: active ? LEVEL_COLOR[lvl] : "#6b7280",
+                background: active ? `${LEVEL_COLOR[lvl]}1a` : "transparent",
+              }}
+              whileTap={reduce ? undefined : { scale: 0.92 }}
+              whileHover={reduce ? undefined : { scale: 1.04 }}
+            >
+              {active && (
+                <motion.span
+                  layoutId="levelChipActive"
+                  className="absolute inset-0 -z-10 rounded-full"
+                  style={{ background: "rgba(255,255,255,0.06)" }}
+                  transition={{ type: "spring", stiffness: 500, damping: 35 }}
+                />
+              )}
+              {LEVEL_RU[lvl]}
+            </motion.button>
+          );
+        })}
       </div>
 
       <select
@@ -65,12 +80,13 @@ export default function Filters({
       </select>
 
       {(value.region || value.level || value.topic) && (
-        <button
+        <motion.button
           onClick={() => onChange({ region: null, level: null, topic: null })}
           className="text-[11px] text-dim underline hover:text-gray-300"
+          whileTap={reduce ? undefined : { scale: 0.95 }}
         >
           сбросить
-        </button>
+        </motion.button>
       )}
     </div>
   );
