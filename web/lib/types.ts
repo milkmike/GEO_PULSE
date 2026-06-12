@@ -153,3 +153,21 @@ export interface SourceRow {
   tier: string; article_count: number; last_collected: string | null;
   relevant_count: number; avg_sentiment: number | null;
 }
+
+export interface UNVoteYear {
+  year: number; total_votes: number | null; agree_with_russia: number | null;
+  disagree_with_russia: number | null; abstain: number | null;
+  agreement_pct: number | null;
+}
+
+export interface TradeYear {
+  year: number; ru_export_usd: number | null; ru_import_usd: number | null;
+  total_trade_usd: number | null; trade_balance_usd: number | null;
+  yoy_change_pct: number | null;
+}
+
+export interface AgreementGroup {
+  event_key: string; event_type: string; action_level: number;
+  first_at: string; last_at: string; articles_total: number;
+  articles: { title: string; url: string | null; source: string; published_at: string }[];
+}

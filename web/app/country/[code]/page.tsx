@@ -2,13 +2,17 @@
 
 import { use, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import AgreementsPanel from "@/components/AgreementsPanel";
 import Markdown from "@/components/Markdown";
 import Plot from "@/components/Plot";
 import SignalFeed from "@/components/SignalFeed";
+import TradePanel from "@/components/TradePanel";
+import UNVotesPanel from "@/components/UNVotesPanel";
 import { api, apiBase } from "@/lib/api";
 import { fmt, fmtDate, LEVEL_COLOR, LEVEL_RU } from "@/lib/format";
 import type {
-  Brief, Dossier, EntityStat, FxSeries, Headline, Signal, TopicStat,
+  AgreementGroup, Brief, Dossier, EntityStat, FxSeries, Headline, Signal, TopicStat,
+  TradeYear, UNVoteYear,
 } from "@/lib/types";
 
 const CHART_BASE = {
@@ -31,6 +35,9 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
   const [entities, setEntities] = useState<EntityStat[]>([]);
   const [fx, setFx] = useState<FxSeries | null>(null);
   const [brief, setBrief] = useState<Brief | null>(null);
+  const [un, setUn] = useState<UNVoteYear[]>([]);
+  const [trade, setTrade] = useState<TradeYear[]>([]);
+  const [agreements, setAgreements] = useState<AgreementGroup[]>([]);
   const [error, setError] = useState(false);
   const [showEmbed, setShowEmbed] = useState(false);
 
@@ -41,6 +48,9 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
     api.entities(cc).then((d) => setEntities(d.entities)).catch(() => {});
     api.fx(cc).then(setFx).catch(() => {});
     api.countryBrief(cc).then(setBrief).catch(() => {});
+    api.unVotes(cc).then((d) => setUn(d.data)).catch(() => {});
+    api.trade(cc).then((d) => setTrade(d.data)).catch(() => {});
+    api.agreements(cc).then((d) => setAgreements(d.agreements)).catch(() => {});
   }, [cc]);
 
   const indexChart = useMemo(() => {
@@ -221,6 +231,10 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
             />
           </section>
         )}
+
+        <UNVotesPanel data={un} />
+        <TradePanel data={trade} />
+        <AgreementsPanel items={agreements} />
 
         {topics.length > 0 && (
           <section className="card">

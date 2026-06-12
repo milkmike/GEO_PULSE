@@ -1,6 +1,7 @@
 import type {
-  Brief, CountrySummary, Dossier, EntityStat, FxSeries, Headline, Health,
-  MapEntry, MapHistoryFrame, Meta, Signal, SourceHealthRow, SourceRow, TopicStat,
+  AgreementGroup, Brief, CountrySummary, Dossier, EntityStat, FxSeries, Headline, Health,
+  MapEntry, MapHistoryFrame, Meta, Signal, SourceHealthRow, SourceRow, TopicStat, TradeYear,
+  UNVoteYear,
 } from "./types";
 
 /** API base: build-time env wins; otherwise same host on :8100 (compose default). */
@@ -49,4 +50,10 @@ export const api = {
   topicCountries: (topic: string, days = 30) =>
     get<{ label: string; countries: { country_code: string; country_name: string; articles: number; avg_sentiment: number | null }[] }>(
       `/api/v2/topics/${topic}/countries?days=${days}`),
+  unVotes: (code: string) =>
+    get<{ data: UNVoteYear[] }>(`/api/v2/countries/${code}/un-votes`),
+  trade: (code: string) =>
+    get<{ data: TradeYear[] }>(`/api/v2/countries/${code}/trade`),
+  agreements: (code: string, days = 180) =>
+    get<{ agreements: AgreementGroup[] }>(`/api/v2/countries/${code}/agreements?days=${days}`),
 };
