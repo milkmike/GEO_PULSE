@@ -6,7 +6,10 @@ Strategy (per country):
 2. Fallback: UN Comtrade public preview (free, no key) — CIS countries only (numeric map)
 3. Last resort: IMF Direction of Trade Statistics (free, no key, ISO2 area codes) — all countries
 
-Runs monthly; only inserts new year data, never overwrites confirmed data.
+Runs monthly. Upserts year rows per country: new years are inserted, existing
+years are refreshed with the latest source figures (trade statistics get revised
+retroactively). Source priority per pass: Comtrade (CIS) before IMF DOTS; IMF
+never overwrites rows Comtrade loaded in the same pass.
 Covers all 99 countries in the GEO PULSE registry (src/countries.py).
 """
 import argparse
@@ -48,9 +51,6 @@ PARTNER_CODES = {
     "112": "BY",  # Belarus
 }
 
-# Reverse map: ISO2 -> Comtrade numeric (for guard checks)
-ISO2_IN_COMTRADE = set(PARTNER_CODES.values())
-
 # All registry countries except Russia — the full target set
 TARGET_COUNTRIES = [c for c in all_codes() if c != "RU"]
 
@@ -82,7 +82,7 @@ def get_existing_years(conn) -> set:
     return existing
 
 
-def try_comtrade_api_for_cis() -> list:
+def try_comtrade_api_for_cis() -> list | None:
     """Try fetching CIS countries from UN Comtrade API (requires free subscription key).
 
     Only covers countries present in PARTNER_CODES (CIS numeric map).
@@ -168,7 +168,7 @@ def try_comtrade_api_for_cis() -> list:
     return results if results else None
 
 
-def try_comtrade_bulk_for_cis() -> list:
+def try_comtrade_bulk_for_cis() -> list | None:
     """Try UN Comtrade bulk download (public, no key needed).
 
     Uses the preview endpoint which has limited but free access.
