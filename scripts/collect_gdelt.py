@@ -59,12 +59,14 @@ def collect_all(days: int = 7, with_samples: bool = True):
 
     total_rows = 0
     failed = []
+    consecutive_failures = 0
     for i, country in enumerate(countries, 1):
         code = country["code"]
         try:
             rows = collect_country(country, days=days, with_samples=with_samples)
             if rows:
                 total_rows += _upsert_rows(rows)
+                consecutive_failures = 0
                 latest = rows[-1]
                 logger.info(
                     f"  [{i}/{len(countries)}] {code}: {len(rows)} days, "
@@ -72,9 +74,18 @@ def collect_all(days: int = 7, with_samples: bool = True):
                 )
             else:
                 failed.append(code)
+                consecutive_failures += 1
         except Exception as e:
             failed.append(code)
+            consecutive_failures += 1
             logger.error(f"  [{i}/{len(countries)}] {code}: {e}")
+
+        # Circuit breaker: a streak of empty countries usually means the IP is
+        # rate-limited — cool down once instead of burning the whole pass
+        if consecutive_failures == 5:
+            logger.warning("5 countries failed in a row — cooling down 10 min")
+            time.sleep(600)
+            consecutive_failures = 0
 
     logger.info(f"GDELT pass complete: {total_rows} rows upserted, "
                 f"{len(failed)} countries without data {failed[:10]}")

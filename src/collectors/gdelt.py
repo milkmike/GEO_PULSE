@@ -6,6 +6,7 @@ daily aggregates: coverage volume, share of national news flow, average tone,
 plus a sample of top headlines. Free API, no key required.
 """
 import logging
+import os
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -19,35 +20,54 @@ GDELT_DOC_URL = "https://api.gdeltproject.org/api/v2/doc/doc"
 # keywords match articles in all 65 monitored languages)
 RUSSIA_QUERY = '(russia OR russian OR putin OR kremlin OR moscow)'
 
-# GDELT politeness: keep well under their informal rate limits
-REQUEST_PAUSE_SEC = 1.2
+# GDELT politeness: the DOC API rate-limits per IP aggressively (429/503 on
+# bursts). ~5s sustained pacing keeps a 99-country pass (~300 requests)
+# within tolerance; tune via env if your IP is luckier/unluckier.
+REQUEST_PAUSE_SEC = float(os.environ.get("GDELT_PAUSE_SEC", "5.0"))
+MAX_RETRIES = 3  # per request, on 429/503 with growing backoff
 TIMEOUT_SEC = 30.0
 
 USER_AGENT = "GeoPulse/2.0 (research project; Russia-relations monitoring)"
 
 
 def _gdelt_get(params: dict) -> dict | None:
-    """Single GDELT DOC API call. Returns parsed JSON or None."""
-    try:
-        resp = httpx.get(
-            GDELT_DOC_URL,
-            params=params,
-            headers={"User-Agent": USER_AGENT},
-            timeout=TIMEOUT_SEC,
-        )
-        resp.raise_for_status()
-        # GDELT returns plain-text error messages with HTTP 200 on bad queries
-        text = resp.text.strip()
-        if not text.startswith("{"):
-            logger.warning(f"GDELT non-JSON response: {text[:120]}")
+    """Single GDELT DOC API call with 429/503 backoff. Returns JSON or None."""
+    for attempt in range(MAX_RETRIES):
+        try:
+            resp = httpx.get(
+                GDELT_DOC_URL,
+                params=params,
+                headers={"User-Agent": USER_AGENT},
+                timeout=TIMEOUT_SEC,
+            )
+            if resp.status_code in (429, 503):
+                # honour Retry-After when present; otherwise 30s, 90s, 270s
+                try:
+                    retry_after = int(resp.headers.get("retry-after") or 0)
+                except ValueError:
+                    retry_after = 0
+                wait = max(retry_after, 30 * (3 ** attempt))
+                logger.warning(
+                    f"GDELT {resp.status_code}, backing off {wait}s "
+                    f"(attempt {attempt + 1}/{MAX_RETRIES})"
+                )
+                time.sleep(wait)
+                continue
+            resp.raise_for_status()
+            # GDELT returns plain-text error messages with HTTP 200 on bad queries
+            text = resp.text.strip()
+            if not text.startswith("{"):
+                logger.warning(f"GDELT non-JSON response: {text[:120]}")
+                return None
+            return resp.json()
+        except httpx.HTTPError as e:
+            logger.warning(f"GDELT request failed: {e}")
             return None
-        return resp.json()
-    except httpx.HTTPError as e:
-        logger.warning(f"GDELT request failed: {e}")
-        return None
-    except ValueError as e:
-        logger.warning(f"GDELT JSON parse failed: {e}")
-        return None
+        except ValueError as e:
+            logger.warning(f"GDELT JSON parse failed: {e}")
+            return None
+    logger.warning("GDELT rate limit persisted after retries, skipping request")
+    return None
 
 
 def _timeline_points(data: dict | None) -> dict[str, dict]:
