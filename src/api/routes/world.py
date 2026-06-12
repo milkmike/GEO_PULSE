@@ -487,6 +487,50 @@ def list_signals(days: int = Query(3, ge=1, le=30),
     }
 
 
+@router.get("/headlines")
+def world_headlines(hours: int = Query(24, ge=1, le=168),
+                    tier: Optional[str] = None,
+                    country: Optional[str] = None,
+                    limit: int = Query(20, ge=1, le=100)):
+    """Top relevant headlines across all countries (main page 'news of the day')."""
+    conditions = ["a.is_relevant = TRUE",
+                  "ar.published_at > NOW() - make_interval(hours => :h)",
+                  "ar.url IS NOT NULL"]
+    params: dict = {"h": hours, "lim": limit}
+    if tier:
+        conditions.append("s.tier = :tier")
+        params["tier"] = tier
+    if country:
+        conditions.append("s.country_code = :cc")
+        params["cc"] = country.upper()
+
+    with get_session() as session:
+        rows = session.execute(
+            text(f"""
+                SELECT ar.title, ar.url, s.name AS source_name, s.tier,
+                       s.country_code, ar.published_at,
+                       a.sentiment, a.action_level
+                FROM analysis a
+                JOIN articles ar ON a.article_id = ar.id
+                JOIN sources s ON ar.source_id = s.id
+                WHERE {' AND '.join(conditions)}
+                ORDER BY a.action_level DESC NULLS LAST,
+                         ar.reprint_count DESC NULLS LAST,
+                         ar.published_at DESC
+                LIMIT :lim
+            """), params).fetchall()
+
+    return {"headlines": [
+        {"title": r.title, "url": r.url, "source": r.source_name, "tier": r.tier,
+         "country_code": r.country_code,
+         "country_name": country_name_ru(r.country_code),
+         "flag": (COUNTRIES.get(r.country_code) or {}).get("flag", ""),
+         "published_at": r.published_at.isoformat() if r.published_at else None,
+         "sentiment": float(r.sentiment) if r.sentiment is not None else None,
+         "action_level": int(r.action_level or 1)}
+        for r in rows], "total": len(rows)}
+
+
 @router.get("/topics/{topic}/countries")
 def topic_countries(topic: str, days: int = Query(30, ge=1, le=180)):
     """Topic lens: which countries discuss this topic, how much and in what tone."""
