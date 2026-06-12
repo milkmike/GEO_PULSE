@@ -23,7 +23,7 @@ export default function SiteHeader({
         <Link href="/" className="flex items-baseline gap-2.5">
           <span className="live-dot relative top-[-2px]" aria-hidden="true" />
           <span className="display text-[22px] leading-none tracking-tight">
-            GEO PULSE
+            МАССАРАКШ
           </span>
           <span className="tnum text-[10px] uppercase tracking-[0.22em] text-dim">
             мир ↔ россия

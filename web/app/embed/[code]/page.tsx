@@ -43,7 +43,7 @@ export default function EmbedPage({ params }: { params: Promise<{ code: string }
   }, [dossier]);
 
   if (!dossier?.index) {
-    return <div className="p-4 text-xs text-dim">GEO PULSE · {cc}: загрузка…</div>;
+    return <div className="p-4 text-xs text-dim">Массаракш · {cc}: загрузка…</div>;
   }
 
   const { country, index } = dossier;

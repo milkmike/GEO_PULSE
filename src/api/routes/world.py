@@ -27,6 +27,10 @@ KNOWN_TIERS = {"official", "mainstream", "independent", "social",
                # legacy v1 tier labels still present in the sources table
                "state", "opposition"}
 
+# Countries demoted in the global headlines ranking: their (war) coverage at
+# action_level 5-6 would otherwise permanently occupy the top of the feed.
+HEADLINES_DEMOTED = ["UA"]
+
 
 def _cache_get(key: str):
     try:
@@ -583,7 +587,9 @@ def world_headlines(hours: int = Query(24, ge=1, le=168),
     `region` filters to countries in that region (source home country's region);
     unknown region key → 400.  When region or global view is active (no `country`
     param), diversity caps are applied: ≤ 2 articles per source and ≤ 4 per
-    country, so no single country monopolises the feed.
+    country (≤ 2 for demoted countries), so no single country monopolises the feed.
+    Demoted countries (HEADLINES_DEMOTED) are also sorted last in the outer ORDER BY
+    so their high-action-level war coverage does not permanently top the global feed.
 
     `topic` filters to articles tagged with that topic key (taxonomy from TOPICS);
     unknown topic key → 400.
@@ -634,7 +640,8 @@ def world_headlines(hours: int = Query(24, ge=1, le=168),
             LIMIT :lim
         """
     else:
-        # Global / region view: cap ≤ 2 per source and ≤ 4 per country.
+        # Global / region view: cap ≤ 2 per source and ≤ 4 per country
+        # (≤ 2 for demoted countries). Demoted countries sort last.
         sql = f"""
             SELECT title, url, source_name, tier, country_code, published_at,
                    sentiment, action_level
@@ -657,12 +664,16 @@ def world_headlines(hours: int = Query(24, ge=1, le=168),
                 JOIN sources s ON ar.source_id = s.id
                 WHERE {where_clause}
             ) t
-            WHERE src_rank <= 2 AND cc_rank <= 4
-            ORDER BY action_level DESC NULLS LAST,
+            WHERE src_rank <= 2
+              AND (CASE WHEN country_code = ANY(:demoted) THEN cc_rank <= 2
+                        ELSE cc_rank <= 4 END)
+            ORDER BY (CASE WHEN country_code = ANY(:demoted) THEN 1 ELSE 0 END),
+                     action_level DESC NULLS LAST,
                      reprint_count DESC NULLS LAST,
                      published_at DESC
             LIMIT :lim
         """
+        params["demoted"] = HEADLINES_DEMOTED
 
     with get_session() as session:
         rows = session.execute(text(sql), params).fetchall()

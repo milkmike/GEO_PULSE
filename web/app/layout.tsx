@@ -18,7 +18,7 @@ const jbMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "GEO PULSE — Мир ↔ Россия",
+  title: "Массаракш — Мир ↔ Россия",
   description:
     "Мониторинг отношений 99 стран мира с Россией: индекс, сигналы медиаполя, AI-брифинги",
 };
