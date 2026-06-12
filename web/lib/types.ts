@@ -139,3 +139,10 @@ export interface Meta {
   levels: Level[];
   countries: { code: string; name: string; iso3: string; flag: string; region: string; tier: number }[];
 }
+
+export interface SourceRow {
+  id: number; name: string; url: string; country_code: string;
+  source_type: string; language: string | null; active: boolean;
+  tier: string; article_count: number; last_collected: string | null;
+  relevant_count: number; avg_sentiment: number | null;
+}

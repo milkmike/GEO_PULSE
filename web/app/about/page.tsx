@@ -3,14 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { api } from "@/lib/api";
-import type { Meta } from "@/lib/types";
-
-interface SourceEntry {
-  id: number;
-  active: boolean;
-  article_count: number;
-  country_code: string;
-}
+import type { Meta, SourceRow } from "@/lib/types";
 
 interface StatsState {
   total: number;
@@ -18,6 +11,7 @@ interface StatsState {
   articles: number;
   countries: number;
   loaded: boolean;
+  error: boolean;
 }
 
 const SCALE_LEVELS = [
@@ -36,11 +30,14 @@ export default function AboutPage() {
     articles: 0,
     countries: 0,
     loaded: false,
+    error: false,
   });
 
   useEffect(() => {
     Promise.allSettled([api.sources(), api.meta()]).then(([sourcesResult, metaResult]) => {
-      const sources: SourceEntry[] =
+      const allFailed =
+        sourcesResult.status === "rejected" && metaResult.status === "rejected";
+      const sources: SourceRow[] =
         sourcesResult.status === "fulfilled" ? sourcesResult.value.sources : [];
       const meta: Meta | null =
         metaResult.status === "fulfilled" ? metaResult.value : null;
@@ -50,7 +47,8 @@ export default function AboutPage() {
         active: sources.filter((s) => s.active).length,
         articles: sources.reduce((sum, s) => sum + (s.article_count ?? 0), 0),
         countries: meta?.countries?.length ?? 0,
-        loaded: true,
+        loaded: !allFailed,
+        error: allFailed,
       });
     });
   }, []);
@@ -236,7 +234,7 @@ export default function AboutPage() {
           </h3>
           {/* Colored horizontal bar */}
           <div className="overflow-x-auto">
-            <div className="flex min-w-[420px] rounded-md overflow-hidden">
+            <div aria-hidden="true" className="flex min-w-[420px] rounded-md overflow-hidden">
               {SCALE_LEVELS.map((lvl) => (
                 <div key={lvl.label} className={`flex-1 ${lvl.bg} px-1 py-2`} />
               ))}
