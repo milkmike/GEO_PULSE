@@ -95,6 +95,70 @@ countries:
         tier: analytics
         state_affiliated: false
         propaganda_risk: low
+      - name: DFRLab
+        type: rss
+        url: https://www.dfrlab.org/feed/
+        weight: 1.0
+        language: en
+        tier: analytics
+        state_affiliated: false
+        propaganda_risk: low
+      - name: Defense One
+        type: rss
+        url: https://www.defenseone.com/rss/all/
+        weight: 1.0
+        language: en
+        tier: analytics
+        state_affiliated: false
+        propaganda_risk: low
+      - name: Breaking Defense
+        type: rss
+        url: https://breakingdefense.com/feed/
+        weight: 1.0
+        language: en
+        tier: analytics
+        state_affiliated: false
+        propaganda_risk: low
+      - name: The War Zone
+        type: rss
+        url: https://twz.com/feed
+        weight: 1.0
+        language: en
+        tier: analytics
+        state_affiliated: false
+        propaganda_risk: low
+      - name: International Crisis Group
+        type: rss
+        url: https://www.crisisgroup.org/rss.xml
+        weight: 1.0
+        language: en
+        tier: analytics
+        state_affiliated: false
+        propaganda_risk: low
+      - name: CNAS
+        type: rss
+        url: https://news.google.com/rss/search?q=site:cnas.org+russia&hl=en-US&gl=US&ceid=US:en
+        weight: 1.0
+        language: en
+        tier: analytics
+        state_affiliated: false
+        propaganda_risk: low
+      - name: GMF (German Marshall Fund)
+        type: rss
+        url: https://news.google.com/rss/search?q=site:gmfus.org+russia&hl=en-US&gl=US&ceid=US:en
+        weight: 1.0
+        language: en
+        tier: analytics
+        state_affiliated: false
+        propaganda_risk: low
+      - name: Stimson Center
+        type: rss
+        url: https://news.google.com/rss/search?q=site:stimson.org+russia&hl=en-US&gl=US&ceid=US:en
+        weight: 1.0
+        language: en
+        tier: analytics
+        state_affiliated: false
+        propaganda_risk: low
       - name: NYT World
         type: rss
         url: https://rss.nytimes.com/services/xml/rss/nyt/World.xml
@@ -1317,6 +1381,14 @@ countries:
   AU:
     name: Австралия
     sources:
+      - name: Lowy Institute (The Interpreter)
+        type: rss
+        url: https://www.lowyinstitute.org/the-interpreter/rss.xml
+        weight: 1.0
+        language: en
+        tier: analytics
+        state_affiliated: false
+        propaganda_risk: low
       - name: ABC News
         type: rss
         url: https://www.abc.net.au/news/feed/51120/rss.xml

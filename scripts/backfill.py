@@ -38,7 +38,8 @@ USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 FETCH_TIMEOUT = httpx.Timeout(10.0, connect=5.0)
 
 FROM_DATE = datetime(2022, 1, 1, tzinfo=timezone.utc)
-TO_DATE = datetime(2026, 2, 9, tzinfo=timezone.utc)
+# TO_DATE resolved at runtime (defaults to now; override with --to-date YYYY-MM-DD)
+TO_DATE: datetime = datetime(2099, 1, 1, tzinfo=timezone.utc)  # sentinel; overwritten in main()
 SOURCE_TIMEOUT = 900  # 15 min max per source
 
 STATS = {"discovered": 0, "extracted": 0, "saved": 0, "duplicates": 0,
@@ -426,7 +427,16 @@ def main():
     parser.add_argument("--tier", default="official", help="Source tier")
     parser.add_argument("--max-per-source", type=int, default=500)
     parser.add_argument("--source-id", type=int, help="Single source ID")
+    parser.add_argument("--to-date", help="Upper date bound YYYY-MM-DD (default: now)")
     args = parser.parse_args()
+
+    # Resolve TO_DATE: use --to-date if given, otherwise current UTC time.
+    global TO_DATE  # noqa: PLW0603 — module-level sentinel used by backfill_source
+    if args.to_date:
+        TO_DATE = datetime.fromisoformat(args.to_date).replace(tzinfo=timezone.utc)
+    else:
+        TO_DATE = datetime.now(timezone.utc)
+    logger.info(f"Date range: {FROM_DATE.date()} → {TO_DATE.date()}")
 
     wait_for_db()
 
@@ -448,6 +458,10 @@ def main():
     total = 0
     source_stats = []
     for src in sources:
+        # Google News proxy URLs have no crawlable archive — skip them.
+        if urlparse(src.url).netloc == "news.google.com":
+            logger.info(f"  skip (google-news proxy, no archive): {src.name} — {src.url}")
+            continue
         count = backfill_source(src.id, src.url, src.name, src.country_code, args.max_per_source)
         total += count
         if count > 0:

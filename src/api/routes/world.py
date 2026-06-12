@@ -573,13 +573,16 @@ def list_signals(days: int = Query(3, ge=1, le=30),
 
 
 @router.get("/headlines")
-def world_headlines(hours: int = Query(24, ge=1, le=168),
+def world_headlines(hours: int = Query(24, ge=1, le=26280),
                     tier: Optional[str] = None,
                     country: Optional[str] = None,
                     region: Optional[str] = None,
                     topic: Optional[str] = None,
                     limit: int = Query(20, ge=1, le=100)):
     """Top relevant headlines across all countries (main page 'news of the day').
+
+    `hours` accepts 1–26280 (≈3 years) so analytics archive queries get
+    full depth; a partial index on published_at keeps performance acceptable.
 
     `country` filters by the SOURCE's home country; when set, no diversity caps
     are applied (single-country view wants all its headlines).
