@@ -425,7 +425,8 @@ def gather_topic_inputs(session, topic: str) -> dict:
             FROM analysis a
             JOIN articles ar ON a.article_id = ar.id
             JOIN sources s ON ar.source_id = s.id
-            WHERE a.is_relevant = TRUE AND :topic = ANY(a.topics)
+            WHERE a.is_relevant = TRUE AND ar.is_duplicate = FALSE
+              AND :topic = ANY(a.topics)
               AND ar.published_at > NOW() - INTERVAL '14 days'
             GROUP BY s.country_code
             ORDER BY articles DESC
