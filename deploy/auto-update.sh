@@ -38,6 +38,9 @@ if ! git merge --ff-only origin/main >/dev/null 2>&1; then
     exit 0
 fi
 
-# Rebuild + restart everything (compose only recreates changed services).
-docker compose up -d --build >/dev/null 2>&1
+# Build first at low CPU/IO priority so a heavy image build (Next.js!) cannot
+# starve the running containers (the box OOM-froze once, 2026-06-12), then
+# swap containers — compose only recreates changed services.
+nice -n 19 ionice -c3 docker compose build >/dev/null 2>&1
+docker compose up -d >/dev/null 2>&1
 log "DEPLOYED ${BEFORE:0:8} -> ${AFTER:0:8}"
