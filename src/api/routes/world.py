@@ -21,6 +21,9 @@ from src.pipeline.topics import TOPICS
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v2", tags=["world"])
 
+KNOWN_TIERS = {"official", "mainstream", "independent", "social",
+               "domestic_opposition", "western_proxy", "analytics"}
+
 
 def _cache_get(key: str):
     try:
@@ -492,8 +495,18 @@ def world_headlines(hours: int = Query(24, ge=1, le=168),
                     tier: Optional[str] = None,
                     country: Optional[str] = None,
                     limit: int = Query(20, ge=1, le=100)):
-    """Top relevant headlines across all countries (main page 'news of the day')."""
+    """Top relevant headlines across all countries (main page 'news of the day').
+
+    `country` filters by the SOURCE's home country (what country X's media
+    write), not by the article's subject. `total` is the number of returned
+    rows (capped by `limit`). No action_level floor by design — the ordering
+    already prioritizes high-action items.
+    """
+    if tier and tier not in KNOWN_TIERS:
+        raise HTTPException(400, f"Unknown tier: {tier}")
+
     conditions = ["a.is_relevant = TRUE",
+                  "ar.is_duplicate = FALSE",
                   "ar.published_at > NOW() - make_interval(hours => :h)",
                   "ar.url IS NOT NULL"]
     params: dict = {"h": hours, "lim": limit}

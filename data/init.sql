@@ -195,6 +195,9 @@ CREATE INDEX idx_analysis_topics ON analysis USING gin(topics);
 CREATE INDEX idx_articles_source_published ON articles(source_id, published_at DESC);
 CREATE INDEX idx_articles_published ON articles(published_at DESC);
 CREATE INDEX idx_analysis_sentiment ON analysis(sentiment);
+CREATE INDEX IF NOT EXISTS idx_analysis_relevant_al
+    ON analysis (is_relevant, action_level DESC NULLS LAST, article_id)
+    WHERE is_relevant = TRUE;
 CREATE INDEX idx_temperature_country ON temperature(country_code, time DESC);
 CREATE INDEX idx_alerts_country ON alerts(country_code, created_at DESC);
 CREATE INDEX idx_articles_title_trgm ON articles USING gin (title_normalized gin_trgm_ops);
