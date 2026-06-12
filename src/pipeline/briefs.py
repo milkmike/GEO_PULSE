@@ -36,6 +36,10 @@ WORLD_BRIEF_PROMPT = """Ты — дежурный аналитик платфо�
 ## Следить
 2-3 сюжета, которые могут развиться в ближайшие дни.
 
+Заголовки в данных пронумерованы полем "n". Каждое фактическое утверждение,
+основанное на заголовке, помечай сноской [n] (например: «...растёт напряжённость [3]»).
+Используй ТОЛЬКО номера из данных, не выдумывай. Утверждения из индексов и
+сигналов сносок не требуют.
 Пиши сжато, фактологично, без воды. Если данных мало — так и скажи, не выдумывай."""
 
 COUNTRY_BRIEF_PROMPT = """Ты — аналитик платформы GEO PULSE. Составь досье-брифинг об отношениях страны {country} с Россией на основе машинной сводки.
@@ -55,6 +59,10 @@ COUNTRY_BRIEF_PROMPT = """Ты — аналитик платформы GEO PULSE
 ## Прогноз внимания
 Что отслеживать дальше.
 
+Заголовки в данных пронумерованы полем "n". Каждое фактическое утверждение,
+основанное на заголовке, помечай сноской [n] (например: «...растёт напряжённость [3]»).
+Используй ТОЛЬКО номера из данных, не выдумывай. Утверждения из индексов и
+сигналов сносок не требуют.
 Пиши сжато и фактологично. Не выдумывай события, которых нет в данных."""
 
 
@@ -67,7 +75,7 @@ def _hash_inputs(data: dict) -> str:
 def _last_brief(session, scope: str):
     return session.execute(
         text("""
-            SELECT id, content, model, source_hash, created_at FROM briefs
+            SELECT id, content, model, source_hash, created_at, meta FROM briefs
             WHERE scope = :scope ORDER BY created_at DESC LIMIT 1
         """),
         {"scope": scope},
@@ -99,7 +107,8 @@ def gather_world_inputs(session) -> dict:
 
     headlines = session.execute(
         text("""
-            SELECT s.country_code, ar.title, a.sentiment, a.action_level
+            SELECT s.country_code, ar.title, ar.url, s.name AS source_name,
+                   a.sentiment, a.action_level
             FROM analysis a
             JOIN articles ar ON a.article_id = ar.id
             JOIN sources s ON ar.source_id = s.id
@@ -120,15 +129,32 @@ def gather_world_inputs(session) -> dict:
         """)
     ).fetchall()
 
+    citations = []
+
+    def _cite(title, url, source, country):
+        n = len(citations) + 1
+        citations.append({"n": n, "title": title, "url": url,
+                          "source": source, "country": country})
+        return n
+
+    tier1_headlines = []
+    for r in headlines:
+        entry = {"country": country_name_ru(r.country_code), "title": r.title,
+                 "sentiment": float(r.sentiment or 0),
+                 "action_level": int(r.action_level or 1)}
+        if r.url:
+            entry["n"] = _cite(r.title, r.url, r.source_name, r.country_code)
+        tier1_headlines.append(entry)
+
     world_headlines = []
     for r in gdelt_top:
-        samples = r.article_samples or []
-        for s in samples[:2]:
-            world_headlines.append({
-                "country": country_name_ru(r.country_code),
-                "title": s.get("title", ""),
-                "tone": float(r.tone_avg) if r.tone_avg is not None else None,
-            })
+        for s in (r.article_samples or [])[:2]:
+            entry = {"country": country_name_ru(r.country_code),
+                     "title": s.get("title", ""),
+                     "tone": float(r.tone_avg) if r.tone_avg is not None else None}
+            if s.get("url"):
+                entry["n"] = _cite(s.get("title", ""), s["url"], "GDELT", r.country_code)
+            world_headlines.append(entry)
 
     return {
         "index_movers": [
@@ -141,12 +167,9 @@ def gather_world_inputs(session) -> dict:
              "severity": r.severity, "title": r.title}
             for r in signals
         ],
-        "tier1_headlines": [
-            {"country": country_name_ru(r.country_code), "title": r.title,
-             "sentiment": float(r.sentiment or 0), "action_level": int(r.action_level or 1)}
-            for r in headlines
-        ],
+        "tier1_headlines": tier1_headlines,
         "world_headlines": world_headlines[:12],
+        "citations": citations,
     }
 
 
@@ -174,7 +197,8 @@ def gather_country_inputs(session, code: str) -> dict:
 
     headlines = session.execute(
         text("""
-            SELECT ar.title, a.sentiment, a.action_level, ar.published_at::date AS day
+            SELECT ar.title, ar.url, s.name AS source_name,
+                   a.sentiment, a.action_level, ar.published_at::date AS day
             FROM analysis a
             JOIN articles ar ON a.article_id = ar.id
             JOIN sources s ON ar.source_id = s.id
@@ -194,10 +218,30 @@ def gather_country_inputs(session, code: str) -> dict:
         {"cc": code},
     ).fetchall()
 
-    gdelt_samples = []
+    citations = []
+
+    def _cite(title, url, source, country):
+        n = len(citations) + 1
+        citations.append({"n": n, "title": title, "url": url,
+                          "source": source, "country": country})
+        return n
+
+    own_media_headlines = []
+    for r in headlines:
+        entry = {"title": r.title, "sentiment": float(r.sentiment or 0),
+                 "action_level": int(r.action_level or 1), "day": str(r.day)}
+        if r.url:
+            entry["n"] = _cite(r.title, r.url, r.source_name, code)
+        own_media_headlines.append(entry)
+
+    gdelt_headlines = []
     for r in gdelt:
         if r.article_samples:
-            gdelt_samples = [s.get("title", "") for s in r.article_samples[:8]]
+            for s in r.article_samples[:8]:
+                entry = {"title": s.get("title", "")}
+                if s.get("url"):
+                    entry["n"] = _cite(s.get("title", ""), s["url"], "GDELT", code)
+                gdelt_headlines.append(entry)
             break
 
     return {
@@ -215,17 +259,14 @@ def gather_country_inputs(session, code: str) -> dict:
         } if idx else None,
         "signals": [{"type": r.signal_type, "severity": r.severity, "title": r.title}
                     for r in signals],
-        "own_media_headlines": [
-            {"title": r.title, "sentiment": float(r.sentiment or 0),
-             "action_level": int(r.action_level or 1), "day": str(r.day)}
-            for r in headlines
-        ],
+        "own_media_headlines": own_media_headlines,
         "gdelt_tone_7d": [
             {"day": str(r.day), "tone": float(r.tone_avg) if r.tone_avg is not None else None,
              "volume": float(r.volume) if r.volume is not None else None}
             for r in gdelt
         ],
-        "gdelt_headlines": gdelt_samples,
+        "gdelt_headlines": gdelt_headlines,
+        "citations": citations,
     }
 
 
@@ -244,6 +285,10 @@ def generate_world_brief(force: bool = False) -> dict | None:
     """Generate the world brief if inputs changed since the last one."""
     with get_session() as session:
         inputs = gather_world_inputs(session)
+        # Pop citations registry before hashing so it doesn't affect hash
+        # (url availability may change without headline content changing).
+        citations = inputs.pop("citations", [])
+
         if not any(inputs.values()):
             logger.info("World brief: no inputs yet, skipping")
             return None
@@ -264,10 +309,14 @@ def generate_world_brief(force: bool = False) -> dict | None:
         logger.error(f"World brief LLM failed: {e}")
         return None
 
+    from src.pipeline.citations import apply_citations
+    content, used = apply_citations(content, {c["n"] for c in citations})
+
     with get_session() as session:
         _save_brief(session, "world", content, model, source_hash,
                     {"movers": len(inputs["index_movers"]),
-                     "signals": len(inputs["signals"])})
+                     "signals": len(inputs["signals"]),
+                     "citations": [{**c, "used": c["n"] in used} for c in citations]})
     logger.info(f"World brief generated ({model}, {len(content)} chars)")
     return {"content": content, "model": model}
 
@@ -284,17 +333,23 @@ def generate_country_brief(code: str, max_age_hours: float = 6.0,
             age_h = (now - last.created_at).total_seconds() / 3600
             if age_h < max_age_hours:
                 return {"content": last.content, "model": last.model,
-                        "created_at": last.created_at.isoformat(), "cached": True}
+                        "created_at": last.created_at.isoformat(), "cached": True,
+                        "citations": (last.meta or {}).get("citations", [])}
 
         inputs = gather_country_inputs(session, code)
         if not inputs.get("index") and not inputs.get("own_media_headlines") \
                 and not inputs.get("gdelt_tone_7d"):
             return None
 
+        # Pop citations registry before hashing so url availability doesn't
+        # trigger spurious cache misses when article content is unchanged.
+        citations = inputs.pop("citations", [])
+
         source_hash = _hash_inputs(inputs)
         if last and last.source_hash == source_hash and not force:
             return {"content": last.content, "model": last.model,
-                    "created_at": last.created_at.isoformat(), "cached": True}
+                    "created_at": last.created_at.isoformat(), "cached": True,
+                    "citations": (last.meta or {}).get("citations", [])}
 
         prompt = COUNTRY_BRIEF_PROMPT.format(
             country=country_name_ru(code),
@@ -307,8 +362,15 @@ def generate_country_brief(code: str, max_age_hours: float = 6.0,
         logger.error(f"Country brief LLM failed for {code}: {e}")
         return None
 
+    from src.pipeline.citations import apply_citations
+    content, used = apply_citations(content, {c["n"] for c in citations})
+
+    citations_meta = [{**c, "used": c["n"] in used} for c in citations]
+
     with get_session() as session:
-        _save_brief(session, code, content, model, source_hash, {})
+        _save_brief(session, code, content, model, source_hash,
+                    {"citations": citations_meta})
     logger.info(f"Country brief generated for {code} ({model})")
     return {"content": content, "model": model,
-            "created_at": now.isoformat(), "cached": False}
+            "created_at": now.isoformat(), "cached": False,
+            "citations": citations_meta}
