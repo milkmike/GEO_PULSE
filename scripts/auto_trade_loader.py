@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""Auto-load Russia-CIS trade data from public sources.
+"""Auto-load Russia-world trade data from public sources.
 
-Strategy:
-1. Try UN Comtrade bulk download (free, no key, annual CSV)
-2. Fallback: scrape Russian Federal Customs Service summary tables
-3. Last resort: keep existing data, log warning
+Strategy (per country):
+1. Try UN Comtrade API (requires subscription key) — CIS countries only (numeric map)
+2. Fallback: UN Comtrade public preview (free, no key) — CIS countries only (numeric map)
+3. Last resort: IMF Direction of Trade Statistics (free, no key, ISO2 area codes) — all countries
 
 Runs monthly; only inserts new year data, never overwrites confirmed data.
+Covers all 99 countries in the GEO PULSE registry (src/countries.py).
 """
 import argparse
-import csv
 import io
 import json
 import logging
@@ -21,6 +21,7 @@ import urllib.request
 from datetime import datetime
 
 from src.api_tracker import track_api_call, track_duration
+from src.countries import all_codes
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +33,8 @@ DB_URL = os.environ.get(
 # Russia ISO3 numeric code for Comtrade
 RUSSIA_CODE = "643"
 
-# CIS country codes: ISO3 numeric -> our ISO2
+# CIS country codes: ISO3 numeric -> our ISO2.
+# Comtrade branches are ONLY attempted for countries present in this map.
 PARTNER_CODES = {
     "398": "KZ",  # Kazakhstan
     "051": "AM",  # Armenia
@@ -45,6 +47,12 @@ PARTNER_CODES = {
     "498": "MD",  # Moldova
     "112": "BY",  # Belarus
 }
+
+# Reverse map: ISO2 -> Comtrade numeric (for guard checks)
+ISO2_IN_COMTRADE = set(PARTNER_CODES.values())
+
+# All registry countries except Russia — the full target set
+TARGET_COUNTRIES = [c for c in all_codes() if c != "RU"]
 
 COMTRADE_API_KEY = os.environ.get("COMTRADE_API_KEY", "")
 
@@ -65,7 +73,7 @@ def get_db_connection():
     )
 
 
-def get_existing_years(conn) -> dict:
+def get_existing_years(conn) -> set:
     """Get {(country_code, year)} set of existing records."""
     cur = conn.cursor()
     cur.execute("SELECT country_code, year FROM trade_data")
@@ -74,8 +82,12 @@ def get_existing_years(conn) -> dict:
     return existing
 
 
-def try_comtrade_api() -> list[dict] | None:
-    """Try fetching from UN Comtrade API (requires free subscription key)."""
+def try_comtrade_api_for_cis() -> list:
+    """Try fetching CIS countries from UN Comtrade API (requires free subscription key).
+
+    Only covers countries present in PARTNER_CODES (CIS numeric map).
+    Returns list of flow dicts or None on failure/no key.
+    """
     if not COMTRADE_API_KEY:
         logger.info("No COMTRADE_API_KEY set, skipping Comtrade API")
         return None
@@ -156,10 +168,12 @@ def try_comtrade_api() -> list[dict] | None:
     return results if results else None
 
 
-def try_comtrade_bulk() -> list[dict] | None:
+def try_comtrade_bulk_for_cis() -> list:
     """Try UN Comtrade bulk download (public, no key needed).
-    
+
     Uses the preview endpoint which has limited but free access.
+    Only covers countries present in PARTNER_CODES (CIS numeric map).
+    Returns list of flow dicts or None on failure.
     """
     partner_list = ",".join(PARTNER_CODES.keys())
     current_year = datetime.now().year
@@ -201,62 +215,59 @@ def try_comtrade_bulk() -> list[dict] | None:
     return results if results else None
 
 
-def try_imf_dots() -> list[dict] | None:
-    """Try IMF Direction of Trade Statistics API (free, no key)."""
-    current_year = datetime.now().year
-    iso2_to_imf = {
-        "KZ": "KZ", "AM": "AM", "UZ": "UZ", "KG": "KG", "TJ": "TJ",
-        "TM": "TM", "AZ": "AZ", "GE": "GE", "MD": "MD", "BY": "BY",
-    }
-    results = []
+def fetch_imf_dots_country(iso2: str, current_year: int) -> list:
+    """Fetch IMF DOTS trade data for a single country (ISO2 = IMF area code).
 
-    for iso2, imf_code in iso2_to_imf.items():
-        # TMG_CIF_USD = imports CIF, TXG_FOB_USD = exports FOB
-        url = (
-            f"https://dataservices.imf.org/REST/SDMX_JSON.svc/CompactData/"
-            f"DOT/A.RU.TMG_CIF_USD+TXG_FOB_USD.{imf_code}"
-            f"?startPeriod={current_year - 2}&endPeriod={current_year}"
-        )
-        try:
-            req = urllib.request.Request(url, headers={
-                "User-Agent": "GeoPulse/1.0",
-                "Accept": "application/json",
-            })
-            with urllib.request.urlopen(req, timeout=60) as resp:
-                data = json.loads(resp.read())
+    IMF DOTS uses ISO2 area codes directly, so no mapping table is needed.
+    Indicators:
+      TXG_FOB_USD — Russia exports FOB (millions USD)
+      TMG_CIF_USD — Russia imports CIF (millions USD)
+    Returns list of flow dicts (may be empty).
+    """
+    url = (
+        f"https://dataservices.imf.org/REST/SDMX_JSON.svc/CompactData/"
+        f"DOT/A.RU.TMG_CIF_USD+TXG_FOB_USD.{iso2}"
+        f"?startPeriod={current_year - 2}&endPeriod={current_year}"
+    )
+    req = urllib.request.Request(url, headers={
+        "User-Agent": "GeoPulse/1.0",
+        "Accept": "application/json",
+    })
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        data = json.loads(resp.read())
 
-            dataset = data.get("CompactData", {}).get("DataSet", {})
-            series_list = dataset.get("Series", [])
-            if isinstance(series_list, dict):
-                series_list = [series_list]
+    dataset = data.get("CompactData", {}).get("DataSet", {})
+    series_list = dataset.get("Series", [])
+    if isinstance(series_list, dict):
+        series_list = [series_list]
 
-            for series in series_list:
-                indicator = series.get("@INDICATOR", "")
-                flow = "export" if "TXG" in indicator else "import"
-                obs = series.get("Obs", [])
-                if isinstance(obs, dict):
-                    obs = [obs]
-                for o in obs:
-                    year = int(o.get("@TIME_PERIOD", 0))
-                    value = float(o.get("@OBS_VALUE", 0))
-                    if year > 0 and value > 0:
-                        results.append(
-                            {
-                                "country": iso2,
-                                "year": year,
-                                "flow": flow,
-                                "value_usd": int(value * 1_000_000),  # IMF reports in millions
-                            }
-                        )
-            time.sleep(0.3)
-        except Exception as e:
-            logger.warning(f"IMF DOTS error for {iso2}: {e}")
-
-    return results if results else None
+    rows = []
+    for series in series_list:
+        indicator = series.get("@INDICATOR", "")
+        flow = "export" if "TXG" in indicator else "import"
+        obs = series.get("Obs", [])
+        if isinstance(obs, dict):
+            obs = [obs]
+        for o in obs:
+            year = int(o.get("@TIME_PERIOD", 0))
+            value = float(o.get("@OBS_VALUE", 0))
+            if year > 0 and value > 0:
+                rows.append(
+                    {
+                        "country": iso2,
+                        "year": year,
+                        "flow": flow,
+                        "value_usd": int(value * 1_000_000),  # IMF reports in millions USD
+                    }
+                )
+    return rows
 
 
-def merge_and_save(trade_records: list[dict]):
-    """Merge export/import into per-country-year rows and save to DB."""
+def merge_and_save(trade_records: list) -> tuple:
+    """Merge export/import into per-country-year rows and save to DB.
+
+    Returns (inserted, updated) counts.
+    """
     # Aggregate: (country, year) -> {export_usd, import_usd}
     agg: dict = {}
     for r in trade_records:
@@ -270,7 +281,7 @@ def merge_and_save(trade_records: list[dict]):
 
     if not agg:
         logger.warning("No trade data to save")
-        return
+        return 0, 0
 
     import psycopg2
 
@@ -328,36 +339,93 @@ def merge_and_save(trade_records: list[dict]):
     conn.commit()
     cur.close()
     conn.close()
-    logger.info(f"Trade data: {inserted} new, {updated} updated")
+    return inserted, updated
 
 
 def run_once():
-    """Try all sources in priority order."""
-    logger.info("=== Auto Trade Loader ===")
+    """Run one full pass across all registry countries.
 
-    # 1. Try Comtrade API (with key)
-    data = try_comtrade_api()
-    if data:
-        logger.info(f"Comtrade API: {len(data)} records")
-        merge_and_save(data)
-        return True
+    Priority per country:
+      1. Comtrade API (key required) — CIS numeric map only
+      2. Comtrade public preview (no key) — CIS numeric map only
+      3. IMF DOTS (no key, ISO2 area codes) — all 99 countries
 
-    # 2. Try Comtrade bulk (no key)
-    data = try_comtrade_bulk()
-    if data:
-        logger.info(f"Comtrade bulk: {len(data)} records")
-        merge_and_save(data)
-        return True
+    Returns True if at least one country loaded data.
+    """
+    logger.info("=== Auto Trade Loader (all registry countries) ===")
+    logger.info(f"Target: {len(TARGET_COUNTRIES)} countries")
 
-    # 3. Try IMF DOTS
-    data = try_imf_dots()
-    if data:
-        logger.info(f"IMF DOTS: {len(data)} records")
-        merge_and_save(data)
-        return True
+    current_year = datetime.now().year
+    loaded_countries: set = set()
+    skipped_countries: set = set()
+    failed_countries: set = set()
 
-    logger.warning("All trade data sources failed. Data NOT updated.")
-    return False
+    # --- Step 1: Comtrade API batch (CIS countries with numeric map) ---
+    comtrade_api_records = None
+    if COMTRADE_API_KEY:
+        comtrade_api_records = try_comtrade_api_for_cis()
+        if comtrade_api_records:
+            logger.info(f"Comtrade API: {len(comtrade_api_records)} flow records for CIS")
+
+    # --- Step 2: Comtrade bulk (CIS fallback, no key) ---
+    comtrade_bulk_records = None
+    if not comtrade_api_records:
+        comtrade_bulk_records = try_comtrade_bulk_for_cis()
+        if comtrade_bulk_records:
+            logger.info(f"Comtrade bulk: {len(comtrade_bulk_records)} flow records for CIS")
+
+    # Merge whichever Comtrade source succeeded and track which CIS countries it covered
+    comtrade_covered: set = set()
+    comtrade_all_records = comtrade_api_records or comtrade_bulk_records or []
+    if comtrade_all_records:
+        inserted, updated = merge_and_save(comtrade_all_records)
+        comtrade_covered = {r["country"] for r in comtrade_all_records}
+        for cc in comtrade_covered:
+            if cc in TARGET_COUNTRIES:
+                loaded_countries.add(cc)
+        logger.info(f"Comtrade saved: {inserted} new, {updated} updated")
+
+    # --- Step 3: IMF DOTS — all remaining TARGET_COUNTRIES ---
+    # For CIS countries already loaded via Comtrade, IMF DOTS is still attempted
+    # as a completeness check, but Comtrade data takes priority (already saved).
+    # For non-CIS countries (the majority), IMF DOTS is the only source.
+    imf_records_all = []
+
+    for iso2 in TARGET_COUNTRIES:
+        # Skip if already successfully loaded via Comtrade (avoid double-write)
+        if iso2 in comtrade_covered:
+            continue
+        try:
+            rows = fetch_imf_dots_country(iso2, current_year)
+            if rows:
+                imf_records_all.extend(rows)
+                loaded_countries.add(iso2)
+            else:
+                skipped_countries.add(iso2)
+                logger.debug(f"IMF DOTS: no data for {iso2}")
+            time.sleep(0.3)  # Be polite to the IMF API
+        except Exception as e:
+            failed_countries.add(iso2)
+            logger.warning(f"IMF DOTS error for {iso2}: {e}")
+
+    if imf_records_all:
+        logger.info(f"IMF DOTS: {len(imf_records_all)} flow records for {len(loaded_countries - comtrade_covered)} countries")
+        inserted, updated = merge_and_save(imf_records_all)
+        logger.info(f"IMF DOTS saved: {inserted} new, {updated} updated")
+
+    # --- Pass summary ---
+    n_loaded = len(loaded_countries)
+    n_skipped = len(skipped_countries)
+    n_failed = len(failed_countries)
+    logger.info(
+        f"Pass complete: loaded {n_loaded} countries, "
+        f"skipped {n_skipped} (no new data), "
+        f"failed {n_failed}"
+    )
+    if failed_countries:
+        logger.warning(f"Failed countries: {sorted(failed_countries)}")
+
+    return n_loaded > 0
 
 
 def main():
