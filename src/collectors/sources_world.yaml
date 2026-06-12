@@ -33,7 +33,7 @@ countries:
         propaganda_risk: low
       - name: Carnegie Endowment
         type: rss
-        url: https://news.google.com/rss/search?q=site:carnegieendowment.org&hl=en-US&gl=US&ceid=US:en
+        url: https://news.google.com/rss/search?q=site:carnegieendowment.org+russia&hl=en-US&gl=US&ceid=US:en
         weight: 1.0
         language: en
         tier: analytics
@@ -41,7 +41,7 @@ countries:
         propaganda_risk: low
       - name: CSIS
         type: rss
-        url: https://news.google.com/rss/search?q=site:csis.org&hl=en-US&gl=US&ceid=US:en
+        url: https://news.google.com/rss/search?q=site:csis.org+russia&hl=en-US&gl=US&ceid=US:en
         weight: 1.0
         language: en
         tier: analytics
@@ -49,7 +49,7 @@ countries:
         propaganda_risk: low
       - name: FPRI
         type: rss
-        url: https://news.google.com/rss/search?q=site:fpri.org&hl=en-US&gl=US&ceid=US:en
+        url: https://news.google.com/rss/search?q=site:fpri.org+russia&hl=en-US&gl=US&ceid=US:en
         weight: 1.0
         language: en
         tier: analytics
@@ -57,7 +57,7 @@ countries:
         propaganda_risk: low
       - name: Atlantic Council
         type: rss
-        url: https://news.google.com/rss/search?q=site:atlanticcouncil.org&hl=en-US&gl=US&ceid=US:en
+        url: https://news.google.com/rss/search?q=site:atlanticcouncil.org+russia&hl=en-US&gl=US&ceid=US:en
         weight: 1.0
         language: en
         tier: analytics
@@ -73,7 +73,7 @@ countries:
         propaganda_risk: low
       - name: Brookings
         type: rss
-        url: https://news.google.com/rss/search?q=site:brookings.edu&hl=en-US&gl=US&ceid=US:en
+        url: https://news.google.com/rss/search?q=site:brookings.edu+russia&hl=en-US&gl=US&ceid=US:en
         weight: 1.0
         language: en
         tier: analytics
@@ -81,7 +81,7 @@ countries:
         propaganda_risk: low
       - name: RAND
         type: rss
-        url: https://news.google.com/rss/search?q=site:rand.org&hl=en-US&gl=US&ceid=US:en
+        url: https://news.google.com/rss/search?q=site:rand.org+russia&hl=en-US&gl=US&ceid=US:en
         weight: 1.0
         language: en
         tier: analytics
@@ -131,7 +131,7 @@ countries:
     sources:
       - name: RUSI
         type: rss
-        url: https://news.google.com/rss/search?q=site:rusi.org&hl=en-US&gl=US&ceid=US:en
+        url: https://news.google.com/rss/search?q=site:rusi.org+russia&hl=en-US&gl=US&ceid=US:en
         weight: 1.0
         language: en
         tier: analytics
@@ -139,7 +139,7 @@ countries:
         propaganda_risk: low
       - name: Chatham House
         type: rss
-        url: https://news.google.com/rss/search?q=site:chathamhouse.org&hl=en-US&gl=US&ceid=US:en
+        url: https://news.google.com/rss/search?q=site:chathamhouse.org+russia&hl=en-US&gl=US&ceid=US:en
         weight: 1.0
         language: en
         tier: analytics
@@ -175,7 +175,7 @@ countries:
     sources:
       - name: ECFR
         type: rss
-        url: https://news.google.com/rss/search?q=site:ecfr.eu&hl=en-US&gl=DE&ceid=DE:en
+        url: https://news.google.com/rss/search?q=site:ecfr.eu+russia&hl=en-US&gl=DE&ceid=DE:en
         weight: 1.0
         language: en
         tier: analytics
