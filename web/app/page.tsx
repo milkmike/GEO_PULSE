@@ -85,6 +85,7 @@ export default function HomePage() {
         </h1>
         <HealthBadge />
         <nav className="ml-auto flex items-center gap-4 text-xs text-dim">
+          <Link href="/about" className="hover:text-accent">о проекте</Link>
           <Link href="/signals" className="hover:text-accent">все сигналы</Link>
           {updatedAt && <span>обновлено {fmtDate(updatedAt)}</span>}
         </nav>
