@@ -497,16 +497,24 @@ def list_signals(days: int = Query(3, ge=1, le=30),
 def world_headlines(hours: int = Query(24, ge=1, le=168),
                     tier: Optional[str] = None,
                     country: Optional[str] = None,
+                    region: Optional[str] = None,
                     limit: int = Query(20, ge=1, le=100)):
     """Top relevant headlines across all countries (main page 'news of the day').
 
-    `country` filters by the SOURCE's home country (what country X's media
-    write), not by the article's subject. `total` is the number of returned
-    rows (capped by `limit`). No action_level floor by design — the ordering
-    already prioritizes high-action items.
+    `country` filters by the SOURCE's home country; when set, no diversity caps
+    are applied (single-country view wants all its headlines).
+
+    `region` filters to countries in that region (source home country's region);
+    unknown region key → 400.  When region or global view is active (no `country`
+    param), diversity caps are applied: ≤ 2 articles per source and ≤ 4 per
+    country, so no single country monopolises the feed.
+
+    `total` is the number of returned rows (capped by `limit`).
     """
     if tier and tier not in KNOWN_TIERS:
         raise HTTPException(400, f"Unknown tier: {tier}")
+    if region and region not in REGIONS:
+        raise HTTPException(400, f"Unknown region: {region}")
 
     conditions = ["a.is_relevant = TRUE",
                   "ar.is_duplicate = FALSE",
@@ -519,22 +527,61 @@ def world_headlines(hours: int = Query(24, ge=1, le=168),
     if country:
         conditions.append("s.country_code = :cc")
         params["cc"] = country.upper()
+    if region:
+        region_codes = [c for c, v in COUNTRIES.items() if v["region"] == region]
+        conditions.append("s.country_code = ANY(:region_codes)")
+        params["region_codes"] = region_codes
 
-    with get_session() as session:
-        rows = session.execute(
-            text(f"""
+    where_clause = " AND ".join(conditions)
+
+    if country:
+        # Single-country view: no diversity caps, simple query.
+        sql = f"""
+            SELECT ar.title, ar.url, s.name AS source_name, s.tier,
+                   s.country_code, ar.published_at,
+                   a.sentiment, a.action_level
+            FROM analysis a
+            JOIN articles ar ON a.article_id = ar.id
+            JOIN sources s ON ar.source_id = s.id
+            WHERE {where_clause}
+            ORDER BY a.action_level DESC NULLS LAST,
+                     ar.reprint_count DESC NULLS LAST,
+                     ar.published_at DESC
+            LIMIT :lim
+        """
+    else:
+        # Global / region view: cap ≤ 2 per source and ≤ 4 per country.
+        sql = f"""
+            SELECT title, url, source_name, tier, country_code, published_at,
+                   sentiment, action_level
+            FROM (
                 SELECT ar.title, ar.url, s.name AS source_name, s.tier,
-                       s.country_code, ar.published_at,
-                       a.sentiment, a.action_level
+                       s.country_code, ar.published_at, ar.reprint_count,
+                       a.sentiment, a.action_level,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY ar.source_id
+                           ORDER BY a.action_level DESC NULLS LAST,
+                                    ar.published_at DESC
+                       ) AS src_rank,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY s.country_code
+                           ORDER BY a.action_level DESC NULLS LAST,
+                                    ar.published_at DESC
+                       ) AS cc_rank
                 FROM analysis a
                 JOIN articles ar ON a.article_id = ar.id
                 JOIN sources s ON ar.source_id = s.id
-                WHERE {' AND '.join(conditions)}
-                ORDER BY a.action_level DESC NULLS LAST,
-                         ar.reprint_count DESC NULLS LAST,
-                         ar.published_at DESC
-                LIMIT :lim
-            """), params).fetchall()
+                WHERE {where_clause}
+            ) t
+            WHERE src_rank <= 2 AND cc_rank <= 4
+            ORDER BY action_level DESC NULLS LAST,
+                     reprint_count DESC NULLS LAST,
+                     published_at DESC
+            LIMIT :lim
+        """
+
+    with get_session() as session:
+        rows = session.execute(text(sql), params).fetchall()
 
     return {"headlines": [
         {"title": r.title, "url": r.url, "source": r.source_name, "tier": r.tier,

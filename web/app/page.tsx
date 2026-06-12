@@ -27,7 +27,6 @@ export default function HomePage() {
     const load = () => {
       api.countries().then((d) => setCountries(d.countries)).catch(() => {});
       api.signals().then((d) => setSignals(d.signals)).catch(() => {});
-      api.worldHeadlines().then((d) => setHeadlines(d.headlines)).catch(() => {});
       api.worldBrief().then(setBrief).catch(() => {});
     };
     load();
@@ -35,6 +34,15 @@ export default function HomePage() {
     const t = setInterval(load, 120_000);
     return () => clearInterval(t);
   }, []);
+
+  useEffect(() => {
+    const loadHeadlines = () => {
+      api.worldHeadlines(24, 20, filters.region).then((d) => setHeadlines(d.headlines)).catch(() => {});
+    };
+    loadHeadlines();
+    const t = setInterval(loadHeadlines, 120_000);
+    return () => clearInterval(t);
+  }, [filters.region]);
 
   useEffect(() => {
     if (!filters.topic) {
@@ -118,7 +126,11 @@ export default function HomePage() {
 
       <div className="mt-3 grid gap-3 lg:grid-cols-3">
         <section className="card">
-          <div className="card-title px-4 pb-1 pt-3">Главные новости дня</div>
+          <div className="card-title px-4 pb-1 pt-3">
+            {filters.region && meta
+              ? `Новости дня · ${meta.regions[filters.region]}`
+              : "Главные новости дня"}
+          </div>
           <div className="max-h-[340px] overflow-y-auto">
             <HeadlinesFeed items={headlines} />
           </div>
