@@ -554,6 +554,7 @@ def list_signals(days: int = Query(3, ge=1, le=30),
                 WHERE {' AND '.join(conditions)}
                 ORDER BY CASE severity WHEN 'critical' THEN 0
                                        WHEN 'warning' THEN 1 ELSE 2 END,
+                         CASE WHEN country_code = 'UA' THEN 1 ELSE 0 END,
                          created_at DESC
                 LIMIT :lim
             """),
