@@ -13,3 +13,6 @@ backups/
 sessions/
 *.session
 *.session-journal
+
+# Claude Code local settings (per-machine permissions)
+.claude/settings.local.json

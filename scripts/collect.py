@@ -112,6 +112,7 @@ def ensure_sources_in_db():
                         tier=src.get("tier", "mainstream"),
                     )
                     session.add(source)
+                    session.flush()
                     logger.info(f"Added source: {src['name']} ({country_code})")
 
     logger.info("Sources synced to database")
