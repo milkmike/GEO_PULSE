@@ -1,5 +1,6 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
+import TowerLogo from "./TowerLogo";
 
 const NAV = [
   { href: "/", label: "карта" },
@@ -20,8 +21,8 @@ export default function SiteHeader({
   return (
     <header className="reveal pt-4">
       <div className="flex flex-wrap items-baseline gap-x-4 gap-y-2">
-        <Link href="/" className="flex items-baseline gap-2.5">
-          <span className="live-dot relative top-[-2px]" aria-hidden="true" />
+        <Link href="/" className="group flex items-end gap-2">
+          <TowerLogo />
           <span className="display text-[22px] leading-none tracking-tight">
             МАССАРАКШ
           </span>

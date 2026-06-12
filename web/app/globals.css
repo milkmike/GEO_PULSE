@@ -185,12 +185,64 @@ body {
   animation: pulseDot 2.4s ease-out infinite;
 }
 
+/* ── transmitter tower logo ────────────────────────────── */
+@keyframes towerWave {
+  0% {
+    transform: scale(0.35);
+    opacity: 0.9;
+  }
+  100% {
+    transform: scale(1.7);
+    opacity: 0;
+  }
+}
+@keyframes towerSpin {
+  0% { transform: scaleX(1); }
+  25% { transform: scaleX(0.15); }
+  50% { transform: scaleX(-1); }
+  75% { transform: scaleX(-0.15); }
+  100% { transform: scaleX(1); }
+}
+@keyframes beaconBlink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+.tower-wave {
+  transform-box: fill-box;
+  transform-origin: center;
+  opacity: 0;
+  animation: towerWave 3.6s ease-out infinite;
+}
+.tower-wave-2 { animation-delay: 1.2s; }
+.tower-wave-3 { animation-delay: 2.4s; }
+.tower-head {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+.tower-beacon {
+  animation: beaconBlink 2.6s ease-in-out infinite;
+}
+.group:hover .tower-head {
+  animation: towerSpin 1.3s linear infinite;
+}
+.group:hover .tower-wave {
+  animation-duration: 1.3s;
+  stroke: var(--color-ru-red);
+}
+.group:hover .tower-beacon {
+  animation-duration: 0.55s;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .reveal,
   .reveal-1, .reveal-2, .reveal-3, .reveal-4,
   .reveal-5, .reveal-6, .reveal-7, .reveal-8,
   .tricolor-draw,
-  .live-dot {
+  .live-dot,
+  .tower-wave,
+  .tower-head,
+  .tower-beacon,
+  .group:hover .tower-head {
     animation: none;
   }
 }
