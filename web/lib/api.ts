@@ -1,6 +1,6 @@
 import type {
   Brief, CountrySummary, Dossier, EntityStat, FxSeries, Headline, Health,
-  MapEntry, MapHistoryFrame, Meta, Signal, SourceRow, TopicStat,
+  MapEntry, MapHistoryFrame, Meta, Signal, SourceHealthRow, SourceRow, TopicStat,
 } from "./types";
 
 /** API base: build-time env wins; otherwise same host on :8100 (compose default). */
@@ -43,7 +43,8 @@ export const api = {
     get<{ signals: Signal[]; total: number }>(`/api/v2/signals?days=7&limit=200${params}`),
   health: () => get<Health>("/api/v2/health"),
   meta: () => get<Meta>("/api/v2/meta"),
-  sources: () => get<{ sources: SourceRow[]; total: number }>("/api/v1/sources"),
+  sources: () => get<{ sources: SourceRow[] }>("/api/v1/sources"),
+  healthSources: () => get<{ sources: SourceHealthRow[]; total: number }>("/api/v2/health/sources"),
   topicCountries: (topic: string, days = 30) =>
     get<{ label: string; countries: { country_code: string; country_name: string; articles: number; avg_sentiment: number | null }[] }>(
       `/api/v2/topics/${topic}/countries?days=${days}`),

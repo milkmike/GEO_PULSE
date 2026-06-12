@@ -137,7 +137,14 @@ export interface Meta {
   regions: Record<string, string>;
   topics: Record<string, string>;
   levels: Level[];
-  countries: { code: string; name: string; iso3: string; flag: string; region: string; tier: number }[];
+  countries: { code: string; name: string; iso3: string; flag: string; region: string; tier: number; langs?: string[] }[];
+}
+
+export interface SourceHealthRow {
+  source_id: number;
+  status: "OK" | "STALE" | "DEAD";
+  last_article_at: string | null;
+  articles_30d: number;
 }
 
 export interface SourceRow {
