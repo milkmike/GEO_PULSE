@@ -4,7 +4,8 @@
 Strategy (per country):
 1. Try UN Comtrade API (requires subscription key) — CIS countries only (numeric map)
 2. Fallback: UN Comtrade public preview (free, no key) — CIS countries only (numeric map)
-3. Last resort: IMF Direction of Trade Statistics (free, no key, ISO2 area codes) — all countries
+3. Last resort: IMF International Trade in Goods / IMTS (free, no key, ISO3 area codes) — all countries
+   Formerly "Direction of Trade Statistics (DOTS)"; new portal: api.imf.org, dataflow=IMTS
 
 Runs monthly. Upserts year rows per country: new years are inserted, existing
 years are refreshed with the latest source figures (trade statistics get revised
@@ -24,7 +25,7 @@ import urllib.request
 from datetime import datetime
 
 from src.api_tracker import track_api_call, track_duration
-from src.countries import all_codes
+from src.countries import COUNTRIES, all_codes
 
 logger = logging.getLogger(__name__)
 
@@ -216,48 +217,79 @@ def try_comtrade_bulk_for_cis() -> list | None:
 
 
 def fetch_imf_dots_country(iso2: str, current_year: int) -> list:
-    """Fetch IMF DOTS trade data for a single country (ISO2 = IMF area code).
+    """Fetch IMF IMTS trade data for a single country (ISO2 = GEO PULSE registry code).
 
-    IMF DOTS uses ISO2 area codes directly, so no mapping table is needed.
-    Indicators:
-      TXG_FOB_USD — Russia exports FOB (millions USD)
-      TMG_CIF_USD — Russia imports CIF (millions USD)
+    Uses the new IMF data portal (api.imf.org), dataflow IMTS — formerly known as
+    Direction of Trade Statistics (DOTS); legacy endpoint dataservices.imf.org retired.
+
+    The new API requires ISO3 country codes (e.g. KAZ, DEU), which are looked up
+    from the GEO PULSE registry (src/countries.py).  Russia reporter code is "RUS".
+
+    Indicators (new names vs. legacy):
+      XG_FOB_USD — Russia exports FOB, US dollar   (was TXG_FOB_USD)
+      MG_CIF_USD — Russia imports CIF, US dollar   (was TMG_CIF_USD)
+
+    UNITS: OBS_VALUE is raw USD (not millions). The legacy API returned millions and
+    required a *1_000_000 multiplier — that multiplier is NOT applied here.
+
     Returns list of flow dicts (may be empty).
+    Raises on network / HTTP errors so run_once() can count the country as failed.
     """
+    import xml.etree.ElementTree as ET
+
+    country_info = COUNTRIES.get(iso2.upper())
+    if not country_info or not country_info.get("iso3"):
+        logger.warning(f"IMF IMTS: no ISO3 code for {iso2}, skipping")
+        return []
+
+    iso3 = country_info["iso3"]
+
+    # Dataflow: IMF.STA:IMTS(1.0.0)
+    # Key order: COUNTRY.INDICATOR.COUNTERPART_COUNTRY.FREQUENCY
+    # Reporter = RUS (Russia), Counterpart = iso3 (e.g. KAZ, DEU)
+    # Use a 4-year lookback window: IMF IMTS data for some countries (e.g. CIS) lags
+    # up to 2 years, so current_year - 2 would return 0 records by mid-year.
     url = (
-        f"https://dataservices.imf.org/REST/SDMX_JSON.svc/CompactData/"
-        f"DOT/A.RU.TMG_CIF_USD+TXG_FOB_USD.{iso2}"
-        f"?startPeriod={current_year - 2}&endPeriod={current_year}"
+        "https://api.imf.org/external/sdmx/2.1/data/IMF.STA,IMTS,1.0.0/"
+        f"RUS.XG_FOB_USD+MG_CIF_USD.{iso3}.A"
+        f"?startPeriod={current_year - 4}&endPeriod={current_year}"
     )
     req = urllib.request.Request(url, headers={
         "User-Agent": "GeoPulse/1.0",
-        "Accept": "application/json",
+        "Accept": "application/xml",
     })
     with urllib.request.urlopen(req, timeout=60) as resp:
-        data = json.loads(resp.read())
+        xml_data = resp.read()
 
-    dataset = data.get("CompactData", {}).get("DataSet", {})
-    series_list = dataset.get("Series", [])
-    if isinstance(series_list, dict):
-        series_list = [series_list]
+    # Parse SDMX StructureSpecificData XML.
+    # The DataSet element contains interleaved Group and Series children (no namespace
+    # prefix on those inner elements in this response).
+    root = ET.fromstring(xml_data)
+    MSG_NS = "http://www.sdmx.org/resources/sdmxml/schemas/v2_1/message"
+    dataset = root.find(f"{{{MSG_NS}}}DataSet")
+    if dataset is None:
+        return []
 
     rows = []
-    for series in series_list:
-        indicator = series.get("@INDICATOR", "")
-        flow = "export" if "TXG" in indicator else "import"
-        obs = series.get("Obs", [])
-        if isinstance(obs, dict):
-            obs = [obs]
-        for o in obs:
-            year = int(o.get("@TIME_PERIOD", 0))
-            value = float(o.get("@OBS_VALUE", 0))
+    for series in dataset:
+        # Skip Group annotation elements; Series elements carry INDICATOR attrib
+        indicator = series.attrib.get("INDICATOR", "")
+        if not indicator:
+            continue
+        flow = "export" if indicator == "XG_FOB_USD" else "import"
+        for obs in series:
+            try:
+                year = int(obs.attrib.get("TIME_PERIOD", 0))
+                value = float(obs.attrib.get("OBS_VALUE", 0))
+            except (TypeError, ValueError):
+                continue
             if year > 0 and value > 0:
                 rows.append(
                     {
                         "country": iso2,
                         "year": year,
                         "flow": flow,
-                        "value_usd": int(value * 1_000_000),  # IMF reports in millions USD
+                        "value_usd": int(value),  # API returns raw USD (not millions)
                     }
                 )
     return rows
@@ -348,7 +380,7 @@ def run_once():
     Priority per country:
       1. Comtrade API (key required) — CIS numeric map only
       2. Comtrade public preview (no key) — CIS numeric map only
-      3. IMF DOTS (no key, ISO2 area codes) — all 99 countries
+      3. IMF IMTS (no key, ISO3 codes via registry) — all 99 countries
 
     Returns True if at least one country loaded data.
     """
