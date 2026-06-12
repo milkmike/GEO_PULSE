@@ -279,6 +279,39 @@ def _expand(code: str, row: tuple) -> dict:
 
 COUNTRIES: dict[str, dict] = {code: _expand(code, row) for code, row in _REGISTRY.items()}
 
+# ISO 639-1 native language(s) per country — powers the /sources coverage matrix.
+_NATIVE_LANGS: dict[str, list[str]] = {
+    "KZ": ["kk", "ru"], "BY": ["be", "ru"], "AM": ["hy"], "AZ": ["az"],
+    "GE": ["ka"], "MD": ["ro"], "UZ": ["uz"], "KG": ["ky", "ru"],
+    "TJ": ["tg"], "TM": ["tk"],
+    "GB": ["en"], "DE": ["de"], "FR": ["fr"], "IT": ["it"], "ES": ["es"],
+    "PT": ["pt"], "NL": ["nl"], "BE": ["nl", "fr"], "AT": ["de"],
+    "CH": ["de", "fr", "it"], "SE": ["sv"], "NO": ["no"], "FI": ["fi"],
+    "DK": ["da"], "IE": ["en", "ga"], "IS": ["is"],
+    "UA": ["uk"], "PL": ["pl"], "CZ": ["cs"], "SK": ["sk"], "HU": ["hu"],
+    "RO": ["ro"], "BG": ["bg"], "EE": ["et"], "LV": ["lv"], "LT": ["lt"],
+    "RS": ["sr"], "GR": ["el"], "CY": ["el"], "HR": ["hr"], "SI": ["sl"],
+    "BA": ["bs", "sr", "hr"], "MK": ["mk"], "ME": ["sr"], "AL": ["sq"],
+    "US": ["en"], "CA": ["en", "fr"], "MX": ["es"],
+    "BR": ["pt"], "AR": ["es"], "VE": ["es"], "CU": ["es"], "NI": ["es"],
+    "CL": ["es"], "CO": ["es"], "PE": ["es"], "BO": ["es"],
+    "TR": ["tr"], "IR": ["fa"], "IL": ["he"], "SA": ["ar"], "AE": ["ar"],
+    "QA": ["ar"], "IQ": ["ar"], "SY": ["ar"], "EG": ["ar"],
+    "CN": ["zh"], "JP": ["ja"], "KR": ["ko"], "KP": ["ko"], "MN": ["mn"],
+    "TW": ["zh"],
+    "IN": ["hi", "en"], "PK": ["ur", "en"], "AF": ["ps", "fa"],
+    "BD": ["bn"], "LK": ["si", "ta"],
+    "ID": ["id"], "VN": ["vi"], "TH": ["th"], "MY": ["ms"],
+    "SG": ["en", "zh"], "PH": ["en", "tl"], "MM": ["my"],
+    "ZA": ["en", "af"], "NG": ["en"], "ET": ["am"], "KE": ["en", "sw"],
+    "DZ": ["ar", "fr"], "MA": ["ar", "fr"], "TN": ["ar", "fr"],
+    "LY": ["ar"], "SD": ["ar"], "ML": ["fr"], "NE": ["fr"], "BF": ["fr"],
+    "CF": ["fr"], "AU": ["en"], "NZ": ["en"],
+}
+assert set(_NATIVE_LANGS) == set(COUNTRIES), "langs registry must cover all countries"
+for _code, _langs in _NATIVE_LANGS.items():
+    COUNTRIES[_code]["langs"] = _langs
+
 COUNTRY_NAMES_ALL = {code: c["name_ru"] for code, c in COUNTRIES.items()}
 
 

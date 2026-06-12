@@ -48,7 +48,8 @@ def get_meta():
              "iso3": c["iso3"], "flag": c["flag"], "region": c["region"],
              "tier": c["tier"], "memberships": c["memberships"],
              "unfriendly": c["unfriendly"],
-             "sanctions_on_russia": c["sanctions_on_russia"]}
+             "sanctions_on_russia": c["sanctions_on_russia"],
+             "langs": c.get("langs", [])}
             for c in COUNTRIES.values()
         ],
     }
