@@ -19,54 +19,17 @@ Usage:
 """
 import argparse
 import logging
-from urllib.parse import urlparse
 
+from src.collectors.gnews import base_domain, site_wrapper_url
 from src.config import SOURCES_PATH, WORLD_SOURCES_PATH, load_sources
 from scripts.validate_feed import validate_url
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 logger = logging.getLogger("fix-dead-feeds")
 
-# Russia search term + Google News locale per source language.
-RUSSIA_TERM = {
-    "en": "russia", "ru": "россия", "de": "russland", "fr": "russie",
-    "es": "rusia", "pt": "rússia", "it": "russia", "tr": "rusya",
-    "ar": "روسيا", "fa": "روسیه", "uk": "росія", "pl": "rosja",
-    "ro": "rusia", "el": "ρωσία", "sr": "русија", "ko": "러시아",
-    "ja": "ロシア", "zh": "俄罗斯", "hi": "रूस", "id": "rusia",
-}
-LOCALE = {
-    "en": ("en-US", "US", "US:en"), "de": ("de", "DE", "DE:de"),
-    "fr": ("fr", "FR", "FR:fr"), "es": ("es-419", "US", "US:es-419"),
-    "pt": ("pt-BR", "BR", "BR:pt-419"), "it": ("it", "IT", "IT:it"),
-    "tr": ("tr", "TR", "TR:tr"), "ar": ("ar", "EG", "EG:ar"),
-    "fa": ("fa", "IR", "IR:fa"), "uk": ("uk", "UA", "UA:uk"),
-    "pl": ("pl", "PL", "PL:pl"), "ro": ("ro", "RO", "RO:ro"),
-    "el": ("el", "GR", "GR:el"), "sr": ("sr", "RS", "RS:sr"),
-    "ko": ("ko", "KR", "KR:ko"), "ja": ("ja", "JP", "JP:ja"),
-    "zh": ("zh-CN", "CN", "CN:zh-Hans"), "hi": ("hi", "IN", "IN:hi"),
-    "id": ("id", "ID", "ID:id"),
-}
-
 # Reason fragments that mean "the URL is broken" (vs merely stale/quiet).
 HARD_FAILURE_MARKERS = ("HTTP 4", "HTTP 5", "fetch failed", "parse error",
                         "no entries", "0 entries")
-
-
-def base_domain(url: str) -> str:
-    host = urlparse(url).netloc.lower()
-    for p in ("rss.", "www.", "feeds.", "feed.", "en.", "amp.", "m."):
-        if host.startswith(p):
-            host = host[len(p):]
-    return host
-
-
-def gnews_wrapper(url: str, lang: str) -> str:
-    domain = base_domain(url)
-    term = RUSSIA_TERM.get(lang, "russia")
-    hl, gl, ceid = LOCALE.get(lang, ("en-US", "US", "US:en"))
-    return (f"https://news.google.com/rss/search?q=site:{domain}+{term}"
-            f"&hl={hl}&gl={gl}&ceid={ceid}")
 
 
 def is_already_gnews(url: str) -> bool:
@@ -95,7 +58,7 @@ def main():
         if not any(m in res["reason"] for m in HARD_FAILURE_MARKERS):
             logger.info("SKIP  [%s] %-26s soft: %s", cc, name[:26], res["reason"][:50])
             continue
-        new = gnews_wrapper(url, lang)
+        new = site_wrapper_url(url, lang)
         chk = validate_url(new, "rss")
         if not chk["ok"]:
             logger.warning("KEEP  [%s] %-26s wrapper also failed: %s", cc, name[:26], chk["reason"][:50])
