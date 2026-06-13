@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
 from sqlalchemy import text
@@ -202,122 +203,124 @@ def ensure_sources_in_db():
     )
 
 
+# Concurrent fetches per collection pass. The pass is network-bound (hundreds of
+# feeds, some slow web scrapers); serial collection couldn't keep up with the
+# loop interval and starved freshly-added feeds. Fetch in parallel, save serially.
+COLLECT_WORKERS = int(os.environ.get("COLLECT_WORKERS", "10"))
+
+
+def _fetch_source(source) -> tuple[list[dict], str, str]:
+    """Fetch one source (network-bound; safe to run in a thread pool)."""
+    if source.source_type == "rss":
+        return collect_rss_status(source.url, source.name)
+    if source.source_type == "web":
+        return scrape_web_status(source.url, source.name)
+    return [], "unknown_type", f"unknown source_type={source.source_type!r}"
+
+
+def _save_source(source, articles: list[dict]) -> tuple[int, int, int]:
+    """Persist a source's fetched articles. Returns (new, dupes, skipped)."""
+    new_count = dupe_count = skipped = 0
+    with get_session() as session:
+        for art in articles:
+            # Exact duplicate (same source + external_id) → skip.
+            existing = session.execute(
+                text("SELECT id FROM articles WHERE source_id = :sid AND external_id = :eid"),
+                {"sid": source.id, "eid": art["external_id"]},
+            ).fetchone()
+            if existing:
+                skipped += 1
+                continue
+
+            cleaned_title = clean_title(art.get("title"))
+            if cleaned_title is None:
+                skipped += 1
+                continue
+
+            title_norm = normalize_title(cleaned_title)
+            published_at = art["published_at"]
+
+            parent_id = None
+            if title_norm and len(title_norm) >= 10:
+                parent_id = find_duplicate(session, title_norm, source.country_code, published_at)
+
+            age_hours = (datetime.now(timezone.utc) - published_at).total_seconds() / 3600
+            is_backfill = age_hours > BACKFILL_HOURS
+
+            try:
+                with session.begin_nested():
+                    article = Article(
+                        source_id=source.id,
+                        external_id=art["external_id"],
+                        title=cleaned_title,
+                        body=art.get("body", ""),
+                        url=art.get("url", ""),
+                        published_at=published_at,
+                        language=_detect_language(art["title"]),
+                        title_normalized=title_norm,
+                        is_duplicate=parent_id is not None,
+                        duplicate_of=parent_id,
+                        is_backfill=is_backfill,
+                    )
+                    session.add(article)
+                    session.flush()  # Get article.id for Redis enqueue
+
+                    if parent_id:
+                        session.execute(
+                            text("UPDATE articles SET reprint_count = reprint_count + 1 WHERE id = :pid"),
+                            {"pid": parent_id},
+                        )
+                        dupe_count += 1
+                    else:
+                        new_count += 1
+                        _enqueue_article(article.id, source.country_code)
+            except Exception as e:
+                skipped += 1
+                logger.warning(
+                    f"  [{source.country_code}] Failed to persist '{cleaned_title[:80]}': {e}"
+                )
+                continue
+    return new_count, dupe_count, skipped
+
+
 def collect_all():
-    """Collect articles from all active sources."""
+    """Collect from all active sources — fetch concurrently, save serially."""
     with get_session() as session:
         sources = session.execute(
             text("SELECT id, name, url, country_code, source_type, weight FROM sources WHERE active = true")
         ).fetchall()
 
-    total_new = 0
-    total_skipped = 0
-    total_dupes = 0
+    total_new = total_skipped = total_dupes = 0
+    logger.info(f"Collecting {len(sources)} sources ({COLLECT_WORKERS} workers)...")
 
-    for source in sources:
-        logger.info(f"Collecting from {source.name} ({source.country_code}, {source.source_type})...")
+    with ThreadPoolExecutor(max_workers=COLLECT_WORKERS) as ex:
+        future_map = {ex.submit(_fetch_source, s): s for s in sources}
+        for fut in as_completed(future_map):
+            source = future_map[fut]
+            try:
+                articles, fetch_status, fetch_error = fut.result()
+            except Exception as e:  # noqa: BLE001
+                articles, fetch_status, fetch_error = [], "error", str(e)[:160]
 
-        if source.source_type == "rss":
-            articles, fetch_status, fetch_error = collect_rss_status(source.url, source.name)
-        elif source.source_type == "web":
-            articles, fetch_status, fetch_error = scrape_web_status(source.url, source.name)
-        else:
-            logger.warning(f"Unknown source type: {source.source_type}")
-            continue
-
-        # Record why this source is quiet (or that it's healthy) + optional quarantine.
-        _record_fetch(source.id, fetch_status, fetch_error)
-
-        # Save articles
-        new_count = 0
-        dupe_count = 0
-        with get_session() as session:
-            for art in articles:
-                # Check for exact duplicate (same source + external_id)
-                existing = session.execute(
-                    text("SELECT id FROM articles WHERE source_id = :sid AND external_id = :eid"),
-                    {"sid": source.id, "eid": art["external_id"]},
-                ).fetchone()
-
-                if existing:
-                    total_skipped += 1
-                    continue
-
-                # Clean and validate title
-                cleaned_title = clean_title(art.get("title"))
-                if cleaned_title is None:
-                    logger.debug(f"  [{source.country_code}] Skipped garbage title: {art.get('title', '')[:60]}")
-                    total_skipped += 1
-                    continue
-
-                # Normalize title for fuzzy dedup
-                title_norm = normalize_title(cleaned_title)
-                published_at = art["published_at"]
-
-                # Check for cross-source duplicate
-                parent_id = None
-                if title_norm and len(title_norm) >= 10:
-                    parent_id = find_duplicate(
-                        session, title_norm, source.country_code, published_at
-                    )
-
-                # Mark as backfill if article is older than threshold
-                age_hours = (datetime.now(timezone.utc) - published_at).total_seconds() / 3600
-                is_backfill = age_hours > BACKFILL_HOURS
-
-                try:
-                    with session.begin_nested():
-                        article = Article(
-                            source_id=source.id,
-                            external_id=art["external_id"],
-                            title=cleaned_title,
-                            body=art.get("body", ""),
-                            url=art.get("url", ""),
-                            published_at=published_at,
-                            language=_detect_language(art['title']),
-                            title_normalized=title_norm,
-                            is_duplicate=parent_id is not None,
-                            duplicate_of=parent_id,
-                            is_backfill=is_backfill,
-                        )
-                        session.add(article)
-                        session.flush()  # Get article.id for Redis enqueue
-
-                        if parent_id:
-                            # Increment reprint_count on the parent article
-                            session.execute(
-                                text("UPDATE articles SET reprint_count = reprint_count + 1 WHERE id = :pid"),
-                                {"pid": parent_id},
-                            )
-                            dupe_count += 1
-                            logger.info(
-                                f"  [{source.country_code}] DUPE: \"{art['title'][:60]}...\" → parent #{parent_id}"
-                            )
-                        else:
-                            new_count += 1
-                            # Enqueue new non-duplicate articles to Redis for analysis
-                            _enqueue_article(article.id, source.country_code)
-                except Exception as e:
-                    total_skipped += 1
-                    logger.warning(
-                        f"  [{source.country_code}] Failed to persist article '{cleaned_title[:80]}': {e}"
-                    )
-                    continue
-
-        total_new += new_count
-        total_dupes += dupe_count
-        logger.info(
-            f"  → {new_count} new, {dupe_count} dupes "
-            f"(skipped {len(articles) - new_count - dupe_count} exact duplicates)"
-        )
+            # Record status (own session) then save serially (own session) —
+            # only the network fetch above ran in parallel.
+            _record_fetch(source.id, fetch_status, fetch_error)
+            new_count, dupe_count, skipped = _save_source(source, articles)
+            total_new += new_count
+            total_dupes += dupe_count
+            total_skipped += skipped
+            if new_count or dupe_count:
+                logger.info(
+                    f"  {source.name} ({source.country_code}): "
+                    f"{new_count} new, {dupe_count} dupes [{fetch_status}]"
+                )
 
     logger.info(
         f"Collection complete: {total_new} new articles, {total_dupes} cross-source dupes, "
-        f"{total_skipped} exact duplicates skipped"
+        f"{total_skipped} skipped"
     )
 
-    # Update Redis stats after collection run
     _update_collector_stats()
-
     return total_new
 
 
