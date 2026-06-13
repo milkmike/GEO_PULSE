@@ -24,8 +24,6 @@ import argparse
 import json
 import logging
 import os
-import re
-import sys
 import time
 import urllib.request
 from datetime import datetime
@@ -79,12 +77,9 @@ def aggregate(datasets: list[dict]) -> dict[str, dict]:
 
 
 def load_to_db(by_country: dict[str, dict]):
-    m = re.match(r"postgresql://([^:]+):([^@]+)@([^:]+):(\d+)/(.+)", DB_URL)
-    if not m:
-        logger.error("Cannot parse DATABASE_URL: %s", DB_URL)
-        sys.exit(1)
-    conn = psycopg2.connect(host=m.group(3), port=int(m.group(4)),
-                            user=m.group(1), password=m.group(2), dbname=m.group(5))
+    # psycopg2 accepts the libpq URL directly — more robust than regex parsing
+    # (handles missing port, special chars) and never sys.exit()s the --loop.
+    conn = psycopg2.connect(DB_URL)
     cur = conn.cursor()
     count = 0
     for cc, agg in sorted(by_country.items(), key=lambda kv: -kv[1]["target_count"]):

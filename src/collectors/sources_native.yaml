@@ -675,14 +675,14 @@ countries:
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  NO:
+  "NO":
     name: Норвегия
     sources:
       - name: "Google News (NO) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=Russland&hl=no&gl=NO&ceid=NO:no"
         weight: 1.0
-        language: no
+        language: "no"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
