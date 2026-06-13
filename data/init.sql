@@ -16,6 +16,10 @@ CREATE TABLE sources (
     tier VARCHAR(20) DEFAULT 'mainstream',
     state_affiliated BOOLEAN DEFAULT FALSE,
     propaganda_risk VARCHAR(10) DEFAULT 'low',
+    last_fetch_at TIMESTAMPTZ,
+    last_status VARCHAR(24),
+    last_error TEXT,
+    consecutive_failures INTEGER DEFAULT 0,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 

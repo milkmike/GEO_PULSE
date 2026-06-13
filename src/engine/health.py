@@ -60,6 +60,7 @@ def source_health() -> list[dict]:
                     GROUP BY source_id
                 )
                 SELECT s.id, s.name, s.country_code, s.tier, s.source_type, s.active,
+                       s.last_status, s.last_error, s.consecutive_failures, s.last_fetch_at,
                        ls.last_at, ls.n30, c.median_gap_sec
                 FROM sources s
                 LEFT JOIN last_seen ls ON ls.source_id = s.id
@@ -98,6 +99,11 @@ def source_health() -> list[dict]:
             "silent_hours": round(silent_h, 1) if silent_h is not None else None,
             "expected_max_hours": round(expected_h, 1),
             "articles_30d": int(r.n30 or 0),
+            # Fetch-level diagnosis (migration 015): why the source is quiet.
+            "last_status": r.last_status,
+            "last_error": r.last_error,
+            "consecutive_failures": int(r.consecutive_failures or 0),
+            "last_fetch_at": r.last_fetch_at.isoformat() if r.last_fetch_at else None,
         })
     return result
 

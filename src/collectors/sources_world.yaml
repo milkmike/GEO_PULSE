@@ -129,7 +129,7 @@ countries:
         propaganda_risk: low
       - name: International Crisis Group
         type: rss
-        url: https://www.crisisgroup.org/rss.xml
+        url: https://news.google.com/rss/search?q=site:crisisgroup.org+russia&hl=en-US&gl=US&ceid=US:en
         weight: 1.0
         language: en
         tier: analytics
@@ -161,7 +161,7 @@ countries:
         propaganda_risk: low
       - name: NYT World
         type: rss
-        url: https://rss.nytimes.com/services/xml/rss/nyt/World.xml
+        url: https://news.google.com/rss/search?q=site:nytimes.com+russia&hl=en-US&gl=US&ceid=US:en
         weight: 1.5
         language: en
         tier: mainstream
@@ -179,13 +179,13 @@ countries:
         tier: mainstream
       - name: Politico
         type: rss
-        url: https://rss.politico.com/politics-news.xml
+        url: https://news.google.com/rss/search?q=site:politico.com+russia&hl=en-US&gl=US&ceid=US:en
         weight: 1.3
         language: en
         tier: mainstream
       - name: NPR World
         type: rss
-        url: https://feeds.npr.org/1004/rss.xml
+        url: https://news.google.com/rss/search?q=site:npr.org+russia&hl=en-US&gl=US&ceid=US:en
         weight: 1.2
         language: en
         tier: official
@@ -217,7 +217,7 @@ countries:
         tier: mainstream
       - name: The Guardian World
         type: rss
-        url: https://www.theguardian.com/world/rss
+        url: https://news.google.com/rss/search?q=site:theguardian.com+russia&hl=en-US&gl=US&ceid=US:en
         weight: 1.3
         language: en
         tier: mainstream
@@ -229,7 +229,7 @@ countries:
         tier: mainstream
       - name: The Telegraph
         type: rss
-        url: https://www.telegraph.co.uk/news/rss.xml
+        url: https://news.google.com/rss/search?q=site:telegraph.co.uk+russia&hl=en-US&gl=US&ceid=US:en
         weight: 1.1
         language: en
         tier: mainstream
@@ -247,25 +247,25 @@ countries:
         propaganda_risk: low
       - name: Deutsche Welle
         type: rss
-        url: https://rss.dw.com/rdf/rss-de-all
+        url: https://news.google.com/rss/search?q=site:dw.com+russland&hl=de&gl=DE&ceid=DE:de
         weight: 1.4
         language: de
         tier: official
       - name: Spiegel International
         type: rss
-        url: https://www.spiegel.de/international/index.rss
+        url: https://news.google.com/rss/search?q=site:spiegel.de+russia&hl=en-US&gl=US&ceid=US:en
         weight: 1.3
         language: en
         tier: mainstream
       - name: Tagesschau
         type: rss
-        url: https://www.tagesschau.de/index~rss2.xml
+        url: https://news.google.com/rss/search?q=site:tagesschau.de+russland&hl=de&gl=DE&ceid=DE:de
         weight: 1.3
         language: de
         tier: mainstream
       - name: FAZ
         type: rss
-        url: https://www.faz.net/rss/aktuell/
+        url: https://news.google.com/rss/search?q=site:faz.net+russland&hl=de&gl=DE&ceid=DE:de
         weight: 1.2
         language: de
         tier: mainstream
@@ -281,19 +281,19 @@ countries:
         tier: official
       - name: Le Monde
         type: rss
-        url: https://www.lemonde.fr/rss/une.xml
+        url: https://news.google.com/rss/search?q=site:lemonde.fr+russie&hl=fr&gl=FR&ceid=FR:fr
         weight: 1.4
         language: fr
         tier: mainstream
       - name: RFI
         type: rss
-        url: https://www.rfi.fr/fr/rss
+        url: https://news.google.com/rss/search?q=site:rfi.fr+russie&hl=fr&gl=FR&ceid=FR:fr
         weight: 1.1
         language: fr
         tier: official
       - name: Le Figaro
         type: rss
-        url: https://www.lefigaro.fr/rss/figaro_actualites.xml
+        url: https://news.google.com/rss/search?q=site:lefigaro.fr+russie&hl=fr&gl=FR&ceid=FR:fr
         weight: 1.1
         language: fr
         tier: mainstream
@@ -335,7 +335,7 @@ countries:
     sources:
       - name: Украинская правда
         type: rss
-        url: https://www.pravda.com.ua/rus/rss/
+        url: https://news.google.com/rss/search?q=site:pravda.com.ua+россия&hl=en-US&gl=US&ceid=US:en
         weight: 1.4
         language: ru
         tier: mainstream
@@ -363,19 +363,19 @@ countries:
     sources:
       - name: Hurriyet Daily News
         type: rss
-        url: https://www.hurriyetdailynews.com/rss
+        url: https://news.google.com/rss/search?q=site:hurriyetdailynews.com+russia&hl=en-US&gl=US&ceid=US:en
         weight: 1.3
         language: en
         tier: mainstream
       - name: Daily Sabah
         type: rss
-        url: https://www.dailysabah.com/rss
+        url: https://news.google.com/rss/search?q=site:dailysabah.com+russia&hl=en-US&gl=US&ceid=US:en
         weight: 1.2
         language: en
         tier: mainstream
       - name: Anadolu Agency
         type: rss
-        url: https://www.aa.com.tr/en/rss/default?cat=news
+        url: https://news.google.com/rss/search?q=site:aa.com.tr+russia&hl=en-US&gl=US&ceid=US:en
         weight: 1.4
         language: en
         tier: official
@@ -397,7 +397,7 @@ countries:
         tier: official
       - name: People's Daily EN
         type: rss
-        url: http://en.people.cn/rss/90777.xml
+        url: https://news.google.com/rss/search?q=site:people.cn+russia&hl=en-US&gl=US&ceid=US:en
         weight: 1.2
         language: en
         tier: official
@@ -407,13 +407,13 @@ countries:
     sources:
       - name: The Hindu International
         type: rss
-        url: https://www.thehindu.com/news/international/feeder/default.rss
+        url: https://news.google.com/rss/search?q=site:thehindu.com+russia&hl=en-US&gl=US&ceid=US:en
         weight: 1.3
         language: en
         tier: mainstream
       - name: Times of India World
         type: rss
-        url: https://timesofindia.indiatimes.com/rssfeeds/296589292.cms
+        url: https://news.google.com/rss/search?q=site:timesofindia.indiatimes.com+russia&hl=en-US&gl=US&ceid=US:en
         weight: 1.2
         language: en
         tier: mainstream
@@ -423,25 +423,25 @@ countries:
     sources:
       - name: Press TV
         type: rss
-        url: https://www.presstv.ir/rss
+        url: https://news.google.com/rss/search?q=site:presstv.ir+russia&hl=en-US&gl=US&ceid=US:en
         weight: 1.3
         language: en
         tier: official
       - name: Tehran Times
         type: rss
-        url: https://www.tehrantimes.com/rss
+        url: https://news.google.com/rss/search?q=site:tehrantimes.com+russia&hl=en-US&gl=US&ceid=US:en
         weight: 1.2
         language: en
         tier: official
       - name: Mehr News
         type: rss
-        url: https://en.mehrnews.com/rss
+        url: https://news.google.com/rss/search?q=site:mehrnews.com+russia&hl=en-US&gl=US&ceid=US:en
         weight: 1.1
         language: en
         tier: official
       - name: IRNA EN
         type: rss
-        url: https://en.irna.ir/rss
+        url: https://news.google.com/rss/search?q=site:irna.ir+russia&hl=en-US&gl=US&ceid=US:en
         weight: 1.1
         language: en
         tier: official
@@ -451,7 +451,7 @@ countries:
     sources:
       - name: Times of Israel
         type: rss
-        url: https://www.timesofisrael.com/feed/
+        url: https://news.google.com/rss/search?q=site:timesofisrael.com+russia&hl=en-US&gl=US&ceid=US:en
         weight: 1.3
         language: en
         tier: mainstream
@@ -483,13 +483,13 @@ countries:
     sources:
       - name: Yonhap News
         type: rss
-        url: https://en.yna.co.kr/RSS/news.xml
+        url: https://news.google.com/rss/search?q=site:yna.co.kr+russia&hl=en-US&gl=US&ceid=US:en
         weight: 1.3
         language: en
         tier: official
       - name: Korea Herald
         type: rss
-        url: http://www.koreaherald.com/common/rss_xml.php?ct=102
+        url: https://news.google.com/rss/search?q=site:koreaherald.com+russia&hl=en-US&gl=US&ceid=US:en
         weight: 1.1
         language: en
         tier: mainstream
@@ -505,7 +505,7 @@ countries:
         tier: official
       - name: Folha Mundo
         type: rss
-        url: https://feeds.folha.uol.com.br/mundo/rss091.xml
+        url: https://news.google.com/rss/search?q=site:folha.uol.com.br+rússia&hl=pt-BR&gl=BR&ceid=BR:pt-419
         weight: 1.2
         language: pt
         tier: mainstream
@@ -521,7 +521,7 @@ countries:
         tier: independent
       - name: B92
         type: rss
-        url: https://www.b92.net/eng/rss/news.xml
+        url: https://news.google.com/rss/search?q=site:b92.net+russia&hl=en-US&gl=US&ceid=US:en
         weight: 1.1
         language: en
         tier: mainstream
@@ -558,7 +558,7 @@ countries:
     sources:
       - name: Arab News
         type: rss
-        url: https://www.arabnews.com/rss.xml
+        url: https://news.google.com/rss/search?q=site:arabnews.com+russia&hl=en-US&gl=US&ceid=US:en
         weight: 1.3
         language: en
         tier: mainstream
@@ -574,13 +574,13 @@ countries:
     sources:
       - name: Gulf News
         type: rss
-        url: https://gulfnews.com/rss
+        url: https://news.google.com/rss/search?q=site:gulfnews.com+russia&hl=en-US&gl=US&ceid=US:en
         weight: 1.2
         language: en
         tier: mainstream
       - name: The National
         type: rss
-        url: https://www.thenationalnews.com/rss
+        url: https://news.google.com/rss/search?q=site:thenationalnews.com+russia&hl=en-US&gl=US&ceid=US:en
         weight: 1.2
         language: en
         tier: mainstream
@@ -606,13 +606,13 @@ countries:
     sources:
       - name: Shafaq News
         type: rss
-        url: https://shafaq.com/en/rss
+        url: https://news.google.com/rss/search?q=site:shafaq.com+russia&hl=en-US&gl=US&ceid=US:en
         weight: 1.1
         language: en
         tier: mainstream
       - name: Rudaw
         type: rss
-        url: https://www.rudaw.net/rss
+        url: https://news.google.com/rss/search?q=site:rudaw.net+russia&hl=en-US&gl=US&ceid=US:en
         weight: 1.0
         language: en
         tier: independent
@@ -639,7 +639,7 @@ countries:
     sources:
       - name: El País
         type: rss
-        url: https://feeds.elpais.com/mrss-s/pages/ep/site/elpais.com/portada
+        url: https://news.google.com/rss/search?q=site:elpais.com+rusia&hl=es-419&gl=US&ceid=US:es-419
         weight: 1.4
         language: es
         tier: mainstream
@@ -655,13 +655,13 @@ countries:
     sources:
       - name: El Universal
         type: rss
-        url: https://www.eluniversal.com.mx/rss.xml
+        url: https://news.google.com/rss/search?q=site:eluniversal.com.mx+rusia&hl=es-419&gl=US&ceid=US:es-419
         weight: 1.2
         language: es
         tier: mainstream
       - name: Aristegui Noticias
         type: rss
-        url: https://aristeguinoticias.com/feed/
+        url: https://news.google.com/rss/search?q=site:aristeguinoticias.com+rusia&hl=es-419&gl=US&ceid=US:es-419
         weight: 1.0
         language: es
         tier: independent
@@ -671,19 +671,19 @@ countries:
     sources:
       - name: Clarín
         type: rss
-        url: https://www.clarin.com/rss/lo-ultimo/
+        url: https://news.google.com/rss/search?q=site:clarin.com+rusia&hl=es-419&gl=US&ceid=US:es-419
         weight: 1.2
         language: es
         tier: mainstream
       - name: Infobae
         type: rss
-        url: https://www.infobae.com/feeds/rss/
+        url: https://news.google.com/rss/search?q=site:infobae.com+rusia&hl=es-419&gl=US&ceid=US:es-419
         weight: 1.2
         language: es
         tier: mainstream
       - name: Página/12
         type: rss
-        url: https://www.pagina12.com.ar/rss/portada
+        url: https://news.google.com/rss/search?q=site:pagina12.com.ar+rusia&hl=es-419&gl=US&ceid=US:es-419
         weight: 1.0
         language: es
         tier: independent
@@ -709,7 +709,7 @@ countries:
         tier: mainstream
       - name: El Espectador
         type: rss
-        url: https://www.elespectador.com/arc/outboundfeeds/rss/?outputType=xml
+        url: https://news.google.com/rss/search?q=site:elespectador.com+rusia&hl=es-419&gl=US&ceid=US:es-419
         weight: 1.0
         language: es
         tier: mainstream
@@ -832,7 +832,7 @@ countries:
     sources:
       - name: Addis Standard
         type: rss
-        url: https://addisstandard.com/feed/
+        url: https://news.google.com/rss/search?q=site:addisstandard.com+russia&hl=en-US&gl=US&ceid=US:en
         weight: 1.1
         language: en
         tier: independent
@@ -858,7 +858,7 @@ countries:
     sources:
       - name: Maliweb
         type: rss
-        url: https://www.maliweb.net/feed
+        url: https://news.google.com/rss/search?q=site:maliweb.net+russie&hl=fr&gl=FR&ceid=FR:fr
         weight: 1.0
         language: fr
         tier: mainstream
@@ -926,7 +926,7 @@ countries:
     sources:
       - name: Morocco World News
         type: rss
-        url: https://www.moroccoworldnews.com/feed/
+        url: https://news.google.com/rss/search?q=site:moroccoworldnews.com+russia&hl=en-US&gl=US&ceid=US:en
         weight: 1.1
         language: en
         tier: mainstream
@@ -1005,7 +1005,7 @@ countries:
     sources:
       - name: The Star
         type: rss
-        url: https://www.thestar.com.my/rss/News
+        url: https://news.google.com/rss/search?q=site:thestar.com.my+russia&hl=en-US&gl=US&ceid=US:en
         weight: 1.1
         language: en
         tier: mainstream
@@ -1059,7 +1059,7 @@ countries:
         tier: mainstream
       - name: Dhaka Tribune
         type: rss
-        url: https://www.dhakatribune.com/feed
+        url: https://news.google.com/rss/search?q=site:dhakatribune.com+russia&hl=en-US&gl=US&ceid=US:en
         weight: 1.0
         language: en
         tier: mainstream
@@ -1079,7 +1079,7 @@ countries:
     sources:
       - name: The Irrawaddy
         type: rss
-        url: https://www.irrawaddy.com/feed
+        url: https://news.google.com/rss/search?q=site:irrawaddy.com+russia&hl=en-US&gl=US&ceid=US:en
         weight: 1.1
         language: en
         tier: independent
@@ -1144,7 +1144,7 @@ countries:
     sources:
       - name: Brussels Times
         type: rss
-        url: https://www.brusselstimes.com/feed
+        url: https://news.google.com/rss/search?q=site:brusselstimes.com+russia&hl=en-US&gl=US&ceid=US:en
         weight: 1.0
         language: en
         tier: mainstream
@@ -1170,7 +1170,7 @@ countries:
     sources:
       - name: SwissInfo EN
         type: rss
-        url: https://www.swissinfo.ch/eng/rss
+        url: https://news.google.com/rss/search?q=site:swissinfo.ch+russia&hl=en-US&gl=US&ceid=US:en
         weight: 1.1
         language: en
         tier: official
@@ -1180,7 +1180,7 @@ countries:
     sources:
       - name: SVT
         type: rss
-        url: https://www.svt.se/nyheter/rss.xml
+        url: https://news.google.com/rss/search?q=site:svt.se+russia&hl=en-US&gl=US&ceid=US:en
         weight: 1.2
         language: sv
         tier: official
@@ -1220,7 +1220,7 @@ countries:
     sources:
       - name: eKathimerini
         type: rss
-        url: https://www.ekathimerini.com/feed/
+        url: https://news.google.com/rss/search?q=site:ekathimerini.com+russia&hl=en-US&gl=US&ceid=US:en
         weight: 1.1
         language: en
         tier: mainstream
@@ -1326,7 +1326,7 @@ countries:
     sources:
       - name: LRT
         type: rss
-        url: https://www.lrt.lt/rss
+        url: https://news.google.com/rss/search?q=site:lrt.lt+russia&hl=en-US&gl=US&ceid=US:en
         weight: 1.2
         language: lt
         tier: official
@@ -1391,13 +1391,13 @@ countries:
         propaganda_risk: low
       - name: ABC News
         type: rss
-        url: https://www.abc.net.au/news/feed/51120/rss.xml
+        url: https://news.google.com/rss/search?q=site:abc.net.au+russia&hl=en-US&gl=US&ceid=US:en
         weight: 1.3
         language: en
         tier: official
       - name: SMH World
         type: rss
-        url: https://www.smh.com.au/rss/world.xml
+        url: https://news.google.com/rss/search?q=site:smh.com.au+russia&hl=en-US&gl=US&ceid=US:en
         weight: 1.1
         language: en
         tier: mainstream
