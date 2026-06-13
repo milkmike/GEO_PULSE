@@ -58,14 +58,16 @@ def render_yaml(data: dict[str, dict]) -> str:
     lines = [HEADER, "countries:"]
     for cc in sorted(data):
         d = data[cc]
-        lines.append(f"  {cc}:")
+        # Country code and language are quoted: YAML 1.1 parses bare NO/no
+        # (Norway / Norwegian) as the boolean False, which corrupts the key.
+        lines.append(f'  "{cc}":')
         lines.append(f"    name: {country_name_ru(cc)}")
         lines.append(f"    sources:")
         lines.append(f'      - name: "Google News ({d["lang"].upper()}) — Россия"')
         lines.append(f"        type: rss")
         lines.append(f'        url: "{d["url"]}"')
         lines.append(f"        weight: 1.0")
-        lines.append(f"        language: {d['lang']}")
+        lines.append(f'        language: "{d["lang"]}"')
         lines.append(f"        tier: mainstream")
         lines.append(f"        state_affiliated: false")
         lines.append(f"        propaganda_risk: low")

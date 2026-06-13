@@ -1192,7 +1192,7 @@ countries:
         type: rss
         url: https://www.nrk.no/nyheter/siste.rss
         weight: 1.2
-        language: no
+        language: "no"
         tier: official
 
   FI:

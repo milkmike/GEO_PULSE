@@ -11,6 +11,7 @@ from sqlalchemy import text
 from src.collectors.rss import collect_rss_status
 from src.collectors.scraper import scrape_web_status
 from src.config import load_sources
+from src.countries import COUNTRIES
 from src.db import get_session, wait_for_db, Source, Article
 from src.pipeline.dedup import normalize_title, find_duplicate
 from src.pipeline.title_cleaner import clean_title
@@ -132,56 +133,73 @@ def ensure_sources_in_db():
         return
 
     config = load_sources()
-    
-    added = updated = 0
+
+    added = updated = skipped = 0
     with get_session() as session:
         for country_code, country_data in config["countries"].items():
-            for src in country_data["sources"]:
-                # Already present at this exact URL → nothing to do.
-                by_url = session.execute(
-                    text("SELECT id FROM sources WHERE url = :url AND country_code = :cc"),
-                    {"url": src["url"], "cc": country_code},
-                ).fetchone()
-                if by_url:
-                    continue
+            cc = str(country_code).upper()
+            # A bad YAML key (e.g. bare `NO`/`ON` → bool under YAML 1.1, or a typo)
+            # must not corrupt the sync — skip codes outside the registry.
+            if cc not in COUNTRIES:
+                logger.warning(f"Skipping sources for unknown country code: {country_code!r}")
+                continue
+            for src in country_data.get("sources", []):
+                # Each source in its own savepoint: one bad row is logged and
+                # skipped instead of aborting (and crash-looping) the whole sync.
+                try:
+                    with session.begin_nested():
+                        # Already present at this exact URL → nothing to do.
+                        by_url = session.execute(
+                            text("SELECT id FROM sources WHERE url = :url AND country_code = :cc"),
+                            {"url": src["url"], "cc": cc},
+                        ).fetchone()
+                        if by_url:
+                            continue
 
-                # Same (country, name) but a different URL → the YAML url changed
-                # (e.g. a geoblocked feed rewritten to a Google News wrapper).
-                # Update in place + reactivate instead of inserting a duplicate,
-                # so feed fixes actually replace the dead source on an existing DB.
-                by_name = session.execute(
-                    text("""SELECT id FROM sources
-                            WHERE country_code = :cc AND name = :name
-                            ORDER BY id LIMIT 1"""),
-                    {"cc": country_code, "name": src["name"]},
-                ).fetchone()
-                if by_name:
-                    session.execute(
-                        text("UPDATE sources SET url = :url, active = TRUE WHERE id = :id"),
-                        {"url": src["url"], "id": by_name.id},
-                    )
-                    updated += 1
-                    logger.info(f"Updated source URL: {src['name']} ({country_code})")
-                    continue
+                        # Same (country, name) but a different URL → the YAML url
+                        # changed (e.g. a geoblocked feed rewritten to a Google
+                        # News wrapper). Update in place + reactivate instead of
+                        # inserting a duplicate, so feed fixes actually replace the
+                        # dead source on an existing DB.
+                        by_name = session.execute(
+                            text("""SELECT id FROM sources
+                                    WHERE country_code = :cc AND name = :name
+                                    ORDER BY id LIMIT 1"""),
+                            {"cc": cc, "name": src["name"]},
+                        ).fetchone()
+                        if by_name:
+                            session.execute(
+                                text("UPDATE sources SET url = :url, active = TRUE WHERE id = :id"),
+                                {"url": src["url"], "id": by_name.id},
+                            )
+                            updated += 1
+                            logger.info(f"Updated source URL: {src['name']} ({cc})")
+                            continue
 
-                source = Source(
-                    name=src["name"],
-                    url=src["url"],
-                    country_code=country_code,
-                    source_type=src["type"],
-                    weight=src.get("weight", 1.0),
-                    language=src.get("language", "ru"),
-                    config=src.get("config", {}),
-                    tier=src.get("tier", "mainstream"),
-                    state_affiliated=src.get("state_affiliated", False),
-                    propaganda_risk=src.get("propaganda_risk", "low"),
-                )
-                session.add(source)
-                session.flush()
-                added += 1
-                logger.info(f"Added source: {src['name']} ({country_code})")
+                        lang = src.get("language", "ru")
+                        source = Source(
+                            name=src["name"],
+                            url=src["url"],
+                            country_code=cc,
+                            source_type=src["type"],
+                            weight=src.get("weight", 1.0),
+                            language=str(lang) if lang is not None else "ru",
+                            config=src.get("config", {}),
+                            tier=src.get("tier", "mainstream"),
+                            state_affiliated=src.get("state_affiliated", False),
+                            propaganda_risk=src.get("propaganda_risk", "low"),
+                        )
+                        session.add(source)
+                        session.flush()
+                        added += 1
+                        logger.info(f"Added source: {src['name']} ({cc})")
+                except Exception as e:
+                    skipped += 1
+                    logger.warning(f"Skipping source {src.get('name')!r} ({cc}): {e}")
 
-    logger.info(f"Sources synced to database ({added} added, {updated} url-updated)")
+    logger.info(
+        f"Sources synced to database ({added} added, {updated} url-updated, {skipped} skipped)"
+    )
 
 
 def collect_all():
