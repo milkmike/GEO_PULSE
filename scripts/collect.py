@@ -133,33 +133,55 @@ def ensure_sources_in_db():
 
     config = load_sources()
     
+    added = updated = 0
     with get_session() as session:
         for country_code, country_data in config["countries"].items():
             for src in country_data["sources"]:
-                # Check if source exists
-                existing = session.execute(
+                # Already present at this exact URL → nothing to do.
+                by_url = session.execute(
                     text("SELECT id FROM sources WHERE url = :url AND country_code = :cc"),
                     {"url": src["url"], "cc": country_code},
                 ).fetchone()
+                if by_url:
+                    continue
 
-                if not existing:
-                    source = Source(
-                        name=src["name"],
-                        url=src["url"],
-                        country_code=country_code,
-                        source_type=src["type"],
-                        weight=src.get("weight", 1.0),
-                        language=src.get("language", "ru"),
-                        config=src.get("config", {}),
-                        tier=src.get("tier", "mainstream"),
-                        state_affiliated=src.get("state_affiliated", False),
-                        propaganda_risk=src.get("propaganda_risk", "low"),
+                # Same (country, name) but a different URL → the YAML url changed
+                # (e.g. a geoblocked feed rewritten to a Google News wrapper).
+                # Update in place + reactivate instead of inserting a duplicate,
+                # so feed fixes actually replace the dead source on an existing DB.
+                by_name = session.execute(
+                    text("""SELECT id FROM sources
+                            WHERE country_code = :cc AND name = :name
+                            ORDER BY id LIMIT 1"""),
+                    {"cc": country_code, "name": src["name"]},
+                ).fetchone()
+                if by_name:
+                    session.execute(
+                        text("UPDATE sources SET url = :url, active = TRUE WHERE id = :id"),
+                        {"url": src["url"], "id": by_name.id},
                     )
-                    session.add(source)
-                    session.flush()
-                    logger.info(f"Added source: {src['name']} ({country_code})")
+                    updated += 1
+                    logger.info(f"Updated source URL: {src['name']} ({country_code})")
+                    continue
 
-    logger.info("Sources synced to database")
+                source = Source(
+                    name=src["name"],
+                    url=src["url"],
+                    country_code=country_code,
+                    source_type=src["type"],
+                    weight=src.get("weight", 1.0),
+                    language=src.get("language", "ru"),
+                    config=src.get("config", {}),
+                    tier=src.get("tier", "mainstream"),
+                    state_affiliated=src.get("state_affiliated", False),
+                    propaganda_risk=src.get("propaganda_risk", "low"),
+                )
+                session.add(source)
+                session.flush()
+                added += 1
+                logger.info(f"Added source: {src['name']} ({country_code})")
+
+    logger.info(f"Sources synced to database ({added} added, {updated} url-updated)")
 
 
 def collect_all():
