@@ -29,6 +29,24 @@ services:
       timeout: 5s
       retries: 5
 
+  # One-shot: apply pending DB migrations idempotently (tracked in
+  # schema_migrations). Runs on every `up -d`; no other service depends on it.
+  # This is how schema changes land in prod — auto-update.sh does not migrate.
+  migrate:
+    image: timescale/timescaledb:latest-pg16
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGHOST: db
+      PGUSER: thermo
+      PGDATABASE: cis_thermometer
+      PGPASSWORD: ${DB_PASSWORD}
+    volumes:
+      - ./scripts:/scripts:ro
+    entrypoint: ["bash", "/scripts/apply_migrations.sh"]
+    restart: "no"
+
   collector:
     build:
       context: .

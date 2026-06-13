@@ -38,6 +38,12 @@ if ! git merge --ff-only origin/main >/dev/null 2>&1; then
     exit 0
 fi
 
+# Apply pending DB migrations before swapping containers (idempotent, tracked in
+# schema_migrations). The migrate service also runs under `up -d`, but invoking
+# it explicitly guarantees the schema is current on every deploy regardless of
+# compose restart semantics.
+docker compose run --rm migrate >>"$LOG" 2>&1 || log "WARN: migrate step reported issues (continuing)"
+
 # Build first at low CPU/IO priority so a heavy image build (Next.js!) cannot
 # starve the running containers (the box OOM-froze once, 2026-06-12), then
 # swap containers — compose only recreates changed services.

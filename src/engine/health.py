@@ -35,8 +35,20 @@ def source_health() -> list[dict]:
     """Per-source freshness with learned cadence."""
     now = datetime.now(timezone.utc)
     with get_session() as session:
+        # Fetch-health columns (migration 015) may not exist yet on a freshly
+        # deployed but not-yet-migrated DB — select NULLs instead of 500ing.
+        has_fetch_cols = session.execute(
+            text("""SELECT COUNT(*) FROM information_schema.columns
+                    WHERE table_name = 'sources' AND column_name = 'last_status'""")
+        ).scalar()
+        fetch_cols = (
+            "s.last_status, s.last_error, s.consecutive_failures, s.last_fetch_at"
+            if has_fetch_cols else
+            "NULL AS last_status, NULL AS last_error, "
+            "0 AS consecutive_failures, NULL AS last_fetch_at"
+        )
         rows = session.execute(
-            text("""
+            text(f"""
                 WITH cadence AS (
                     SELECT ar.source_id,
                            PERCENTILE_CONT(0.5) WITHIN GROUP (
@@ -60,7 +72,7 @@ def source_health() -> list[dict]:
                     GROUP BY source_id
                 )
                 SELECT s.id, s.name, s.country_code, s.tier, s.source_type, s.active,
-                       s.last_status, s.last_error, s.consecutive_failures, s.last_fetch_at,
+                       {fetch_cols},
                        ls.last_at, ls.n30, c.median_gap_sec
                 FROM sources s
                 LEFT JOIN last_seen ls ON ls.source_id = s.id
