@@ -8,6 +8,14 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://thermo:thermo@localh
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 API_URL = os.environ.get("API_URL", "http://localhost:8000")
 
+# Heavy / structured-output model for batch & clustering jobs (thread dedup,
+# reanalyze, digests). The high-volume analyzer/briefs chain lives in
+# src/llm.py (LLM_MODELS); this is the single knob for the few scripts that
+# need a strong JSON-capable model. Default is a cheap Chinese model — switch
+# in one line. Alternatives: deepseek/deepseek-v3.2, xiaomi/mimo-v2.5,
+# moonshotai/kimi-k2.6, deepseek/deepseek-v4-flash.
+HEAVY_MODEL = os.environ.get("HEAVY_MODEL", "xiaomi/mimo-v2.5-pro")
+
 # Paths
 BASE_DIR = Path(__file__).parent.parent
 SOURCES_PATH = BASE_DIR / "src" / "collectors" / "sources.yaml"

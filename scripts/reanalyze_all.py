@@ -9,13 +9,13 @@ import httpx
 from sqlalchemy import text
 
 from src.db import get_session
-from src.config import COUNTRY_NAMES
+from src.config import COUNTRY_NAMES, HEAVY_MODEL
 from src.pipeline.prompts import SENTIMENT_PROMPT, PROMPT_VERSION
 
 logger = logging.getLogger(__name__)
 
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
-MODEL = "anthropic/claude-sonnet-4"
+MODEL = HEAVY_MODEL
 BATCH_SIZE = 20
 MAX_WORKERS = 5
 

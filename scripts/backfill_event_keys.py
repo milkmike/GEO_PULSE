@@ -8,6 +8,8 @@ import psycopg2
 import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+from src.config import HEAVY_MODEL
+
 DB_PARAMS = {
     "host": "db", "port": 5432,
     "dbname": "cis_thermometer", "user": "thermo",
@@ -15,7 +17,7 @@ DB_PARAMS = {
 }
 
 API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
-MODEL = "anthropic/claude-sonnet-4"
+MODEL = HEAVY_MODEL
 BASE_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 BATCH_PROMPT = """Для каждой статьи определи event_key — краткий идентификатор СОБЫТИЯ (3-5 слов, lowercase, без дат).

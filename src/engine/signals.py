@@ -58,6 +58,7 @@ TTL_HOURS = {
     "index_shift": 24,
     "fx_move": 24,
     "notable_event": 48,
+    "sanctions_escalation": 72,
 }
 
 
@@ -485,6 +486,55 @@ def detect_fx_moves(session) -> int:
     return emitted
 
 
+def detect_sanctions_escalation(session) -> int:
+    """A jurisdiction tightened sanctions since the last snapshot.
+
+    Reads the structural `sanctions_pressure` table (OpenSanctions, refreshed by
+    scripts/collect_sanctions.py). The table is optional/new, so the query runs
+    inside begin_nested() per the project convention — a missing table yields no
+    signals instead of poisoning the session. Only registry countries are
+    surfaced (skips supranational 'EU' etc.).
+    """
+    MIN_DELTA = 25  # ignore routine churn; flag meaningful batches of new targets
+    try:
+        with session.begin_nested():
+            rows = session.execute(
+                text("""
+                    SELECT country_code, delta, target_count, lists_count, last_change
+                    FROM sanctions_pressure
+                    WHERE delta >= :min_delta
+                      AND prev_target_count > 0   -- skip the first snapshot (no baseline)
+                      AND updated_at > NOW() - INTERVAL '2 days'
+                """),
+                {"min_delta": MIN_DELTA},
+            ).fetchall()
+    except Exception as e:  # table absent or not yet populated
+        logger.info(f"sanctions_pressure unavailable, skipping: {e}")
+        return 0
+
+    emitted = 0
+    month_bucket = datetime.now(timezone.utc).strftime("%Y%m")
+    for r in rows:
+        if r.country_code not in COUNTRIES:
+            continue
+        emitted += _emit(
+            session, "sanctions_escalation", r.country_code,
+            dedup_key=f"sanctions_escalation:{r.country_code}:{month_bucket}",
+            title=f"Санкционное ужесточение: {country_name_ru(r.country_code)} (+{int(r.delta)} целей)",
+            description=(
+                f"{country_name_ru(r.country_code)} расширила санкционные списки на "
+                f"{int(r.delta)} целей (всего {int(r.target_count)} в {int(r.lists_count)} "
+                f"программах, обновление {r.last_change})."
+            ),
+            payload={"delta": int(r.delta), "target_count": int(r.target_count),
+                     "lists_count": int(r.lists_count),
+                     "last_change": str(r.last_change) if r.last_change else None},
+            severity="warning" if r.delta >= 100 else "info",
+            confidence=0.7,
+        )
+    return emitted
+
+
 def cleanup_expired(session, keep_days: int = 30) -> int:
     """Drop long-expired signals to keep the table lean."""
     res = session.execute(
@@ -506,6 +556,7 @@ def detect_all() -> dict:
         ("index_shifts", detect_index_shifts),
         ("notable_events", detect_notable_events),
         ("fx_moves", detect_fx_moves),
+        ("sanctions_escalation", detect_sanctions_escalation),
     ):
         try:
             with get_session() as session:

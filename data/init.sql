@@ -232,3 +232,17 @@ CREATE TABLE IF NOT EXISTS trade_data (
     updated_at TIMESTAMP DEFAULT now(),
     UNIQUE (country_code, year)
 );
+
+-- Sanctions pressure per jurisdiction (see scripts/migrations/014_sanctions.sql)
+CREATE TABLE IF NOT EXISTS sanctions_pressure (
+    id SERIAL PRIMARY KEY,
+    country_code VARCHAR(2) NOT NULL,
+    lists_count INTEGER DEFAULT 0,
+    target_count INTEGER DEFAULT 0,
+    prev_target_count INTEGER DEFAULT 0,
+    delta INTEGER DEFAULT 0,
+    last_change DATE,
+    programs JSONB DEFAULT '[]',
+    updated_at TIMESTAMP DEFAULT now(),
+    UNIQUE (country_code)
+);

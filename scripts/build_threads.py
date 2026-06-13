@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 import httpx
 from sqlalchemy import text
 
-from src.config import COUNTRY_NAMES, OPENROUTER_API_KEY
+from src.config import COUNTRY_NAMES, OPENROUTER_API_KEY, HEAVY_MODEL
 from src.db import get_session, wait_for_db
 from src.api_tracker import track_api_call, track_duration
 
@@ -21,7 +21,7 @@ logging.basicConfig(
 logger = logging.getLogger("threads-v2")
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-MODEL = "anthropic/claude-sonnet-4"
+MODEL = HEAVY_MODEL
 
 # Clustering config
 COSINE_THRESHOLD = 0.82       # Embedding similarity: auto-merge

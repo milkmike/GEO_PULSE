@@ -8,14 +8,14 @@ import time
 import httpx
 from sqlalchemy import text
 
-from src.config import COUNTRY_NAMES
+from src.config import COUNTRY_NAMES, HEAVY_MODEL
 from src.db import get_session
 from src.api_tracker import track_api_call, track_duration
 
 logger = logging.getLogger(__name__)
 
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
-MODEL = "anthropic/claude-sonnet-4"
+MODEL = HEAVY_MODEL
 
 DIGEST_PROMPT = """Ты аналитик-международник. Напиши краткую сводку (4-6 предложений, по-русски) об отношениях {country} с Россией за последнюю неделю.
 
