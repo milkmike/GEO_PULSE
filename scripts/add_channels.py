@@ -63,6 +63,31 @@ NEW_CHANNELS = [
     ("KG", "kabar_kg", "Кабар KG TG", "state"),
 ]
 
+# World / OSINT channels beyond the CIS core (5-tuple: + state_affiliated).
+# Every username below was verified live via the public t.me/s/<name> preview
+# before being added — do the same for any new entry so we don't create dead
+# sources. Global OSINT channels that don't map to a single monitored country
+# (Bellingcat, Clash Report, OSINTdefender, …) are intentionally NOT added yet:
+# the sources.country_code column is mandatory and there is no "global" code —
+# see docs/research/dead-sources + roadmap for the proposed topic/global tag.
+WORLD_CHANNELS = [
+    # country, username, display_name, tier, state_affiliated
+    ("UA", "DeepStateUA", "DeepState UA (war map) TG", "analytics", False),
+    ("UA", "Liveuamap", "Liveuamap TG", "analytics", False),
+    ("UA", "ssternenko", "Sternenko TG", "independent", False),
+    ("TR", "anadoluajansi", "Anadolu Agency TG", "official", True),
+    ("AZ", "apa_az", "APA.az TG", "mainstream", False),
+    ("BY", "nexta_tv", "NEXTA TG", "western_proxy", False),
+]
+
+
+def all_channels():
+    """Normalize both registries to 5-tuples (country, user, name, tier, state)."""
+    for country, username, name, tier in NEW_CHANNELS:
+        yield country, username, name, tier, False
+    yield from WORLD_CHANNELS
+
+
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 
 
@@ -73,7 +98,7 @@ def add_to_db():
     added = 0
     skipped = 0
     
-    for country, username, name, tier in NEW_CHANNELS:
+    for country, username, name, tier, state_affiliated in all_channels():
         url = f"https://t.me/{username}"
         # Check if already exists
         cur.execute("SELECT id FROM sources WHERE url = %s", (url,))
@@ -81,12 +106,13 @@ def add_to_db():
             print(f"  SKIP {username} — already exists")
             skipped += 1
             continue
-        
+
         cur.execute("""
-            INSERT INTO sources (name, url, country_code, source_type, tier, active, created_at)
-            VALUES (%s, %s, %s, 'telegram', %s, true, NOW())
+            INSERT INTO sources (name, url, country_code, source_type, tier,
+                                 state_affiliated, active, created_at)
+            VALUES (%s, %s, %s, 'telegram', %s, %s, true, NOW())
             RETURNING id
-        """, (name, url, country, tier))
+        """, (name, url, country, tier, state_affiliated))
         sid = cur.fetchone()[0]
         print(f"  ADD [{country}] @{username} → id={sid} ({tier})")
         added += 1
@@ -116,7 +142,7 @@ async def subscribe_channels():
     joined = 0
     failed = 0
     
-    for country, username, name, tier in NEW_CHANNELS:
+    for country, username, name, tier, state_affiliated in all_channels():
         try:
             print(f"  JOIN @{username}...", end=" ", flush=True)
             await client(JoinChannelRequest(username))

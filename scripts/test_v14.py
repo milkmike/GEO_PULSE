@@ -3,7 +3,7 @@ import json
 import httpx
 import os
 from src.pipeline.prompts import SENTIMENT_PROMPT, PROMPT_VERSION
-from src.config import COUNTRY_NAMES
+from src.config import COUNTRY_NAMES, HEAVY_MODEL
 
 key = os.environ['OPENROUTER_API_KEY']
 tests = [
@@ -16,7 +16,7 @@ for title, country in tests:
     prompt = SENTIMENT_PROMPT.format(country=country, source='test', title=title, body=title)
     r = httpx.post('https://openrouter.ai/api/v1/chat/completions',
         headers={'Authorization': f'Bearer {key}', 'Content-Type': 'application/json'},
-        json={'model': 'anthropic/claude-sonnet-4', 'messages': [{'role': 'user', 'content': prompt}], 'max_tokens': 300, 'temperature': 0},
+        json={'model': HEAVY_MODEL, 'messages': [{'role': 'user', 'content': prompt}], 'max_tokens': 300, 'temperature': 0},
         timeout=30)
     content = r.json()['choices'][0]['message']['content'].strip()
     if content.startswith('```'):

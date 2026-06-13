@@ -374,3 +374,19 @@ def scrape_web(source_url: str, source_name: str = "") -> list[dict]:
         logger.error(f"[{source_name}] Error scraping {source_url}: {e}")
 
     return articles
+
+
+def scrape_web_status(source_url: str, source_name: str = "") -> tuple[list[dict], str, str]:
+    """scrape_web wrapper that classifies the outcome for source-health tracking.
+
+    Returns (articles, status, error_detail) where status is ok | no_articles |
+    error. Web extraction (trafilatura→Firecrawl) can't cleanly distinguish a
+    geoblock from a JS page, so a 0-article result is reported as no_articles.
+    """
+    try:
+        articles = scrape_web(source_url, source_name)
+    except Exception as e:  # noqa: BLE001 — scrape_web already guards, this is belt-and-suspenders
+        return [], "error", f"{type(e).__name__}: {str(e)[:160]}"
+    if articles:
+        return articles, "ok", ""
+    return [], "no_articles", "scraper returned 0 articles"

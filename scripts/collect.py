@@ -8,8 +8,8 @@ from datetime import datetime, timezone
 
 from sqlalchemy import text
 
-from src.collectors.rss import collect_rss
-from src.collectors.scraper import scrape_web
+from src.collectors.rss import collect_rss_status
+from src.collectors.scraper import scrape_web_status
 from src.config import load_sources
 from src.db import get_session, wait_for_db, Source, Article
 from src.pipeline.dedup import normalize_title, find_duplicate
@@ -53,6 +53,10 @@ SKIP_YAML_SYNC = os.environ.get("SKIP_YAML_SYNC", "0") == "1"
 # Articles older than this threshold are marked as backfill
 BACKFILL_HOURS = int(os.environ.get("BACKFILL_HOURS", "48"))
 
+# Auto-quarantine: disable a source after N consecutive failed fetches.
+# 0 (default) = never auto-disable — only record status (instrumentation only).
+QUARANTINE_AFTER = int(os.environ.get("SOURCE_QUARANTINE_AFTER", "0"))
+
 # Redis integration (optional, graceful fallback)
 _redis_available = False
 try:
@@ -70,6 +74,44 @@ def _enqueue_article(article_id: int, country_code: str):
         enqueue(Q_RAW_ARTICLES, {"article_id": article_id, "country_code": country_code})
     except Exception as e:
         logger.warning(f"Failed to enqueue article {article_id} to Redis: {e}")
+
+
+def _record_fetch(source_id: int, status: str, error: str):
+    """Persist the fetch outcome on the source (why it's quiet) + optional quarantine.
+
+    Runs in its own session and never raises — instrumentation must not break
+    collection (e.g. on a DB that predates migration 015)."""
+    try:
+        with get_session() as session:
+            if status == "ok":
+                session.execute(
+                    text("""UPDATE sources SET last_fetch_at = NOW(), last_status = 'ok',
+                                last_error = NULL, consecutive_failures = 0
+                            WHERE id = :id"""),
+                    {"id": source_id},
+                )
+            else:
+                session.execute(
+                    text("""UPDATE sources SET last_fetch_at = NOW(), last_status = :st,
+                                last_error = :err,
+                                consecutive_failures = consecutive_failures + 1
+                            WHERE id = :id"""),
+                    {"id": source_id, "st": status[:24], "err": (error or "")[:1000]},
+                )
+                if QUARANTINE_AFTER > 0:
+                    res = session.execute(
+                        text("""UPDATE sources SET active = FALSE
+                                WHERE id = :id AND active = TRUE
+                                  AND consecutive_failures >= :n"""),
+                        {"id": source_id, "n": QUARANTINE_AFTER},
+                    )
+                    if res.rowcount:
+                        logger.warning(
+                            f"  Quarantined source {source_id}: {status} "
+                            f"≥{QUARANTINE_AFTER} consecutive failures"
+                        )
+    except Exception as e:
+        logger.warning(f"Could not record fetch status for source {source_id}: {e}")
 
 
 def _update_collector_stats():
@@ -135,12 +177,15 @@ def collect_all():
         logger.info(f"Collecting from {source.name} ({source.country_code}, {source.source_type})...")
 
         if source.source_type == "rss":
-            articles = collect_rss(source.url, source.name)
+            articles, fetch_status, fetch_error = collect_rss_status(source.url, source.name)
         elif source.source_type == "web":
-            articles = scrape_web(source.url, source.name)
+            articles, fetch_status, fetch_error = scrape_web_status(source.url, source.name)
         else:
             logger.warning(f"Unknown source type: {source.source_type}")
             continue
+
+        # Record why this source is quiet (or that it's healthy) + optional quarantine.
+        _record_fetch(source.id, fetch_status, fetch_error)
 
         # Save articles
         new_count = 0

@@ -8,10 +8,20 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://thermo:thermo@localh
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 API_URL = os.environ.get("API_URL", "http://localhost:8000")
 
+# Heavy / structured-output model for batch & clustering jobs (thread dedup,
+# reanalyze, digests). The high-volume analyzer/briefs chain lives in
+# src/llm.py (LLM_MODELS); this is the single knob for the few scripts that
+# need a strong JSON-capable model. Default is a cheap Chinese model — switch
+# in one line. Alternatives: deepseek/deepseek-v3.2, xiaomi/mimo-v2.5,
+# moonshotai/kimi-k2.6, deepseek/deepseek-v4-flash.
+HEAVY_MODEL = os.environ.get("HEAVY_MODEL", "xiaomi/mimo-v2.5-pro")
+
 # Paths
 BASE_DIR = Path(__file__).parent.parent
 SOURCES_PATH = BASE_DIR / "src" / "collectors" / "sources.yaml"
 WORLD_SOURCES_PATH = BASE_DIR / "src" / "collectors" / "sources_world.yaml"
+# Generated native-language Google News feeds (scripts/add_native_feeds.py).
+NATIVE_SOURCES_PATH = BASE_DIR / "src" / "collectors" / "sources_native.yaml"
 
 # Country names — tier-1 deep-coverage set (CIS). For the full world registry
 # (99 countries, regions, memberships) see src/countries.py.
@@ -50,10 +60,12 @@ def load_sources() -> dict:
     with open(SOURCES_PATH) as f:
         config = yaml.safe_load(f)
 
-    if WORLD_SOURCES_PATH.exists():
-        with open(WORLD_SOURCES_PATH) as f:
-            world = yaml.safe_load(f) or {}
-        for code, data in (world.get("countries") or {}).items():
+    for extra_path in (WORLD_SOURCES_PATH, NATIVE_SOURCES_PATH):
+        if not extra_path.exists():
+            continue
+        with open(extra_path) as f:
+            extra = yaml.safe_load(f) or {}
+        for code, data in (extra.get("countries") or {}).items():
             if code in config["countries"]:
                 config["countries"][code]["sources"].extend(data.get("sources", []))
             else:
