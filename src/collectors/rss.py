@@ -58,12 +58,15 @@ def _parse_entries(feed) -> list[dict]:
 
 
 def collect_rss_status(source_url: str, source_name: str = "",
-                       retries: int = 2) -> tuple[list[dict], str, str]:
+                       retries: int = 1, timeout: float = 15.0) -> tuple[list[dict], str, str]:
     """Fetch and parse an RSS feed, classifying the outcome.
 
-    Returns (articles, status, error_detail). Transient failures (timeout, 5xx,
-    connection) are retried with backoff; hard failures (4xx/geoblock/malformed/
-    empty) return immediately.
+    Returns (articles, status, error_detail). Only genuinely transient server
+    errors (5xx, connection errors) are retried once; a *timeout* fails fast
+    (no retry) — a feed that hangs past the timeout is almost always dead, and
+    retrying it 30s+ at a time starves the sequential collector of hundreds of
+    healthy feeds behind it. Hard failures (4xx/geoblock/malformed/empty) return
+    immediately.
     """
     last_status, last_error = "conn_error", ""
     for attempt in range(retries + 1):
@@ -71,12 +74,13 @@ def collect_rss_status(source_url: str, source_name: str = "",
             response = httpx.get(
                 source_url,
                 headers={"User-Agent": USER_AGENT},
-                timeout=30.0,
+                timeout=timeout,
                 follow_redirects=True,
             )
         except (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.PoolTimeout,
                 httpx.TimeoutException) as e:
-            last_status, last_error = "timeout", f"{type(e).__name__}: {str(e)[:160]}"
+            # Fail fast — don't burn another timeout window on a hanging feed.
+            return [], "timeout", f"{type(e).__name__}: {str(e)[:160]}"
         except httpx.HTTPError as e:
             last_status, last_error = "conn_error", f"{type(e).__name__}: {str(e)[:160]}"
         else:
@@ -100,10 +104,10 @@ def collect_rss_status(source_url: str, source_name: str = "",
                 logger.info(f"[{source_name}] Collected {len(articles)} articles from RSS")
                 return articles, "ok", ""
 
-        # transient failure — back off and retry
+        # transient server/connection failure — one quick retry
         if attempt < retries:
-            time.sleep(2 ** attempt)
-            logger.info(f"[{source_name}] retry {attempt + 1}/{retries} after {last_status}")
+            time.sleep(1)
+            logger.info(f"[{source_name}] retry after {last_status}")
 
     logger.error(f"[{source_name}] RSS fetch failed ({last_status}): {last_error}")
     return [], last_status, last_error
