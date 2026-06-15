@@ -19,6 +19,20 @@ async function get<T>(path: string): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+/** Thrown when the admin key is missing/wrong (401/403). */
+export class AdminAuthError extends Error {}
+
+/** GET an admin endpoint with the X-Admin-Key header. */
+export async function adminGet<T>(path: string, key: string): Promise<T> {
+  const res = await fetch(`${apiBase()}${path}`, {
+    cache: "no-store",
+    headers: { "X-Admin-Key": key },
+  });
+  if (res.status === 401 || res.status === 403) throw new AdminAuthError("forbidden");
+  if (!res.ok) throw new Error(`${res.status} ${path}`);
+  return res.json() as Promise<T>;
+}
+
 export const api = {
   countries: () =>
     get<{ countries: CountrySummary[]; total: number }>("/api/v2/countries"),
