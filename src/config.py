@@ -9,12 +9,15 @@ OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 API_URL = os.environ.get("API_URL", "http://localhost:8000")
 
 # Heavy / structured-output model for batch & clustering jobs (thread dedup,
-# reanalyze, digests). The high-volume analyzer/briefs chain lives in
-# src/llm.py (LLM_MODELS); this is the single knob for the few scripts that
-# need a strong JSON-capable model. Default is a cheap Chinese model — switch
-# in one line. Alternatives: deepseek/deepseek-v3.2, xiaomi/mimo-v2.5,
-# moonshotai/kimi-k2.6, deepseek/deepseek-v4-flash.
-HEAVY_MODEL = os.environ.get("HEAVY_MODEL", "xiaomi/mimo-v2.5-pro")
+# reanalyze, digests) — needs reliable strict JSON (response_format json_object).
+# Qwen has the best structured-output discipline of the cheap Chinese models.
+# Alternatives: deepseek/deepseek-v4-flash (cheapest), xiaomi/mimo-v2.5-pro.
+HEAVY_MODEL = os.environ.get("HEAVY_MODEL", "qwen/qwen3.6-flash")
+
+# Brief-writing model (world/country/topic briefs) — decoupled from the
+# high-volume analyzer chain (LLM_MODELS) so we can use a stronger model for
+# Russian prose. Qwen is the strongest cheap model for Russian.
+BRIEFS_MODEL = os.environ.get("BRIEFS_MODEL", "qwen/qwen3.7-plus")
 
 # Paths
 BASE_DIR = Path(__file__).parent.parent

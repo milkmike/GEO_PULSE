@@ -11,12 +11,17 @@ from datetime import datetime, timezone
 
 from sqlalchemy import text
 
+from src.config import BRIEFS_MODEL
 from src.countries import COUNTRIES, country_name_ru
 from src.db import get_session
-from src.llm import LLMError, chat
+from src.llm import DEFAULT_MODELS, LLMError, chat
 from src.pipeline.topics import TOPICS
 
 logger = logging.getLogger(__name__)
+
+# Briefs use a stronger model for Russian prose (BRIEFS_MODEL), with the cheap
+# analyzer chain as fallback — separate from the high-volume analyzer.
+_BRIEFS_CHAIN = [BRIEFS_MODEL] + DEFAULT_MODELS
 
 WORLD_BRIEF_PROMPT = """Ты — дежурный аналитик платформы «Массаракш», отслеживающей отношения всех стран мира с Россией.
 
@@ -333,7 +338,7 @@ def generate_world_brief(force: bool = False) -> dict | None:
         )
 
     try:
-        content, model = chat(prompt, max_tokens=1500, temperature=0.3, script="briefs.py")
+        content, model = chat(prompt, max_tokens=4000, temperature=0.3, script="briefs.py", models=_BRIEFS_CHAIN)
     except LLMError as e:
         logger.error(f"World brief LLM failed: {e}")
         return None
@@ -386,7 +391,7 @@ def generate_country_brief(code: str, max_age_hours: float = 6.0,
         )
 
     try:
-        content, model = chat(prompt, max_tokens=1200, temperature=0.3, script="briefs.py")
+        content, model = chat(prompt, max_tokens=2500, temperature=0.3, script="briefs.py", models=_BRIEFS_CHAIN)
     except LLMError as e:
         logger.error(f"Country brief LLM failed for {code}: {e}")
         return None
@@ -510,7 +515,7 @@ def generate_topic_brief(topic: str, max_age_hours: float = 6.0,
         )
 
     try:
-        content, model = chat(prompt, max_tokens=1000, temperature=0.3, script="briefs.py")
+        content, model = chat(prompt, max_tokens=2000, temperature=0.3, script="briefs.py", models=_BRIEFS_CHAIN)
     except LLMError as e:
         logger.error(f"Topic brief LLM failed for {topic}: {e}")
         return None
