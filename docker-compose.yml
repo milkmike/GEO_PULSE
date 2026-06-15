@@ -254,6 +254,8 @@ services:
       COMTRADE_API_KEY: ${COMTRADE_API_KEY}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       REDIS_URL: redis://redis:6379/0
+      ADMIN_API_KEY: ${ADMIN_API_KEY:-}
+      CORS_ORIGINS: ${CORS_ORIGINS:-*}
     depends_on:
       db:
         condition: service_healthy
