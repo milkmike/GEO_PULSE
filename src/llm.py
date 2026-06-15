@@ -26,9 +26,9 @@ logger = logging.getLogger(__name__)
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 DEFAULT_MODELS = [
-    "google/gemini-3-flash-preview",
-    "google/gemini-2.0-flash-001",
-    "meta-llama/llama-3.3-70b-instruct",
+    "deepseek/deepseek-v4-flash",      # ~10x cheaper than Gemini 3 Flash, strong multilingual
+    "xiaomi/mimo-v2.5",                # fallback — different provider
+    "google/gemini-2.0-flash-001",     # last resort — different provider
 ]
 
 LLM_MODELS = [m.strip() for m in os.environ.get("LLM_MODELS", "").split(",") if m.strip()] \
