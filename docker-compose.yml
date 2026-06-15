@@ -102,7 +102,7 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
-      HEAVY_MODEL: ${HEAVY_MODEL:-xiaomi/mimo-v2.5-pro}
+      HEAVY_MODEL: ${HEAVY_MODEL:-qwen/qwen3.6-flash}
     depends_on:
       db:
         condition: service_healthy
@@ -289,7 +289,7 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
-      VOX_MODEL: ${VOX_MODEL:-google/gemini-2.0-flash-001}
+      VOX_MODEL: ${VOX_MODEL:-deepseek/deepseek-v4-flash}
     depends_on:
       db:
         condition: service_healthy

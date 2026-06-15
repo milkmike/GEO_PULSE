@@ -26,7 +26,7 @@ log = logging.getLogger("vox-analyzer")
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
-MODEL = os.environ.get("VOX_MODEL", "anthropic/claude-haiku:beta")
+MODEL = os.environ.get("VOX_MODEL", "deepseek/deepseek-v4-flash")
 BATCH_SIZE = int(os.environ.get("VOX_BATCH_SIZE", "20"))
 ANALYZE_INTERVAL = int(os.environ.get("VOX_ANALYZE_INTERVAL", "120"))  # 2 мин
 

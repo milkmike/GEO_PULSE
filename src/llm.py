@@ -118,11 +118,15 @@ def _call_ollama(prompt: str, max_tokens: int, temperature: float | None,
 
 
 def chat(prompt: str, max_tokens: int = 300, temperature: float | None = None,
-         cache_ttl: int = 0, script: str = "llm") -> tuple[str, str]:
+         cache_ttl: int = 0, script: str = "llm",
+         models: list[str] | None = None) -> tuple[str, str]:
     """Run the prompt through the provider chain.
 
-    Returns (text, model_used). Raises LLMError when every tier fails.
+    `models` overrides the default LLM_MODELS chain for this call (e.g. briefs
+    use a stronger model than the high-volume analyzer). Returns
+    (text, model_used). Raises LLMError when every tier fails.
     """
+    chain = models or LLM_MODELS
     cache_key = None
     if cache_ttl > 0:
         digest = hashlib.sha256(prompt.encode()).hexdigest()
@@ -135,7 +139,7 @@ def chat(prompt: str, max_tokens: int = 300, temperature: float | None = None,
     errors = []
 
     if OPENROUTER_API_KEY:
-        for model in LLM_MODELS:
+        for model in chain:
             try:
                 text = _call_openrouter(model, prompt, max_tokens, temperature, script)
                 if cache_key:

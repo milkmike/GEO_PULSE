@@ -37,6 +37,8 @@ COST_TABLE = {
         "xiaomi/mimo-v2.5": (0.14, 0.28),
         "deepseek/deepseek-v3.2": (0.23, 0.34),
         "deepseek/deepseek-v4-flash": (0.09, 0.18),
+        "qwen/qwen3.6-flash": (0.1875, 1.125),
+        "qwen/qwen3.7-plus": (0.32, 1.28),
         "moonshotai/kimi-k2.6": (0.68, 3.41),
         # Main analyzer/briefs chain (src/llm.py DEFAULT_MODELS)
         "google/gemini-3-flash-preview": (0.50, 3.00),
