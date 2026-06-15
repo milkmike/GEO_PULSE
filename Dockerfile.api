@@ -4,4 +4,5 @@ RUN apt-get update && apt-get install -y --no-install-recommends gcc libpq-dev &
 COPY requirements-base.txt requirements-api.txt ./
 RUN pip install --no-cache-dir -r requirements-api.txt
 COPY src/ src/
+COPY scripts/visits.py scripts/
 ENV PYTHONPATH=/app PYTHONUNBUFFERED=1

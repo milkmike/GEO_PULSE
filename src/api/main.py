@@ -1,15 +1,18 @@
 """FastAPI application."""
+import hashlib
 import logging
 import os
+import re
 import secrets
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -55,6 +58,97 @@ async def guard_admin_and_writes(request: Request, call_next):
         if not ADMIN_API_KEY or not secrets.compare_digest(provided, ADMIN_API_KEY):
             return JSONResponse({"detail": "forbidden"}, status_code=403)
     return await call_next(request)
+
+
+# ── Visitor counter (self-hosted, no cookies, no raw IP stored) ──────────────
+# 1×1 transparent GIF embedded on every page; each request logs a row in
+# pageviews with a daily-salted visitor hash. Read aggregates via the
+# /api/v1/admin/visits endpoint (admin-gated, localhost-only) or scripts/visits.py.
+_PX_GIF = bytes([
+    0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01, 0x00, 0x01, 0x00, 0x80, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0x21, 0xF9, 0x04, 0x01, 0x00, 0x00, 0x00,
+    0x00, 0x2C, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x02, 0x02,
+    0x44, 0x01, 0x00, 0x3B,
+])
+_BOT_RE = re.compile(
+    r"bot|crawl|spider|monitor|curl|wget|headless|preview|slurp|fetch|"
+    r"python-httpx|python-requests|axios|go-http|facebookexternalhit",
+    re.I,
+)
+_PAGEVIEW_SALT = os.environ.get("PAGEVIEW_SALT", "massaraksh-pv")
+
+
+def _client_ip(request: Request) -> str:
+    xff = request.headers.get("x-forwarded-for", "")
+    if xff:
+        return xff.split(",")[0].strip()
+    return request.client.host if request.client else "?"
+
+
+@app.get("/api/v1/px.gif")
+def tracking_pixel(request: Request, p: str = "/"):
+    """1×1 tracking pixel — records a pageview, returns a transparent GIF."""
+    try:
+        ua = request.headers.get("user-agent", "")
+        if not _BOT_RE.search(ua):
+            today = datetime.now(timezone.utc).date().isoformat()
+            salt = hashlib.sha256((today + _PAGEVIEW_SALT).encode()).hexdigest()
+            vhash = hashlib.sha256(
+                (_client_ip(request) + ua + salt).encode()
+            ).hexdigest()[:16]
+            ref = request.headers.get("referer", "")
+            ref_host = (urlparse(ref).netloc or "")[:120] if ref else ""
+            with get_session() as session:
+                session.execute(
+                    text("""INSERT INTO pageviews (path, visitor_hash, referrer_host)
+                            VALUES (:p, :vh, :rh)"""),
+                    {"p": (p or "/")[:300], "vh": vhash, "rh": ref_host},
+                )
+    except Exception as e:  # tracking must never break the pixel
+        logger.warning(f"pageview tracking failed: {e}")
+    return Response(content=_PX_GIF, media_type="image/gif",
+                    headers={"Cache-Control": "no-store, max-age=0"})
+
+
+@app.get("/api/v1/admin/visits")
+def get_visits(days: int = Query(30, ge=1, le=365)):
+    """Visitor stats: daily views/uniques, totals, top pages & referrers."""
+    with get_session() as session:
+        daily = session.execute(
+            text("""SELECT day, COUNT(*) AS views,
+                           COUNT(DISTINCT visitor_hash) AS uniques
+                    FROM pageviews WHERE day > CURRENT_DATE - :days
+                    GROUP BY day ORDER BY day DESC"""),
+            {"days": days},
+        ).fetchall()
+        totals = session.execute(
+            text("""SELECT COUNT(*) AS views,
+                           COUNT(DISTINCT visitor_hash) AS uniques
+                    FROM pageviews WHERE day > CURRENT_DATE - :days"""),
+            {"days": days},
+        ).fetchone()
+        top_paths = session.execute(
+            text("""SELECT path, COUNT(*) AS views FROM pageviews
+                    WHERE day > CURRENT_DATE - :days
+                    GROUP BY path ORDER BY views DESC LIMIT 15"""),
+            {"days": days},
+        ).fetchall()
+        top_ref = session.execute(
+            text("""SELECT referrer_host, COUNT(*) AS views FROM pageviews
+                    WHERE day > CURRENT_DATE - :days
+                      AND referrer_host IS NOT NULL AND referrer_host <> ''
+                    GROUP BY referrer_host ORDER BY views DESC LIMIT 15"""),
+            {"days": days},
+        ).fetchall()
+    return {
+        "days": days,
+        "totals": {"views": totals.views if totals else 0,
+                   "uniques": totals.uniques if totals else 0},
+        "daily": [{"day": r.day.isoformat(), "views": r.views, "uniques": r.uniques}
+                  for r in daily],
+        "top_paths": [{"path": r.path, "views": r.views} for r in top_paths],
+        "top_referrers": [{"host": r.referrer_host, "views": r.views} for r in top_ref],
+    }
 
 
 # Register routes
