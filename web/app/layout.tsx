@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Golos_Text, JetBrains_Mono, Piazzolla } from "next/font/google";
 import "./globals.css";
+import DisclaimerBanner from "@/components/DisclaimerBanner";
 
 const piazzolla = Piazzolla({
   subsets: ["cyrillic", "latin"],
@@ -26,7 +27,10 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="ru" className={`${piazzolla.variable} ${golos.variable} ${jbMono.variable}`}>
-      <body className="min-h-screen antialiased">{children}</body>
+      <body className="min-h-screen antialiased">
+        <DisclaimerBanner />
+        {children}
+      </body>
     </html>
   );
 }
