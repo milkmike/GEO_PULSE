@@ -79,6 +79,19 @@
   <span id="updated"></span>
 </header>
 
+<div id="disclaimer" style="display:flex;gap:9px;align-items:flex-start;padding:8px 18px;
+     background:var(--panel2);border-bottom:1px solid var(--border);font-size:12.5px;">
+  <span style="color:var(--cooling);">⚠</span>
+  <span style="flex:1;color:var(--dim);">
+    <span style="color:var(--cooling);">Сервис в стадии наполнения.</span>
+    Аналитика и брифинги генерируются ИИ и могут подавать ситуацию острее, чем она есть, —
+    воспринимайте оценки ориентировочно, а не как факт.
+  </span>
+  <span onclick="this.parentElement.style.display='none';sessionStorage.setItem('mr_disc','1')"
+        style="cursor:pointer;color:var(--dim);">✕</span>
+</div>
+<script>if(sessionStorage.getItem('mr_disc')==='1'){var d=document.getElementById('disclaimer');if(d)d.style.display='none';}</script>
+
 <main>
   <div class="card"><div id="map"></div></div>
 
