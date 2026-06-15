@@ -338,7 +338,7 @@ def generate_world_brief(force: bool = False) -> dict | None:
         )
 
     try:
-        content, model = chat(prompt, max_tokens=1500, temperature=0.3, script="briefs.py", models=_BRIEFS_CHAIN)
+        content, model = chat(prompt, max_tokens=4000, temperature=0.3, script="briefs.py", models=_BRIEFS_CHAIN)
     except LLMError as e:
         logger.error(f"World brief LLM failed: {e}")
         return None
@@ -391,7 +391,7 @@ def generate_country_brief(code: str, max_age_hours: float = 6.0,
         )
 
     try:
-        content, model = chat(prompt, max_tokens=1200, temperature=0.3, script="briefs.py", models=_BRIEFS_CHAIN)
+        content, model = chat(prompt, max_tokens=2500, temperature=0.3, script="briefs.py", models=_BRIEFS_CHAIN)
     except LLMError as e:
         logger.error(f"Country brief LLM failed for {code}: {e}")
         return None
@@ -515,7 +515,7 @@ def generate_topic_brief(topic: str, max_age_hours: float = 6.0,
         )
 
     try:
-        content, model = chat(prompt, max_tokens=1000, temperature=0.3, script="briefs.py", models=_BRIEFS_CHAIN)
+        content, model = chat(prompt, max_tokens=2000, temperature=0.3, script="briefs.py", models=_BRIEFS_CHAIN)
     except LLMError as e:
         logger.error(f"Topic brief LLM failed for {topic}: {e}")
         return None
