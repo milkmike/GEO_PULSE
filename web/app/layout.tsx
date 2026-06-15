@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Golos_Text, JetBrains_Mono, Piazzolla } from "next/font/google";
 import "./globals.css";
 import DisclaimerBanner from "@/components/DisclaimerBanner";
+import Pixel from "@/components/Pixel";
 
 const piazzolla = Piazzolla({
   subsets: ["cyrillic", "latin"],
@@ -30,6 +31,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body className="min-h-screen antialiased">
         <DisclaimerBanner />
         {children}
+        <Pixel />
       </body>
     </html>
   );

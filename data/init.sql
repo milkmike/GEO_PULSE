@@ -250,3 +250,14 @@ CREATE TABLE IF NOT EXISTS sanctions_pressure (
     updated_at TIMESTAMP DEFAULT now(),
     UNIQUE (country_code)
 );
+
+-- Pageviews (self-hosted visitor counter, see scripts/migrations/016_pageviews.sql)
+CREATE TABLE IF NOT EXISTS pageviews (
+    id BIGSERIAL PRIMARY KEY,
+    ts TIMESTAMPTZ NOT NULL DEFAULT now(),
+    day DATE NOT NULL DEFAULT CURRENT_DATE,
+    path TEXT,
+    visitor_hash CHAR(16),
+    referrer_host TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_pageviews_day ON pageviews(day);
