@@ -70,4 +70,23 @@ export const api = {
     get<{ data: TradeYear[] }>(`/api/v2/countries/${code}/trade`),
   agreements: (code: string, days = 180) =>
     get<{ agreements: AgreementGroup[] }>(`/api/v2/countries/${code}/agreements?days=${days}`),
+  // Generate the AI dossier on demand (slow; cached 6h server-side).
+  generateCountryBrief: (code: string) =>
+    get<Brief>(`/api/v2/countries/${code}/brief?generate=1`),
+  tierDivergence: (code: string, days = 30) =>
+    get<{ tiers: { tier: string; sentiment: number; articles: number; sources: number }[] }>(
+      `/api/v2/countries/${code}/tier-divergence?days=${days}`),
+  sanctions: (code: string) =>
+    get<{
+      has_data: boolean; lists_count?: number; target_count?: number; delta?: number;
+      last_change?: string | null; programs?: { name: string; title: string; targets: number }[];
+    }>(`/api/v2/countries/${code}/sanctions`),
+  vox: (code: string, days = 14) =>
+    get<{
+      timeline: { time: string; vox_temperature: number | null; media_temperature: number | null;
+                  elite_gap: number | null; comment_count: number; dominant_emotion: string | null }[];
+      emotions: Record<string, number>;
+      top_topics: { topic: string; count: number }[];
+      recent_comments: { id: number; text: string; sentiment: number; emotion: string; stance: string }[];
+    }>(`/api/v1/vox/countries/${code}?days=${days}`),
 };

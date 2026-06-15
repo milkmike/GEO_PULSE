@@ -498,17 +498,84 @@ def country_headlines(code: str, days: int = Query(3, ge=1, le=30),
 
 
 @router.get("/countries/{code}/brief")
-def country_brief(code: str, refresh: bool = False):
-    """AI dossier brief for the country (cached 6h, regenerated on demand)."""
+def country_brief(code: str, generate: bool = False, refresh: bool = False):
+    """AI dossier brief. Default: cached only (fast, no LLM). generate=1 builds
+    it on demand (cached 6h); refresh=1 forces regeneration."""
     code = code.upper()
     if code not in COUNTRIES:
         raise HTTPException(404, f"Unknown country: {code}")
 
-    from src.pipeline.briefs import generate_country_brief
-    brief = generate_country_brief(code, force=refresh)
-    if not brief:
-        raise HTTPException(404, "Недостаточно данных для брифинга по этой стране")
+    from src.pipeline.briefs import generate_country_brief, read_cached_brief
+    if generate or refresh:
+        brief = generate_country_brief(code, force=refresh)
+        if not brief:
+            raise HTTPException(404, "Недостаточно данных для брифинга по этой стране")
+    else:
+        brief = read_cached_brief(code)
+        if not brief:
+            # No cached brief yet — the client offers a "Собрать AI-досье" button.
+            raise HTTPException(404, "brief_not_generated")
     return {"country_code": code, **brief}
+
+
+@router.get("/countries/{code}/tier-divergence")
+def country_tier_divergence(code: str, days: int = Query(30, ge=1, le=180)):
+    """Average sentiment per source tier for the country (official vs others)."""
+    code = code.upper()
+    if code not in COUNTRIES:
+        raise HTTPException(404, f"Unknown country: {code}")
+    with get_session() as session:
+        rows = session.execute(
+            text("""
+                SELECT COALESCE(s.tier, 'mainstream') AS tier,
+                       AVG(a.sentiment) AS sentiment,
+                       COUNT(*) AS articles,
+                       COUNT(DISTINCT s.id) AS sources
+                FROM analysis a
+                JOIN articles ar ON a.article_id = ar.id
+                JOIN sources s ON ar.source_id = s.id
+                WHERE s.country_code = :cc AND a.is_relevant = TRUE
+                  AND a.sentiment IS NOT NULL
+                  AND ar.published_at > NOW() - make_interval(days => :days)
+                GROUP BY COALESCE(s.tier, 'mainstream')
+                ORDER BY AVG(a.sentiment) DESC
+            """),
+            {"cc": code, "days": days},
+        ).fetchall()
+    return {"country_code": code, "days": days, "tiers": [
+        {"tier": r.tier, "sentiment": round(float(r.sentiment), 3),
+         "articles": int(r.articles), "sources": int(r.sources)} for r in rows
+    ]}
+
+
+@router.get("/countries/{code}/sanctions")
+def country_sanctions(code: str):
+    """Sanctions pressure this jurisdiction applies (OpenSanctions baseline)."""
+    code = code.upper()
+    if code not in COUNTRIES:
+        raise HTTPException(404, f"Unknown country: {code}")
+    row = None
+    with get_session() as session:
+        try:
+            row = session.execute(
+                text("""SELECT lists_count, target_count, delta, last_change,
+                               programs, updated_at
+                        FROM sanctions_pressure WHERE country_code = :cc"""),
+                {"cc": code},
+            ).fetchone()
+        except Exception:  # table may not exist yet (migration pending)
+            row = None
+    if not row:
+        return {"country_code": code, "has_data": False}
+    return {
+        "country_code": code, "has_data": True,
+        "lists_count": int(row.lists_count or 0),
+        "target_count": int(row.target_count or 0),
+        "delta": int(row.delta or 0),
+        "last_change": row.last_change.isoformat() if row.last_change else None,
+        "programs": row.programs or [],
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+    }
 
 
 @router.get("/brief")

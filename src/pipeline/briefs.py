@@ -410,6 +410,19 @@ def generate_country_brief(code: str, max_age_hours: float = 6.0,
             "citations": citations_meta}
 
 
+def read_cached_brief(code: str) -> dict | None:
+    """Return the latest cached country brief WITHOUT generating (fast, no LLM)."""
+    code = code.upper()
+    with get_session() as session:
+        last = _last_brief(session, code)
+        if not last:
+            return None
+        return {"content": last.content, "model": last.model,
+                "created_at": last.created_at.isoformat(), "cached": True,
+                "citations": (last.meta or {}).get("citations", [])}
+
+
+
 def gather_topic_inputs(session, topic: str) -> dict:
     """Headlines and country stats for a topic-lens brief."""
     headlines = session.execute(

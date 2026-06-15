@@ -9,6 +9,10 @@ import Plot from "@/components/Plot";
 import SignalFeed from "@/components/SignalFeed";
 import TradePanel from "@/components/TradePanel";
 import UNVotesPanel from "@/components/UNVotesPanel";
+import SparklineStrip from "@/components/SparklineStrip";
+import TierDivergencePanel from "@/components/TierDivergencePanel";
+import SanctionsPanel from "@/components/SanctionsPanel";
+import VoxPanel from "@/components/VoxPanel";
 import { api, apiBase } from "@/lib/api";
 import { fmt, fmtDate, LEVEL_COLOR, LEVEL_RU } from "@/lib/format";
 import type {
@@ -41,18 +45,28 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
   const [agreements, setAgreements] = useState<AgreementGroup[]>([]);
   const [error, setError] = useState(false);
   const [showEmbed, setShowEmbed] = useState(false);
+  const [briefState, setBriefState] = useState<"idle" | "generating" | "empty" | "error">("idle");
 
   useEffect(() => {
+    setBrief(null);
+    setBriefState("idle");
     api.dossier(cc).then(setDossier).catch(() => setError(true));
     api.topics(cc).then((d) => setTopics(d.topics)).catch(() => {});
     api.headlines(cc).then(setHeadlines).catch(() => {});
     api.entities(cc).then((d) => setEntities(d.entities)).catch(() => {});
     api.fx(cc).then(setFx).catch(() => {});
-    api.countryBrief(cc).then(setBrief).catch(() => {});
+    api.countryBrief(cc).then(setBrief).catch(() => {}); // 404 = not generated yet → button
     api.unVotes(cc).then((d) => setUn(d.data)).catch(() => {});
     api.trade(cc).then((d) => setTrade(d.data)).catch(() => {});
     api.agreements(cc).then((d) => setAgreements(d.agreements)).catch(() => {});
   }, [cc]);
+
+  const generateBrief = () => {
+    setBriefState("generating");
+    api.generateCountryBrief(cc)
+      .then((b) => { setBrief(b); setBriefState("idle"); })
+      .catch((e) => setBriefState(String(e).includes("404") ? "empty" : "error"));
+  };
 
   const indexChart = useMemo(() => {
     if (!dossier || dossier.index_history.length < 2) return null;
@@ -207,6 +221,8 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
         <div className="mt-3 text-sm text-dim">Индекс ещё не рассчитан</div>
       )}
 
+      {dossier && <div className="mt-4"><SparklineStrip dossier={dossier} /></div>}
+
       <div className="mt-4 grid gap-3 md:grid-cols-2">
         {indexChart && (
           <section className="card md:col-span-2">
@@ -284,6 +300,10 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
           </section>
         )}
 
+        <TierDivergencePanel code={cc} />
+        <SanctionsPanel code={cc} />
+        <VoxPanel code={cc} />
+
         {headlines && headlines.headlines.length > 0 && (
           <section className="card md:col-span-2">
             <div className="card-title px-4 pb-1 pt-3">
@@ -321,18 +341,42 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
           </div>
         </section>
 
-        <section className="card">
+        <section className="card md:col-span-2">
           <div className="card-title px-4 pb-1 pt-3">AI-досье</div>
-          <div className="max-h-[300px] overflow-y-auto px-4 pb-3">
+          <div className="max-h-[360px] overflow-y-auto px-4 pb-3">
             {brief ? (
               <>
                 <Markdown text={brief.content} citations={brief.citations ?? brief.meta?.citations} />
-                <div className="mt-2 text-[11px] text-dim">
-                  {brief.model} · {fmtDate(brief.created_at)}
+                <div className="mt-2 flex items-center gap-3 text-[11px] text-dim">
+                  <span>{brief.model} · {fmtDate(brief.created_at)}</span>
+                  <button onClick={generateBrief} className="underline hover:text-ru-white">
+                    обновить
+                  </button>
                 </div>
               </>
+            ) : briefState === "generating" ? (
+              <div className="flex items-center gap-2 py-3 text-xs text-dim">
+                <span className="inline-block h-3 w-3 animate-spin rounded-full border border-dim border-t-accent" />
+                Генерируется ИИ-досье… это занимает ~30–60 секунд.
+              </div>
+            ) : briefState === "empty" ? (
+              <div className="py-3 text-xs text-dim">
+                Недостаточно данных для брифинга по этой стране (нет индекса, GDELT и своих статей).
+              </div>
             ) : (
-              <div className="py-2 text-xs text-dim">Недостаточно данных для брифинга</div>
+              <div className="py-2">
+                <p className="mb-2 text-xs text-dim">
+                  {briefState === "error"
+                    ? "Не удалось собрать досье — попробуйте ещё раз."
+                    : "Сводка по стране ещё не собрана."}
+                </p>
+                <button
+                  onClick={generateBrief}
+                  className="rounded bg-accent/15 px-3 py-1.5 text-[13px] text-accent transition-colors hover:bg-accent/25"
+                >
+                  Собрать AI-досье
+                </button>
+              </div>
             )}
           </div>
         </section>
