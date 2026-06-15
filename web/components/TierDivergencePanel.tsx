@@ -46,19 +46,15 @@ export default function TierDivergencePanel({ code }: { code: string }) {
         {tiers.map((t) => {
           const pos = t.sentiment >= 0;
           const w = Math.min(50, (Math.abs(t.sentiment) / 3) * 50);
+          const barStyle = pos
+            ? { left: "50%", width: `${w}%`, background: "var(--color-partner)" }
+            : { right: "50%", width: `${w}%`, background: "var(--color-hostile)" };
           return (
             <div key={t.tier} className="flex items-center gap-2 text-[12px]">
               <span className="w-28 shrink-0 text-dim">{TIER_RU[t.tier] ?? t.tier}</span>
               <div className="relative h-3 flex-1 rounded bg-panel2">
                 <div className="absolute left-1/2 top-0 h-full w-px bg-line" />
-                <div
-                  className="absolute top-0 h-full rounded"
-                  style={{
-                    width: `${w}%`,
-                    [pos ? "left" : "right"]: "50%",
-                    background: pos ? "var(--color-partner)" : "var(--color-hostile)",
-                  }}
-                />
+                <div className="absolute top-0 h-full rounded" style={barStyle} />
               </div>
               <span className="tnum w-10 text-right" style={{ color: pos ? "var(--color-partner)" : "var(--color-hostile)" }}>
                 {t.sentiment > 0 ? "+" : ""}
