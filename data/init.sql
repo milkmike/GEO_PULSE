@@ -261,3 +261,14 @@ CREATE TABLE IF NOT EXISTS pageviews (
     referrer_host TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_pageviews_day ON pageviews(day);
+
+-- Russian fossil-fuel imports per country (see scripts/migrations/017_ru_fossil_imports.sql)
+CREATE TABLE IF NOT EXISTS ru_fossil_imports (
+    country_code VARCHAR(2) PRIMARY KEY,
+    total_eur    DOUBLE PRECISION DEFAULT 0,
+    total_tonne  DOUBLE PRECISION DEFAULT 0,
+    commodities  JSONB DEFAULT '[]',
+    world_rank   INTEGER,
+    period_from  DATE,
+    updated_at   TIMESTAMP DEFAULT now()
+);

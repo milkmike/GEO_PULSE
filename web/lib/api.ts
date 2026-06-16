@@ -81,6 +81,12 @@ export const api = {
       has_data: boolean; lists_count?: number; target_count?: number; delta?: number;
       last_change?: string | null; programs?: { name: string; title: string; targets: number }[];
     }>(`/api/v2/countries/${code}/sanctions`),
+  energy: (code: string) =>
+    get<{
+      has_data: boolean; total_eur?: number; total_tonne?: number;
+      commodities?: { group: string; name: string; value_eur: number; value_tonne: number }[];
+      world_rank?: number | null; period_from?: string | null; updated_at?: string | null;
+    }>(`/api/v2/countries/${code}/energy`),
   vox: (code: string, days = 14) =>
     get<{
       timeline: { time: string; vox_temperature: number | null; media_temperature: number | null;

@@ -14,6 +14,7 @@ import DynamicsPanel from "@/components/DynamicsPanel";
 import SortableGrid, { type SortableItem } from "@/components/SortableGrid";
 import TierDivergencePanel from "@/components/TierDivergencePanel";
 import SanctionsPanel from "@/components/SanctionsPanel";
+import EnergyPanel from "@/components/EnergyPanel";
 import VoxPanel from "@/components/VoxPanel";
 import { api, apiBase } from "@/lib/api";
 import { COUNTRY_TIPS } from "@/lib/explain";
@@ -27,7 +28,7 @@ import type {
 // top; visitors can drag any card to reorder (saved per browser in localStorage).
 const PANEL_ORDER = [
   "sparklines", "dynamics", "brief", "headlines", "index", "gdelt",
-  "tier", "sanctions", "vox", "topics", "entities",
+  "tier", "sanctions", "energy", "vox", "topics", "entities",
   "agreements", "unvotes", "trade", "fx", "signals",
 ];
 
@@ -279,6 +280,7 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
     },
     { id: "tier", tip: COUNTRY_TIPS.tier, node: <TierDivergencePanel code={cc} /> },
     { id: "sanctions", tip: COUNTRY_TIPS.sanctions, node: <SanctionsPanel code={cc} /> },
+    { id: "energy", tip: COUNTRY_TIPS.energy, node: <EnergyPanel code={cc} /> },
     { id: "vox", tip: COUNTRY_TIPS.vox, node: <VoxPanel code={cc} /> },
     {
       id: "topics", tip: COUNTRY_TIPS.topics,
