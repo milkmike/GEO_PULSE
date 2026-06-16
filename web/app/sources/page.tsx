@@ -25,6 +25,12 @@ const STATUS_CLS: Record<string, string> = {
   DEAD: "text-red-400",
 };
 
+const STATUS_RU: Record<string, string> = {
+  OK: "норма",
+  STALE: "застой",
+  DEAD: "мёртв",
+};
+
 export default function SourcesPage() {
   const [sources, setSources] = useState<SourceRow[]>([]);
   const [health, setHealth] = useState<Map<number, SourceHealthRow>>(new Map());
@@ -208,7 +214,7 @@ export default function SourcesPage() {
             className={chip(fStatus === s)}
             onClick={() => setFStatus(fStatus === s ? null : s)}
           >
-            {s}
+            {STATUS_RU[s] ?? s}
           </span>
         ))}
         <span className="ml-auto text-dim">
@@ -264,7 +270,7 @@ export default function SourcesPage() {
                   STATUS_CLS[h?.status ?? ""] ?? "text-zinc-600"
                 }`}
               >
-                {s.active ? (h?.status ?? "—") : "выкл"}
+                {s.active ? (h?.status ? (STATUS_RU[h.status] ?? h.status) : "—") : "выкл"}
               </span>
             </div>
           );

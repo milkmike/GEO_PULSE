@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
+import InfoTip from "@/components/InfoTip";
 
 export type SortableItem = {
   /** Stable id used for ordering + persistence. */
@@ -9,6 +10,8 @@ export type SortableItem = {
    *  "col-span-12 lg:col-span-8". Size lives on the cell (not its position),
    *  so reordering preserves each panel's width. */
   cellClassName?: string;
+  /** Plain-language explanation shown via an info (ⓘ) badge on the card. */
+  tip?: string;
   /** The panel itself; may be a falsy/empty node — empty cells auto-hide. */
   node: ReactNode;
 };
@@ -58,6 +61,11 @@ function Cell({
       onDrop={onDrop}
       onDragEnd={onEnd}
     >
+      {!empty && item.tip && (
+        <div className="absolute right-9 top-2 z-20">
+          <InfoTip text={item.tip} />
+        </div>
+      )}
       {!empty && (
         <button
           type="button"

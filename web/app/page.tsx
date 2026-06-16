@@ -12,6 +12,7 @@ import SiteHeader from "@/components/SiteHeader";
 import SortableGrid, { type SortableItem } from "@/components/SortableGrid";
 import WorldMap from "@/components/WorldMap";
 import { api } from "@/lib/api";
+import { HOME_TIPS } from "@/lib/explain";
 import { fmtDate } from "@/lib/format";
 import type { Brief, CountrySummary, Headline, Meta, Signal } from "@/lib/types";
 
@@ -110,7 +111,7 @@ export default function HomePage() {
   // preserves widths and the map stays large.
   const homePanels: SortableItem[] = [
     {
-      id: "map", cellClassName: "col-span-12 lg:col-span-8",
+      id: "map", cellClassName: "col-span-12 lg:col-span-8", tip: HOME_TIPS.map,
       node: (
         <section className="card min-h-[420px] lg:h-[58vh]">
           <WorldMap entries={mapEntries} />
@@ -118,7 +119,7 @@ export default function HomePage() {
       ),
     },
     {
-      id: "ranking", cellClassName: "col-span-12 lg:col-span-4",
+      id: "ranking", cellClassName: "col-span-12 lg:col-span-4", tip: HOME_TIPS.ranking,
       node: (
         <section className="card flex max-h-[58vh] min-h-[320px] flex-col">
           <div className="card-title px-4 pb-1 pt-3">
@@ -131,7 +132,7 @@ export default function HomePage() {
       ),
     },
     {
-      id: "headlines", cellClassName: "col-span-12 lg:col-span-4",
+      id: "headlines", cellClassName: "col-span-12 lg:col-span-4", tip: HOME_TIPS.headlines,
       node: (
         <section className="card">
           <div className="card-title px-4 pb-1 pt-3">
@@ -150,7 +151,7 @@ export default function HomePage() {
       ),
     },
     {
-      id: "signals", cellClassName: "col-span-12 lg:col-span-4",
+      id: "signals", cellClassName: "col-span-12 lg:col-span-4", tip: HOME_TIPS.signals,
       node: (
         <section className="card">
           <div className="card-title flex items-baseline justify-between px-4 pb-1 pt-3">
@@ -166,7 +167,7 @@ export default function HomePage() {
       ),
     },
     {
-      id: "brief", cellClassName: "col-span-12 lg:col-span-4",
+      id: "brief", cellClassName: "col-span-12 lg:col-span-4", tip: HOME_TIPS.brief,
       node: (
         <section className="card">
           <div className="card-title px-4 pb-1 pt-3">
