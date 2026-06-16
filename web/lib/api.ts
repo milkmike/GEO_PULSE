@@ -1,6 +1,6 @@
 import type {
   AgreementGroup, Brief, CountrySummary, Dossier, EntityStat, FxSeries, Headline, Health,
-  MapEntry, Meta, Signal, SourceHealthRow, SourceRow, TopicStat, TradeYear,
+  MapEntry, Meta, Signal, SourceHealthRow, SourceRow, Thread, TopicStat, TradeYear,
   UNVoteYear,
 } from "./types";
 
@@ -89,4 +89,8 @@ export const api = {
       top_topics: { topic: string; count: number }[];
       recent_comments: { id: number; text: string; sentiment: number; emotion: string; stance: string }[];
     }>(`/api/v1/vox/countries/${code}?days=${days}`),
+  // Narrative storylines (threads) for a country — arc_phase, dynamics/forecast, article links.
+  countryThreads: (code: string, limit = 6) =>
+    get<{ country: string; name: string; threads: Thread[] }>(
+      `/api/v1/countries/${code}/threads?limit=${limit}`),
 };

@@ -10,6 +10,8 @@ import SignalFeed from "@/components/SignalFeed";
 import TradePanel from "@/components/TradePanel";
 import UNVotesPanel from "@/components/UNVotesPanel";
 import SparklineStrip from "@/components/SparklineStrip";
+import DynamicsPanel from "@/components/DynamicsPanel";
+import SortableGrid, { type SortableItem } from "@/components/SortableGrid";
 import TierDivergencePanel from "@/components/TierDivergencePanel";
 import SanctionsPanel from "@/components/SanctionsPanel";
 import VoxPanel from "@/components/VoxPanel";
@@ -19,6 +21,14 @@ import type {
   AgreementGroup, Brief, Dossier, EntityStat, FxSeries, Headline, Signal, TopicStat,
   TradeYear, UNVoteYear,
 } from "@/lib/types";
+
+// Default panel order on country pages. AI-dossier + news sources sit near the
+// top; visitors can drag any card to reorder (saved per browser in localStorage).
+const PANEL_ORDER = [
+  "dynamics", "brief", "headlines", "index", "gdelt",
+  "tier", "sanctions", "vox", "topics", "entities",
+  "agreements", "unvotes", "trade", "fx", "signals",
+];
 
 const CHART_BASE = {
   paper_bgcolor: "rgba(0,0,0,0)",
@@ -159,6 +169,184 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
   const color = index ? LEVEL_COLOR[index.level] : "#9ca3af";
   const embedSnippet = `<iframe src="${typeof window !== "undefined" ? window.location.origin : ""}/embed/${cc}" width="320" height="180" frameborder="0" loading="lazy"></iframe>`;
 
+  // Reorderable panels. Empty/absent nodes auto-hide (see SortableGrid).
+  const panels: SortableItem[] = [
+    {
+      id: "dynamics", span: true,
+      node: <DynamicsPanel code={cc} dossier={dossier} headlines={headlines} topics={topics} />,
+    },
+    {
+      id: "brief", span: true,
+      node: (
+        <section className="card">
+          <div className="card-title px-4 pb-1 pt-3">AI-досье</div>
+          <div className="max-h-[360px] overflow-y-auto px-4 pb-3">
+            {brief ? (
+              <>
+                <Markdown text={brief.content} citations={brief.citations ?? brief.meta?.citations} />
+                <div className="mt-2 flex items-center gap-3 text-[11px] text-dim">
+                  <span>{brief.model} · {fmtDate(brief.created_at)}</span>
+                  <button onClick={generateBrief} className="underline hover:text-ru-white">
+                    обновить
+                  </button>
+                </div>
+              </>
+            ) : briefState === "generating" ? (
+              <div className="flex items-center gap-2 py-3 text-xs text-dim">
+                <span className="inline-block h-3 w-3 animate-spin rounded-full border border-dim border-t-accent" />
+                Генерируется ИИ-досье… это занимает ~30–60 секунд.
+              </div>
+            ) : briefState === "empty" ? (
+              <div className="py-3 text-xs text-dim">
+                Недостаточно данных для брифинга по этой стране (нет индекса, GDELT и своих статей).
+              </div>
+            ) : (
+              <div className="py-2">
+                <p className="mb-2 text-xs text-dim">
+                  {briefState === "error"
+                    ? "Не удалось собрать досье — попробуйте ещё раз."
+                    : "Сводка по стране ещё не собрана."}
+                </p>
+                <button
+                  onClick={generateBrief}
+                  className="rounded bg-accent/15 px-3 py-1.5 text-[13px] text-accent transition-colors hover:bg-accent/25"
+                >
+                  Собрать AI-досье
+                </button>
+              </div>
+            )}
+          </div>
+        </section>
+      ),
+    },
+    {
+      id: "headlines", span: true,
+      node: headlines && headlines.headlines.length > 0 ? (
+        <section className="card">
+          <div className="card-title px-4 pb-1 pt-3">
+            Источники новостей ({headlines.source === "gdelt" ? "GDELT" : "собственные источники"})
+          </div>
+          <div className="px-4 pb-3">
+            {headlines.headlines.map((h, i) => (
+              <div key={i} className="border-b border-dashed border-line py-1.5 text-[13px]">
+                <a href={h.url ?? "#"} target="_blank" rel="noopener noreferrer" className="hover:text-accent">
+                  {h.title}
+                </a>
+                <div className="text-[11px] text-dim">
+                  {h.source}
+                  {h.sentiment != null && ` · тон ${fmt(h.sentiment)}`}
+                  {h.tier && ` · ${h.tier}`}
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null,
+    },
+    {
+      id: "index", span: true,
+      node: indexChart ? (
+        <section className="card">
+          <div className="card-title px-4 pt-3">Индекс и термометр · 90 дней</div>
+          <Plot
+            data={indexChart}
+            layout={{ ...CHART_BASE, height: 230 } as unknown as Record<string, unknown>}
+            className="w-full"
+          />
+        </section>
+      ) : null,
+    },
+    {
+      id: "gdelt",
+      node: gdeltChart ? (
+        <section className="card">
+          <div className="card-title px-4 pt-3">GDELT: тон и объём о России</div>
+          <Plot
+            data={gdeltChart}
+            layout={{
+              ...CHART_BASE, height: 210,
+              yaxis2: { overlaying: "y", side: "right", color: "#374151", showgrid: false },
+            } as unknown as Record<string, unknown>}
+            className="w-full"
+          />
+        </section>
+      ) : null,
+    },
+    { id: "tier", node: <TierDivergencePanel code={cc} /> },
+    { id: "sanctions", node: <SanctionsPanel code={cc} /> },
+    { id: "vox", node: <VoxPanel code={cc} /> },
+    {
+      id: "topics",
+      node: topics.length > 0 ? (
+        <section className="card">
+          <div className="card-title px-4 pb-2 pt-3">Темы · 30 дней</div>
+          <div className="px-4 pb-3">
+            {topics.map((t) => (
+              <div key={t.topic} className="flex items-center justify-between border-b border-dashed border-line py-1 text-[13px]">
+                <span>{t.label}</span>
+                <span className="tnum text-xs text-dim">
+                  {t.articles} ст. ·{" "}
+                  <span className={t.avg_sentiment > 0 ? "text-ally" : t.avg_sentiment < 0 ? "text-hostile" : ""}>
+                    {fmt(t.avg_sentiment)}
+                  </span>
+                </span>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null,
+    },
+    {
+      id: "entities",
+      node: entities.length > 0 ? (
+        <section className="card">
+          <div className="card-title px-4 pb-2 pt-3">Сущности в повестке · 30 дней</div>
+          <div className="flex flex-wrap gap-1.5 px-4 pb-3">
+            {entities.map((e) => (
+              <span
+                key={e.key}
+                className="rounded-full border border-line bg-panel2 px-2.5 py-0.5 text-[11px]"
+                title={`тон ${fmt(e.avg_sentiment)}`}
+              >
+                {e.name} <span className="text-dim">×{e.mentions}</span>
+              </span>
+            ))}
+          </div>
+        </section>
+      ) : null,
+    },
+    { id: "agreements", node: <AgreementsPanel items={agreements} /> },
+    { id: "unvotes", node: <UNVotesPanel data={un} /> },
+    { id: "trade", node: <TradePanel data={trade} /> },
+    {
+      id: "fx",
+      node: fxChart ? (
+        <section className="card">
+          <div className="card-title px-4 pt-3">Курс {fx?.currency} к рублю (ЦБ РФ)</div>
+          <Plot
+            data={fxChart}
+            layout={{ ...CHART_BASE, height: 210, showlegend: false } as unknown as Record<string, unknown>}
+            className="w-full"
+          />
+        </section>
+      ) : null,
+    },
+    {
+      id: "signals",
+      node: (
+        <section className="card">
+          <div className="card-title px-4 pb-1 pt-3">Сигналы · 90 дней</div>
+          <div className="max-h-[300px] overflow-y-auto">
+            <SignalFeed
+              signals={dossier.signals.slice(0, 12) as unknown as Signal[]}
+              emptyText="Сигналов не было"
+            />
+          </div>
+        </section>
+      ),
+    },
+  ];
+
   return (
     <main className="mx-auto max-w-[1100px] px-3 pb-10">
       <SiteHeader />
@@ -224,162 +412,7 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
       {dossier && <div className="mt-4"><SparklineStrip dossier={dossier} /></div>}
 
       <div className="mt-4 grid gap-3 md:grid-cols-2">
-        {indexChart && (
-          <section className="card md:col-span-2">
-            <div className="card-title px-4 pt-3">Индекс и термометр · 90 дней</div>
-            <Plot
-              data={indexChart}
-              layout={{ ...CHART_BASE, height: 230 } as unknown as Record<string, unknown>}
-              className="w-full"
-            />
-          </section>
-        )}
-
-        {gdeltChart && (
-          <section className="card">
-            <div className="card-title px-4 pt-3">GDELT: тон и объём о России</div>
-            <Plot
-              data={gdeltChart}
-              layout={{
-                ...CHART_BASE, height: 210,
-                yaxis2: { overlaying: "y", side: "right", color: "#374151", showgrid: false },
-              } as unknown as Record<string, unknown>}
-              className="w-full"
-            />
-          </section>
-        )}
-
-        {fxChart && (
-          <section className="card">
-            <div className="card-title px-4 pt-3">Курс {fx?.currency} к рублю (ЦБ РФ)</div>
-            <Plot
-              data={fxChart}
-              layout={{ ...CHART_BASE, height: 210, showlegend: false } as unknown as Record<string, unknown>}
-              className="w-full"
-            />
-          </section>
-        )}
-
-        <UNVotesPanel data={un} />
-        <TradePanel data={trade} />
-        <AgreementsPanel items={agreements} />
-
-        {topics.length > 0 && (
-          <section className="card">
-            <div className="card-title px-4 pb-2 pt-3">Темы · 30 дней</div>
-            <div className="px-4 pb-3">
-              {topics.map((t) => (
-                <div key={t.topic} className="flex items-center justify-between border-b border-dashed border-line py-1 text-[13px]">
-                  <span>{t.label}</span>
-                  <span className="tnum text-xs text-dim">
-                    {t.articles} ст. ·{" "}
-                    <span className={t.avg_sentiment > 0 ? "text-ally" : t.avg_sentiment < 0 ? "text-hostile" : ""}>
-                      {fmt(t.avg_sentiment)}
-                    </span>
-                  </span>
-                </div>
-              ))}
-            </div>
-          </section>
-        )}
-
-        {entities.length > 0 && (
-          <section className="card">
-            <div className="card-title px-4 pb-2 pt-3">Сущности в повестке · 30 дней</div>
-            <div className="flex flex-wrap gap-1.5 px-4 pb-3">
-              {entities.map((e) => (
-                <span
-                  key={e.key}
-                  className="rounded-full border border-line bg-panel2 px-2.5 py-0.5 text-[11px]"
-                  title={`тон ${fmt(e.avg_sentiment)}`}
-                >
-                  {e.name} <span className="text-dim">×{e.mentions}</span>
-                </span>
-              ))}
-            </div>
-          </section>
-        )}
-
-        <TierDivergencePanel code={cc} />
-        <SanctionsPanel code={cc} />
-        <VoxPanel code={cc} />
-
-        {headlines && headlines.headlines.length > 0 && (
-          <section className="card md:col-span-2">
-            <div className="card-title px-4 pb-1 pt-3">
-              Заголовки ({headlines.source === "gdelt" ? "GDELT" : "собственные источники"})
-            </div>
-            <div className="px-4 pb-3">
-              {headlines.headlines.map((h, i) => (
-                <div key={i} className="border-b border-dashed border-line py-1.5 text-[13px]">
-                  <a
-                    href={h.url ?? "#"}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="hover:text-accent"
-                  >
-                    {h.title}
-                  </a>
-                  <div className="text-[11px] text-dim">
-                    {h.source}
-                    {h.sentiment != null && ` · тон ${fmt(h.sentiment)}`}
-                    {h.tier && ` · ${h.tier}`}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </section>
-        )}
-
-        <section className="card">
-          <div className="card-title px-4 pb-1 pt-3">Сигналы · 90 дней</div>
-          <div className="max-h-[300px] overflow-y-auto">
-            <SignalFeed
-              signals={dossier.signals.slice(0, 12) as unknown as Signal[]}
-              emptyText="Сигналов не было"
-            />
-          </div>
-        </section>
-
-        <section className="card md:col-span-2">
-          <div className="card-title px-4 pb-1 pt-3">AI-досье</div>
-          <div className="max-h-[360px] overflow-y-auto px-4 pb-3">
-            {brief ? (
-              <>
-                <Markdown text={brief.content} citations={brief.citations ?? brief.meta?.citations} />
-                <div className="mt-2 flex items-center gap-3 text-[11px] text-dim">
-                  <span>{brief.model} · {fmtDate(brief.created_at)}</span>
-                  <button onClick={generateBrief} className="underline hover:text-ru-white">
-                    обновить
-                  </button>
-                </div>
-              </>
-            ) : briefState === "generating" ? (
-              <div className="flex items-center gap-2 py-3 text-xs text-dim">
-                <span className="inline-block h-3 w-3 animate-spin rounded-full border border-dim border-t-accent" />
-                Генерируется ИИ-досье… это занимает ~30–60 секунд.
-              </div>
-            ) : briefState === "empty" ? (
-              <div className="py-3 text-xs text-dim">
-                Недостаточно данных для брифинга по этой стране (нет индекса, GDELT и своих статей).
-              </div>
-            ) : (
-              <div className="py-2">
-                <p className="mb-2 text-xs text-dim">
-                  {briefState === "error"
-                    ? "Не удалось собрать досье — попробуйте ещё раз."
-                    : "Сводка по стране ещё не собрана."}
-                </p>
-                <button
-                  onClick={generateBrief}
-                  className="rounded bg-accent/15 px-3 py-1.5 text-[13px] text-accent transition-colors hover:bg-accent/25"
-                >
-                  Собрать AI-досье
-                </button>
-              </div>
-            )}
-          </div>
-        </section>
+        <SortableGrid storageKey="country-panel-order" defaultOrder={PANEL_ORDER} items={panels} />
       </div>
 
       <div className="mt-4 text-[11px] text-dim">
