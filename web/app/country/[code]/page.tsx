@@ -25,7 +25,7 @@ import type {
 // Default panel order on country pages. AI-dossier + news sources sit near the
 // top; visitors can drag any card to reorder (saved per browser in localStorage).
 const PANEL_ORDER = [
-  "dynamics", "brief", "headlines", "index", "gdelt",
+  "sparklines", "dynamics", "brief", "headlines", "index", "gdelt",
   "tier", "sanctions", "vox", "topics", "entities",
   "agreements", "unvotes", "trade", "fx", "signals",
 ];
@@ -172,11 +172,15 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
   // Reorderable panels. Empty/absent nodes auto-hide (see SortableGrid).
   const panels: SortableItem[] = [
     {
-      id: "dynamics", span: true,
+      id: "sparklines", cellClassName: "md:col-span-2",
+      node: <SparklineStrip dossier={dossier} />,
+    },
+    {
+      id: "dynamics", cellClassName: "md:col-span-2",
       node: <DynamicsPanel code={cc} dossier={dossier} headlines={headlines} topics={topics} />,
     },
     {
-      id: "brief", span: true,
+      id: "brief", cellClassName: "md:col-span-2",
       node: (
         <section className="card">
           <div className="card-title px-4 pb-1 pt-3">AI-досье</div>
@@ -220,7 +224,7 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
       ),
     },
     {
-      id: "headlines", span: true,
+      id: "headlines", cellClassName: "md:col-span-2",
       node: headlines && headlines.headlines.length > 0 ? (
         <section className="card">
           <div className="card-title px-4 pb-1 pt-3">
@@ -244,7 +248,7 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
       ) : null,
     },
     {
-      id: "index", span: true,
+      id: "index", cellClassName: "md:col-span-2",
       node: indexChart ? (
         <section className="card">
           <div className="card-title px-4 pt-3">Индекс и термометр · 90 дней</div>
@@ -408,8 +412,6 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
       ) : (
         <div className="mt-3 text-sm text-dim">Индекс ещё не рассчитан</div>
       )}
-
-      {dossier && <div className="mt-4"><SparklineStrip dossier={dossier} /></div>}
 
       <div className="mt-4 grid gap-3 md:grid-cols-2">
         <SortableGrid storageKey="country-panel-order" defaultOrder={PANEL_ORDER} items={panels} />
