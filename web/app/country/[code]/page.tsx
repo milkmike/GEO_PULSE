@@ -16,6 +16,7 @@ import TierDivergencePanel from "@/components/TierDivergencePanel";
 import SanctionsPanel from "@/components/SanctionsPanel";
 import VoxPanel from "@/components/VoxPanel";
 import { api, apiBase } from "@/lib/api";
+import { COUNTRY_TIPS } from "@/lib/explain";
 import { fmt, fmtDate, LEVEL_COLOR, LEVEL_RU } from "@/lib/format";
 import type {
   AgreementGroup, Brief, Dossier, EntityStat, FxSeries, Headline, Signal, TopicStat,
@@ -172,15 +173,15 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
   // Reorderable panels. Empty/absent nodes auto-hide (see SortableGrid).
   const panels: SortableItem[] = [
     {
-      id: "sparklines", cellClassName: "md:col-span-2",
+      id: "sparklines", cellClassName: "md:col-span-2", tip: COUNTRY_TIPS.sparklines,
       node: <SparklineStrip dossier={dossier} />,
     },
     {
-      id: "dynamics", cellClassName: "md:col-span-2",
+      id: "dynamics", cellClassName: "md:col-span-2", tip: COUNTRY_TIPS.dynamics,
       node: <DynamicsPanel code={cc} dossier={dossier} headlines={headlines} topics={topics} />,
     },
     {
-      id: "brief", cellClassName: "md:col-span-2",
+      id: "brief", cellClassName: "md:col-span-2", tip: COUNTRY_TIPS.brief,
       node: (
         <section className="card">
           <div className="card-title px-4 pb-1 pt-3">AI-досье</div>
@@ -224,7 +225,7 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
       ),
     },
     {
-      id: "headlines", cellClassName: "md:col-span-2",
+      id: "headlines", cellClassName: "md:col-span-2", tip: COUNTRY_TIPS.headlines,
       node: headlines && headlines.headlines.length > 0 ? (
         <section className="card">
           <div className="card-title px-4 pb-1 pt-3">
@@ -248,7 +249,7 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
       ) : null,
     },
     {
-      id: "index", cellClassName: "md:col-span-2",
+      id: "index", cellClassName: "md:col-span-2", tip: COUNTRY_TIPS.index,
       node: indexChart ? (
         <section className="card">
           <div className="card-title px-4 pt-3">Индекс и термометр · 90 дней</div>
@@ -261,7 +262,7 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
       ) : null,
     },
     {
-      id: "gdelt",
+      id: "gdelt", tip: COUNTRY_TIPS.gdelt,
       node: gdeltChart ? (
         <section className="card">
           <div className="card-title px-4 pt-3">GDELT: тон и объём о России</div>
@@ -276,11 +277,11 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
         </section>
       ) : null,
     },
-    { id: "tier", node: <TierDivergencePanel code={cc} /> },
-    { id: "sanctions", node: <SanctionsPanel code={cc} /> },
-    { id: "vox", node: <VoxPanel code={cc} /> },
+    { id: "tier", tip: COUNTRY_TIPS.tier, node: <TierDivergencePanel code={cc} /> },
+    { id: "sanctions", tip: COUNTRY_TIPS.sanctions, node: <SanctionsPanel code={cc} /> },
+    { id: "vox", tip: COUNTRY_TIPS.vox, node: <VoxPanel code={cc} /> },
     {
-      id: "topics",
+      id: "topics", tip: COUNTRY_TIPS.topics,
       node: topics.length > 0 ? (
         <section className="card">
           <div className="card-title px-4 pb-2 pt-3">Темы · 30 дней</div>
@@ -301,7 +302,7 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
       ) : null,
     },
     {
-      id: "entities",
+      id: "entities", tip: COUNTRY_TIPS.entities,
       node: entities.length > 0 ? (
         <section className="card">
           <div className="card-title px-4 pb-2 pt-3">Сущности в повестке · 30 дней</div>
@@ -319,11 +320,11 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
         </section>
       ) : null,
     },
-    { id: "agreements", node: <AgreementsPanel items={agreements} /> },
-    { id: "unvotes", node: <UNVotesPanel data={un} /> },
-    { id: "trade", node: <TradePanel data={trade} /> },
+    { id: "agreements", tip: COUNTRY_TIPS.agreements, node: <AgreementsPanel items={agreements} /> },
+    { id: "unvotes", tip: COUNTRY_TIPS.unvotes, node: <UNVotesPanel data={un} /> },
+    { id: "trade", tip: COUNTRY_TIPS.trade, node: <TradePanel data={trade} /> },
     {
-      id: "fx",
+      id: "fx", tip: COUNTRY_TIPS.fx,
       node: fxChart ? (
         <section className="card">
           <div className="card-title px-4 pt-3">Курс {fx?.currency} к рублю (ЦБ РФ)</div>
@@ -336,7 +337,7 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
       ) : null,
     },
     {
-      id: "signals",
+      id: "signals", tip: COUNTRY_TIPS.signals,
       node: (
         <section className="card">
           <div className="card-title px-4 pb-1 pt-3">Сигналы · 90 дней</div>

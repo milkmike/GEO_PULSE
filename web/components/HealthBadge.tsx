@@ -11,6 +11,13 @@ const COLOR: Record<Health["verdict"], string> = {
   UNHEALTHY: "text-hostile border-hostile",
 };
 
+const VERDICT_RU: Record<Health["verdict"], string> = {
+  HEALTHY: "Сбор в норме",
+  WARNING: "Сбор: внимание",
+  DEGRADED: "Сбор: сбои",
+  UNHEALTHY: "Сбор: критично",
+};
+
 export default function HealthBadge() {
   const [health, setHealth] = useState<Health | null>(null);
 
@@ -25,9 +32,13 @@ export default function HealthBadge() {
   return (
     <span
       className={`rounded-full border px-2.5 py-0.5 text-[11px] ${COLOR[health.verdict]}`}
-      title={`Источники: ${health.sources_ok}/${health.sources_total} OK · GDELT: ${health.gdelt.status}`}
+      title={
+        `Здоровье сбора данных: насколько свежо и полно собираются источники сейчас. ` +
+        `Работают ${health.sources_ok} из ${health.sources_total} источников · GDELT: ${health.gdelt.status}. ` +
+        `${health.coverage_pct}% — доля живых источников.`
+      }
     >
-      {health.verdict} · {health.coverage_pct}%
+      {VERDICT_RU[health.verdict]} · {health.coverage_pct}%
     </span>
   );
 }
