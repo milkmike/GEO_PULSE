@@ -21,6 +21,18 @@ THREAD_FIELDS = """
     t.generated_at
 """
 
+# Top-3 most recent article links for a thread (title/url/published_at) as a JSON
+# array. Reuses the thread_articles→articles join from get_thread's timeline.
+RECENT_ARTICLES_SUBQ = """
+    (SELECT json_agg(x) FROM (
+        SELECT ar.title, ar.url, ar.published_at
+        FROM thread_articles ta JOIN articles ar ON ta.article_id = ar.id
+        WHERE ta.thread_id = t.id AND ar.url IS NOT NULL
+        ORDER BY ar.published_at DESC NULLS LAST
+        LIMIT 3
+    ) x) AS recent_articles
+"""
+
 
 class ThreadResponse(BaseModel):
     id: int
@@ -43,6 +55,7 @@ class ThreadResponse(BaseModel):
     related_threads: list[int]
     summary: dict[str, Any] | None
     generated_at: str | None
+    articles: list[dict[str, Any]] = []
 
 
 class ThreadTimelineItem(BaseModel):
@@ -99,6 +112,8 @@ def thread_to_dict(r) -> dict:
         "related_threads": r.related_threads or [],
         "summary": r.summary_json if r.summary_json else None,
         "generated_at": r.generated_at.isoformat() if r.generated_at else None,
+        # Recent article links, populated only by queries that SELECT recent_articles.
+        "articles": getattr(r, "recent_articles", None) or [],
     }
     return result
 
@@ -138,7 +153,7 @@ def list_threads(
 
     with get_session() as session:
         rows = session.execute(text(f"""
-            SELECT {THREAD_FIELDS}
+            SELECT {THREAD_FIELDS}, {RECENT_ARTICLES_SUBQ}
             FROM threads t
             {where}
             ORDER BY {order}
@@ -312,7 +327,7 @@ def get_country_threads(
 
     with get_session() as session:
         rows = session.execute(text(f"""
-            SELECT {THREAD_FIELDS}
+            SELECT {THREAD_FIELDS}, {RECENT_ARTICLES_SUBQ}
             FROM threads t
             {where}
             ORDER BY t.importance_score DESC

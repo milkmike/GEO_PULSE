@@ -171,3 +171,37 @@ export interface AgreementGroup {
   first_at: string; last_at: string; articles_total: number;
   articles: { title: string; url: string | null; source: string; published_at: string }[];
 }
+
+export interface ThreadArticle {
+  title: string | null;
+  url: string | null;
+  published_at: string | null;
+}
+
+export interface ThreadSummary {
+  title?: string;
+  summary?: string;
+  dynamics?: string;
+  impact?: string;
+  forecast?: string;
+  key_actors?: string[];
+  tags?: string[];
+}
+
+export interface Thread {
+  id: number;
+  country_code: string;
+  country_name: string;
+  title: string;
+  status: string;
+  arc_phase: string;
+  first_seen: string | null;
+  last_seen: string | null;
+  article_count: number;
+  avg_sentiment: number | null;
+  importance_score: number;
+  velocity: number;
+  sentiment_shift: number;
+  summary: ThreadSummary | null;
+  articles: ThreadArticle[];
+}

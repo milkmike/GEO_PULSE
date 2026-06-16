@@ -10,6 +10,7 @@ import SignalFeed from "@/components/SignalFeed";
 import TradePanel from "@/components/TradePanel";
 import UNVotesPanel from "@/components/UNVotesPanel";
 import SparklineStrip from "@/components/SparklineStrip";
+import DynamicsPanel from "@/components/DynamicsPanel";
 import TierDivergencePanel from "@/components/TierDivergencePanel";
 import SanctionsPanel from "@/components/SanctionsPanel";
 import VoxPanel from "@/components/VoxPanel";
@@ -224,6 +225,8 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
       {dossier && <div className="mt-4"><SparklineStrip dossier={dossier} /></div>}
 
       <div className="mt-4 grid gap-3 md:grid-cols-2">
+        <DynamicsPanel code={cc} dossier={dossier} headlines={headlines} topics={topics} />
+
         {indexChart && (
           <section className="card md:col-span-2">
             <div className="card-title px-4 pt-3">Индекс и термометр · 90 дней</div>
