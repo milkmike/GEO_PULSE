@@ -87,6 +87,15 @@ export const api = {
       commodities?: { group: string; name: string; value_eur: number; value_tonne: number }[];
       world_rank?: number | null; period_from?: string | null; updated_at?: string | null;
     }>(`/api/v2/countries/${code}/energy`),
+  ruRadar: () =>
+    get<{
+      has_data: boolean;
+      usd_rub?: number | null; usd_rub_chg30?: number | null;
+      cny_rub?: number | null; cny_rub_chg30?: number | null;
+      moex?: number | null; moex_chg30?: number | null;
+      moex_spark?: { d: string; v: number }[];
+      pressure?: number; verdict?: string | null; updated_at?: string | null;
+    }>("/api/v2/ru-radar"),
   vox: (code: string, days = 14) =>
     get<{
       timeline: { time: string; vox_temperature: number | null; media_temperature: number | null;

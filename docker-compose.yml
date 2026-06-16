@@ -242,6 +242,18 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  market-radar-loader:
+    build:
+      context: .
+      dockerfile: Dockerfile.loaders
+    command: python scripts/collect_market_radar.py --loop --interval 21600
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
   web:
     build:
       context: ./web

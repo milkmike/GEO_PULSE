@@ -82,7 +82,7 @@ export default function EnergyPanel({ code }: { code: string }) {
 
           {e.period_from && (
             <div className="mt-2 text-[11px] text-dim">
-              накопительно с {e.period_from.slice(0, 10)} · данные CREA
+              накопительно с {e.period_from.slice(0, 4)} года · данные CREA
             </div>
           )}
         </div>
