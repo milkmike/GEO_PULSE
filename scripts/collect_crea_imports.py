@@ -4,8 +4,8 @@
 Source (free, no key): https://api.russiafossiltracker.com/v0/counter
 
 We pull the cumulative value (EUR) and volume (tonnes) of Russian fossil-fuel
-exports since the 2022 full-scale invasion, aggregated by destination country and
-commodity group, then upsert one row per importer into `ru_fossil_imports` with a
+exports since 2022, aggregated by destination country and commodity group, then
+upsert one row per importer into `ru_fossil_imports` with a
 per-commodity breakdown and a world rank by euros paid to Russia.
 
 This is the "who keeps funding Russia via energy" layer (worldmonitor energy-radar
@@ -26,7 +26,7 @@ import urllib.request
 import psycopg2
 
 DB_URL = os.environ.get("DATABASE_URL", "postgresql://thermo:thermo@localhost:5432/cis_thermometer")
-# Cumulative since the full-scale invasion — CREA's "Financing Putin's war" window.
+# Cumulative window start (CREA tracker default).
 PERIOD_FROM = os.environ.get("CREA_PERIOD_FROM", "2022-02-24")
 API_URL = "https://api.russiafossiltracker.com/v0/counter"
 

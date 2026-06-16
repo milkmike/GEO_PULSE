@@ -272,3 +272,19 @@ CREATE TABLE IF NOT EXISTS ru_fossil_imports (
     period_from  DATE,
     updated_at   TIMESTAMP DEFAULT now()
 );
+
+-- Financial "isolation radar" snapshot (see scripts/migrations/018_ru_market_radar.sql)
+CREATE TABLE IF NOT EXISTS ru_market_radar (
+    id            INTEGER PRIMARY KEY DEFAULT 1,
+    usd_rub       DOUBLE PRECISION,
+    usd_rub_chg30 DOUBLE PRECISION,
+    cny_rub       DOUBLE PRECISION,
+    cny_rub_chg30 DOUBLE PRECISION,
+    moex          DOUBLE PRECISION,
+    moex_chg30    DOUBLE PRECISION,
+    moex_spark    JSONB DEFAULT '[]',
+    pressure      INTEGER DEFAULT 0,
+    verdict       TEXT,
+    updated_at    TIMESTAMP DEFAULT now(),
+    CONSTRAINT ru_market_radar_singleton CHECK (id = 1)
+);

@@ -4,5 +4,5 @@ RUN apt-get update && apt-get install -y --no-install-recommends gcc libpq-dev &
 COPY requirements-base.txt ./
 RUN pip install --no-cache-dir -r requirements-base.txt
 COPY src/ src/
-COPY scripts/load_un_votes.py scripts/auto_trade_loader.py scripts/generate_digests.py scripts/collect_sanctions.py scripts/collect_crea_imports.py scripts/
+COPY scripts/load_un_votes.py scripts/auto_trade_loader.py scripts/generate_digests.py scripts/collect_sanctions.py scripts/collect_crea_imports.py scripts/collect_market_radar.py scripts/
 ENV PYTHONPATH=/app PYTHONUNBUFFERED=1 LANG=C.UTF-8

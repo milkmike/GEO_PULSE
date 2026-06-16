@@ -608,6 +608,37 @@ def country_energy(code: str):
     }
 
 
+@router.get("/ru-radar")
+def ru_radar():
+    """Financial 'isolation radar' for Russia: ruble (USD/RUB, CNY/RUB) + MOEX."""
+    row = None
+    with get_session() as session:
+        try:
+            row = session.execute(
+                text("""SELECT usd_rub, usd_rub_chg30, cny_rub, cny_rub_chg30,
+                               moex, moex_chg30, moex_spark, pressure, verdict, updated_at
+                        FROM ru_market_radar WHERE id = 1"""),
+            ).fetchone()
+        except Exception:  # table may not exist yet (migration pending)
+            row = None
+    if not row:
+        return {"has_data": False}
+
+    def _f(v):
+        return float(v) if v is not None else None
+
+    return {
+        "has_data": True,
+        "usd_rub": _f(row.usd_rub), "usd_rub_chg30": _f(row.usd_rub_chg30),
+        "cny_rub": _f(row.cny_rub), "cny_rub_chg30": _f(row.cny_rub_chg30),
+        "moex": _f(row.moex), "moex_chg30": _f(row.moex_chg30),
+        "moex_spark": row.moex_spark or [],
+        "pressure": int(row.pressure or 0),
+        "verdict": row.verdict,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+    }
+
+
 @router.get("/brief")
 def world_brief():
     """Latest world brief «Россия и мир»."""

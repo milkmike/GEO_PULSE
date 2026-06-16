@@ -7,6 +7,7 @@ import Filters, { type FilterState } from "@/components/Filters";
 import HealthBadge from "@/components/HealthBadge";
 import HeadlinesFeed from "@/components/HeadlinesFeed";
 import Markdown from "@/components/Markdown";
+import RadarPanel from "@/components/RadarPanel";
 import SignalFeed from "@/components/SignalFeed";
 import SiteHeader from "@/components/SiteHeader";
 import SortableGrid, { type SortableItem } from "@/components/SortableGrid";
@@ -18,7 +19,7 @@ import type { Brief, CountrySummary, Headline, Meta, Signal } from "@/lib/types"
 
 // Default order of the home dashboard cards; visitors can drag to reorder
 // (persisted per browser in localStorage under "home-panel-order").
-const HOME_ORDER = ["map", "ranking", "headlines", "signals", "brief"];
+const HOME_ORDER = ["map", "ranking", "headlines", "signals", "brief", "radar"];
 
 export default function HomePage() {
   const [countries, setCountries] = useState<CountrySummary[]>([]);
@@ -204,6 +205,10 @@ export default function HomePage() {
           </div>
         </section>
       ),
+    },
+    {
+      id: "radar", cellClassName: "col-span-12 lg:col-span-4", tip: HOME_TIPS.radar,
+      node: <RadarPanel />,
     },
   ];
 
