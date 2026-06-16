@@ -229,6 +229,19 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  crea-imports-loader:
+    build:
+      context: .
+      dockerfile: Dockerfile.loaders
+    command: python scripts/collect_crea_imports.py --loop --interval 86400
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      CREA_PERIOD_FROM: ${CREA_PERIOD_FROM:-2022-02-24}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
   web:
     build:
       context: ./web

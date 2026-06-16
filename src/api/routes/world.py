@@ -578,6 +578,36 @@ def country_sanctions(code: str):
     }
 
 
+@router.get("/countries/{code}/energy")
+def country_energy(code: str):
+    """Russian fossil-fuel imports this country pays for (CREA Russia Fossil Tracker)."""
+    code = code.upper()
+    if code not in COUNTRIES:
+        raise HTTPException(404, f"Unknown country: {code}")
+    row = None
+    with get_session() as session:
+        try:
+            row = session.execute(
+                text("""SELECT total_eur, total_tonne, commodities, world_rank,
+                               period_from, updated_at
+                        FROM ru_fossil_imports WHERE country_code = :cc"""),
+                {"cc": code},
+            ).fetchone()
+        except Exception:  # table may not exist yet (migration pending)
+            row = None
+    if not row or not (row.total_eur or row.total_tonne):
+        return {"country_code": code, "has_data": False}
+    return {
+        "country_code": code, "has_data": True,
+        "total_eur": float(row.total_eur or 0),
+        "total_tonne": float(row.total_tonne or 0),
+        "commodities": row.commodities or [],
+        "world_rank": int(row.world_rank) if row.world_rank is not None else None,
+        "period_from": row.period_from.isoformat() if row.period_from else None,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+    }
+
+
 @router.get("/brief")
 def world_brief():
     """Latest world brief «Россия и мир»."""
