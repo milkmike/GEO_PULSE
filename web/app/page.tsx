@@ -9,10 +9,15 @@ import HeadlinesFeed from "@/components/HeadlinesFeed";
 import Markdown from "@/components/Markdown";
 import SignalFeed from "@/components/SignalFeed";
 import SiteHeader from "@/components/SiteHeader";
+import SortableGrid, { type SortableItem } from "@/components/SortableGrid";
 import WorldMap from "@/components/WorldMap";
 import { api } from "@/lib/api";
 import { fmtDate } from "@/lib/format";
 import type { Brief, CountrySummary, Headline, Meta, Signal } from "@/lib/types";
+
+// Default order of the home dashboard cards; visitors can drag to reorder
+// (persisted per browser in localStorage under "home-panel-order").
+const HOME_ORDER = ["map", "ranking", "headlines", "signals", "brief"];
 
 export default function HomePage() {
   const [countries, setCountries] = useState<CountrySummary[]>([]);
@@ -101,36 +106,20 @@ export default function HomePage() {
 
   const updatedAt = countries[0]?.updated_at;
 
-  return (
-    <main className="mx-auto max-w-[1500px] px-3 pb-8">
-      <SiteHeader
-        active="/"
-        right={
-          <span className="flex items-center gap-3">
-            <HealthBadge />
-            {updatedAt && (
-              <span className="tnum text-[10px] text-dim">
-                обновлено {fmtDate(updatedAt)}
-              </span>
-            )}
-          </span>
-        }
-      />
-
-      {meta && (
-        <Filters
-          regions={meta.regions}
-          topics={meta.topics}
-          value={filters}
-          onChange={setFilters}
-        />
-      )}
-
-      <div className="reveal reveal-2 grid gap-3 lg:grid-cols-[1fr_380px]">
+  // Reorderable home dashboard. Sizes live on each cell (col-span) so dragging
+  // preserves widths and the map stays large.
+  const homePanels: SortableItem[] = [
+    {
+      id: "map", cellClassName: "col-span-12 lg:col-span-8",
+      node: (
         <section className="card min-h-[420px] lg:h-[58vh]">
           <WorldMap entries={mapEntries} />
         </section>
-
+      ),
+    },
+    {
+      id: "ranking", cellClassName: "col-span-12 lg:col-span-4",
+      node: (
         <section className="card flex max-h-[58vh] min-h-[320px] flex-col">
           <div className="card-title px-4 pb-1 pt-3">
             {filters.topic && meta
@@ -139,9 +128,11 @@ export default function HomePage() {
           </div>
           <CountryRanking countries={filtered} topicCounts={topicCounts ?? undefined} />
         </section>
-      </div>
-
-      <div className="reveal reveal-4 mt-3 grid gap-3 lg:grid-cols-3">
+      ),
+    },
+    {
+      id: "headlines", cellClassName: "col-span-12 lg:col-span-4",
+      node: (
         <section className="card">
           <div className="card-title px-4 pb-1 pt-3">
             {[
@@ -156,7 +147,11 @@ export default function HomePage() {
             <HeadlinesFeed items={headlines} />
           </div>
         </section>
-
+      ),
+    },
+    {
+      id: "signals", cellClassName: "col-span-12 lg:col-span-4",
+      node: (
         <section className="card">
           <div className="card-title flex items-baseline justify-between px-4 pb-1 pt-3">
             <span>Сигналы медиаполя</span>
@@ -168,7 +163,11 @@ export default function HomePage() {
             <SignalFeed signals={signals.slice(0, 30)} />
           </div>
         </section>
-
+      ),
+    },
+    {
+      id: "brief", cellClassName: "col-span-12 lg:col-span-4",
+      node: (
         <section className="card">
           <div className="card-title px-4 pb-1 pt-3">
             {filters.topic && meta
@@ -203,6 +202,37 @@ export default function HomePage() {
             )}
           </div>
         </section>
+      ),
+    },
+  ];
+
+  return (
+    <main className="mx-auto max-w-[1500px] px-3 pb-8">
+      <SiteHeader
+        active="/"
+        right={
+          <span className="flex items-center gap-3">
+            <HealthBadge />
+            {updatedAt && (
+              <span className="tnum text-[10px] text-dim">
+                обновлено {fmtDate(updatedAt)}
+              </span>
+            )}
+          </span>
+        }
+      />
+
+      {meta && (
+        <Filters
+          regions={meta.regions}
+          topics={meta.topics}
+          value={filters}
+          onChange={setFilters}
+        />
+      )}
+
+      <div className="reveal reveal-2 mt-3 grid grid-cols-12 gap-3">
+        <SortableGrid storageKey="home-panel-order" defaultOrder={HOME_ORDER} items={homePanels} />
       </div>
     </main>
   );

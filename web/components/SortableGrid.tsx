@@ -5,8 +5,10 @@ import { useEffect, useRef, useState, type DragEvent, type ReactNode } from "rea
 export type SortableItem = {
   /** Stable id used for ordering + persistence. */
   id: string;
-  /** Full-width (spans both grid columns). */
-  span?: boolean;
+  /** Extra classes for the grid cell, e.g. "md:col-span-2" or
+   *  "col-span-12 lg:col-span-8". Size lives on the cell (not its position),
+   *  so reordering preserves each panel's width. */
+  cellClassName?: string;
   /** The panel itself; may be a falsy/empty node — empty cells auto-hide. */
   node: ReactNode;
 };
@@ -43,7 +45,7 @@ function Cell({
   const cls = [
     "group relative",
     empty ? "hidden" : "",
-    item.span ? "md:col-span-2" : "",
+    item.cellClassName ?? "",
     dragging ? "opacity-40" : "",
     over && !dragging ? "rounded-xl ring-2 ring-accent/70" : "",
   ].filter(Boolean).join(" ");
@@ -71,7 +73,7 @@ function Cell({
             }
           }}
           onDragEnd={onEnd}
-          className="absolute right-2 top-2 z-20 cursor-grab select-none rounded px-1.5 text-[15px] leading-none text-dim opacity-30 transition-opacity hover:text-ru-white group-hover:opacity-100 active:cursor-grabbing"
+          className="absolute right-2 top-2 z-20 flex h-5 w-5 cursor-grab select-none items-center justify-center rounded border border-line bg-panel2/80 text-[13px] leading-none text-dim opacity-60 backdrop-blur-sm transition hover:border-ru-blue hover:text-ru-white hover:opacity-100 active:cursor-grabbing"
         >
           ⠿
         </button>
