@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -478,6 +479,226 @@ def test_legacy_signal_reconstruction_is_honest_about_missing_snapshot():
     assert evidence["window_end"] is None
     assert evidence["completeness"] == "partial"
     assert "исходный снимок" in evidence["explanation"]["limitations"][0]
+
+
+class _MetadataUpgradeSession:
+    def __init__(self, rows):
+        self.rows = {row["signal_id"]: row for row in rows}
+        self.writes: list[int] = []
+        self.batch_limits: list[int] = []
+
+    def _eligible(self, row, known_detectors):
+        explanation = row["explanation"]
+        return (
+            "window_basis" not in explanation
+            or "window_status" not in explanation
+            or (
+                row["detector"] in known_detectors
+                and "current_rule_reference" not in explanation
+            )
+        )
+
+    def execute(self, statement, params=None):
+        sql = " ".join(str(statement).split())
+        params = params or {}
+        known_detectors = set(params.get("known_detectors", ()))
+        after_signal_id = int(params.get("after_signal_id", 0))
+        candidates = [
+            row
+            for signal_id, row in sorted(self.rows.items())
+            if signal_id > after_signal_id
+            and row["detector_version"] == "legacy-reconstructed-v1"
+            and self._eligible(row, known_detectors)
+        ]
+
+        if sql.upper().startswith("SELECT COUNT(*)"):
+            return SimpleNamespace(scalar_one=lambda: len(candidates))
+        if sql.upper().startswith("SELECT SIGNAL_ID, DETECTOR"):
+            limit = int(params["batch_size"])
+            self.batch_limits.append(limit)
+            return _Rows(
+                [
+                    SimpleNamespace(
+                        signal_id=row["signal_id"],
+                        detector=row["detector"],
+                        explanation=dict(row["explanation"]),
+                    )
+                    for row in candidates[:limit]
+                ]
+            )
+        if sql.upper().startswith("UPDATE SIGNAL_EVIDENCE"):
+            assert "CAST(:additions AS jsonb) - ARRAY" in sql
+            assert "WHERE se.signal_id = :signal_id" in sql
+            signal_id = int(params["signal_id"])
+            additions = json.loads(params["additions"])
+            explanation = self.rows[signal_id]["explanation"]
+            for key, value in additions.items():
+                explanation.setdefault(key, value)
+            self.writes.append(signal_id)
+            return SimpleNamespace(rowcount=1)
+        raise AssertionError(f"unexpected metadata upgrade SQL: {sql}")
+
+
+def test_metadata_upgrade_runs_after_old_done_checkpoint_and_is_idempotent(tmp_path):
+    import scripts.backfill_investigation_data as backfill
+
+    existing_reference = {
+        "absolute_z_score_min": 1.6,
+        "standard_deviation_floor": 0.3,
+    }
+    explicit_reference = {"manually_verified": True}
+    rows = [
+        {
+            "signal_id": 22,
+            "detector": "tone_shift",
+            "detector_version": "legacy-reconstructed-v1",
+            "explanation": {
+                "rule": "pre-patch reconstructed evidence",
+                "current_rule_reference": existing_reference,
+            },
+        },
+        {
+            "signal_id": 23,
+            "detector": "tone_shift",
+            "detector_version": "legacy-reconstructed-v1",
+            "explanation": {
+                "window_basis": "recovered_from_archive",
+                "current_rule_reference": explicit_reference,
+            },
+        },
+        {
+            "signal_id": 24,
+            "detector": "volume_surge",
+            "detector_version": "legacy-reconstructed-v1",
+            "explanation": {"rule": "reference was absent in the old row"},
+        },
+    ]
+    session = _MetadataUpgradeSession(rows)
+
+    @contextmanager
+    def session_factory():
+        yield session
+
+    checkpoint = tmp_path / "checkpoint.json"
+    checkpoint.write_text(
+        json.dumps(
+            {
+                "version": backfill.CHECKPOINT_VERSION,
+                "stages": {
+                    "signal_evidence": {
+                        "cursor": 23,
+                        "done": True,
+                        "updated_at": NOW.isoformat(),
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    stages = {
+        "signal_evidence_metadata": backfill.backfill_signal_evidence_metadata,
+    }
+
+    first = backfill.run_backfill(
+        apply=True,
+        batch_size=1,
+        checkpoint_path=checkpoint,
+        stages=stages,
+        session_factory=session_factory,
+    )
+
+    assert first["stages"]["signal_evidence_metadata"]["eligible"] == 3
+    assert first["stages"]["signal_evidence_metadata"]["processed"] == 3
+    assert session.batch_limits == [1, 1, 1, 1]
+    assert session.writes == [22, 23, 24]
+    assert rows[0]["explanation"] == {
+        "rule": "pre-patch reconstructed evidence",
+        "current_rule_reference": existing_reference,
+        "window_basis": "not_persisted",
+        "window_status": "unknown",
+    }
+    assert rows[1]["explanation"] == {
+        "window_basis": "recovered_from_archive",
+        "current_rule_reference": explicit_reference,
+        "window_status": "unknown",
+    }
+    assert rows[2]["explanation"] == {
+        "rule": "reference was absent in the old row",
+        "window_basis": "not_persisted",
+        "window_status": "unknown",
+        "current_rule_reference": {
+            "minimum_share_ratio": 2.0,
+            "minimum_daily_volume": 10,
+        },
+    }
+    saved = json.loads(checkpoint.read_text(encoding="utf-8"))
+    assert saved["stages"]["signal_evidence"]["done"] is True
+    assert saved["stages"]["signal_evidence_metadata"]["done"] is True
+    assert saved["stages"]["signal_evidence_metadata"]["cursor"] == {
+        "version": 1,
+        "after_signal_id": 24,
+    }
+
+    writes_after_first_run = list(session.writes)
+    second = backfill.run_backfill(
+        apply=True,
+        batch_size=1,
+        checkpoint_path=checkpoint,
+        stages=stages,
+        session_factory=session_factory,
+    )
+
+    assert second["stages"]["signal_evidence_metadata"]["processed"] == 0
+    assert session.writes == writes_after_first_run
+
+    fresh_checkpoint = tmp_path / "fresh-checkpoint.json"
+    third = backfill.run_backfill(
+        apply=True,
+        batch_size=1,
+        checkpoint_path=fresh_checkpoint,
+        stages=stages,
+        session_factory=session_factory,
+    )
+
+    assert third["stages"]["signal_evidence_metadata"]["eligible"] == 0
+    assert third["stages"]["signal_evidence_metadata"]["processed"] == 0
+    assert session.writes == writes_after_first_run
+
+
+def test_metadata_upgrade_dry_run_is_read_only(tmp_path):
+    import scripts.backfill_investigation_data as backfill
+
+    rows = [
+        {
+            "signal_id": 22,
+            "detector": "tone_shift",
+            "detector_version": "legacy-reconstructed-v1",
+            "explanation": {"rule": "pre-patch reconstructed evidence"},
+        }
+    ]
+    session = _MetadataUpgradeSession(rows)
+
+    @contextmanager
+    def session_factory():
+        yield session
+
+    checkpoint = tmp_path / "checkpoint.json"
+    summary = backfill.run_backfill(
+        apply=False,
+        batch_size=1,
+        checkpoint_path=checkpoint,
+        stages={
+            "signal_evidence_metadata": backfill.backfill_signal_evidence_metadata,
+        },
+        session_factory=session_factory,
+    )
+
+    report = summary["stages"]["signal_evidence_metadata"]
+    assert report["eligible"] == 1
+    assert report["processed"] == 0
+    assert session.writes == []
+    assert rows[0]["explanation"] == {"rule": "pre-patch reconstructed evidence"}
+    assert not checkpoint.exists()
 
 
 def test_story_resume_fails_closed_when_the_frozen_candidate_snapshot_changes(

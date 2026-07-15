@@ -46,6 +46,7 @@ STAGE_NAMES = (
     "knowledge_mentions",
     "story_membership",
     "signal_evidence",
+    "signal_evidence_metadata",
     "explanation_warmup",
 )
 
@@ -443,6 +444,79 @@ _SIGNAL_THRESHOLDS: dict[str, dict[str, Any]] = {
     "fx_move": {"absolute_daily_change_percent_min": 2.0},
     "sanctions_escalation": {"minimum_new_targets": 25},
 }
+SIGNAL_EVIDENCE_METADATA_VERSION = 1
+
+
+_MISSING_RECONSTRUCTED_METADATA = """
+    se.detector_version = 'legacy-reconstructed-v1'
+    AND (
+        NOT (COALESCE(se.explanation, '{}'::jsonb) ? 'window_basis')
+        OR NOT (COALESCE(se.explanation, '{}'::jsonb) ? 'window_status')
+        OR (
+            se.detector = ANY(CAST(:known_detectors AS text[]))
+            AND NOT (
+                COALESCE(se.explanation, '{}'::jsonb)
+                ? 'current_rule_reference'
+            )
+        )
+    )
+"""
+
+
+def _signal_metadata_cursor(cursor: Any) -> dict[str, int]:
+    if cursor is None:
+        return {
+            "version": SIGNAL_EVIDENCE_METADATA_VERSION,
+            "after_signal_id": 0,
+        }
+    if not isinstance(cursor, Mapping):
+        raise ValueError("signal evidence metadata cursor must be an object")
+    version = int(cursor.get("version", 0))
+    if version != SIGNAL_EVIDENCE_METADATA_VERSION:
+        raise ValueError(f"unsupported signal evidence metadata cursor: {version}")
+    after_signal_id = int(cursor.get("after_signal_id", 0))
+    if after_signal_id < 0:
+        raise ValueError("signal evidence metadata cursor must be non-negative")
+    return {"version": version, "after_signal_id": after_signal_id}
+
+
+def _signal_metadata_additions(detector: str) -> dict[str, Any]:
+    additions: dict[str, Any] = {
+        "window_basis": "not_persisted",
+        "window_status": "unknown",
+    }
+    if detector in _SIGNAL_THRESHOLDS:
+        additions["current_rule_reference"] = dict(_SIGNAL_THRESHOLDS[detector])
+    return additions
+
+
+def _upgrade_reconstructed_signal_metadata(
+    session: Any,
+    *,
+    signal_id: int,
+    detector: str,
+) -> int:
+    """Atomically add only absent metadata keys to one reconstructed row."""
+
+    additions = _signal_metadata_additions(detector)
+    result = session.execute(text(f"""
+        UPDATE signal_evidence AS se
+        SET explanation = COALESCE(se.explanation, '{{}}'::jsonb) || (
+            CAST(:additions AS jsonb) - ARRAY(
+                SELECT jsonb_object_keys(
+                    COALESCE(se.explanation, '{{}}'::jsonb)
+                )
+            )
+        )
+        WHERE se.signal_id = :signal_id
+          AND {_MISSING_RECONSTRUCTED_METADATA}
+    """), {
+        "signal_id": signal_id,
+        "known_detectors": sorted(_SIGNAL_THRESHOLDS),
+        "additions": json.dumps(additions, ensure_ascii=False),
+    })
+    return max(0, int(getattr(result, "rowcount", 0) or 0))
+
 
 def reconstruct_signal_evidence(row: Any) -> dict[str, Any] | None:
     """Reconstruct only fields retained on a legacy signal row.
@@ -593,6 +667,81 @@ def backfill_signal_evidence(context: StageContext, cursor: Any) -> StageReport:
     )
 
 
+def backfill_signal_evidence_metadata(
+    context: StageContext,
+    cursor: Any,
+) -> StageReport:
+    """Upgrade pre-patch reconstructed explanations in bounded batches."""
+
+    cursor_state = _signal_metadata_cursor(cursor)
+    if context.apply and context.saved_stage.get("done"):
+        return StageReport(0, 0, cursor_state, True)
+
+    params = {
+        "after_signal_id": cursor_state["after_signal_id"],
+        "known_detectors": sorted(_SIGNAL_THRESHOLDS),
+    }
+    with context.session_factory() as session:
+        eligible = _scalar(session, f"""
+            SELECT COUNT(*)
+            FROM signal_evidence se
+            WHERE se.signal_id > :after_signal_id
+              AND {_MISSING_RECONSTRUCTED_METADATA}
+        """, params)
+    if not context.apply:
+        return StageReport(eligible, 0, cursor_state, False)
+
+    processed = 0
+    skipped = 0
+    batches = 0
+    after_signal_id = cursor_state["after_signal_id"]
+    while True:
+        with context.session_factory() as session:
+            rows = session.execute(text(f"""
+                SELECT signal_id, detector, explanation
+                FROM signal_evidence se
+                WHERE se.signal_id > :after_signal_id
+                  AND {_MISSING_RECONSTRUCTED_METADATA}
+                ORDER BY signal_id
+                LIMIT :batch_size
+            """), {
+                "after_signal_id": after_signal_id,
+                "known_detectors": sorted(_SIGNAL_THRESHOLDS),
+                "batch_size": context.batch_size,
+            }).fetchall()
+            for row in rows:
+                changed = _upgrade_reconstructed_signal_metadata(
+                    session,
+                    signal_id=int(_value(row, "signal_id")),
+                    detector=str(_value(row, "detector", "")),
+                )
+                processed += changed
+                skipped += int(changed == 0)
+        if not rows:
+            cursor_state = {
+                "version": SIGNAL_EVIDENCE_METADATA_VERSION,
+                "after_signal_id": after_signal_id,
+            }
+            context.save_cursor(cursor_state, done=True)
+            break
+        batches += 1
+        after_signal_id = int(_value(rows[-1], "signal_id"))
+        cursor_state = {
+            "version": SIGNAL_EVIDENCE_METADATA_VERSION,
+            "after_signal_id": after_signal_id,
+        }
+        context.save_cursor(cursor_state, done=False)
+
+    return StageReport(
+        eligible=eligible,
+        processed=processed,
+        skipped=skipped,
+        cursor=cursor_state,
+        done=True,
+        batches=batches,
+    )
+
+
 def _warmup_rows(session: Any, cursor: Any, batch_size: int) -> list[Any]:
     params: dict[str, Any] = {"batch_size": batch_size}
     cursor_filter = ""
@@ -686,6 +835,7 @@ DEFAULT_STAGES: Mapping[str, StageRunner] = {
     "knowledge_mentions": backfill_knowledge_mentions,
     "story_membership": backfill_story_membership,
     "signal_evidence": backfill_signal_evidence,
+    "signal_evidence_metadata": backfill_signal_evidence_metadata,
     "explanation_warmup": backfill_explanation_warmup,
 }
 
