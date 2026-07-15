@@ -13,8 +13,10 @@
 - Never mutate or delete existing articles, signal evidence, temperature history, or source data.
 - Do not add a database migration or trigger a backfill/recalculation.
 - Return at most two preview articles per signal list item.
+- Return total candidate count and exact context-window bounds with every preview.
 - Use persisted `signal_evidence.article_ids` before contextual articles.
-- Contextual articles are relevant, non-duplicate articles from sources in the signal country, published in the 72 hours ending at signal creation.
+- Contextual articles are relevant, non-duplicate articles from sources in the signal country, published in a 72-hour window ending at the observed period.
+- For legacy `tone_shift` and `volume_surge`, derive the observed period from the latest `gdelt_daily.day` on or before the signal creation date calculated in UTC; do not anchor it to delayed detector execution time.
 - Label contextual articles as possible context; never claim that correlation proves causation.
 - Sanitize every public article URL with the existing `safe_public_url` helper.
 - Avoid N+1 API or SQL calls on the signal feed.
@@ -31,7 +33,7 @@
 
 **Interfaces:**
 - Consumes: signal rows with `id`, `country_code`, and `created_at`; persisted `signal_evidence.article_ids`; existing `safe_public_url`.
-- Produces: `load_signal_article_previews(session, signal_rows, limit=2) -> dict[int, dict[str, Any]]` and list response field `evidence_preview` with `{kind, articles}`.
+- Produces: `load_signal_article_previews(session, signal_rows, limit=2) -> dict[int, dict[str, Any]]` and list response field `evidence_preview` with `{kind, articles, total, window_hours, window_start, window_end}`.
 
 - [ ] **Step 1: Write failing list API tests**
 
@@ -43,6 +45,10 @@ second SQL call receives all signal IDs once rather than one call per signal.
 ```python
 assert result["signals"][0]["evidence_preview"] == {
     "kind": "context",
+    "total": 47,
+    "window_hours": 72,
+    "window_start": "2026-07-12T00:00:00+00:00",
+    "window_end": "2026-07-15T00:00:00+00:00",
     "articles": [{
         "id": 501,
         "title": "Правительство прокомментировало отношения с Россией",
@@ -66,14 +72,17 @@ Expected: FAIL because `evidence_preview` and the batch loader do not exist.
 - [ ] **Step 3: Implement the batch loader**
 
 Create `src/api/signal_article_context.py`. Execute one PostgreSQL query for all
-requested signal IDs. Its `requested` CTE joins `signals` to `signal_evidence`;
-its `exact_candidates` CTE unnests the first persisted article IDs with
+requested signal IDs. Its `requested` CTE joins `signals` to `signal_evidence`
+and derives `context_end`: for legacy `tone_shift`/`volume_surge`, use one day
+after the latest `gdelt_daily.day` on or before signal creation; otherwise use
+`created_at`. Derive `context_start = context_end - INTERVAL '72 hours'`. Its
+`exact_candidates` CTE unnests the first persisted article IDs with
 ordinality; its `context_candidates` CTE runs only where the evidence array is
 empty and filters:
 
 ```sql
-ar.published_at > requested.created_at - INTERVAL '72 hours'
-AND ar.published_at <= requested.created_at
+ar.published_at >= requested.context_start
+AND ar.published_at < requested.context_end
 AND ar.is_duplicate = FALSE
 AND analysis.is_relevant = TRUE
 AND source.country_code = requested.country_code
@@ -94,9 +103,13 @@ absolute sentiment, reprint count, and publication time. Apply
 }
 ```
 
-Initialize signals without rows as `{kind: "unavailable", articles: []}` and
-reject limits outside `1..100` with `ValueError`. The signal-list caller always
-passes `2`; the larger bound is reserved for one signal's detail page.
+Return one summary row per requested signal so empty states retain their kind.
+Use `kind: "context"` with an empty article array when a country-context query
+ran but found nothing, and `kind: "unavailable"` only when neither exact evidence
+nor a country-context query is possible. Include the candidate count before the
+limit and ISO window bounds. Reject limits outside `1..100` with `ValueError`.
+The signal-list caller always passes `2`; the larger bound is reserved for one
+signal's detail page.
 
 - [ ] **Step 4: Attach previews to the list response**
 
@@ -105,7 +118,10 @@ signal query. Add to each serialized signal:
 
 ```python
 "evidence_preview": previews.get(
-    int(r.id), {"kind": "unavailable", "articles": []}
+    int(r.id), {
+        "kind": "unavailable", "articles": [], "total": 0,
+        "window_hours": None, "window_start": None, "window_end": None,
+    }
 ),
 ```
 
@@ -132,7 +148,7 @@ Commit: `feat: add signal article previews`
 
 **Interfaces:**
 - Consumes: `load_signal_article_previews` from Task 1 and the existing exact `articles` array.
-- Produces: detail response field `context_articles: SignalArticleReference[]` and a visually distinct `Новостной контекст` section.
+- Produces: detail response field `context_preview: SignalEvidencePreview | null` and a visually distinct `Новостной контекст` section.
 
 - [ ] **Step 1: Write failing backend detail tests**
 
@@ -141,46 +157,53 @@ query result. For a `tone_shift` with no persisted article IDs, assert:
 
 ```python
 assert detail["articles"] == []
-assert detail["context_articles"][0]["title"] == "Контекст сдвига"
+assert detail["context_preview"]["articles"][0]["title"] == "Контекст сдвига"
+assert detail["context_preview"]["total"] == 8
 ```
 
-For a detector with exact evidence, assert `context_articles == []` so exact
+For a detector with exact evidence, assert `context_preview is None` so exact
 evidence is never duplicated as contextual material.
 
 - [ ] **Step 2: Run backend detail tests and verify RED**
 
 Run: `.venv311/bin/python -m pytest tests/test_signal_evidence.py -q`
 
-Expected: FAIL because `context_articles` is absent.
+Expected: FAIL because `context_preview` is absent.
 
 - [ ] **Step 3: Load context only when exact evidence is absent**
 
 In `SqlSignalDetailService.detail`, while the database session is open, call:
 
 ```python
-context_articles = []
+context_preview = None
 if not articles:
     preview = load_signal_article_previews(session, [signal], limit=20).get(
         int(_value(signal, "id")),
-        {"kind": "unavailable", "articles": []},
+        {
+            "kind": "unavailable", "articles": [], "total": 0,
+            "window_hours": None, "window_start": None, "window_end": None,
+        },
     )
-    if preview["kind"] == "context":
-        context_articles = preview["articles"]
+    if preview["kind"] in {"context", "unavailable"}:
+        context_preview = preview
 ```
 
-Pass it to `_serialize` and return it as `context_articles`. Exact detector
+Pass it to `_serialize` and return it as `context_preview`. Exact detector
 evidence remains in the existing `articles` field.
 
 - [ ] **Step 4: Write failing frontend detail tests**
 
-Add `context_articles` to the fixture. Assert the page renders heading
+Add `context_preview` to the fixture. Assert the page renders heading
 `Новостной контекст`, the source link, and this caveat:
 
 ```text
-Публикации совпадают с окном сигнала и помогают исследовать возможные причины, но сами по себе не доказывают причинную связь.
+Эти публикации вышли за 72 часа до срабатывания и отобраны как возможный контекст. Они не доказывают причину сдвига.
 ```
 
-Also assert that `Публикации-доказательства` is used for exact evidence.
+Also assert that `Публикации-доказательства` is used for exact evidence, empty
+context says `За 72 часа до сигнала релевантные публикации не найдены.`, and the
+technical heading changes from `Почему сработал сигнал` to `Как сработал
+детектор`.
 
 - [ ] **Step 5: Run frontend detail tests and verify RED**
 
@@ -190,11 +213,14 @@ Expected: FAIL because the context section does not exist.
 
 - [ ] **Step 6: Add the shared TypeScript article shape and render context**
 
-Define `SignalArticleReference` once and use it for `SignalDetail.articles`,
-`SignalDetail.context_articles`, and the list preview type. Extract the repeated
-article-row markup in `SignalEvidence.tsx` into a small local component. Render
-the contextual section only when `context_articles.length > 0`; keep safe
-external-link behavior and do not call contextual rows evidence.
+Define `SignalArticleReference` and `SignalEvidencePreview` once and use them for
+`SignalDetail.articles`, `SignalDetail.context_preview`, and the list preview
+type. Extract the repeated article-row markup in `SignalEvidence.tsx` into a
+small local component. Render the contextual section whenever `context_preview`
+exists, including its empty state. Show `Показано {returned} из {total}` and
+`Отобраны по уровню события, выраженности тона, числу перепечаток и времени
+публикации.` Keep safe external-link behavior and do not call contextual rows
+evidence.
 
 - [ ] **Step 7: Run focused tests and commit**
 
@@ -224,16 +250,19 @@ Commit: `feat: add news context to signal detail`
 Extend the signal fixture with two context articles and assert:
 
 ```tsx
-expect(screen.getByText("Что происходило в момент сдвига")).toBeVisible();
+expect(screen.getByText("Публикации за 72 часа до сигнала")).toBeVisible();
+expect(screen.getByText("Контекст для проверки; причинная связь не установлена.")).toBeVisible();
+expect(screen.getByText("2 из 47 релевантных публикаций")).toBeVisible();
 expect(screen.getByRole("link", { name: /Ejemplo.*Правительство/i }))
   .toHaveAttribute("href", "https://example.es/story");
-expect(screen.getByRole("link", { name: /Разобрать причины и источники/i }))
+expect(screen.getByRole("link", { name: /Открыть разбор сигнала/i }))
   .toHaveAttribute("href", "/signals/17");
 ```
 
 Assert the card itself has role `article`, exact evidence uses heading
-`На чём основан сигнал`, detail-disabled cards omit only the CTA, and unavailable
-previews show the honest fallback.
+`На чём основан сигнал`, detail-disabled cards omit only the CTA, empty context
+and unavailable previews show distinct honest fallbacks, and source links are
+not nested inside the CTA.
 
 - [ ] **Step 2: Run card tests and verify RED**
 
@@ -243,7 +272,8 @@ Expected: FAIL because the article preview and CTA do not exist.
 
 - [ ] **Step 3: Implement the hybrid card**
 
-Always render the outer element as `<article>`. Below the facts, render at most
+Always render the outer element as `<article>` without hover/cursor styling and
+render the signal title as `<h3>`. Below the facts, render at most
 two preview rows. Each valid article URL is an external anchor with
 `target="_blank"` and `rel="noopener noreferrer"`; missing URLs render as text.
 Use these headings:
@@ -251,11 +281,15 @@ Use these headings:
 ```ts
 const heading = preview.kind === "evidence"
   ? "На чём основан сигнал"
-  : "Что происходило в момент сдвига";
+  : "Публикации за 72 часа до сигнала";
 ```
 
 When `detailEnabled`, render a separate internal Link with the exact label
-`Разобрать причины и источники →`. Preserve reduced-motion parity and the current
+`Открыть разбор сигнала →`. Give source links an accessible name `Открыть
+первоисточник: {title} — {source}`, include visually hidden `откроется в новой
+вкладке`, and add visible keyboard focus. On mobile use simple separators, clamp
+article titles to two lines, keep source/date on one line, and make the CTA at
+least 44 px high and full width. Preserve reduced-motion parity and the current
 fact/status rendering.
 
 - [ ] **Step 4: Run frontend checks and commit**
@@ -310,8 +344,8 @@ Verify:
 
 ```text
 GET /api/v2/signals?days=7&limit=10 -> 200 with evidence_preview
-GET /api/v2/signals/{tone_shift_id} -> 200 with context_articles or exact articles
-GET / -> 200 and card contains “Разобрать причины и источники”
+GET /api/v2/signals/{tone_shift_id} -> 200 with context_preview or exact articles
+GET / -> 200 and card contains “Открыть разбор сигнала”
 GET /signals -> 200
 GET /signals/{tone_shift_id} -> 200
 ```
