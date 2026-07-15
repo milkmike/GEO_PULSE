@@ -25,19 +25,26 @@ jobs:
       postgres:
         image: pgvector/pgvector:pg16
         env:
-          POSTGRES_DB: geopulse_test
+          POSTGRES_DB: postgres
           POSTGRES_USER: geopulse
           POSTGRES_PASSWORD: geopulse
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U geopulse -d geopulse_test"
+          --health-cmd "pg_isready -U geopulse -d postgres"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
 
     env:
-      GEO_PULSE_SEARCH_PERF_TEST_DATABASE_URL: postgresql+psycopg2://geopulse:geopulse@127.0.0.1:5432/geopulse_test
+      PGHOST: 127.0.0.1
+      PGPORT: "5432"
+      PGUSER: geopulse
+      PGPASSWORD: geopulse
+      GEO_PULSE_TEST_DATABASE_URL: postgresql://geopulse:geopulse@127.0.0.1:5432/geopulse_migrations_test
+      GEO_PULSE_TEST_DATABASE_RESET: "1"
+      GEO_PULSE_SEARCH_PERF_TEST_DATABASE_URL: postgresql://geopulse:geopulse@127.0.0.1:5432/geopulse_search_test
+      GEOPULSE_STORY_MVCC_TEST_DATABASE_URL: postgresql://geopulse:geopulse@127.0.0.1:5432/geopulse_story_test
 
     steps:
       - name: Check out repository
@@ -50,6 +57,11 @@ jobs:
           cache: pip
           cache-dependency-path: requirements-*.txt
 
+      - name: Install PostgreSQL client
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends postgresql-client
+
       - name: Install backend dependencies
         run: |
           python -m pip install --upgrade pip
@@ -60,14 +72,33 @@ jobs:
             -r requirements-temperature.txt \
             -r requirements-dev.txt
 
-      - name: Enable PostgreSQL extensions
-        run: >-
-          docker exec "${{ job.services.postgres.id }}"
-          psql -v ON_ERROR_STOP=1 -U geopulse -d geopulse_test
-          -c "CREATE EXTENSION IF NOT EXISTS pg_trgm; CREATE EXTENSION IF NOT EXISTS vector;"
+      - name: Create isolated PostgreSQL test databases
+        run: |
+          psql --dbname=postgres -v ON_ERROR_STOP=1 -c "CREATE DATABASE geopulse_migrations_test"
+          psql --dbname=postgres -v ON_ERROR_STOP=1 -c "CREATE DATABASE geopulse_search_test"
+          psql --dbname=postgres -v ON_ERROR_STOP=1 -c "CREATE DATABASE geopulse_story_test"
+          psql --dbname=geopulse_search_test -v ON_ERROR_STOP=1 -c "CREATE EXTENSION IF NOT EXISTS pg_trgm; CREATE EXTENSION IF NOT EXISTS vector;"
 
-      - name: Run backend test suite
-        run: python -m pytest -q -ra
+      - name: Verify live PostgreSQL gate configuration
+        run: |
+          command -v psql
+          test "$(psql "$GEO_PULSE_TEST_DATABASE_URL" -Atqc "SELECT current_database()")" = "geopulse_migrations_test"
+          test "$(psql "$GEO_PULSE_SEARCH_PERF_TEST_DATABASE_URL" -Atqc "SELECT current_database()")" = "geopulse_search_test"
+          test "$(psql "$GEOPULSE_STORY_MVCC_TEST_DATABASE_URL" -Atqc "SELECT current_database()")" = "geopulse_story_test"
+
+      - name: Run live PostgreSQL gates
+        run: >-
+          python -m pytest -q -ra
+          tests/test_postgres_migrations.py
+          tests/test_search_postgres.py
+          tests/test_story_membership_mvcc.py
+
+      - name: Run remaining backend test suite
+        run: >-
+          python -m pytest -q -ra
+          --ignore=tests/test_postgres_migrations.py
+          --ignore=tests/test_search_postgres.py
+          --ignore=tests/test_story_membership_mvcc.py
 
   frontend:
     name: Frontend (Node 22)
