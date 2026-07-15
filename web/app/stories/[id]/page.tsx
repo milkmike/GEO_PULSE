@@ -70,7 +70,7 @@ function entityHref(id: string, label: string): string {
 }
 
 export default function StoryDetailPage({ params }: { params: Promise<{ id: string }> }) {
-  const { signalDetail } = useFeatureFlags();
+  const { searchNavigation, signalDetail } = useFeatureFlags();
   const { id: rawId } = use(params);
   const storyId = /^\d+$/.test(rawId) && Number(rawId) > 0 ? Number(rawId) : null;
   const [story, setStory] = useState<StoryDetailResponse | null>(null);
@@ -239,9 +239,15 @@ export default function StoryDetailPage({ params }: { params: Promise<{ id: stri
             {story.entities.length ? (
               <div className="mt-3 flex flex-wrap gap-2">
                 {story.entities.map((entity) => (
-                  <Link key={entity.entity_id} href={entityHref(entity.entity_id, entity.canonical_name)} className="inline-flex min-h-11 items-center rounded-full border border-line px-3 text-xs hover:border-ru-blue hover:text-accent sm:min-h-0 sm:py-1.5">
-                    {entity.canonical_name} <span className="ml-1 text-dim">×{entity.mentions}</span>
-                  </Link>
+                  searchNavigation ? (
+                    <Link key={entity.entity_id} href={entityHref(entity.entity_id, entity.canonical_name)} className="inline-flex min-h-11 items-center rounded-full border border-line px-3 text-xs hover:border-ru-blue hover:text-accent sm:min-h-0 sm:py-1.5">
+                      {entity.canonical_name} <span className="ml-1 text-dim">×{entity.mentions}</span>
+                    </Link>
+                  ) : (
+                    <span key={entity.entity_id} title="Поиск новостей пока отключён" className="inline-flex min-h-11 items-center rounded-full border border-line px-3 text-xs sm:min-h-0 sm:py-1.5">
+                      {entity.canonical_name} <span className="ml-1 text-dim">×{entity.mentions}</span>
+                    </span>
+                  )
                 ))}
               </div>
             ) : <p className="mt-2 text-xs text-dim">Распознанных сущностей пока нет.</p>}

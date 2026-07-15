@@ -121,10 +121,8 @@ describe("StoryDetailPage", () => {
     expect(screen.getByText(detail.summary!)).toBeVisible();
     expect(screen.getByRole("link", { name: "Испания" })).toBeVisible();
     expect(screen.getByText("тон −1,4")).toBeVisible();
-    expect(screen.getByRole("link", { name: /Владимир Путин/i })).toHaveAttribute(
-      "href",
-      "/search?entity_id=person%3Aputin&entity_label=%D0%92%D0%BB%D0%B0%D0%B4%D0%B8%D0%BC%D0%B8%D1%80+%D0%9F%D1%83%D1%82%D0%B8%D0%BD",
-    );
+    expect(screen.getByText(/Владимир Путин/i)).toBeVisible();
+    expect(screen.queryByRole("link", { name: /Владимир Путин/i })).not.toBeInTheDocument();
     expect(screen.getByText("Сдвиг индекса Испании")).toBeVisible();
     expect(screen.queryByRole("link", { name: /Сдвиг индекса Испании/i })).not.toBeInTheDocument();
     expect(screen.getByText(/Временной контекст RRI/i)).toBeVisible();
@@ -145,17 +143,21 @@ describe("StoryDetailPage", () => {
     expect(screen.queryByRole("link", { name: /Россия · первоисточник/i })).not.toBeInTheDocument();
   });
 
-  it("links signal details only when the server snapshot enables the Task 9 entry point", async () => {
+  it("links gated destinations only when the server snapshot enables their entry points", async () => {
     apiMocks.story.mockResolvedValue(detail);
     await act(async () => {
       render(
-        <FeatureFlagsProvider flags={{ searchNavigation: false, storiesNavigation: true, investigation: false, signalDetail: true }}>
+        <FeatureFlagsProvider flags={{ searchNavigation: true, storiesNavigation: true, investigation: false, signalDetail: true }}>
           <StoryDetailPage params={Promise.resolve({ id: "42" })} />
         </FeatureFlagsProvider>,
       );
     });
 
     expect(await screen.findByRole("link", { name: /Сдвиг индекса Испании/i })).toHaveAttribute("href", "/signals/9");
+    expect(screen.getByRole("link", { name: /Владимир Путин/i })).toHaveAttribute(
+      "href",
+      "/search?entity_id=person%3Aputin&entity_label=%D0%92%D0%BB%D0%B0%D0%B4%D0%B8%D0%BC%D0%B8%D1%80+%D0%9F%D1%83%D1%82%D0%B8%D0%BD",
+    );
   });
 
   it("appends a cursor page without replacing the evidence dossier", async () => {
