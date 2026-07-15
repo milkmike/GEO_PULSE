@@ -28,7 +28,7 @@ def _validate_cursor_key(scope: str, key: Any) -> dict[str, Any]:
     if scope == "entity_suggest":
         if set(key) != {"match_rank", "canonical_name", "id"}:
             raise ValueError("cursor key has invalid suggest fields")
-        if not isinstance(key["match_rank"], int) or key["match_rank"] < 0:
+        if type(key["match_rank"]) is not int or key["match_rank"] < 0:
             raise ValueError("cursor match rank is invalid")
         if not isinstance(key["canonical_name"], str) or not key["canonical_name"]:
             raise ValueError("cursor canonical name is invalid")
@@ -37,7 +37,12 @@ def _validate_cursor_key(scope: str, key: Any) -> dict[str, Any]:
         except (TypeError, ValueError) as exc:
             raise ValueError("cursor entity ID is invalid") from exc
     elif scope == "entity_mentions":
-        if set(key) != {"published_at", "created_at", "article_id"}:
+        if set(key) != {
+            "published_at",
+            "created_at",
+            "article_id",
+            "extractor",
+        }:
             raise ValueError("cursor key has invalid mention fields")
         for field in ("published_at", "created_at"):
             try:
@@ -46,8 +51,10 @@ def _validate_cursor_key(scope: str, key: Any) -> dict[str, Any]:
                 raise ValueError(f"cursor {field} is invalid") from exc
             if timestamp.tzinfo is None:
                 raise ValueError(f"cursor {field} must include a timezone")
-        if not isinstance(key["article_id"], int) or key["article_id"] < 1:
+        if type(key["article_id"]) is not int or key["article_id"] < 1:
             raise ValueError("cursor article ID is invalid")
+        if not isinstance(key["extractor"], str) or not key["extractor"]:
+            raise ValueError("cursor extractor is invalid")
     else:
         raise ValueError("cursor scope is invalid")
     return key
@@ -300,6 +307,7 @@ class SqlEntityQueryService:
         cursor_published_at = cursor["published_at"] if cursor else None
         cursor_created_at = cursor["created_at"] if cursor else None
         cursor_article_id = cursor["article_id"] if cursor else None
+        cursor_extractor = cursor["extractor"] if cursor else None
         with get_session() as session:
             raw_entity = session.execute(
                 text(
@@ -348,9 +356,16 @@ class SqlEntityQueryService:
                               AND aem.created_at = CAST(:cursor_created_at AS timestamptz)
                               AND aem.article_id < :cursor_article_id
                           )
+                          OR (
+                              ar.published_at = CAST(:cursor_published_at AS timestamptz)
+                              AND aem.created_at = CAST(:cursor_created_at AS timestamptz)
+                              AND aem.article_id = :cursor_article_id
+                              AND aem.extractor < :cursor_extractor
+                          )
                       )
                     ORDER BY ar.published_at DESC,
-                             aem.created_at DESC, aem.article_id DESC
+                             aem.created_at DESC, aem.article_id DESC,
+                             aem.extractor DESC
                     LIMIT :fetch_limit OFFSET :offset
                     """
                 ),
@@ -361,6 +376,7 @@ class SqlEntityQueryService:
                     "cursor_published_at": cursor_published_at,
                     "cursor_created_at": cursor_created_at,
                     "cursor_article_id": cursor_article_id,
+                    "cursor_extractor": cursor_extractor,
                 },
             ).fetchall()
 
@@ -409,6 +425,7 @@ class SqlEntityQueryService:
                     "published_at": last["published_at"].isoformat(),
                     "created_at": last["created_at"].isoformat(),
                     "article_id": int(last["article_id"]),
+                    "extractor": last["extractor"],
                 },
             )
         return {
@@ -421,6 +438,8 @@ class SqlEntityQueryService:
             "labels": entity["labels"] or {},
             "country_codes": list(entity["country_codes"] or ()),
             "provenance": entity["provenance"] or {},
+            "created_at": entity["created_at"].isoformat(),
+            "updated_at": entity["updated_at"].isoformat(),
             "aliases": alias_items,
             "mentions": {
                 "items": mention_items,
@@ -445,7 +464,7 @@ def suggest_entities(
     service: EntityQueryService = Depends(get_entity_query_service),
 ):
     if cursor is not None and offset:
-        raise HTTPException(status_code=400, detail="Cursor cannot be combined with offset")
+        raise HTTPException(status_code=422, detail="Cursor cannot be combined with offset")
     cursor_key = None
     if cursor is not None:
         try:
@@ -455,7 +474,7 @@ def suggest_entities(
                 binding={"q": normalize_entity_name(q)},
             )
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail="Invalid cursor") from exc
+            raise HTTPException(status_code=422, detail="Invalid cursor") from exc
     return service.suggest(
         query=q,
         limit=limit,
@@ -473,7 +492,7 @@ def entity_detail(
     service: EntityQueryService = Depends(get_entity_query_service),
 ):
     if cursor is not None and offset:
-        raise HTTPException(status_code=400, detail="Cursor cannot be combined with offset")
+        raise HTTPException(status_code=422, detail="Cursor cannot be combined with offset")
     cursor_key = None
     if cursor is not None:
         try:
@@ -483,7 +502,7 @@ def entity_detail(
                 binding={"entity_id": str(entity_id)},
             )
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail="Invalid cursor") from exc
+            raise HTTPException(status_code=422, detail="Invalid cursor") from exc
     result = service.detail(
         entity_id=entity_id,
         limit=limit,

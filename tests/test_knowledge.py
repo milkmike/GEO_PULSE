@@ -1,5 +1,7 @@
+import base64
 from contextlib import contextmanager
 from datetime import datetime, timezone
+import json
 from uuid import UUID, uuid4
 
 import pytest
@@ -199,8 +201,15 @@ def test_entity_cursor_round_trip_validates_scope_binding_and_shape():
         )
 
 
-def test_entity_routes_reject_rebound_cursor_and_cursor_with_offset():
+def raw_entity_cursor(*, scope, binding, key):
+    payload = {"v": 1, "scope": scope, "binding": binding, "key": key}
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+
+def test_entity_routes_return_422_for_invalid_rebound_and_mixed_cursors():
     entity_id = uuid4()
+    other_entity_id = uuid4()
     service = FakeEntityQueryService(entity_id)
     app = FastAPI()
     app.include_router(router)
@@ -215,18 +224,89 @@ def test_entity_routes_reject_rebound_cursor_and_cursor_with_offset():
             "id": str(entity_id),
         },
     )
+    mention_token = raw_entity_cursor(
+        scope="entity_mentions",
+        binding={"entity_id": str(entity_id)},
+        key={
+            "published_at": datetime(2026, 7, 15, tzinfo=timezone.utc).isoformat(),
+            "created_at": datetime(2026, 7, 15, tzinfo=timezone.utc).isoformat(),
+            "article_id": 42,
+            "extractor": "legacy_registry",
+        },
+    )
 
-    rebound = client.get(
+    suggest_invalid = client.get(
+        "/api/v2/entities/suggest",
+        params={"q": "Путин", "cursor": "not-valid-base64"},
+    )
+    suggest_rebound = client.get(
         "/api/v2/entities/suggest",
         params={"q": "Лавров", "cursor": token},
     )
-    mixed = client.get(
+    suggest_mixed = client.get(
         "/api/v2/entities/suggest",
         params={"q": "Путин", "cursor": token, "offset": 1},
     )
+    detail_invalid = client.get(
+        f"/api/v2/entities/{entity_id}",
+        params={"cursor": "not-valid-base64"},
+    )
+    detail_rebound = client.get(
+        f"/api/v2/entities/{other_entity_id}",
+        params={"cursor": mention_token},
+    )
+    detail_mixed = client.get(
+        f"/api/v2/entities/{entity_id}",
+        params={"cursor": mention_token, "offset": 1},
+    )
 
-    assert rebound.status_code == 400
-    assert mixed.status_code == 400
+    assert suggest_invalid.status_code == 422
+    assert suggest_rebound.status_code == 422
+    assert suggest_mixed.status_code == 422
+    assert detail_invalid.status_code == 422
+    assert detail_rebound.status_code == 422
+    assert detail_mixed.status_code == 422
+    assert service.calls == []
+
+
+def test_entity_routes_reject_json_boole_as_integer_cursor_keys():
+    entity_id = uuid4()
+    service = FakeEntityQueryService(entity_id)
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_entity_query_service] = lambda: service
+    client = TestClient(app)
+    suggest_token = raw_entity_cursor(
+        scope="entity_suggest",
+        binding={"q": "путин"},
+        key={
+            "match_rank": True,
+            "canonical_name": "Владимир Путин",
+            "id": str(entity_id),
+        },
+    )
+    mention_token = raw_entity_cursor(
+        scope="entity_mentions",
+        binding={"entity_id": str(entity_id)},
+        key={
+            "published_at": datetime(2026, 7, 15, tzinfo=timezone.utc).isoformat(),
+            "created_at": datetime(2026, 7, 15, tzinfo=timezone.utc).isoformat(),
+            "article_id": True,
+            "extractor": "legacy_registry",
+        },
+    )
+
+    suggest = client.get(
+        "/api/v2/entities/suggest",
+        params={"q": "Путин", "cursor": suggest_token},
+    )
+    detail = client.get(
+        f"/api/v2/entities/{entity_id}",
+        params={"cursor": mention_token},
+    )
+
+    assert suggest.status_code == 422
+    assert detail.status_code == 422
     assert service.calls == []
 
 
@@ -386,6 +466,7 @@ def test_detail_mentions_use_descending_keyset_and_entity_bound_cursor(monkeypat
         "published_at": datetime(2026, 7, 16, tzinfo=timezone.utc).isoformat(),
         "created_at": datetime(2026, 7, 16, tzinfo=timezone.utc).isoformat(),
         "article_id": 99,
+        "extractor": "zeta",
     }
 
     response = SqlEntityQueryService().detail(
@@ -399,8 +480,14 @@ def test_detail_mentions_use_descending_keyset_and_entity_bound_cursor(monkeypat
     assert "ar.published_at < CAST(:cursor_published_at AS timestamptz)" in sql
     assert "aem.created_at < CAST(:cursor_created_at AS timestamptz)" in sql
     assert "aem.article_id < :cursor_article_id" in sql
+    assert "aem.extractor < :cursor_extractor" in sql
     assert "ORDER BY ar.published_at DESC" in sql
+    assert "aem.article_id DESC" in sql
+    assert "aem.extractor DESC" in sql
     assert params["cursor_article_id"] == 99
+    assert params["cursor_extractor"] == "zeta"
+    assert response["created_at"] == created.isoformat()
+    assert response["updated_at"] == created.isoformat()
     assert response["mentions"]["has_more"] is True
     assert decode_entity_cursor(
         response["mentions"]["next_cursor"],
@@ -410,7 +497,75 @@ def test_detail_mentions_use_descending_keyset_and_entity_bound_cursor(monkeypat
         "published_at": published.isoformat(),
         "created_at": created.isoformat(),
         "article_id": 42,
+        "extractor": "legacy_registry",
     }
+
+
+def test_detail_mentions_do_not_skip_same_article_mentions_by_extractor(monkeypatch):
+    entity_id = uuid4()
+    published = datetime(2026, 7, 15, 10, 0, tzinfo=timezone.utc)
+    created = datetime(2026, 7, 15, 11, 0, tzinfo=timezone.utc)
+    entity_rows = [{
+        "id": entity_id,
+        "kind": "person",
+        "canonical_name": "Владимир Путин",
+        "normalized_name": "владимир путин",
+        "labels": {"ru": "Владимир Путин"},
+        "country_codes": ["RU"],
+        "provenance": {},
+        "created_at": created,
+        "updated_at": created,
+    }]
+
+    def mention(extractor):
+        return {
+            "article_id": 42,
+            "mention_text": "Путин",
+            "char_start": 0,
+            "char_end": 5,
+            "extractor": extractor,
+            "extractor_version": "1",
+            "confidence": 0.9,
+            "evidence": {"source": extractor},
+            "created_at": created,
+            "title": "Article",
+            "url": "https://example.org/article",
+            "published_at": published,
+        }
+
+    zeta = mention("zeta")
+    alpha = mention("alpha")
+    session = SequentialQuerySession(
+        [entity_rows, [], [zeta, alpha], entity_rows, [], [alpha]]
+    )
+    monkeypatch.setattr(
+        "src.api.routes.entities.get_session",
+        session_factory_for(session),
+    )
+    service = SqlEntityQueryService()
+
+    first = service.detail(entity_id=entity_id, limit=1, offset=0)
+    cursor = decode_entity_cursor(
+        first["mentions"]["next_cursor"],
+        scope="entity_mentions",
+        binding={"entity_id": str(entity_id)},
+    )
+    second = service.detail(
+        entity_id=entity_id,
+        limit=1,
+        offset=0,
+        cursor=cursor,
+    )
+
+    extractors = [
+        first["mentions"]["items"][0]["extractor"],
+        second["mentions"]["items"][0]["extractor"],
+    ]
+    assert extractors == ["zeta", "alpha"]
+    assert len(set(extractors)) == 2
+    second_sql, second_params = session.calls[5]
+    assert "aem.extractor < :cursor_extractor" in second_sql
+    assert second_params["cursor_extractor"] == "zeta"
 
 
 def test_entity_detail_returns_not_found_from_injected_service():
