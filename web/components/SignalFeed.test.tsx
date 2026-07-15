@@ -161,7 +161,7 @@ describe("SignalFeed", () => {
 
     render(<SignalFeed signals={[emptyContext, unavailable, urlLess]} detailEnabled />);
 
-    expect(screen.getByText("За 72 часа до сигнала релевантные публикации не найдены.")).toBeVisible();
+    expect(screen.getByText("В сохранённом 72-часовом окне релевантные публикации не найдены.")).toBeVisible();
     expect(screen.getByText("Публикации для этого сигнала не найдены или не сохранились.")).toBeVisible();
     expect(screen.getByText("Ссылка на первоисточник не сохранена.")).toBeVisible();
     expect(screen.getByText("Сохранённый заголовок").closest("a")).toBeNull();

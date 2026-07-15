@@ -158,7 +158,7 @@ function EvidencePreview({ preview }: { preview: SignalEvidencePreview | null | 
       )}
 
       {kind === "context" && articles.length === 0 ? (
-        <p className="mt-2 text-[11px] leading-snug text-dim">За 72 часа до сигнала релевантные публикации не найдены.</p>
+        <p className="mt-2 text-[11px] leading-snug text-dim">В сохранённом 72-часовом окне релевантные публикации не найдены.</p>
       ) : kind === "unavailable" ? (
         <p className="mt-2 text-[11px] leading-snug text-dim">Публикации для этого сигнала не найдены или не сохранились.</p>
       ) : (
