@@ -14,6 +14,7 @@ from src.search import (
     SearchTimeoutError,
     decode_cursor,
     encode_cursor,
+    search_request_fingerprint,
     validate_search_query,
 )
 
@@ -58,7 +59,9 @@ def _serialize_cursor(value: object) -> str | None:
         int(value["article_id"]),
         datetime.fromisoformat(str(value["ranking_at"])),
         datetime.fromisoformat(str(value["snapshot_collected_at"])),
-        int(value["snapshot_article_id"]),
+        int(value["snapshot_collected_article_id"]),
+        int(value["snapshot_max_article_id"]),
+        str(value["request_fingerprint"]),
     )
 
 
@@ -96,8 +99,6 @@ def search_articles_endpoint(
         normalized_query = validate_search_query(q, filters)
         if date_from and date_to and date_from > date_to:
             raise ValueError("from must not be after to")
-        if cursor:
-            decode_cursor(cursor)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -114,6 +115,14 @@ def search_articles_endpoint(
         cursor=cursor,
         limit=limit,
     )
+    if cursor:
+        try:
+            decode_cursor(
+                cursor,
+                expected_fingerprint=search_request_fingerprint(query),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
     try:
         page = service(query)
     except SearchTimeoutError as exc:

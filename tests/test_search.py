@@ -1,5 +1,7 @@
+import base64
+import json
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -16,6 +18,7 @@ from src.search import (
     explain_match,
     normalize_query,
     search_articles,
+    search_request_fingerprint,
     validate_search_query,
 )
 
@@ -136,6 +139,7 @@ def test_cursor_serialization_is_stable_and_round_trips():
     published_at = datetime(2026, 7, 14, 12, 30, tzinfo=timezone.utc)
     ranking_at = datetime(2026, 7, 15, 9, 0, tzinfo=timezone.utc)
     snapshot_at = datetime(2026, 7, 15, 8, 55, tzinfo=timezone.utc)
+    request_fingerprint = "a" * 64
     first = encode_cursor(
         .712345,
         published_at,
@@ -143,6 +147,8 @@ def test_cursor_serialization_is_stable_and_round_trips():
         ranking_at,
         snapshot_at,
         900,
+        900,
+        request_fingerprint,
     )
     second = encode_cursor(
         .712345,
@@ -151,6 +157,8 @@ def test_cursor_serialization_is_stable_and_round_trips():
         ranking_at,
         snapshot_at,
         900,
+        900,
+        request_fingerprint,
     )
     assert first == second
     assert decode_cursor(first) == (
@@ -160,6 +168,8 @@ def test_cursor_serialization_is_stable_and_round_trips():
         ranking_at,
         snapshot_at,
         900,
+        900,
+        request_fingerprint,
     )
 
     half_up = encode_cursor(
@@ -169,6 +179,8 @@ def test_cursor_serialization_is_stable_and_round_trips():
         ranking_at,
         snapshot_at,
         900,
+        900,
+        request_fingerprint,
     )
     assert decode_cursor(half_up)[0] == .123457
 
@@ -240,7 +252,9 @@ class FakeSearchService:
                 "article_id": 123,
                 "ranking_at": "2026-07-15T09:00:00+00:00",
                 "snapshot_collected_at": "2026-07-15T08:55:00+00:00",
-                "snapshot_article_id": 900,
+                "snapshot_collected_article_id": 900,
+                "snapshot_max_article_id": 900,
+                "request_fingerprint": search_request_fingerprint(query),
             },
         }
 
@@ -308,6 +322,61 @@ def test_search_endpoint_serializes_cursor_stably(search_client):
     assert decode_cursor(first)[2] == 123
 
 
+@pytest.mark.parametrize(
+    "changed_params",
+    [
+        {"q": "Медведев", "country": "ES", "sort": "relevance"},
+        {"q": "Путин", "country": "FR", "sort": "relevance"},
+        {"q": "Путин", "country": "ES", "sort": "newest"},
+    ],
+)
+def test_search_endpoint_rejects_cursor_from_a_different_request(
+    search_client,
+    changed_params,
+):
+    first = search_client.get(
+        "/api/v2/search/articles",
+        params={"q": "Путин", "country": "ES", "sort": "relevance"},
+    )
+    cursor = first.json()["next_cursor"]
+
+    response = search_client.get(
+        "/api/v2/search/articles",
+        params={**changed_params, "cursor": cursor},
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"] == "cursor does not match search request"
+
+
+def test_search_request_fingerprint_canonicalizes_uuid_dates_and_nulls():
+    entity_id = "93DBEAEC-C20B-44AD-AAED-46B18EA86A47"
+    first = SearchQuery(
+        q="  ПУТИН! ",
+        country="es",
+        entity_id=entity_id,
+        date_from=date(2026, 7, 1),
+        date_to=None,
+        topic=None,
+        tier=" mainstream ",
+        language=" es ",
+        sort="relevance",
+    )
+    canonical = SearchQuery(
+        q="путин",
+        country="ES",
+        entity_id=entity_id.casefold(),
+        date_from=date.fromisoformat("2026-07-01"),
+        tier="mainstream",
+        language="es",
+        sort="relevance",
+    )
+
+    assert search_request_fingerprint(first) == search_request_fingerprint(canonical)
+    assert search_request_fingerprint(first) != search_request_fingerprint(
+        SearchQuery(**{**canonical.__dict__, "topic": "diplomacy"})
+    )
+
+
 def test_search_endpoint_never_returns_non_http_article_urls():
     app.dependency_overrides[get_search_service] = lambda: FakeSearchService(
         url="javascript:alert(1)"
@@ -328,6 +397,63 @@ def test_search_endpoint_rejects_malformed_cursor(search_client):
     )
     assert response.status_code == 422
     assert response.json()["detail"] == "invalid search cursor"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("article_id", 0),
+        ("article_id", 2_147_483_648),
+        ("article_id", True),
+        ("relevance_score", True),
+        ("snapshot_collected_article_id", 0),
+        ("snapshot_collected_article_id", 2_147_483_648),
+        ("snapshot_collected_article_id", True),
+        ("snapshot_max_article_id", 0),
+        ("snapshot_max_article_id", 2_147_483_648),
+        ("snapshot_max_article_id", True),
+    ],
+)
+def test_search_endpoint_rejects_invalid_numeric_cursor_values(
+    search_client,
+    field,
+    value,
+):
+    params = {"q": "Путин", "country": "ES"}
+    cursor = search_client.get(
+        "/api/v2/search/articles",
+        params=params,
+    ).json()["next_cursor"]
+    padded = cursor + "=" * (-len(cursor) % 4)
+    payload = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")))
+    payload[field] = value
+    invalid_cursor = base64.urlsafe_b64encode(
+        json.dumps(
+            payload,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("ascii")
+    ).decode("ascii").rstrip("=")
+
+    response = search_client.get(
+        "/api/v2/search/articles",
+        params={**params, "cursor": invalid_cursor},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "invalid search cursor"
+
+
+def test_search_service_rejects_invalid_entity_uuid_stably():
+    def database_must_not_run():
+        pytest.fail("invalid entity UUID reached the database")
+
+    with pytest.raises(ValueError, match="entity_id must be a valid UUID"):
+        search_articles(
+            SearchQuery(q="article", entity_id="not-a-uuid"),
+            session_factory=database_must_not_run,
+        )
 
 
 def test_search_endpoint_rejects_reverse_date_range(search_client):
@@ -366,7 +492,8 @@ def test_search_service_uses_parameterized_hybrid_candidates_and_deterministic_r
             url="https://example.es/entity",
             published_at=published_at,
             snapshot_collected_at=published_at,
-            snapshot_article_id=11,
+            snapshot_collected_article_id=11,
+            snapshot_max_article_id=11,
             language="es",
             source_name="Entidad",
             country_code="ES",
@@ -417,7 +544,8 @@ def test_search_service_uses_parameterized_hybrid_candidates_and_deterministic_r
             url="https://example.es/body",
             published_at=published_at,
             snapshot_collected_at=published_at,
-            snapshot_article_id=11,
+            snapshot_collected_article_id=11,
+            snapshot_max_article_id=11,
             language="es",
             source_name="Texto",
             country_code="ES",
@@ -514,7 +642,8 @@ def test_search_service_uses_parameterized_hybrid_candidates_and_deterministic_r
     assert params["sort"] == "relevance"
     assert params["ranking_at"] == published_at
     assert params["snapshot_collected_at"] is None
-    assert params["snapshot_article_id"] is None
+    assert params["snapshot_collected_article_id"] is None
+    assert params["snapshot_max_article_id"] is None
     assert params["candidate_limit"] == 500
 
     first_page = search_articles(
@@ -529,7 +658,9 @@ def test_search_service_uses_parameterized_hybrid_candidates_and_deterministic_r
         next_cursor["article_id"],
         datetime.fromisoformat(next_cursor["ranking_at"]),
         datetime.fromisoformat(next_cursor["snapshot_collected_at"]),
-        next_cursor["snapshot_article_id"],
+        next_cursor["snapshot_collected_article_id"],
+        next_cursor["snapshot_max_article_id"],
+        next_cursor["request_fingerprint"],
     )
     later_page = search_articles(
         SearchQuery(q="путин", country="ES", cursor=cursor),
@@ -539,7 +670,8 @@ def test_search_service_uses_parameterized_hybrid_candidates_and_deterministic_r
     _, later_params = fake_session.calls[-1]
     assert later_params["ranking_at"] == published_at
     assert later_params["snapshot_collected_at"] == published_at
-    assert later_params["snapshot_article_id"] == 11
+    assert later_params["snapshot_collected_article_id"] == 11
+    assert later_params["snapshot_max_article_id"] == 11
     assert [item["article_id"] for item in later_page["items"]] == [11]
     assert all(item["scores"]["freshness"] == 1 for item in later_page["items"])
 
@@ -596,7 +728,8 @@ def test_cursor_snapshot_excludes_articles_ingested_between_pages():
     ]
     changed_pool = [
         *first_pool,
-        make_row(30, .7, snapshot_at + timedelta(seconds=1)),
+        make_row(30, .7, snapshot_at - timedelta(seconds=2)),
+        make_row(40, .6, None),
     ]
 
     class FakeResult:
@@ -618,17 +751,22 @@ def test_cursor_snapshot_excludes_articles_ingested_between_pages():
             pool = first_pool if self.query_count == 0 else changed_pool
             self.query_count += 1
             cutoff_at = params.get("snapshot_collected_at")
-            cutoff_id = params.get("snapshot_article_id")
+            cutoff_id = params.get("snapshot_collected_article_id")
+            max_article_id = params.get("snapshot_max_article_id")
             if cutoff_at is not None:
                 pool = [
                     row for row in pool
-                    if (row.collected_at, row.id) <= (cutoff_at, cutoff_id)
+                    if (row.collected_at or row.published_at, row.id)
+                    <= (cutoff_at, cutoff_id)
                 ]
+            if max_article_id is not None:
+                pool = [row for row in pool if row.id <= max_article_id]
             rows = [
                 SimpleNamespace(
                     **vars(row),
                     snapshot_collected_at=snapshot_at,
-                    snapshot_article_id=20,
+                    snapshot_collected_article_id=20,
+                    snapshot_max_article_id=20,
                 )
                 for row in pool
             ]
@@ -647,7 +785,8 @@ def test_cursor_snapshot_excludes_articles_ingested_between_pages():
     )
     cursor_data = first_page["next_cursor"]
     assert cursor_data["snapshot_collected_at"] == snapshot_at.isoformat()
-    assert cursor_data["snapshot_article_id"] == 20
+    assert cursor_data["snapshot_collected_article_id"] == 20
+    assert cursor_data["snapshot_max_article_id"] == 20
 
     cursor = encode_cursor(
         cursor_data["relevance_score"],
@@ -655,7 +794,9 @@ def test_cursor_snapshot_excludes_articles_ingested_between_pages():
         cursor_data["article_id"],
         datetime.fromisoformat(cursor_data["ranking_at"]),
         datetime.fromisoformat(cursor_data["snapshot_collected_at"]),
-        cursor_data["snapshot_article_id"],
+        cursor_data["snapshot_collected_article_id"],
+        cursor_data["snapshot_max_article_id"],
+        cursor_data["request_fingerprint"],
     )
     second_page = search_articles(
         SearchQuery(q="article", cursor=cursor),
@@ -665,4 +806,5 @@ def test_cursor_snapshot_excludes_articles_ingested_between_pages():
 
     assert [item["article_id"] for item in second_page["items"]] == [20]
     assert session.query_params[-1]["snapshot_collected_at"] == snapshot_at
-    assert session.query_params[-1]["snapshot_article_id"] == 20
+    assert session.query_params[-1]["snapshot_collected_article_id"] == 20
+    assert session.query_params[-1]["snapshot_max_article_id"] == 20

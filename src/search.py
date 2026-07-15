@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
+import hmac
 import json
 import re
 import unicodedata
@@ -11,6 +13,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
+from uuid import UUID
 
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
@@ -22,6 +25,8 @@ TOPIC_WEIGHT = 0.15
 FRESHNESS_WEIGHT = 0.10
 TRUST_WEIGHT = 0.10
 STORY_WEIGHT = 0.05
+SEARCH_RANKING_VERSION = "v1"
+POSTGRES_INTEGER_MAX = 2_147_483_647
 
 _STRUCTURED_FILTERS = {
     "country",
@@ -33,6 +38,10 @@ _STRUCTURED_FILTERS = {
     "language",
 }
 _NON_WORD_RE = re.compile(r"[^\w]+", re.UNICODE)
+
+
+class _CursorRequestMismatch(ValueError):
+    """The cursor is valid but belongs to a different search identity."""
 
 
 ARTICLE_SEARCH_SQL = """
@@ -54,9 +63,13 @@ snapshot AS (
                (SELECT collected_at FROM latest_article)
            ) AS snapshot_collected_at,
            COALESCE(
-               CAST(:snapshot_article_id AS INTEGER),
+               CAST(:snapshot_collected_article_id AS INTEGER),
                (SELECT id FROM latest_article)
-           ) AS snapshot_article_id
+           ) AS snapshot_collected_article_id,
+           COALESCE(
+               CAST(:snapshot_max_article_id AS INTEGER),
+               (SELECT MAX(id) FROM articles)
+           ) AS snapshot_max_article_id
 ),
 base_articles AS (
     SELECT a.id, a.search_vector, a.title_normalized, a.published_at,
@@ -73,7 +86,11 @@ base_articles AS (
           snapshot_state.snapshot_collected_at IS NULL
           OR (COALESCE(a.collected_at, a.published_at), a.id) <=
              (snapshot_state.snapshot_collected_at,
-              snapshot_state.snapshot_article_id)
+              snapshot_state.snapshot_collected_article_id)
+      )
+      AND (
+          snapshot_state.snapshot_max_article_id IS NULL
+          OR a.id <= snapshot_state.snapshot_max_article_id
       )
       AND (:country IS NULL OR s.country_code = :country)
       AND (:topic IS NULL OR an.topics @> ARRAY[CAST(:topic AS TEXT)])
@@ -259,7 +276,8 @@ SELECT a.id, a.title, a.summary, a.url, a.published_at, a.language,
        story_data.story_id, story_data.story_slug, story_data.story_title,
        story_data.story_confidence,
        snapshot_state.snapshot_collected_at,
-       snapshot_state.snapshot_article_id,
+       snapshot_state.snapshot_collected_article_id,
+       snapshot_state.snapshot_max_article_id,
        candidates.lexical_score,
        CASE
            WHEN :q = '' THEN NULL
@@ -375,6 +393,34 @@ def normalize_query(value: str) -> str:
     return " ".join(_NON_WORD_RE.sub(" ", normalized).split())
 
 
+def search_request_fingerprint(query: SearchQuery) -> str:
+    """Hash canonical search identity fields that a cursor is allowed to page."""
+
+    try:
+        entity_id = str(UUID(query.entity_id)) if query.entity_id else None
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise ValueError("entity_id must be a valid UUID") from exc
+    payload = {
+        "country": query.country.strip().upper() if query.country else None,
+        "entity_id": entity_id,
+        "from": query.date_from.isoformat() if query.date_from else None,
+        "language": query.language.strip() if query.language else None,
+        "q": normalize_query(query.q),
+        "ranking_version": SEARCH_RANKING_VERSION,
+        "sort": query.sort,
+        "tier": query.tier.strip() if query.tier else None,
+        "to": query.date_to.isoformat() if query.date_to else None,
+        "topic": query.topic.strip() if query.topic else None,
+    }
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode("ascii")).hexdigest()
+
+
 def validate_search_query(query: str, filters: dict[str, object]) -> str:
     """Validate query length and require text or a meaningful structured filter."""
 
@@ -484,7 +530,9 @@ def encode_cursor(
     article_id: int,
     ranking_at: datetime,
     snapshot_collected_at: datetime,
-    snapshot_article_id: int,
+    snapshot_collected_article_id: int,
+    snapshot_max_article_id: int,
+    request_fingerprint: str,
 ) -> str:
     """Serialize stable page ordering plus its ranking-time snapshot."""
 
@@ -492,9 +540,11 @@ def encode_cursor(
         "article_id": int(article_id),
         "published_at": published_at.isoformat(),
         "ranking_at": ranking_at.isoformat(),
+        "request_fingerprint": request_fingerprint,
         "relevance_score": _round_rank(relevance_score),
-        "snapshot_article_id": int(snapshot_article_id),
+        "snapshot_collected_article_id": int(snapshot_collected_article_id),
         "snapshot_collected_at": snapshot_collected_at.isoformat(),
+        "snapshot_max_article_id": int(snapshot_max_article_id),
     }
     raw = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
     return base64.urlsafe_b64encode(raw.encode("ascii")).decode("ascii").rstrip("=")
@@ -502,38 +552,70 @@ def encode_cursor(
 
 def decode_cursor(
     cursor: str,
-) -> tuple[float, datetime, int, datetime, datetime, int]:
+    *,
+    expected_fingerprint: str | None = None,
+) -> tuple[float, datetime, int, datetime, datetime, int, int, str]:
     """Decode and validate an opaque search cursor."""
 
     try:
         padded = cursor + "=" * (-len(cursor) % 4)
         payload = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")))
-        if set(payload) != {
+        if not isinstance(payload, dict) or set(payload) != {
             "article_id",
             "published_at",
             "ranking_at",
+            "request_fingerprint",
             "relevance_score",
-            "snapshot_article_id",
+            "snapshot_collected_article_id",
             "snapshot_collected_at",
+            "snapshot_max_article_id",
         }:
             raise ValueError
-        relevance_score = float(payload["relevance_score"])
+        raw_relevance_score = payload["relevance_score"]
+        raw_article_id = payload["article_id"]
+        raw_snapshot_collected_article_id = payload[
+            "snapshot_collected_article_id"
+        ]
+        raw_snapshot_max_article_id = payload["snapshot_max_article_id"]
+        if (
+            type(raw_relevance_score) not in {int, float}
+            or type(raw_article_id) is not int
+            or type(raw_snapshot_collected_article_id) is not int
+            or type(raw_snapshot_max_article_id) is not int
+            or not isinstance(payload["published_at"], str)
+            or not isinstance(payload["ranking_at"], str)
+            or not isinstance(payload["snapshot_collected_at"], str)
+            or not isinstance(payload["request_fingerprint"], str)
+        ):
+            raise ValueError
+        relevance_score = float(raw_relevance_score)
         published_at = datetime.fromisoformat(payload["published_at"])
-        article_id = int(payload["article_id"])
+        article_id = raw_article_id
         ranking_at = datetime.fromisoformat(payload["ranking_at"])
         snapshot_collected_at = datetime.fromisoformat(
             payload["snapshot_collected_at"]
         )
-        snapshot_article_id = int(payload["snapshot_article_id"])
+        snapshot_collected_article_id = raw_snapshot_collected_article_id
+        snapshot_max_article_id = raw_snapshot_max_article_id
+        request_fingerprint = payload["request_fingerprint"]
         if (
             not 0 <= relevance_score <= 1
             or published_at.tzinfo is None
             or ranking_at.tzinfo is None
             or snapshot_collected_at.tzinfo is None
-            or article_id < 1
-            or snapshot_article_id < 1
+            or not 1 <= article_id <= POSTGRES_INTEGER_MAX
+            or not 1 <= snapshot_collected_article_id <= POSTGRES_INTEGER_MAX
+            or not 1 <= snapshot_max_article_id <= POSTGRES_INTEGER_MAX
+            or not re.fullmatch(r"[0-9a-f]{64}", request_fingerprint)
         ):
             raise ValueError
+        if expected_fingerprint and not hmac.compare_digest(
+            request_fingerprint,
+            expected_fingerprint,
+        ):
+            raise _CursorRequestMismatch
+    except _CursorRequestMismatch as exc:
+        raise ValueError("cursor does not match search request") from exc
     except (binascii.Error, TypeError, ValueError, UnicodeError, json.JSONDecodeError) as exc:
         raise ValueError("invalid search cursor") from exc
     return (
@@ -542,7 +624,9 @@ def decode_cursor(
         article_id,
         ranking_at,
         snapshot_collected_at,
-        snapshot_article_id,
+        snapshot_collected_article_id,
+        snapshot_max_article_id,
+        request_fingerprint,
     )
 
 
@@ -708,7 +792,15 @@ def search_articles(
         from src.db import get_session
 
         session_factory = get_session
-    cursor_values = decode_cursor(query.cursor) if query.cursor else None
+    request_fingerprint = search_request_fingerprint(query)
+    cursor_values = (
+        decode_cursor(
+            query.cursor,
+            expected_fingerprint=request_fingerprint,
+        )
+        if query.cursor
+        else None
+    )
     ranking_at = (
         _aware_datetime(cursor_values[3])
         if cursor_values
@@ -717,7 +809,8 @@ def search_articles(
     snapshot_collected_at = (
         _aware_datetime(cursor_values[4]) if cursor_values else None
     )
-    snapshot_article_id = cursor_values[5] if cursor_values else None
+    snapshot_collected_article_id = cursor_values[5] if cursor_values else None
+    snapshot_max_article_id = cursor_values[6] if cursor_values else None
     params = {
         "q": query.q,
         "country": query.country,
@@ -730,7 +823,8 @@ def search_articles(
         "sort": query.sort,
         "ranking_at": ranking_at,
         "snapshot_collected_at": snapshot_collected_at,
-        "snapshot_article_id": snapshot_article_id,
+        "snapshot_collected_article_id": snapshot_collected_article_id,
+        "snapshot_max_article_id": snapshot_max_article_id,
         "candidate_limit": 500,
     }
     try:
@@ -747,7 +841,12 @@ def search_articles(
         snapshot_collected_at = _aware_datetime(
             _row_value(rows[0], "snapshot_collected_at")
         )
-        snapshot_article_id = int(_row_value(rows[0], "snapshot_article_id"))
+        snapshot_collected_article_id = int(
+            _row_value(rows[0], "snapshot_collected_article_id")
+        )
+        snapshot_max_article_id = int(
+            _row_value(rows[0], "snapshot_max_article_id")
+        )
 
     ranked = [_serialize_candidate(row, query, ranking_at) for row in rows]
     if query.sort == "newest":
@@ -770,7 +869,7 @@ def search_articles(
         )
 
     if cursor_values:
-        cursor_score, cursor_published_at, cursor_id, _, _, _ = cursor_values
+        cursor_score, cursor_published_at, cursor_id, _, _, _, _, _ = cursor_values
         cursor_published_at = _aware_datetime(cursor_published_at)
         if query.sort == "newest":
             ranked = [
@@ -795,7 +894,9 @@ def search_articles(
             "article_id": last_item["article_id"],
             "ranking_at": ranking_at.isoformat(),
             "snapshot_collected_at": snapshot_collected_at.isoformat(),
-            "snapshot_article_id": snapshot_article_id,
+            "snapshot_collected_article_id": snapshot_collected_article_id,
+            "snapshot_max_article_id": snapshot_max_article_id,
+            "request_fingerprint": request_fingerprint,
         }
     return {
         "items": [item for item, _ in page_rows],
