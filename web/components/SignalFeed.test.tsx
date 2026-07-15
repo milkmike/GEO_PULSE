@@ -73,4 +73,27 @@ describe("SignalFeed", () => {
     expect(screen.getByText(/медиа-сигнал был раньше/i).closest("li")).toHaveTextContent("нет");
     expect(screen.getByText("доля").closest("li")).toHaveTextContent("0%");
   });
+
+  it("localizes sanctions signals plus event and source-tier values", () => {
+    render(<SignalFeed signals={[{
+      ...signal,
+      type: "sanctions_escalation",
+      payload: {
+        event_type: "military",
+        tiers: [
+          "official", "mainstream", "independent", "social",
+          "domestic_opposition", "western_proxy", "analytics",
+        ],
+        official_or_mainstream_sources_available: false,
+      },
+    }]} />);
+
+    expect(screen.getByText(/санкционное ужесточение/i)).toBeVisible();
+    expect(screen.getByText("тип события").closest("li")).toHaveTextContent("военное");
+    expect(screen.getByText("тиры").closest("li")).toHaveTextContent(
+      "официальные источники, крупные СМИ, независимые СМИ, социальные сети, внутренняя оппозиция, западные прокси-источники, аналитика",
+    );
+    expect(screen.getByText(/доступны официальные или крупные СМИ/i).closest("li")).toHaveTextContent("нет");
+    expect(screen.queryByText(/military|official|analytics|sanctions_escalation/i)).not.toBeInTheDocument();
+  });
 });

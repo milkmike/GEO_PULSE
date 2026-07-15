@@ -166,4 +166,85 @@ describe("SignalEvidence", () => {
     expect(screen.queryByText("absolute_delta_min")).not.toBeInTheDocument();
     expect(screen.queryByText("reconstructed_from_signal_payload")).not.toBeInTheDocument();
   });
+
+  it.each([
+    ["military", "военное"],
+    ["diplomatic", "дипломатическое"],
+    ["security", "безопасность"],
+    ["economic", "экономическое"],
+    ["cultural", "культурное"],
+  ])("localizes the reconstructed event value %s", (code, label) => {
+    render(<SignalEvidence detail={{
+      ...complete,
+      values: { ...complete.values, observed: { event_type: code } },
+    }} storiesEnabled />);
+
+    expect(screen.getByText(label)).toBeVisible();
+    expect(screen.queryByText(code)).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["official", "официальные источники"],
+    ["mainstream", "крупные СМИ"],
+    ["independent", "независимые СМИ"],
+    ["social", "социальные сети"],
+    ["domestic_opposition", "внутренняя оппозиция"],
+    ["western_proxy", "западные прокси-источники"],
+    ["analytics", "аналитика"],
+  ])("localizes the reconstructed source tier %s", (code, label) => {
+    render(<SignalEvidence detail={{
+      ...complete,
+      values: { ...complete.values, observed: { tier: code } },
+    }} storiesEnabled />);
+
+    expect(screen.getByText(label)).toBeVisible();
+    expect(screen.queryByText(code)).not.toBeInTheDocument();
+  });
+
+  it("fully localizes reconstructed legacy evidence fields, events and source tiers", () => {
+    const legacy: SignalDetail = {
+      ...complete,
+      values: {
+        observed: {
+          articles: 12,
+          avg_sentiment: -1.2,
+          max_action_level: 4,
+          event_type: "diplomatic",
+          tiers: ["official", "mainstream", "independent", "social"],
+        },
+        baseline: {
+          baseline_daily: 3,
+          mean_90d: -0.4,
+          std: 0.8,
+          baseline_share: 0.15,
+          volume: 12,
+          change_1d_pct: 2.5,
+          official_or_mainstream_sources_available: true,
+          tier: "analytics",
+        },
+        window: complete.values.window,
+      },
+    };
+    render(<SignalEvidence detail={legacy} storiesEnabled />);
+
+    const page = document.body;
+    for (const label of [
+      "Число публикаций",
+      "Средняя тональность",
+      "Максимальный уровень действия",
+      "Среднее число публикаций в день",
+      "Среднее за 90 дней",
+      "Обычное отклонение",
+      "Базовая доля повестки",
+      "Публикаций в день",
+      "Изменение курса за день, %",
+      "Доступны официальные или крупные СМИ",
+    ]) {
+      expect(within(page).getByText(label)).toBeVisible();
+    }
+    expect(screen.getByText("дипломатическое")).toBeVisible();
+    expect(screen.getByText(/официальные источники, крупные СМИ, независимые СМИ, социальные сети/i)).toBeVisible();
+    expect(screen.getByText("аналитика")).toBeVisible();
+    expect(screen.queryByText(/avg_sentiment|mean_90d|change_1d_pct|diplomatic|mainstream/i)).not.toBeInTheDocument();
+  });
 });

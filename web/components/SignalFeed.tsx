@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { motion, useReducedMotion } from "motion/react";
-import { fmtDate, SIGNAL_RU } from "@/lib/format";
+import { eventTypeRu, fmtDate, SIGNAL_RU, sourceTierRu } from "@/lib/format";
 import type { SignalListItem } from "@/lib/types";
 
 const SEV_BORDER: Record<string, string> = {
@@ -50,6 +50,7 @@ const FACT_LABELS: Record<string, string> = {
   delta: "новых санкционных целей",
   lists_count: "санкционных программ",
   last_change: "последнее обновление",
+  official_or_mainstream_sources_available: "доступны официальные или крупные СМИ",
 };
 
 const SIGNED_FACTS = new Set(["delta_24h", "tone", "avg_sentiment", "sentiment", "change_1d_pct", "z_score"]);
@@ -66,10 +67,17 @@ function factValue(key: string, value: unknown): string | null {
     return signed;
   }
   if (typeof value === "boolean") return value ? "да" : "нет";
-  if (typeof value === "string" && value.trim() && value.length <= 80) return value;
-  if (Array.isArray(value) && value.length > 0 && value.length <= 4) {
+  if (typeof value === "string" && value.trim() && value.length <= 80) {
+    if (key === "event_type") return eventTypeRu(value);
+    if (key === "tier") return sourceTierRu(value);
+    return value;
+  }
+  if (Array.isArray(value) && value.length > 0 && (key === "tiers" || value.length <= 4)) {
     const items = value.filter((item) => ["string", "number", "boolean"].includes(typeof item));
-    if (items.length === value.length) return items.join(", ");
+    if (items.length === value.length) {
+      if (key === "tiers") return items.map((item) => sourceTierRu(String(item))).join(", ");
+      return items.join(", ");
+    }
   }
   return null;
 }
@@ -79,7 +87,7 @@ function signalFacts(signal: SignalListItem): Array<{ key: string; label: string
   return Object.entries(signal.payload)
     .map(([key, raw]) => ({
       key,
-      label: FACT_LABELS[key] ?? key.replaceAll("_", " "),
+      label: FACT_LABELS[key] ?? `параметр «${key}»`,
       value: factValue(key, raw),
     }))
     .filter((item): item is { key: string; label: string; value: string } => item.value != null)

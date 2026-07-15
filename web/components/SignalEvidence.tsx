@@ -3,6 +3,7 @@
 import Link from "next/link";
 import Plot from "./Plot";
 import type { SignalDetail } from "@/lib/types";
+import { eventTypeRu, SIGNAL_RU, sourceTierRu } from "@/lib/format";
 import { safeHttpUrl } from "@/lib/urls";
 
 const SEVERITY_LABEL: Record<string, string> = {
@@ -17,18 +18,6 @@ const LIMITATION_LABEL: Record<string, string> = {
   threshold_not_persisted: "Исторический порог срабатывания не сохранён.",
 };
 
-const DETECTOR_LABEL: Record<string, string> = {
-  tier_convergence: "конвергенция тиров",
-  official_silence: "молчание официальных источников",
-  velocity_spike: "информационный шторм",
-  tone_shift: "сдвиг тона",
-  volume_surge: "всплеск внимания",
-  index_shift: "сдвиг RRI",
-  notable_event: "значимое событие",
-  fx_move: "валютный сдвиг",
-  sanctions_escalation: "санкционное ужесточение",
-};
-
 const FIELD_LABEL: Record<string, string> = {
   type: "Тип базового значения",
   status: "Статус сохранения",
@@ -36,23 +25,31 @@ const FIELD_LABEL: Record<string, string> = {
   distinct_tiers: "Число разных тиров",
   tiers: "Тиры источников",
   article_count: "Число публикаций",
+  articles: "Число публикаций",
   average_sentiment: "Средняя тональность",
+  avg_sentiment: "Средняя тональность",
   maximum_action_level: "Максимальный уровень действия",
+  max_action_level: "Максимальный уровень действия",
   loud_articles: "Публикации вне официальных источников",
   quiet_articles: "Публикации официальных источников",
   hours_silent: "Часов без официальной реакции",
   articles_24h: "Публикаций за 24 часа",
   ratio: "Отношение к базовой линии",
   daily_average: "Среднее число публикаций в день",
+  baseline_daily: "Среднее число публикаций в день",
   comparison_days: "Дней в базовой линии",
   tone: "Текущий тон",
   z_score: "Z-оценка",
   mean: "Среднее значение",
+  mean_90d: "Среднее за 90 дней",
   standard_deviation: "Стандартное отклонение",
+  std: "Обычное отклонение",
   sample_days: "Дней в выборке",
   excluded_recent_days: "Исключено последних дней",
   share: "Доля повестки",
+  baseline_share: "Базовая доля повестки",
   daily_volume: "Публикаций в день",
+  volume: "Публикаций в день",
   score: "Значение RRI",
   delta: "Изменение",
   delta_24h: "Изменение RRI",
@@ -61,10 +58,12 @@ const FIELD_LABEL: Record<string, string> = {
   time: "Время точки",
   action_level: "Уровень действия",
   event_type: "Тип события",
+  tier: "Тип источника",
   sentiment: "Тональность",
   reprint_count: "Число перепечаток",
   currency: "Валюта",
   change_1d_percent: "Изменение курса за день, %",
+  change_1d_pct: "Изменение курса за день, %",
   rate_to_rub: "Курс к рублю",
   media_preceded: "Медиасигнал появился раньше",
   preceding_media_signal_count: "Число предшествующих медиасигналов",
@@ -92,6 +91,7 @@ const FIELD_LABEL: Record<string, string> = {
   absolute_daily_change_percent_min: "Минимальное дневное изменение курса, %",
   minimum_new_targets: "Минимум новых санкционных целей",
   enabled: "Включено",
+  official_or_mainstream_sources_available: "Доступны официальные или крупные СМИ",
 };
 
 const VALUE_LABEL: Record<string, string> = {
@@ -126,12 +126,19 @@ function readableValue(value: string): string {
   return VALUE_LABEL[value] ?? value;
 }
 
-function displayValue(value: unknown): string {
+function displayValue(value: unknown, key?: string): string {
   if (value === null || value === undefined || value === "") return "не сохранено";
   if (typeof value === "boolean") return value ? "да" : "нет";
   if (typeof value === "number") return value.toLocaleString("ru-RU", { maximumFractionDigits: 3 });
-  if (typeof value === "string") return readableValue(value);
-  if (Array.isArray(value)) return value.map(displayValue).join(", ");
+  if (typeof value === "string") {
+    if (key === "event_type") return eventTypeRu(value);
+    if (key === "tier") return sourceTierRu(value);
+    return readableValue(value);
+  }
+  if (Array.isArray(value)) {
+    const itemKey = key === "tiers" ? "tier" : undefined;
+    return value.map((item) => displayValue(item, itemKey)).join(", ");
+  }
   return "сложное значение сохранено в доказательстве";
 }
 
@@ -158,7 +165,7 @@ function EvidenceRecord({
           {entries.map(([key, item]) => (
             <li key={key} className="flex items-start justify-between gap-4 border-b border-dashed border-line py-1 last:border-0">
               <span className="text-dim">{readableKey(key)}</span>
-              <strong className="tnum text-right text-ru-white">{displayValue(item)}</strong>
+              <strong className="tnum text-right text-ru-white">{displayValue(item, key)}</strong>
             </li>
           ))}
         </ul>
@@ -244,7 +251,7 @@ export default function SignalEvidence({ detail, storiesEnabled }: { detail: Sig
           {detail.rule.description || "Описание исторического правила не сохранено."}
         </p>
         <div className="mt-2 text-xs text-dim">
-          Детектор {DETECTOR_LABEL[detail.rule.detector] ?? `неизвестный (${detail.rule.detector})`} · версия {detail.rule.version}
+          Детектор {SIGNAL_RU[detail.rule.detector] ?? `неизвестный (${detail.rule.detector})`} · версия {detail.rule.version}
         </div>
         <div className="mt-4 grid gap-3 md:grid-cols-3">
           <EvidenceRecord title="Наблюдаемое значение" value={detail.values.observed} />
@@ -256,7 +263,7 @@ export default function SignalEvidence({ detail, storiesEnabled }: { detail: Sig
             <strong className="text-xs uppercase tracking-wide text-cooling">Текущее правило, не исторический порог</strong>
             <p className="mt-1 text-xs text-dim">{typeof detail.rule.current_rule_reference === "string"
               ? detail.rule.current_rule_reference
-              : Object.entries(detail.rule.current_rule_reference).map(([key, value]) => `${readableKey(key)}: ${displayValue(value)}`).join(" · ")}</p>
+              : Object.entries(detail.rule.current_rule_reference).map(([key, value]) => `${readableKey(key)}: ${displayValue(value, key)}`).join(" · ")}</p>
           </aside>
         )}
       </section>

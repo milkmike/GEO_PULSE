@@ -28,7 +28,32 @@ export const SIGNAL_RU: Record<string, string> = {
   index_shift: "скачок индекса",
   fx_move: "валютный сдвиг",
   notable_event: "значимое событие",
+  sanctions_escalation: "санкционное ужесточение",
 };
+
+export const EVENT_TYPE_RU: Record<string, string> = {
+  military: "военное",
+  diplomatic: "дипломатическое",
+  security: "безопасность",
+  economic: "экономическое",
+  cultural: "культурное",
+};
+
+export const SOURCE_TIER_RU: Record<string, string> = {
+  official: "официальные источники",
+  mainstream: "крупные СМИ",
+  independent: "независимые СМИ",
+  social: "социальные сети",
+  domestic_opposition: "внутренняя оппозиция",
+  western_proxy: "западные прокси-источники",
+  analytics: "аналитика",
+};
+
+export const eventTypeRu = (code: string): string =>
+  EVENT_TYPE_RU[code] ?? `неизвестный тип события (код: ${code})`;
+
+export const sourceTierRu = (code: string): string =>
+  SOURCE_TIER_RU[code] ?? `неизвестный тип источника (код: ${code})`;
 
 export const fmt = (v: number | null | undefined, digits = 1): string =>
   v == null ? "—" : `${v > 0 ? "+" : ""}${v.toFixed(digits)}`;
