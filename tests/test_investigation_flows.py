@@ -470,6 +470,8 @@ def test_legacy_signal_reconstruction_is_honest_about_missing_snapshot():
         "absolute_z_score_min": 1.6,
         "standard_deviation_floor": 0.3,
     }
+    assert evidence["explanation"]["window_basis"] == "not_persisted"
+    assert evidence["explanation"]["window_status"] == "unknown"
     assert evidence["observed"]["z_score"] == -3.5
     assert evidence["baseline"]["mean"] == -0.4
     assert evidence["window_start"] is None

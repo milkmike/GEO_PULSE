@@ -790,6 +790,13 @@ def test_sql_signal_detail_returns_concrete_evidence_and_http_safe_links(monkeyp
         "version": "1.0",
         "description": "Сдвиг не меньше семи пунктов",
         "threshold": {"absolute_delta_min": 7.0},
+        "current_rule_reference": None,
+    }
+    assert detail["values"]["window"] == {
+        "start": (created_at - timedelta(hours=24)).isoformat(),
+        "end": created_at.isoformat(),
+        "basis": None,
+        "status": None,
     }
     assert detail["values"]["observed"]["delta_24h"] == -8.5
     assert detail["chart_points"][0]["score"] == -22.0
@@ -807,6 +814,88 @@ def test_sql_signal_detail_returns_concrete_evidence_and_http_safe_links(monkeyp
     assert detail["evidence_completeness"] == "complete"
     assert detail["limitations"] == []
     assert len(session.calls) == 4
+
+
+def test_reconstructed_signal_detail_preserves_unknown_window_metadata(monkeypatch):
+    created_at = datetime(2026, 7, 10, 12, 0, tzinfo=timezone.utc)
+    base = SimpleNamespace(
+        id=22,
+        signal_type="tone_shift",
+        country_code="ES",
+        severity="warning",
+        signal_confidence=0.88,
+        title="Сдвиг тона",
+        description="Исторический сигнал",
+        payload={"tone": -3.2, "mean_90d": -0.4, "std": 0.8, "z_score": -3.5},
+        created_at=created_at,
+        expires_at=None,
+        evidence_detector="tone_shift",
+        detector_version="legacy-reconstructed-v1",
+        threshold={},
+        observed={"tone": -3.2, "z_score": -3.5},
+        baseline={
+            "type": "historical_tone_distribution",
+            "mean": -0.4,
+            "standard_deviation": 0.8,
+            "status": "reconstructed_from_signal_payload",
+        },
+        window_start=None,
+        window_end=None,
+        article_ids=[],
+        story_ids=[],
+        rri_points=[],
+        evidence_confidence=0.88,
+        completeness="partial",
+        explanation={
+            "rule": "Восстановлено из сохранённого payload старого сигнала",
+            "current_rule_reference": {
+                "absolute_z_score_min": 1.6,
+                "standard_deviation_floor": 0.3,
+            },
+            "window_basis": "not_persisted",
+            "window_status": "unknown",
+            "limitations": ["Историческое окно не сохранялось."],
+        },
+    )
+    session = SequentialSession([[base]])
+
+    from contextlib import contextmanager
+
+    @contextmanager
+    def session_factory():
+        yield session
+
+    monkeypatch.setattr(
+        "src.api.routes.signal_detail.get_session",
+        session_factory,
+    )
+
+    detail = SqlSignalDetailService().detail(signal_id=22)
+
+    assert detail["rule"]["threshold"] == {}
+    assert detail["rule"]["current_rule_reference"] == {
+        "absolute_z_score_min": 1.6,
+        "standard_deviation_floor": 0.3,
+    }
+    assert detail["values"]["baseline"]["status"] == (
+        "reconstructed_from_signal_payload"
+    )
+    assert detail["values"]["window"] == {
+        "start": None,
+        "end": None,
+        "basis": "not_persisted",
+        "status": "unknown",
+    }
+    # The global list endpoint treats NULL expiry as inactive, so detail must
+    # retain the same semantics rather than silently calling it active.
+    assert detail["state"] == {
+        "created_at": created_at.isoformat(),
+        "expires_at": None,
+        "active": False,
+        "status": "expired",
+    }
+    assert detail["evidence_completeness"] == "partial"
+    assert detail["limitations"] == ["Историческое окно не сохранялось."]
 
 
 def test_signal_detail_bounds_large_evidence_and_reports_truncation(monkeypatch):

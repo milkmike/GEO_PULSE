@@ -52,6 +52,9 @@ def legacy_signal_evidence(signal: Any) -> SignalEvidence:
         completeness="partial",
         explanation={
             "rule": "Точное правило срабатывания не сохранено",
+            "current_rule_reference": None,
+            "window_basis": "not_persisted",
+            "window_status": "unknown",
             "limitations": [
                 "Порог, базовое значение и окно детектора не были сохранены в момент срабатывания."
             ],
@@ -379,6 +382,9 @@ class SqlSignalDetailService:
                 "version": evidence.detector_version,
                 "description": explanation.get("rule"),
                 "threshold": dict(evidence.threshold),
+                "current_rule_reference": explanation.get(
+                    "current_rule_reference"
+                ),
             },
             "values": {
                 "observed": dict(evidence.observed),
@@ -386,6 +392,8 @@ class SqlSignalDetailService:
                 "window": {
                     "start": _iso(evidence.window_start),
                     "end": _iso(evidence.window_end),
+                    "basis": explanation.get("window_basis"),
+                    "status": explanation.get("window_status"),
                 },
             },
             "chart_points": [dict(point) for point in rri_points],

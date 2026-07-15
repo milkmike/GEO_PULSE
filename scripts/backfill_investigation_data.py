@@ -505,6 +505,8 @@ def reconstruct_signal_evidence(row: Any) -> dict[str, Any] | None:
         "explanation": {
             "rule": "Восстановлено из сохранённого payload старого сигнала",
             "current_rule_reference": dict(_SIGNAL_THRESHOLDS[detector]),
+            "window_basis": "not_persisted",
+            "window_status": "unknown",
             "limitations": [
                 "Точный исходный снимок, исторический порог, идентификаторы публикаций и окно детектора не сохранялись в старой версии."
             ],

@@ -32,6 +32,13 @@ KNOWN_TIERS = {"official", "mainstream", "independent", "social",
 HEADLINES_DEMOTED = ["UA"]
 
 
+def _utc_iso(value: datetime) -> str:
+    """Serialize persisted timestamps with stable UTC semantics."""
+    if value.tzinfo is None or value.utcoffset() is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc).isoformat()
+
+
 def _cache_get(key: str):
     try:
         from src.queue import get_redis
@@ -314,14 +321,13 @@ def country_dossier(code: str, days: int = Query(30, ge=1, le=365)):
 
         history = session.execute(
             text("""
-                SELECT time_bucket, AVG(score) AS score, AVG(structural) AS structural,
-                       AVG(media) AS media
-                FROM (
-                    SELECT date_trunc('day', time) AS time_bucket, score, structural, media
-                    FROM ru_index
-                    WHERE country_code = :cc AND time > NOW() - make_interval(days => :days)
-                ) t
-                GROUP BY time_bucket ORDER BY time_bucket
+                SELECT DISTINCT ON (date_trunc('day', time AT TIME ZONE 'UTC'))
+                       date_trunc('day', time AT TIME ZONE 'UTC') AS time_bucket,
+                       time, score, structural, media, boost, version, delta_24h
+                FROM ru_index
+                WHERE country_code = :cc
+                  AND time > NOW() - make_interval(days => :days)
+                ORDER BY date_trunc('day', time AT TIME ZONE 'UTC'), time DESC
             """),
             {"cc": code, "days": days},
         ).fetchall()
@@ -378,9 +384,15 @@ def country_dossier(code: str, days: int = Query(30, ge=1, le=365)):
             "version": latest.version,
         } if latest else None,
         "index_history": [
-            {"day": r.time_bucket.date().isoformat(), "score": round(float(r.score), 2),
+            {"day": r.time_bucket.date().isoformat(),
+             "time": _utc_iso(r.time),
+             "score": round(float(r.score), 2),
              "structural": round(float(r.structural), 2) if r.structural is not None else None,
-             "media": round(float(r.media), 2) if r.media is not None else None}
+             "media": round(float(r.media), 2) if r.media is not None else None,
+             "boost": round(float(r.boost), 2) if r.boost is not None else None,
+             "version": r.version,
+             "delta_24h": round(float(r.delta_24h), 2) if r.delta_24h is not None else None,
+             "aggregation": "daily_last"}
             for r in history
         ],
         "temperature_history": [
