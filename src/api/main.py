@@ -27,6 +27,7 @@ from src.api.routes.search import router as search_router
 from src.api.routes.world import router as world_router
 from src.api.routes.entities import router as entities_router
 from src.api.routes.signal_detail import router as signal_detail_router
+from src.api.routes.investigations import router as investigations_router
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -165,6 +166,7 @@ app.include_router(search_router)
 app.include_router(world_router)
 app.include_router(entities_router)
 app.include_router(signal_detail_router)
+app.include_router(investigations_router)
 
 _STATIC_DIR = Path(__file__).parent / "static"
 
