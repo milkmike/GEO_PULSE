@@ -41,6 +41,7 @@ const complete: SignalDetail = {
     published_at: "2026-07-15T19:00:00Z", source_name: "El País", country_code: "ES",
     sentiment: -0.5, action_level: 3, event_key: "talks",
   }],
+  context_preview: null,
   articles_page: { total: 1, returned: 1, limit: 100, truncated: false, has_more: false },
   related_story: {
     id: 42, slug: "talks", title: "Переговоры в Испании", summary: "Межстрановой сюжет.",
@@ -67,6 +68,9 @@ describe("SignalEvidence", () => {
     render(<SignalEvidence detail={complete} storiesEnabled />);
 
     expect(screen.getByRole("heading", { name: complete.summary.headline })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Как сработал детектор" })).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "Почему сработал сигнал" })).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Публикации-доказательства" })).toBeVisible();
     expect(screen.getByText(/RRI: −10 → −2/i)).toBeVisible();
     expect(screen.getByText(/уверенность 82%/i)).toBeVisible();
     expect(screen.getAllByText(/активен/i).length).toBeGreaterThanOrEqual(1);
@@ -88,6 +92,78 @@ describe("SignalEvidence", () => {
     expect(article).toHaveAttribute("rel", expect.stringContaining("noopener"));
     expect(screen.getByRole("link", { name: /Переговоры в Испании/i })).toHaveAttribute("href", "/stories/42");
     expect(screen.getByText(/не доказывает причинность/i)).toBeVisible();
+  });
+
+  it("renders nearby articles as non-causal news context", () => {
+    const contextual: SignalDetail = {
+      ...complete,
+      articles: [],
+      articles_page: { total: 0, returned: 0, limit: 100, truncated: false, has_more: false },
+      context_preview: {
+        kind: "context",
+        total: 8,
+        window_hours: 72,
+        window_start: "2026-07-12T20:00:00Z",
+        window_end: "2026-07-15T20:00:00Z",
+        articles: [{
+          id: 501,
+          title: "Контекст сдвига",
+          url: "https://example.es/context",
+          published_at: "2026-07-15T18:00:00Z",
+          source_name: "Ejemplo",
+          country_code: "ES",
+        }],
+      },
+    };
+
+    render(<SignalEvidence detail={contextual} storiesEnabled />);
+
+    expect(screen.getByRole("heading", { name: "Новостной контекст" })).toBeVisible();
+    expect(screen.getByRole("link", { name: "Контекст сдвига" })).toHaveAttribute(
+      "href",
+      "https://example.es/context",
+    );
+    expect(screen.getByText(
+      "Эти публикации вышли за 72 часа до срабатывания и отобраны как возможный контекст. Они не доказывают причину сдвига.",
+    )).toBeVisible();
+    expect(screen.getByText("Показано 1 из 8")).toBeVisible();
+    expect(screen.getByText(
+      "Отобраны по уровню события, выраженности тона, числу перепечаток и времени публикации.",
+    )).toBeVisible();
+  });
+
+  it("distinguishes empty context from unavailable context", () => {
+    const noMatches: SignalDetail = {
+      ...complete,
+      articles: [],
+      articles_page: { total: 0, returned: 0, limit: 100, truncated: false, has_more: false },
+      context_preview: {
+        kind: "context",
+        articles: [],
+        total: 0,
+        window_hours: 72,
+        window_start: "2026-07-12T20:00:00Z",
+        window_end: "2026-07-15T20:00:00Z",
+      },
+    };
+    const { rerender } = render(<SignalEvidence detail={noMatches} storiesEnabled />);
+
+    expect(screen.getByText("За 72 часа до сигнала релевантные публикации не найдены.")).toBeVisible();
+
+    rerender(<SignalEvidence detail={{
+      ...noMatches,
+      context_preview: {
+        kind: "unavailable",
+        articles: [],
+        total: 0,
+        window_hours: null,
+        window_start: null,
+        window_end: null,
+      },
+    }} storiesEnabled />);
+
+    expect(screen.getByText("Новостной контекст для этого сигнала недоступен.")).toBeVisible();
+    expect(screen.queryByText("За 72 часа до сигнала релевантные публикации не найдены.")).not.toBeInTheDocument();
   });
 
   it("keeps partial missing inputs honest and never exposes unsafe links or fake controls", () => {

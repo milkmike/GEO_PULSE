@@ -812,6 +812,7 @@ def test_sql_signal_detail_returns_concrete_evidence_and_http_safe_links(monkeyp
     }
     assert detail["confidence"] == 0.8
     assert detail["evidence_completeness"] == "complete"
+    assert detail["context_preview"] is None
     assert detail["limitations"] == []
     assert len(session.calls) == 4
 
@@ -857,7 +858,21 @@ def test_reconstructed_signal_detail_preserves_unknown_window_metadata(monkeypat
             "limitations": ["Историческое окно не сохранялось."],
         },
     )
-    session = SequentialSession([[base]])
+    preview = SimpleNamespace(
+        signal_id=22,
+        kind="context",
+        total=8,
+        window_hours=72,
+        window_start=created_at - timedelta(hours=72),
+        window_end=created_at,
+        article_id=501,
+        title="Контекст сдвига",
+        url="https://example.es/context",
+        published_at=created_at - timedelta(hours=2),
+        source_name="Ejemplo",
+        country_code="ES",
+    )
+    session = SequentialSession([[base], [preview]])
 
     from contextlib import contextmanager
 
@@ -896,6 +911,9 @@ def test_reconstructed_signal_detail_preserves_unknown_window_metadata(monkeypat
     }
     assert detail["evidence_completeness"] == "partial"
     assert detail["limitations"] == ["Историческое окно не сохранялось."]
+    assert detail["articles"] == []
+    assert detail["context_preview"]["articles"][0]["title"] == "Контекст сдвига"
+    assert detail["context_preview"]["total"] == 8
 
 
 def test_signal_detail_bounds_large_evidence_and_reports_truncation(monkeypatch):

@@ -573,6 +573,27 @@ export interface IndexExplanation {
   cache: { status: "hit" | "miss"; input_hash: string };
 }
 
+export interface SignalArticleReference {
+  id: number;
+  title: string | null;
+  url: string | null;
+  published_at: string | null;
+  source_name: string | null;
+  country_code: string | null;
+  sentiment?: number | null;
+  action_level?: number | null;
+  event_key?: string | null;
+}
+
+export interface SignalEvidencePreview {
+  kind: "evidence" | "context" | "unavailable";
+  articles: SignalArticleReference[];
+  total: number;
+  window_hours: number | null;
+  window_start: string | null;
+  window_end: string | null;
+}
+
 export interface SignalDetail {
   id: number;
   type: string;
@@ -600,17 +621,8 @@ export interface SignalDetail {
     };
   };
   chart_points: Record<string, unknown>[];
-  articles: Array<{
-    id: number;
-    title: string | null;
-    url: string | null;
-    published_at: string | null;
-    source_name: string | null;
-    country_code: string | null;
-    sentiment: number | null;
-    action_level: number | null;
-    event_key: string | null;
-  }>;
+  articles: SignalArticleReference[];
+  context_preview: SignalEvidencePreview | null;
   articles_page: {
     total: number;
     returned: number;

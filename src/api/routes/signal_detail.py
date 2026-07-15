@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Path
 from sqlalchemy import text
 
 from src.api.public_urls import safe_public_url
+from src.api.signal_article_context import load_signal_article_previews
 from src.countries import country_name_ru
 from src.db import get_session
 from src.engine.signals import SignalEvidence
@@ -129,11 +130,31 @@ class SqlSignalDetailService:
                 signal_country=_value(signal, "country_code"),
                 payload=_value(signal, "payload", {}) or {},
             )
+            context_preview = None
+            if not articles:
+                preview = load_signal_article_previews(
+                    session,
+                    [signal],
+                    limit=20,
+                ).get(
+                    int(_value(signal, "id")),
+                    {
+                        "kind": "unavailable",
+                        "articles": [],
+                        "total": 0,
+                        "window_hours": None,
+                        "window_start": None,
+                        "window_end": None,
+                    },
+                )
+                if preview["kind"] in {"context", "unavailable"}:
+                    context_preview = preview
 
         return self._serialize(
             signal=signal,
             evidence=evidence,
             article_rows=articles,
+            context_preview=context_preview,
             story_row=story,
             countries=countries,
             countries_total=countries_total,
@@ -320,6 +341,7 @@ class SqlSignalDetailService:
         signal: Any,
         evidence: SignalEvidence,
         article_rows: list[Any],
+        context_preview: dict[str, Any] | None,
         story_row: Any | None,
         countries: list[dict[str, Any]],
         countries_total: int,
@@ -398,6 +420,7 @@ class SqlSignalDetailService:
             },
             "chart_points": [dict(point) for point in rri_points],
             "articles": articles,
+            "context_preview": context_preview,
             "articles_page": {
                 "total": len(evidence.article_ids),
                 "returned": len(articles),

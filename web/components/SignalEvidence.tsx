@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import Plot from "./Plot";
-import type { SignalDetail } from "@/lib/types";
+import type { SignalArticleReference, SignalDetail } from "@/lib/types";
 import { eventTypeRu, SIGNAL_RU, sourceTierRu } from "@/lib/format";
 import { safeHttpUrl } from "@/lib/urls";
 
@@ -181,6 +181,26 @@ const fmtTime = (value: string) => new Date(value).toLocaleString("ru-RU", {
 const stateLabel = (status: SignalDetail["state"]["status"]) =>
   VALUE_LABEL[status] ?? `статус не распознан (${status})`;
 
+function ArticleReferenceRow({ article }: { article: SignalArticleReference }) {
+  const href = safeHttpUrl(article.url);
+  const title = article.title || `Публикация #${article.id}`;
+
+  return (
+    <li className="rounded border border-line bg-panel2 px-3 py-3 text-sm">
+      {href ? (
+        <a href={href} target="_blank" rel="noopener noreferrer" className="font-semibold hover:text-accent">
+          {title}
+        </a>
+      ) : <span className="font-semibold">{title}</span>}
+      <div className="mt-1 text-xs text-dim">
+        {article.source_name || "Источник не сохранён"}
+        {article.published_at && ` · ${fmtTime(article.published_at)}`}
+        {article.country_code && ` · ${article.country_code}`}
+      </div>
+    </li>
+  );
+}
+
 export default function SignalEvidence({ detail, storiesEnabled }: { detail: SignalDetail; storiesEnabled: boolean }) {
   const chartPoints = detail.chart_points
     .map((point) => ({ time: point.time, score: point.score }))
@@ -246,7 +266,7 @@ export default function SignalEvidence({ detail, storiesEnabled }: { detail: Sig
       </header>
 
       <section aria-labelledby="signal-rule-heading" className="card p-5">
-        <h2 id="signal-rule-heading" className="card-title">Почему сработал сигнал</h2>
+        <h2 id="signal-rule-heading" className="card-title">Как сработал детектор</h2>
         <p className="mt-2 text-sm leading-relaxed text-dim">
           {detail.rule.description || "Описание исторического правила не сохранено."}
         </p>
@@ -302,32 +322,53 @@ export default function SignalEvidence({ detail, storiesEnabled }: { detail: Sig
         </div>
       </section>
 
-      <section aria-labelledby="signal-articles-heading" className="card p-5">
-        <h2 id="signal-articles-heading" className="card-title">Публикации-доказательства</h2>
-        {detail.articles.length === 0 ? <p className="mt-2 text-sm text-dim">Ссылки на публикации не сохранены.</p> : (
-          <ul className="mt-3 space-y-2">
-            {detail.articles.map((article) => {
-              const href = safeHttpUrl(article.url);
-              const title = article.title || `Публикация #${article.id}`;
-              return (
-                <li key={article.id} className="rounded border border-line bg-panel2 px-3 py-3 text-sm">
-                  {href ? <a href={href} target="_blank" rel="noopener noreferrer" className="font-semibold hover:text-accent">{title}</a> : <span className="font-semibold">{title}</span>}
-                  <div className="mt-1 text-xs text-dim">
-                    {article.source_name || "Источник не сохранён"}
-                    {article.published_at && ` · ${fmtTime(article.published_at)}`}
-                    {article.country_code && ` · ${article.country_code}`}
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-        {detail.articles_page.truncated && (
-          <p className="mt-3 text-xs text-cooling">
-            Показана {detail.articles_page.returned} из {detail.articles_page.total} сохранённых публикаций.
-          </p>
-        )}
-      </section>
+      {(detail.articles.length > 0 || !detail.context_preview) && (
+        <section aria-labelledby="signal-articles-heading" className="card p-5">
+          <h2 id="signal-articles-heading" className="card-title">Публикации-доказательства</h2>
+          {detail.articles.length === 0 ? <p className="mt-2 text-sm text-dim">Ссылки на публикации не сохранены.</p> : (
+            <ul className="mt-3 space-y-2">
+              {detail.articles.map((article) => (
+                <ArticleReferenceRow key={article.id} article={article} />
+              ))}
+            </ul>
+          )}
+          {detail.articles_page.truncated && (
+            <p className="mt-3 text-xs text-cooling">
+              Показана {detail.articles_page.returned} из {detail.articles_page.total} сохранённых публикаций.
+            </p>
+          )}
+        </section>
+      )}
+
+      {detail.context_preview && (
+        <section aria-labelledby="signal-context-heading" className="card border-cooling/50 bg-cooling/5 p-5">
+          <h2 id="signal-context-heading" className="card-title">Новостной контекст</h2>
+          {detail.context_preview.kind === "unavailable" ? (
+            <p className="mt-2 text-sm text-dim">Новостной контекст для этого сигнала недоступен.</p>
+          ) : detail.context_preview.articles.length === 0 ? (
+            <p className="mt-2 text-sm text-dim">За 72 часа до сигнала релевантные публикации не найдены.</p>
+          ) : (
+            <ul className="mt-3 space-y-2">
+              {detail.context_preview.articles.map((article) => (
+                <ArticleReferenceRow key={article.id} article={article} />
+              ))}
+            </ul>
+          )}
+          {detail.context_preview.kind === "context" && (
+            <>
+              <p className="mt-3 text-xs text-cooling">
+                Показано {detail.context_preview.articles.length} из {detail.context_preview.total}
+              </p>
+              <p className="mt-2 text-xs text-dim">
+                Отобраны по уровню события, выраженности тона, числу перепечаток и времени публикации.
+              </p>
+              <p className="mt-2 text-sm leading-relaxed text-dim">
+                Эти публикации вышли за 72 часа до срабатывания и отобраны как возможный контекст. Они не доказывают причину сдвига.
+              </p>
+            </>
+          )}
+        </section>
+      )}
 
       <div className="grid gap-4 md:grid-cols-2">
         <section aria-labelledby="signal-story-heading" className="card p-5">
