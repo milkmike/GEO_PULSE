@@ -32,13 +32,46 @@ const signal: SignalListItem = {
   evidence_preview: null,
 };
 
+const contextSignal: SignalListItem = {
+  ...signal,
+  evidence_preview: {
+    kind: "context",
+    total: 47,
+    window_hours: 72,
+    window_start: "2026-07-12T20:00:00Z",
+    window_end: "2026-07-15T20:00:00Z",
+    articles: [
+      {
+        id: 501,
+        title: "Правительство прокомментировало отношения с Россией",
+        url: "https://example.es/story",
+        published_at: "2026-07-15T01:30:00Z",
+        source_name: "Ejemplo",
+        country_code: "ES",
+      },
+      {
+        id: 502,
+        title: "Парламент обсудил новый дипломатический курс",
+        url: "https://example.es/second-story",
+        published_at: "2026-07-14T18:00:00Z",
+        source_name: "Diario",
+        country_code: "ES",
+      },
+    ],
+  },
+};
+
 describe("SignalFeed", () => {
   beforeEach(() => { motionState.reduced = false; });
 
-  it("shows concrete list facts without a detail request and links only when enabled", () => {
+  it("keeps the card semantic and exposes a separate detail action", () => {
     const { rerender } = render(<SignalFeed signals={[signal]} detailEnabled />);
 
-    expect(screen.getByRole("link", { name: /Индекс Испании изменился на 8 пунктов/i })).toHaveAttribute("href", "/signals/17");
+    const card = screen.getByRole("article", { name: /Индекс Испании изменился на 8 пунктов/i });
+    expect(card.closest("a")).toBeNull();
+    expect(card.className).not.toContain("hover:bg-panel");
+    expect(screen.getByRole("heading", { level: 3, name: signal.title })).toBeVisible();
+    expect(screen.getByRole("link", { name: /Открыть разбор сигнала/i })).toHaveAttribute("href", "/signals/17");
     expect(screen.getByText("Испания")).toBeVisible();
     expect(screen.getByText(/скачок индекса/i)).toBeVisible();
     expect(screen.getByText(/уверенность 82%/i)).toBeVisible();
@@ -48,8 +81,90 @@ describe("SignalFeed", () => {
     expect(screen.queryByText(/nested/i)).not.toBeInTheDocument();
 
     rerender(<SignalFeed signals={[signal]} detailEnabled={false} />);
-    expect(screen.queryByRole("link", { name: /Индекс Испании изменился/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Открыть разбор сигнала/i })).not.toBeInTheDocument();
     expect(screen.getByRole("article", { name: /Индекс Испании изменился/i })).toBeVisible();
+  });
+
+  it("shows compact contextual sources without nesting links", () => {
+    render(<SignalFeed signals={[contextSignal]} detailEnabled />);
+
+    const card = screen.getByRole("article", { name: /Индекс Испании изменился/i });
+    expect(screen.getByText("Публикации в окне сигнала")).toBeVisible();
+    expect(screen.getByText("Контекст для проверки; причинная связь не установлена.")).toBeVisible();
+    expect(screen.getByText("2 из 47 релевантных публикаций")).toBeVisible();
+
+    const source = screen.getByRole("link", {
+      name: /Открыть первоисточник: Правительство.*Ejemplo.*откроется в новой вкладке/i,
+    });
+    expect(source).toHaveAttribute("href", "https://example.es/story");
+    expect(source).toHaveAttribute("target", "_blank");
+    expect(source).toHaveAttribute("rel", expect.stringContaining("noopener"));
+    expect(source).toHaveClass("min-h-11", "focus-visible:outline-2");
+    expect(screen.getByText("Правительство прокомментировало отношения с Россией")).toHaveClass("line-clamp-2");
+
+    const detail = screen.getByRole("link", { name: /Открыть разбор сигнала/i });
+    expect(detail).toHaveAttribute("href", "/signals/17");
+    expect(detail).toHaveClass("min-h-11", "w-full", "focus-visible:outline-2");
+    expect(source.contains(detail)).toBe(false);
+    expect(detail.contains(source)).toBe(false);
+    expect(card.querySelectorAll("a")).toHaveLength(3);
+  });
+
+  it("keeps source links when details are disabled and labels exact evidence", () => {
+    const exact: SignalListItem = {
+      ...contextSignal,
+      evidence_preview: { ...contextSignal.evidence_preview!, kind: "evidence", total: 2, window_hours: null },
+    };
+    render(<SignalFeed signals={[exact]} detailEnabled={false} />);
+
+    expect(screen.getByText("На чём основан сигнал")).toBeVisible();
+    expect(screen.getAllByRole("link")).toHaveLength(2);
+    expect(screen.queryByRole("link", { name: /Открыть разбор сигнала/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/причинная связь не установлена/i)).not.toBeInTheDocument();
+  });
+
+  it("distinguishes empty context, unavailable previews and URL-less publications", () => {
+    const emptyContext: SignalListItem = {
+      ...signal,
+      id: 18,
+      title: "Пустой контекст",
+      evidence_preview: {
+        kind: "context",
+        articles: [],
+        total: 0,
+        window_hours: 72,
+        window_start: null,
+        window_end: null,
+      },
+    };
+    const unavailable: SignalListItem = { ...signal, id: 19, title: "Нет превью", evidence_preview: null };
+    const urlLess: SignalListItem = {
+      ...signal,
+      id: 20,
+      title: "Источник без ссылки",
+      evidence_preview: {
+        kind: "evidence",
+        articles: [{
+          id: 503,
+          title: "Сохранённый заголовок",
+          url: null,
+          published_at: null,
+          source_name: "Архив",
+          country_code: "ES",
+        }],
+        total: 1,
+        window_hours: null,
+        window_start: null,
+        window_end: null,
+      },
+    };
+
+    render(<SignalFeed signals={[emptyContext, unavailable, urlLess]} detailEnabled />);
+
+    expect(screen.getByText("За 72 часа до сигнала релевантные публикации не найдены.")).toBeVisible();
+    expect(screen.getByText("Публикации для этого сигнала не найдены или не сохранились.")).toBeVisible();
+    expect(screen.getByText("Ссылка на первоисточник не сохранена.")).toBeVisible();
+    expect(screen.getByText("Сохранённый заголовок").closest("a")).toBeNull();
   });
 
   it("keeps the same evidence text with reduced motion and does not invent unknown state", () => {
