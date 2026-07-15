@@ -88,6 +88,27 @@ describe("StoryCard", () => {
     expect(links.every((link) => link.getAttribute("href") === "/stories/42")).toBe(true);
   });
 
+  it("shows the country-local article count and tone in a country placement", () => {
+    render(
+      <StoryCard
+        story={{
+          ...story,
+          country_context: {
+            country_code: "ES",
+            country_name: "Испания",
+            article_count: 3,
+            source_count: 2,
+            media_tone: -1.25,
+          },
+        }}
+        placement="country"
+        countryCode="ES"
+      />,
+    );
+
+    expect(screen.getByText(/Испания · 3 публикации · 2 источника · тон −1,3/i)).toBeVisible();
+  });
+
   it("does not expose an unsafe primary URL", () => {
     render(<StoryCard story={{ ...story, primary_url: "javascript:alert(1)" }} />);
 

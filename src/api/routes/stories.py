@@ -48,6 +48,14 @@ STORY_FIELDS = """
 """
 
 
+class StoryCountryContext(BaseModel):
+    country_code: str
+    country_name: str
+    article_count: int
+    source_count: int
+    media_tone: float | None = None
+
+
 class StoryListItem(BaseModel):
     id: int
     slug: str
@@ -72,6 +80,7 @@ class StoryListItem(BaseModel):
     linked_signal_count: int = 0
     linked_signals: list["StorySignalLink"] = Field(default_factory=list)
     latest_rri_shift: "StoryRriShift | None" = None
+    country_context: StoryCountryContext | None = None
 
 
 class StorySignalLink(BaseModel):
@@ -107,12 +116,7 @@ class StoriesListResponse(BaseModel):
     next_cursor: str | None = None
 
 
-class StoryCountrySlice(BaseModel):
-    country_code: str
-    country_name: str
-    article_count: int
-    source_count: int
-    media_tone: float | None = None
+class StoryCountrySlice(StoryCountryContext):
     first_seen: str | None = None
     last_seen: str | None = None
     primary_url: str | None = None
@@ -272,6 +276,7 @@ def story_to_dict(row: Any) -> dict[str, Any]:
         "linked_signal_count": 0,
         "linked_signals": [],
         "latest_rri_shift": None,
+        "country_context": None,
     }
 
 
@@ -440,6 +445,43 @@ def _load_latest_rri_shifts(
     return result
 
 
+def _load_country_contexts(
+    session: Any,
+    story_ids: list[int],
+    *,
+    country_code: str,
+) -> dict[int, dict[str, Any]]:
+    """Load the country-local count and tone for country-page story cards."""
+
+    if not story_ids:
+        return {}
+    rows = session.execute(text("""
+        SELECT sc.story_id,
+               TRIM(sc.country_code) AS country_code,
+               sc.article_count, sc.source_count, sc.media_tone
+        FROM story_countries sc
+        WHERE sc.story_id = ANY(CAST(:story_ids AS bigint[]))
+          AND TRIM(sc.country_code) = :country_code
+    """), {
+        "story_ids": story_ids,
+        "country_code": country_code,
+    }).fetchall()
+    return {
+        int(_value(row, "story_id")): {
+            "country_code": country_code,
+            "country_name": country_name_ru(country_code),
+            "article_count": int(_value(row, "article_count", 0) or 0),
+            "source_count": int(_value(row, "source_count", 0) or 0),
+            "media_tone": (
+                float(_value(row, "media_tone"))
+                if _value(row, "media_tone") is not None else None
+            ),
+        }
+        for row in rows
+        if _value(row, "story_id") is not None
+    }
+
+
 def _attach_story_context(
     session: Any,
     stories: list[dict[str, Any]],
@@ -453,10 +495,19 @@ def _attach_story_context(
         story_ids,
         preferred_country=preferred_country,
     )
+    country_contexts = (
+        _load_country_contexts(
+            session,
+            story_ids,
+            country_code=preferred_country,
+        )
+        if preferred_country else {}
+    )
     for story in stories:
         story_id = int(story["id"])
         story.update(signals.get(story_id, {}))
         story["latest_rri_shift"] = rri_shifts.get(story_id)
+        story["country_context"] = country_contexts.get(story_id)
 
 
 def _encode_cursor(row: Any, context_hash: str) -> str:

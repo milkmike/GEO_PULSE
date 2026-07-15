@@ -346,6 +346,14 @@ export interface StoryRriShift {
   limitation: string;
 }
 
+export interface StoryCountryContext {
+  country_code: string;
+  country_name: string;
+  article_count: number;
+  source_count: number;
+  media_tone: number | null;
+}
+
 export interface StoryListItem {
   id: number;
   slug: string;
@@ -370,6 +378,7 @@ export interface StoryListItem {
   linked_signal_count: number;
   linked_signals: StorySignalLink[];
   latest_rri_shift: StoryRriShift | null;
+  country_context?: StoryCountryContext | null;
 }
 
 export interface StoriesListResponse {
@@ -382,12 +391,7 @@ export interface CountryStoriesResponse extends StoriesListResponse {
   name: string;
 }
 
-export interface StoryCountrySlice {
-  country_code: string;
-  country_name: string;
-  article_count: number;
-  source_count: number;
-  media_tone: number | null;
+export interface StoryCountrySlice extends StoryCountryContext {
   first_seen: string | null;
   last_seen: string | null;
   primary_url: string | null;

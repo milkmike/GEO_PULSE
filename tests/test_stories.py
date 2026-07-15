@@ -658,6 +658,22 @@ class LinkedStoryContextSession(FakeStorySession):
         return super().execute(statement, params)
 
 
+class CountryStoryContextSession(FakeStorySession):
+    def execute(self, statement, params=None):
+        sql = str(statement)
+        params = params or {}
+        if "SELECT sc.story_id," in sql:
+            self.calls.append((sql, params))
+            return FakeResult(rows=[SimpleNamespace(
+                story_id=7,
+                country_code="AZ",
+                article_count=3,
+                source_count=2,
+                media_tone=-1.25,
+            )])
+        return super().execute(statement, params)
+
+
 class UnsafeUrlStorySession(FakeStorySession):
     def execute(self, statement, params=None):
         sql = str(statement)
@@ -846,6 +862,25 @@ def test_story_context_is_empty_without_persisted_evidence(monkeypatch):
     assert payload["linked_signal_count"] == 0
     assert payload["linked_signals"] == []
     assert payload["latest_rri_shift"] is None
+
+
+def test_country_story_card_includes_its_country_specific_slice(monkeypatch):
+    client, session = story_client(monkeypatch, CountryStoryContextSession())
+
+    response = client.get("/api/v2/countries/AZ/stories?limit=1")
+
+    assert response.status_code == 200
+    context = response.json()["stories"][0]["country_context"]
+    assert context == {
+        "country_code": "AZ",
+        "country_name": "Азербайджан",
+        "article_count": 3,
+        "source_count": 2,
+        "media_tone": -1.25,
+    }
+    sql, params = next(call for call in session.calls if "SELECT sc.story_id," in call[0])
+    assert "story_countries" in sql
+    assert params == {"story_ids": [7], "country_code": "AZ"}
 
 
 def test_story_list_supports_topic_entity_date_filters_and_active_ranking(monkeypatch):

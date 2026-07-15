@@ -72,6 +72,7 @@ export default function StoryCard({
   const primaryUrl = safeHttpUrl(story.primary_url);
   const countries = story.countries.map(countryName).join(" · ");
   const rri = story.latest_rri_shift;
+  const countryContext = placement === "country" ? story.country_context : null;
   const ShiftIcon = rri && rri.delta_24h >= 0 ? TrendingUp : TrendingDown;
 
   return (
@@ -113,6 +114,13 @@ export default function StoryCard({
         <p className="mt-2 line-clamp-3 pl-1 text-[13px] leading-relaxed text-dim">
           {story.summary}
         </p>
+      )}
+
+      {countryContext && (
+        <div className="mt-3 border-l border-ru-blue/60 bg-bg/35 px-3 py-2 text-[11px] text-fg">
+          <span className="mb-1 block text-[9px] uppercase tracking-[0.11em] text-dim">срез страны</span>
+          {countryContext.country_name} · {countryContext.article_count} {plural(countryContext.article_count, ["публикация", "публикации", "публикаций"])} · {countryContext.source_count} {plural(countryContext.source_count, ["источник", "источника", "источников"])} · тон {countryContext.media_tone == null ? "—" : signed(countryContext.media_tone)}
+        </div>
       )}
 
       <div className="mt-3 flex flex-wrap gap-x-3 gap-y-1 pl-1 text-[11px] text-dim">
