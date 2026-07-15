@@ -616,7 +616,46 @@ class FakeStorySession:
                 membership_confidence=0.81, evidence={"event_key": 1.0},
                 relevance_score=0.79, is_primary=True,
             )])
+        if "WITH candidate_links AS" in sql or "WITH story_windows AS" in sql:
+            return FakeResult(rows=[])
         return FakeResult(rows=[story_row(7), story_row(6, last_seen=NOW - timedelta(hours=1))])
+
+
+class LinkedStoryContextSession(FakeStorySession):
+    def execute(self, statement, params=None):
+        sql = str(statement)
+        params = params or {}
+        if "WITH candidate_links AS" in sql:
+            self.calls.append((sql, params))
+            return FakeResult(rows=[SimpleNamespace(
+                story_id=7,
+                linked_signal_count=2,
+                linked_signals=[{
+                    "id": 91,
+                    "type": "index_shift",
+                    "severity": "warning",
+                    "title": "Индекс Азербайджана изменился",
+                    "created_at": NOW.isoformat(),
+                    "confidence": 0.83,
+                    "completeness": "complete",
+                    "relation": "explicit_story_evidence",
+                    "evidence": {
+                        "source": "signal_evidence.story_ids",
+                        "story_id": 7,
+                    },
+                }],
+            )])
+        if "WITH story_windows AS" in sql:
+            self.calls.append((sql, params))
+            return FakeResult(rows=[SimpleNamespace(
+                story_id=7,
+                country_code="AZ",
+                point_time=NOW,
+                score=-12.0,
+                delta_24h=-8.0,
+                version="v1",
+            )])
+        return super().execute(statement, params)
 
 
 class UnsafeUrlStorySession(FakeStorySession):
@@ -751,6 +790,62 @@ def test_story_detail_includes_evidence_and_country_primary_urls(monkeypatch):
     assert payload["entities"][0]["evidence"] == {"article_ids": [1, 2]}
     assert payload["events"][0]["evidence"] == {"articles": [1, 2]}
     assert payload["articles"][0]["is_primary"] is True
+
+
+def test_story_cards_and_detail_expose_bounded_proven_signal_context(monkeypatch):
+    client, session = story_client(monkeypatch, LinkedStoryContextSession())
+
+    listing = client.get("/api/v2/stories?limit=1")
+    detail = client.get("/api/v2/stories/7")
+
+    assert listing.status_code == 200
+    card = listing.json()["stories"][0]
+    assert card["linked_signal_count"] == 2
+    assert len(card["linked_signals"]) == 1
+    assert card["linked_signals"][0]["relation"] == "explicit_story_evidence"
+    assert card["linked_signals"][0]["evidence"] == {
+        "source": "signal_evidence.story_ids",
+        "story_id": 7,
+    }
+    assert card["latest_rri_shift"] == {
+        "country_code": "AZ",
+        "country_name": "Азербайджан",
+        "at": NOW.isoformat(),
+        "score": -12.0,
+        "delta_24h": -8.0,
+        "version": "v1",
+        "relation": "temporal_context",
+        "why_included": "rri_point_within_story_window",
+        "limitation": "Временное совпадение с сюжетом не доказывает причинность.",
+    }
+    assert detail.status_code == 200
+    assert detail.json()["id"] == card["id"] == 7
+    assert detail.json()["linked_signal_count"] == 2
+    assert detail.json()["latest_rri_shift"]["relation"] == "temporal_context"
+
+    signal_sql, signal_params = next(
+        call for call in session.calls if "WITH candidate_links AS" in call[0]
+    )
+    assert "signal_evidence" in signal_sql
+    assert "story_ids" in signal_sql
+    assert "story_articles" in signal_sql
+    assert "linked_signal_count" in signal_sql
+    assert signal_params["linked_signal_limit"] == 5
+    rri_sql, _ = next(
+        call for call in session.calls if "WITH story_windows AS" in call[0]
+    )
+    assert "JOIN ru_index" in rri_sql
+    assert "relation" not in rri_sql.lower()
+
+
+def test_story_context_is_empty_without_persisted_evidence(monkeypatch):
+    client, _ = story_client(monkeypatch)
+
+    payload = client.get("/api/v2/stories?limit=1").json()["stories"][0]
+
+    assert payload["linked_signal_count"] == 0
+    assert payload["linked_signals"] == []
+    assert payload["latest_rri_shift"] is None
 
 
 def test_story_list_supports_topic_entity_date_filters_and_active_ranking(monkeypatch):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -19,6 +20,15 @@ from src.stories import StoryCandidate
 
 NOW = datetime(2026, 7, 15, 12, 0, tzinfo=timezone.utc)
 ROOT = Path(__file__).resolve().parents[1]
+WRITE_STATEMENT = re.compile(r"\b(INSERT|UPDATE|DELETE|MERGE|CALL)\b")
+
+
+def _is_read_only_sql(sql: str) -> bool:
+    normalized = sql.lstrip().upper()
+    return (
+        normalized.startswith(("SELECT", "WITH"))
+        and WRITE_STATEMENT.search(normalized) is None
+    )
 
 
 class _Rows:
@@ -37,7 +47,7 @@ class _StorySession:
     def execute(self, statement, params=None):
         sql = str(statement)
         self.statements.append(sql)
-        assert sql.lstrip().upper().startswith("SELECT")
+        assert _is_read_only_sql(sql)
         return _Rows([self.row])
 
 
@@ -279,7 +289,7 @@ def test_public_investigation_gets_do_not_call_providers_or_write(
     )
     assert all(client.get(path, params=params).status_code == 200 for path, params in requests)
     assert story_session.statements
-    assert all(statement.lstrip().upper().startswith("SELECT") for statement in story_session.statements)
+    assert all(_is_read_only_sql(statement) for statement in story_session.statements)
 
 
 def test_default_search_and_signal_services_are_local_read_only(

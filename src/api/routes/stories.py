@@ -9,7 +9,7 @@ import json
 import math
 import re
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, HTTPException, Query
@@ -24,6 +24,7 @@ from src.stories import MERGE_THRESHOLD
 router = APIRouter(prefix="/api/v2", tags=["stories"])
 STORY_CURSOR_VERSION = "stories-v2-active-relevance"
 ARTICLE_CURSOR_VERSION = "story-articles-v2-relevance"
+MAX_LINKED_SIGNALS = 5
 
 STORY_RELEVANCE_SQL = """(
     COALESCE(st.clustering_confidence, 0) * 0.70
@@ -68,6 +69,37 @@ class StoryListItem(BaseModel):
     relevance_score: float
     confidence: float
     evidence: dict[str, Any] = Field(default_factory=dict)
+    linked_signal_count: int = 0
+    linked_signals: list["StorySignalLink"] = Field(default_factory=list)
+    latest_rri_shift: "StoryRriShift | None" = None
+
+
+class StorySignalLink(BaseModel):
+    id: int
+    type: str
+    severity: str
+    title: str
+    created_at: str
+    confidence: float
+    completeness: str
+    relation: Literal["explicit_story_evidence", "shared_article_membership"]
+    evidence: dict[str, Any] = Field(default_factory=dict)
+
+
+class StoryRriShift(BaseModel):
+    country_code: str
+    country_name: str
+    at: str
+    score: float
+    delta_24h: float
+    version: str
+    relation: Literal["temporal_context"] = "temporal_context"
+    why_included: Literal["rri_point_within_story_window"] = (
+        "rri_point_within_story_window"
+    )
+    limitation: str = (
+        "Временное совпадение с сюжетом не доказывает причинность."
+    )
 
 
 class StoriesListResponse(BaseModel):
@@ -237,7 +269,194 @@ def story_to_dict(row: Any) -> dict[str, Any]:
         "relevance_score": round(float(relevance_score), 3),
         "confidence": confidence,
         "evidence": _json_object(_value(row, "meta")),
+        "linked_signal_count": 0,
+        "linked_signals": [],
+        "latest_rri_shift": None,
     }
+
+
+def _load_linked_signals(
+    session: Any,
+    story_ids: list[int],
+) -> dict[int, dict[str, Any]]:
+    """Load bounded, persisted signal links for a whole story page in one query."""
+
+    if not story_ids:
+        return {}
+    rows = session.execute(text("""
+        WITH candidate_links AS (
+            SELECT linked.story_id,
+                   s.id AS signal_id, s.signal_type, s.severity, s.title,
+                   s.created_at, se.confidence, se.completeness,
+                   'explicit_story_evidence'::text AS link_relation,
+                   0 AS relation_priority,
+                   jsonb_build_object(
+                       'source', 'signal_evidence.story_ids',
+                       'story_id', linked.story_id
+                   ) AS link_evidence
+            FROM signal_evidence se
+            JOIN signals s ON s.id = se.signal_id
+            JOIN LATERAL unnest(se.story_ids) AS linked(story_id)
+              ON linked.story_id = ANY(CAST(:story_ids AS bigint[]))
+
+            UNION ALL
+
+            SELECT DISTINCT sa.story_id,
+                   s.id AS signal_id, s.signal_type, s.severity, s.title,
+                   s.created_at, se.confidence, se.completeness,
+                   'shared_article_membership'::text AS link_relation,
+                   1 AS relation_priority,
+                   jsonb_build_object(
+                       'source', 'signal_evidence.article_ids',
+                       'shared_article_ids', (
+                           SELECT COALESCE(jsonb_agg(shared.article_id ORDER BY shared.article_id), '[]'::jsonb)
+                           FROM (
+                               SELECT DISTINCT overlap_sa.article_id
+                               FROM story_articles overlap_sa
+                               WHERE overlap_sa.story_id = sa.story_id
+                                 AND overlap_sa.article_id = ANY(se.article_ids)
+                           ) shared
+                       )
+                   ) AS link_evidence
+            FROM signal_evidence se
+            JOIN signals s ON s.id = se.signal_id
+            JOIN story_articles sa ON sa.article_id = ANY(se.article_ids)
+            WHERE sa.story_id = ANY(CAST(:story_ids AS bigint[]))
+        ), deduplicated AS (
+            SELECT DISTINCT ON (story_id, signal_id)
+                   story_id, signal_id, signal_type, severity, title,
+                   created_at, confidence, completeness,
+                   link_relation, link_evidence
+            FROM candidate_links
+            ORDER BY story_id, signal_id, relation_priority
+        ), ranked AS (
+            SELECT deduplicated.*,
+                   COUNT(*) OVER (PARTITION BY story_id) AS linked_signal_count,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY story_id
+                       ORDER BY created_at DESC, signal_id DESC
+                   ) AS link_rank
+            FROM deduplicated
+        )
+        SELECT story_id, MAX(linked_signal_count)::integer AS linked_signal_count,
+               COALESCE(
+                   jsonb_agg(
+                       jsonb_build_object(
+                           'id', signal_id,
+                           'type', signal_type,
+                           'severity', severity,
+                           'title', title,
+                           'created_at', created_at,
+                           'confidence', confidence,
+                           'completeness', completeness,
+                           'relation', link_relation,
+                           'evidence', link_evidence
+                       ) ORDER BY created_at DESC, signal_id DESC
+                   ) FILTER (WHERE link_rank <= :linked_signal_limit),
+                   '[]'::jsonb
+               ) AS linked_signals
+        FROM ranked
+        GROUP BY story_id
+    """), {
+        "story_ids": story_ids,
+        "linked_signal_limit": MAX_LINKED_SIGNALS,
+    }).fetchall()
+    return {
+        int(_value(row, "story_id")): {
+            "linked_signal_count": int(_value(row, "linked_signal_count", 0) or 0),
+            "linked_signals": _json_list(_value(row, "linked_signals"))[
+                :MAX_LINKED_SIGNALS
+            ],
+        }
+        for row in rows
+        if _value(row, "story_id") is not None
+    }
+
+
+def _load_latest_rri_shifts(
+    session: Any,
+    story_ids: list[int],
+    *,
+    preferred_country: str | None = None,
+) -> dict[int, dict[str, Any]]:
+    """Load temporal RRI context; proximity is never presented as causation."""
+
+    if not story_ids:
+        return {}
+    rows = session.execute(text("""
+        WITH story_windows AS (
+            SELECT st.id AS story_id, st.first_seen, st.last_seen
+            FROM stories st
+            WHERE st.id = ANY(CAST(:story_ids AS bigint[]))
+        ), participating_rri AS (
+            SELECT windows.story_id,
+                   TRIM(sc.country_code) AS country_code,
+                   ri.time AS point_time, ri.score, ri.delta_24h,
+                   COALESCE(ri.version, 'v1') AS version,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY windows.story_id
+                       ORDER BY ri.time DESC,
+                                ABS(ri.delta_24h) DESC,
+                                sc.country_code
+                   ) AS point_rank
+            FROM story_windows windows
+            JOIN story_countries sc ON sc.story_id = windows.story_id
+            JOIN ru_index ri ON ri.country_code = sc.country_code
+            WHERE ri.time >= windows.first_seen
+              AND ri.time <= windows.last_seen
+              AND ri.delta_24h IS NOT NULL
+              AND (
+                  CAST(:preferred_country AS text) IS NULL
+                  OR TRIM(sc.country_code) = :preferred_country
+              )
+        )
+        SELECT story_id, country_code, point_time, score, delta_24h, version
+        FROM participating_rri
+        WHERE point_rank = 1
+    """), {
+        "story_ids": story_ids,
+        "preferred_country": preferred_country,
+    }).fetchall()
+    result: dict[int, dict[str, Any]] = {}
+    for row in rows:
+        story_id = _value(row, "story_id")
+        point_time = _iso(_value(row, "point_time"))
+        if story_id is None or point_time is None:
+            continue
+        country_code = str(_value(row, "country_code", "")).strip().upper()
+        result[int(story_id)] = {
+            "country_code": country_code,
+            "country_name": country_name_ru(country_code),
+            "at": point_time,
+            "score": float(_value(row, "score", 0) or 0),
+            "delta_24h": float(_value(row, "delta_24h", 0) or 0),
+            "version": str(_value(row, "version", "v1") or "v1"),
+            "relation": "temporal_context",
+            "why_included": "rri_point_within_story_window",
+            "limitation": (
+                "Временное совпадение с сюжетом не доказывает причинность."
+            ),
+        }
+    return result
+
+
+def _attach_story_context(
+    session: Any,
+    stories: list[dict[str, Any]],
+    *,
+    preferred_country: str | None = None,
+) -> None:
+    story_ids = [int(story["id"]) for story in stories]
+    signals = _load_linked_signals(session, story_ids)
+    rri_shifts = _load_latest_rri_shifts(
+        session,
+        story_ids,
+        preferred_country=preferred_country,
+    )
+    for story in stories:
+        story_id = int(story["id"])
+        story.update(signals.get(story_id, {}))
+        story["latest_rri_shift"] = rri_shifts.get(story_id)
 
 
 def _encode_cursor(row: Any, context_hash: str) -> str:
@@ -456,11 +675,17 @@ def _list_stories(
                      relevance_score DESC, st.last_seen DESC, st.id DESC
             LIMIT :limit
         """), params).fetchall()
+        has_more = len(rows) > limit
+        page = rows[:limit]
+        stories = [story_to_dict(row) for row in page]
+        _attach_story_context(
+            session,
+            stories,
+            preferred_country=country,
+        )
 
-    has_more = len(rows) > limit
-    page = rows[:limit]
     return {
-        "stories": [story_to_dict(row) for row in page],
+        "stories": stories,
         "next_cursor": _encode_cursor(page[-1], context_hash) if has_more and page else None,
     }
 
@@ -658,8 +883,10 @@ def get_story(
                      ranked.published_at DESC NULLS LAST, ranked.article_id DESC
             LIMIT :article_limit
         """), article_params).fetchall()
+        story_context = story_to_dict(story)
+        _attach_story_context(session, [story_context])
 
-    result = story_to_dict(story)
+    result = story_context
     result["countries"] = [{
         "country_code": str(_value(row, "country_code")).strip(),
         "country_name": country_name_ru(str(_value(row, "country_code")).strip()),
