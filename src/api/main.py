@@ -19,6 +19,7 @@ from sqlalchemy import text
 from src.config import COUNTRY_NAMES, COUNTRY_ISO3
 from src.db import get_session
 from src.api.routes.sources import router as sources_router
+from src.api.routes.stories import router as stories_router
 from src.api.routes.threads import router as threads_router
 from src.api.routes.vox import router as vox_router
 from src.api.routes.articles import router as articles_router
@@ -155,6 +156,7 @@ def get_visits(days: int = Query(30, ge=1, le=365)):
 
 # Register routes
 app.include_router(sources_router)
+app.include_router(stories_router)
 app.include_router(threads_router)
 app.include_router(vox_router)
 app.include_router(articles_router)

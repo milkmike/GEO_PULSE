@@ -13,6 +13,7 @@ from sqlalchemy import text
 from src.config import COUNTRY_NAMES, OPENROUTER_API_KEY, HEAVY_MODEL
 from src.db import get_session, wait_for_db
 from src.api_tracker import track_api_call, track_duration
+from src.stories import build_stories as build_global_stories
 
 logging.basicConfig(
     level=logging.INFO,
@@ -153,6 +154,50 @@ def llm_json(prompt: str, max_tokens: int = 800) -> dict | None:
 
     logger.warning(f"Failed to parse LLM JSON: {raw[:300]}")
     return None
+
+
+def generate_story_copy(payload: dict) -> dict | None:
+    """Generate optional story copy from the background worker only."""
+    prompt = f"""Ты редактор международной новостной ленты. Сформулируй единый
+межстрановой сюжет по данным ниже. Не добавляй факты, которых нет во входе.
+
+ДАННЫЕ:
+{json.dumps(payload, ensure_ascii=False, sort_keys=True)}
+
+Верни JSON:
+{{
+  "title_ru": "точный заголовок до 120 символов",
+  "title_en": "optional English title",
+  "summary": "одно проверяемое предложение"
+}}"""
+    result = llm_json(prompt, max_tokens=400)
+    if result:
+        result["model"] = MODEL
+    return result
+
+
+def run_story_builder() -> None:
+    """Run global stories without allowing failures to stop country threads."""
+    try:
+        with track_duration() as timer:
+            with get_session() as session:
+                result = build_global_stories(session, summarizer=generate_story_copy)
+        logger.info(
+            "Global stories built: %s clusters, %s stories, %s memberships",
+            result.clusters,
+            result.stories_upserted,
+            result.article_memberships,
+        )
+        track_api_call(
+            service="story-builder", endpoint="/build", script="build_threads.py",
+            status="ok", duration_ms=timer.ms,
+        )
+    except Exception as exc:
+        logger.error("Global story build failed: %s", exc, exc_info=True)
+        track_api_call(
+            service="story-builder", endpoint="/build", script="build_threads.py",
+            status="error", error=str(exc)[:500],
+        )
 
 
 # ── Step 1: Fetch articles ──────────────────────────────
@@ -1316,6 +1361,7 @@ def build_threads():
         logger.info(f"Fetched {len(articles)} articles with event_keys")
         if not articles:
             logger.info("No articles, skipping")
+            run_story_builder()
             return
 
         # 2. Cluster: prefer embeddings, fallback to trgm
@@ -1361,6 +1407,7 @@ def build_threads():
         cleanup_old_threads(session)
         logger.info("Cleanup done")
 
+    run_story_builder()
     logger.info("═══ Threads v2 build complete ═══")
 
 
