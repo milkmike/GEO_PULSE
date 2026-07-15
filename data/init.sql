@@ -1,5 +1,6 @@
 -- Enable fuzzy matching
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
+CREATE EXTENSION IF NOT EXISTS vector;
 
 -- CIS Thermometer — DB Schema
 
@@ -288,3 +289,235 @@ CREATE TABLE IF NOT EXISTS ru_market_radar (
     updated_at    TIMESTAMP DEFAULT now(),
     CONSTRAINT ru_market_radar_singleton CHECK (id = 1)
 );
+
+-- === Search and canonical knowledge (see scripts/migrations/019_search_knowledge.sql) ===
+
+ALTER TABLE analysis ADD COLUMN IF NOT EXISTS embedding vector;
+
+ALTER TABLE articles ADD COLUMN IF NOT EXISTS search_vector tsvector
+GENERATED ALWAYS AS (
+  setweight(to_tsvector('simple', coalesce(title, '')), 'A') ||
+  setweight(to_tsvector('simple', coalesce(summary, '')), 'B') ||
+  setweight(to_tsvector('simple', coalesce(body, '')), 'C')
+) STORED;
+CREATE INDEX IF NOT EXISTS idx_articles_search_vector ON articles USING gin(search_vector);
+
+CREATE TABLE IF NOT EXISTS canonical_entities (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  kind VARCHAR(24) NOT NULL CHECK (kind IN ('person','organization','location','event')),
+  canonical_name TEXT NOT NULL,
+  normalized_name TEXT NOT NULL,
+  labels JSONB NOT NULL DEFAULT '{}',
+  country_codes TEXT[] NOT NULL DEFAULT '{}',
+  provenance JSONB NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(kind, normalized_name)
+);
+
+CREATE TABLE IF NOT EXISTS entity_aliases (
+  id BIGSERIAL PRIMARY KEY,
+  entity_id UUID NOT NULL REFERENCES canonical_entities(id) ON DELETE CASCADE,
+  alias TEXT NOT NULL,
+  normalized_alias TEXT NOT NULL,
+  language VARCHAR(8),
+  ambiguous BOOLEAN NOT NULL DEFAULT FALSE,
+  provenance JSONB NOT NULL DEFAULT '{}',
+  UNIQUE(entity_id, normalized_alias)
+);
+CREATE INDEX IF NOT EXISTS idx_entity_aliases_normalized
+  ON entity_aliases(normalized_alias);
+CREATE INDEX IF NOT EXISTS idx_entity_aliases_normalized_trgm
+  ON entity_aliases USING gin(normalized_alias gin_trgm_ops);
+
+CREATE TABLE IF NOT EXISTS article_entity_mentions (
+  article_id INTEGER NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+  entity_id UUID NOT NULL REFERENCES canonical_entities(id) ON DELETE CASCADE,
+  mention_text TEXT,
+  char_start INTEGER,
+  char_end INTEGER,
+  extractor VARCHAR(80) NOT NULL,
+  extractor_version VARCHAR(40),
+  confidence NUMERIC(4,3) NOT NULL DEFAULT 1.0,
+  evidence JSONB NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY(article_id, entity_id, extractor)
+);
+CREATE INDEX IF NOT EXISTS idx_article_entity_mentions_entity
+  ON article_entity_mentions(entity_id, article_id);
+CREATE INDEX IF NOT EXISTS idx_article_entity_mentions_article
+  ON article_entity_mentions(article_id);
+
+CREATE TABLE IF NOT EXISTS knowledge_edges (
+  id BIGSERIAL PRIMARY KEY,
+  source_node TEXT NOT NULL,
+  target_node TEXT NOT NULL,
+  relation VARCHAR(80) NOT NULL,
+  confidence NUMERIC(4,3) NOT NULL,
+  evidence JSONB NOT NULL DEFAULT '[]',
+  valid_from TIMESTAMPTZ,
+  valid_to TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(source_node, target_node, relation)
+);
+CREATE INDEX IF NOT EXISTS idx_knowledge_edges_source
+  ON knowledge_edges(source_node);
+CREATE INDEX IF NOT EXISTS idx_knowledge_edges_target
+  ON knowledge_edges(target_node);
+
+CREATE TABLE IF NOT EXISTS embedding_profiles (
+  id SERIAL PRIMARY KEY,
+  profile_key VARCHAR(80) UNIQUE NOT NULL,
+  provider VARCHAR(40) NOT NULL,
+  model VARCHAR(120) NOT NULL,
+  dimensions INTEGER NOT NULL CHECK (dimensions > 0),
+  task VARCHAR(40) NOT NULL DEFAULT 'text-matching',
+  version VARCHAR(40) NOT NULL,
+  active BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS content_embeddings (
+  id BIGSERIAL PRIMARY KEY,
+  profile_id INTEGER NOT NULL REFERENCES embedding_profiles(id),
+  object_type VARCHAR(24) NOT NULL CHECK (object_type IN ('article','entity','event','story')),
+  object_id TEXT NOT NULL,
+  content_hash CHAR(64) NOT NULL,
+  embedding vector,
+  status VARCHAR(20) NOT NULL DEFAULT 'ready',
+  error TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(profile_id, object_type, object_id, content_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_content_embeddings_object
+  ON content_embeddings(object_type, object_id, profile_id);
+
+CREATE TABLE IF NOT EXISTS embedding_jobs (
+  id BIGSERIAL PRIMARY KEY,
+  profile_id INTEGER NOT NULL REFERENCES embedding_profiles(id),
+  object_type VARCHAR(24) NOT NULL,
+  object_id TEXT NOT NULL,
+  content_hash CHAR(64) NOT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'pending',
+  attempts INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  available_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(profile_id, object_type, object_id, content_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_embedding_jobs_pending
+  ON embedding_jobs(available_at, id)
+  WHERE status = 'pending';
+
+-- === Global stories (see scripts/migrations/020_global_stories.sql) ===
+
+CREATE TABLE IF NOT EXISTS stories (
+  id BIGSERIAL PRIMARY KEY,
+  slug TEXT UNIQUE NOT NULL,
+  title_ru TEXT NOT NULL,
+  title_en TEXT,
+  summary TEXT,
+  lifecycle VARCHAR(20) NOT NULL CHECK (lifecycle IN ('emerging','developing','escalating','cooling','resolved')),
+  first_seen TIMESTAMPTZ NOT NULL,
+  last_seen TIMESTAMPTZ NOT NULL,
+  article_count INTEGER NOT NULL DEFAULT 0,
+  source_count INTEGER NOT NULL DEFAULT 0,
+  country_count INTEGER NOT NULL DEFAULT 0,
+  highest_action_level INTEGER NOT NULL DEFAULT 1,
+  clustering_confidence NUMERIC(4,3) NOT NULL DEFAULT 0,
+  summary_model VARCHAR(120),
+  source_hash CHAR(64),
+  meta JSONB NOT NULL DEFAULT '{}',
+  generated_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_stories_lifecycle_last_seen
+  ON stories(lifecycle, last_seen DESC);
+
+CREATE TABLE IF NOT EXISTS story_articles (
+  story_id BIGINT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+  article_id INTEGER NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+  membership_confidence NUMERIC(4,3) NOT NULL,
+  evidence JSONB NOT NULL DEFAULT '{}',
+  added_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY(story_id, article_id)
+);
+CREATE INDEX IF NOT EXISTS idx_story_articles_membership
+  ON story_articles(article_id, story_id);
+
+CREATE TABLE IF NOT EXISTS story_countries (
+  story_id BIGINT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+  country_code CHAR(2) NOT NULL REFERENCES countries(code),
+  article_count INTEGER NOT NULL DEFAULT 0,
+  source_count INTEGER NOT NULL DEFAULT 0,
+  media_tone NUMERIC(6,2),
+  first_seen TIMESTAMPTZ,
+  last_seen TIMESTAMPTZ,
+  PRIMARY KEY(story_id, country_code)
+);
+CREATE INDEX IF NOT EXISTS idx_story_countries_country
+  ON story_countries(country_code, last_seen DESC);
+
+CREATE TABLE IF NOT EXISTS story_entities (
+  story_id BIGINT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+  entity_id UUID NOT NULL REFERENCES canonical_entities(id) ON DELETE CASCADE,
+  mentions INTEGER NOT NULL DEFAULT 0,
+  confidence NUMERIC(4,3) NOT NULL,
+  evidence JSONB NOT NULL DEFAULT '{}',
+  PRIMARY KEY(story_id, entity_id)
+);
+
+CREATE TABLE IF NOT EXISTS story_events (
+  story_id BIGINT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+  entity_id UUID NOT NULL REFERENCES canonical_entities(id) ON DELETE CASCADE,
+  event_key TEXT NOT NULL,
+  event_at TIMESTAMPTZ,
+  action_level INTEGER NOT NULL DEFAULT 1,
+  evidence JSONB NOT NULL DEFAULT '{}',
+  PRIMARY KEY(story_id, entity_id)
+);
+
+-- === Evidence and explanations (see scripts/migrations/021_signal_evidence_explanations.sql) ===
+
+CREATE TABLE IF NOT EXISTS signal_evidence (
+  id BIGSERIAL PRIMARY KEY,
+  signal_id INTEGER UNIQUE NOT NULL REFERENCES signals(id) ON DELETE CASCADE,
+  detector VARCHAR(80) NOT NULL,
+  detector_version VARCHAR(40) NOT NULL,
+  threshold JSONB NOT NULL,
+  observed JSONB NOT NULL,
+  baseline JSONB NOT NULL,
+  window_start TIMESTAMPTZ,
+  window_end TIMESTAMPTZ,
+  article_ids INTEGER[] NOT NULL DEFAULT '{}',
+  story_ids BIGINT[] NOT NULL DEFAULT '{}',
+  rri_points JSONB NOT NULL DEFAULT '[]',
+  confidence NUMERIC(4,3) NOT NULL,
+  completeness VARCHAR(20) NOT NULL CHECK (completeness IN ('complete','partial')),
+  explanation JSONB NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_signal_evidence_created
+  ON signal_evidence(created_at DESC);
+
+CREATE TABLE IF NOT EXISTS index_change_explanations (
+  id BIGSERIAL PRIMARY KEY,
+  country_code CHAR(2) NOT NULL REFERENCES countries(code),
+  from_time TIMESTAMPTZ NOT NULL,
+  to_time TIMESTAMPTZ NOT NULL,
+  rri_version VARCHAR(16) NOT NULL,
+  input_hash CHAR(64) NOT NULL,
+  exact_changes JSONB NOT NULL,
+  estimated_contributions JSONB NOT NULL DEFAULT '[]',
+  context JSONB NOT NULL DEFAULT '[]',
+  evidence_completeness VARCHAR(20) NOT NULL,
+  limitations JSONB NOT NULL DEFAULT '[]',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(country_code, from_time, to_time, rri_version, input_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_index_change_explanations_lookup
+  ON index_change_explanations(country_code, to_time DESC, rri_version);

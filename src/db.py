@@ -4,10 +4,11 @@ from contextlib import contextmanager
 from datetime import datetime
 
 from sqlalchemy import (
-    Boolean, Column, Date, DateTime, Integer, Numeric, SmallInteger, String, Text,
-    UniqueConstraint, create_engine, text,
+    BigInteger, Boolean, CheckConstraint, Column, Date, DateTime, ForeignKey,
+    Integer, Numeric, SmallInteger, String, Text, UniqueConstraint, create_engine,
+    text,
 )
-from sqlalchemy.dialects.postgresql import ARRAY, JSONB
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 try:
@@ -189,6 +190,294 @@ class Alert(Base):
     data = Column(JSONB)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
     acknowledged = Column(Boolean, default=False)
+
+
+class CanonicalEntity(Base):
+    __tablename__ = "canonical_entities"
+    id = Column(UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()"))
+    kind = Column(String(24), nullable=False)
+    canonical_name = Column(Text, nullable=False)
+    normalized_name = Column(Text, nullable=False)
+    labels = Column(JSONB, nullable=False, default=dict)
+    country_codes = Column(ARRAY(Text), nullable=False, default=list)
+    provenance = Column(JSONB, nullable=False, default=dict)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    __table_args__ = (
+        CheckConstraint(
+            "kind IN ('person','organization','location','event')",
+            name="canonical_entities_kind_check",
+        ),
+        UniqueConstraint("kind", "normalized_name"),
+    )
+
+
+class EntityAlias(Base):
+    __tablename__ = "entity_aliases"
+    id = Column(BigInteger, primary_key=True)
+    entity_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("canonical_entities.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    alias = Column(Text, nullable=False)
+    normalized_alias = Column(Text, nullable=False)
+    language = Column(String(8))
+    ambiguous = Column(Boolean, nullable=False, default=False)
+    provenance = Column(JSONB, nullable=False, default=dict)
+    __table_args__ = (UniqueConstraint("entity_id", "normalized_alias"),)
+
+
+class ArticleEntityMention(Base):
+    __tablename__ = "article_entity_mentions"
+    article_id = Column(
+        Integer,
+        ForeignKey("articles.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    entity_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("canonical_entities.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    mention_text = Column(Text)
+    char_start = Column(Integer)
+    char_end = Column(Integer)
+    extractor = Column(String(80), primary_key=True)
+    extractor_version = Column(String(40))
+    confidence = Column(Numeric(4, 3), nullable=False, default=1.0)
+    evidence = Column(JSONB, nullable=False, default=dict)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+
+class KnowledgeEdge(Base):
+    __tablename__ = "knowledge_edges"
+    id = Column(BigInteger, primary_key=True)
+    source_node = Column(Text, nullable=False)
+    target_node = Column(Text, nullable=False)
+    relation = Column(String(80), nullable=False)
+    confidence = Column(Numeric(4, 3), nullable=False)
+    evidence = Column(JSONB, nullable=False, default=list)
+    valid_from = Column(DateTime(timezone=True))
+    valid_to = Column(DateTime(timezone=True))
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    __table_args__ = (UniqueConstraint("source_node", "target_node", "relation"),)
+
+
+class EmbeddingProfile(Base):
+    __tablename__ = "embedding_profiles"
+    id = Column(Integer, primary_key=True)
+    profile_key = Column(String(80), unique=True, nullable=False)
+    provider = Column(String(40), nullable=False)
+    model = Column(String(120), nullable=False)
+    dimensions = Column(Integer, nullable=False)
+    task = Column(String(40), nullable=False, default="text-matching")
+    version = Column(String(40), nullable=False)
+    active = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    __table_args__ = (
+        CheckConstraint("dimensions > 0", name="embedding_profiles_dimensions_check"),
+    )
+
+
+class ContentEmbedding(Base):
+    __tablename__ = "content_embeddings"
+    id = Column(BigInteger, primary_key=True)
+    profile_id = Column(
+        Integer,
+        ForeignKey("embedding_profiles.id"),
+        nullable=False,
+    )
+    object_type = Column(String(24), nullable=False)
+    object_id = Column(Text, nullable=False)
+    content_hash = Column(String(64), nullable=False)
+    # The dimensionless pgvector embedding column is managed by raw SQL.
+    status = Column(String(20), nullable=False, default="ready")
+    error = Column(Text)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    __table_args__ = (
+        CheckConstraint(
+            "object_type IN ('article','entity','event','story')",
+            name="content_embeddings_object_type_check",
+        ),
+        UniqueConstraint("profile_id", "object_type", "object_id", "content_hash"),
+    )
+
+
+class EmbeddingJob(Base):
+    __tablename__ = "embedding_jobs"
+    id = Column(BigInteger, primary_key=True)
+    profile_id = Column(
+        Integer,
+        ForeignKey("embedding_profiles.id"),
+        nullable=False,
+    )
+    object_type = Column(String(24), nullable=False)
+    object_id = Column(Text, nullable=False)
+    content_hash = Column(String(64), nullable=False)
+    status = Column(String(20), nullable=False, default="pending")
+    attempts = Column(Integer, nullable=False, default=0)
+    last_error = Column(Text)
+    available_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    __table_args__ = (
+        UniqueConstraint("profile_id", "object_type", "object_id", "content_hash"),
+    )
+
+
+class Story(Base):
+    __tablename__ = "stories"
+    id = Column(BigInteger, primary_key=True)
+    slug = Column(Text, unique=True, nullable=False)
+    title_ru = Column(Text, nullable=False)
+    title_en = Column(Text)
+    summary = Column(Text)
+    lifecycle = Column(String(20), nullable=False)
+    first_seen = Column(DateTime(timezone=True), nullable=False)
+    last_seen = Column(DateTime(timezone=True), nullable=False)
+    article_count = Column(Integer, nullable=False, default=0)
+    source_count = Column(Integer, nullable=False, default=0)
+    country_count = Column(Integer, nullable=False, default=0)
+    highest_action_level = Column(Integer, nullable=False, default=1)
+    clustering_confidence = Column(Numeric(4, 3), nullable=False, default=0)
+    summary_model = Column(String(120))
+    source_hash = Column(String(64))
+    meta = Column(JSONB, nullable=False, default=dict)
+    generated_at = Column(DateTime(timezone=True))
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    __table_args__ = (
+        CheckConstraint(
+            "lifecycle IN ('emerging','developing','escalating','cooling','resolved')",
+            name="stories_lifecycle_check",
+        ),
+    )
+
+
+class StoryArticle(Base):
+    __tablename__ = "story_articles"
+    story_id = Column(
+        BigInteger,
+        ForeignKey("stories.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    article_id = Column(
+        Integer,
+        ForeignKey("articles.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    membership_confidence = Column(Numeric(4, 3), nullable=False)
+    evidence = Column(JSONB, nullable=False, default=dict)
+    added_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+
+class StoryCountry(Base):
+    __tablename__ = "story_countries"
+    story_id = Column(
+        BigInteger,
+        ForeignKey("stories.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    country_code = Column(String(2), ForeignKey("countries.code"), primary_key=True)
+    article_count = Column(Integer, nullable=False, default=0)
+    source_count = Column(Integer, nullable=False, default=0)
+    media_tone = Column(Numeric(6, 2))
+    first_seen = Column(DateTime(timezone=True))
+    last_seen = Column(DateTime(timezone=True))
+
+
+class StoryEntity(Base):
+    __tablename__ = "story_entities"
+    story_id = Column(
+        BigInteger,
+        ForeignKey("stories.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    entity_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("canonical_entities.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    mentions = Column(Integer, nullable=False, default=0)
+    confidence = Column(Numeric(4, 3), nullable=False)
+    evidence = Column(JSONB, nullable=False, default=dict)
+
+
+class StoryEvent(Base):
+    __tablename__ = "story_events"
+    story_id = Column(
+        BigInteger,
+        ForeignKey("stories.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    entity_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("canonical_entities.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    event_key = Column(Text, nullable=False)
+    event_at = Column(DateTime(timezone=True))
+    action_level = Column(Integer, nullable=False, default=1)
+    evidence = Column(JSONB, nullable=False, default=dict)
+
+
+class SignalEvidence(Base):
+    __tablename__ = "signal_evidence"
+    id = Column(BigInteger, primary_key=True)
+    signal_id = Column(
+        Integer,
+        ForeignKey("signals.id", ondelete="CASCADE"),
+        unique=True,
+        nullable=False,
+    )
+    detector = Column(String(80), nullable=False)
+    detector_version = Column(String(40), nullable=False)
+    threshold = Column(JSONB, nullable=False)
+    observed = Column(JSONB, nullable=False)
+    baseline = Column(JSONB, nullable=False)
+    window_start = Column(DateTime(timezone=True))
+    window_end = Column(DateTime(timezone=True))
+    article_ids = Column(ARRAY(Integer), nullable=False, default=list)
+    story_ids = Column(ARRAY(BigInteger), nullable=False, default=list)
+    rri_points = Column(JSONB, nullable=False, default=list)
+    confidence = Column(Numeric(4, 3), nullable=False)
+    completeness = Column(String(20), nullable=False)
+    explanation = Column(JSONB, nullable=False, default=dict)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    __table_args__ = (
+        CheckConstraint(
+            "completeness IN ('complete','partial')",
+            name="signal_evidence_completeness_check",
+        ),
+    )
+
+
+class IndexChangeExplanation(Base):
+    __tablename__ = "index_change_explanations"
+    id = Column(BigInteger, primary_key=True)
+    country_code = Column(String(2), ForeignKey("countries.code"), nullable=False)
+    from_time = Column(DateTime(timezone=True), nullable=False)
+    to_time = Column(DateTime(timezone=True), nullable=False)
+    rri_version = Column(String(16), nullable=False)
+    input_hash = Column(String(64), nullable=False)
+    exact_changes = Column(JSONB, nullable=False)
+    estimated_contributions = Column(JSONB, nullable=False, default=list)
+    context = Column(JSONB, nullable=False, default=list)
+    evidence_completeness = Column(String(20), nullable=False)
+    limitations = Column(JSONB, nullable=False, default=list)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    __table_args__ = (
+        UniqueConstraint(
+            "country_code",
+            "from_time",
+            "to_time",
+            "rri_version",
+            "input_hash",
+        ),
+    )
 
 
 @contextmanager
