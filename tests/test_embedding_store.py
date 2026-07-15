@@ -7,6 +7,7 @@ from src.embedding_store import (
     EmbeddingJob,
     EmbeddingProfile,
     EmbeddingProvider,
+    EmbeddingProviderError,
     EmbeddingStore,
     LegacyEmbeddingProvider,
     content_hash,
@@ -75,6 +76,29 @@ def test_legacy_adapter_keeps_document_and_query_methods_separate():
         ("documents", ["one", "two"]),
         ("query", "question"),
     ]
+
+
+@pytest.mark.parametrize("invalid", [float("nan"), float("inf"), float("-inf")])
+def test_legacy_adapter_rejects_non_finite_document_and_query_vectors(invalid):
+    profile = EmbeddingProfile(
+        profile_key="test-profile",
+        provider="test",
+        model="test-model",
+        dimensions=2,
+        task="text-matching",
+        version="1",
+        active=True,
+    )
+    provider = LegacyEmbeddingProvider(
+        profile,
+        document_embedder=lambda texts: [[invalid, 0.0] for _ in texts],
+        query_embedder=lambda text: [0.0, invalid],
+    )
+
+    with pytest.raises(EmbeddingProviderError, match="finite"):
+        provider.embed_documents(["document"])
+    with pytest.raises(EmbeddingProviderError, match="finite"):
+        provider.embed_query("query")
 
 
 def test_embedding_job_key_is_idempotent_and_content_sensitive():
@@ -208,6 +232,104 @@ class ScalarResult:
         return self.value
 
 
+class FencedTransitionSession:
+    """Stateful SQL-contract fake for one reclaimed job generation."""
+
+    def __init__(self):
+        self.status = "processing"
+        self.generation = 2
+        self.embeddings = []
+        self.statements = []
+
+    def execute(self, statement, params):
+        sql = str(statement)
+        self.statements.append(sql)
+        owned = (
+            self.status == "processing"
+            and params.get("generation") == self.generation
+        )
+        if "INSERT INTO content_embeddings" in sql:
+            if "attempts = :generation" not in sql:
+                self.embeddings.append(params["embedding"])
+                self.status = "completed"
+                return ScalarResult(True)
+            if owned:
+                self.embeddings.append(params["embedding"])
+                self.status = "completed"
+            return ScalarResult(owned)
+        if "UPDATE embedding_jobs" in sql:
+            if "attempts = :generation" not in sql:
+                self.status = params.get("status", "completed")
+                return ScalarResult(True)
+            if owned:
+                self.status = params.get("status", "completed")
+            return ScalarResult(owned)
+        return ScalarResult(False)
+
+
+def test_reclaimed_job_generation_fences_late_success_and_failure():
+    profile = EmbeddingProfile(
+        id=4,
+        profile_key="test-profile",
+        provider="test",
+        model="test-model",
+        dimensions=2,
+        task="text-matching",
+        version="1",
+        active=True,
+    )
+    stale_a = EmbeddingJob(
+        id=11,
+        profile_id=4,
+        object_type="article",
+        object_id="42",
+        content_hash="a" * 64,
+        attempts=1,
+    )
+    owner_b = EmbeddingJob(
+        id=11,
+        profile_id=4,
+        object_type="article",
+        object_id="42",
+        content_hash="a" * 64,
+        attempts=2,
+    )
+    session = FencedTransitionSession()
+    store = EmbeddingStore()
+
+    assert store.record_success(
+        session,
+        job=stale_a,
+        profile=profile,
+        embedding=[0.25, 0.75],
+    ) is False
+    assert store.record_failure(
+        session,
+        job=stale_a,
+        error="late A failure",
+        retry=False,
+    ) is False
+    assert session.status == "processing"
+    assert session.embeddings == []
+
+    assert store.record_success(
+        session,
+        job=owner_b,
+        profile=profile,
+        embedding=[0.25, 0.75],
+    ) is True
+    assert session.status == "completed"
+    assert len(session.embeddings) == 1
+
+    assert store.record_failure(
+        session,
+        job=stale_a,
+        error="later A failure",
+        retry=False,
+    ) is False
+    assert all("attempts = :generation" in sql for sql in session.statements)
+
+
 class RecoverySession:
     def __init__(self):
         self.statement = None
@@ -272,11 +394,14 @@ def test_record_success_rejects_wrong_dimension_and_non_finite_vectors(vector):
 
 
 class IndexStore:
-    def __init__(self, profile, jobs):
+    def __init__(self, profile, jobs, transition_result=True):
         self.profile = profile
         self.jobs = list(jobs)
+        self.transition_result = transition_result
         self.successes = []
         self.failures = []
+        self.success_attempts = []
+        self.failure_attempts = []
         self.recoveries = []
 
     def active_profile(self, session):
@@ -296,10 +421,16 @@ class IndexStore:
         return 0
 
     def record_success(self, session, *, job, profile, embedding):
-        self.successes.append((job, embedding))
+        self.success_attempts.append((job, embedding))
+        if self.transition_result:
+            self.successes.append((job, embedding))
+        return self.transition_result
 
     def record_failure(self, session, *, job, error, retry):
-        self.failures.append((job, error, retry))
+        self.failure_attempts.append((job, error, retry))
+        if self.transition_result:
+            self.failures.append((job, error, retry))
+        return self.transition_result
 
 
 class DocumentOnlyProvider:
@@ -463,6 +594,57 @@ def test_index_command_records_malformed_provider_vector_as_failure():
     assert store.successes == []
     assert len(store.failures) == 1
     assert "embedding vector" in store.failures[0][1]
+
+
+def test_index_command_does_not_count_stale_success_or_failure_transitions():
+    profile = EmbeddingProfile(
+        id=4,
+        profile_key="test-profile",
+        provider="test",
+        model="test-model",
+        dimensions=2,
+        task="text-matching",
+        version="1",
+        active=True,
+    )
+    document = "index this document"
+    success_job = EmbeddingJob(
+        id=11,
+        profile_id=4,
+        object_type="article",
+        object_id="42",
+        content_hash=content_hash(document),
+        attempts=1,
+    )
+    stale_success = IndexStore(profile, [success_job], transition_result=False)
+
+    success_result = index_pending(
+        store=stale_success,
+        session_factory=RecordingSessionFactory(),
+        provider_factory=lambda active_profile: DocumentOnlyProvider(active_profile),
+        content_loader=lambda session, claimed_job: document,
+    )
+
+    failure_job = EmbeddingJob(
+        id=12,
+        profile_id=4,
+        object_type="article",
+        object_id="missing",
+        content_hash="a" * 64,
+        attempts=1,
+    )
+    stale_failure = IndexStore(profile, [failure_job], transition_result=False)
+    failure_result = index_pending(
+        store=stale_failure,
+        session_factory=RecordingSessionFactory(),
+        provider_factory=lambda active_profile: DocumentOnlyProvider(active_profile),
+        content_loader=lambda session, claimed_job: None,
+    )
+
+    assert success_result == {"processed": 0, "indexed": 0, "failed": 0}
+    assert failure_result == {"processed": 0, "indexed": 0, "failed": 0}
+    assert len(stale_success.success_attempts) == 1
+    assert len(stale_failure.failure_attempts) == 1
 
 
 @pytest.mark.parametrize(

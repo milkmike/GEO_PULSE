@@ -1,5 +1,8 @@
+from contextlib import contextmanager
+from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -16,6 +19,9 @@ from src.knowledge import (
 )
 from scripts.backfill_knowledge import run_backfill
 from src.api.routes.entities import (
+    SqlEntityQueryService,
+    decode_entity_cursor,
+    encode_entity_cursor,
     get_entity_query_service,
     router,
     safe_public_url,
@@ -92,8 +98,8 @@ class FakeEntityQueryService:
         self.entity_id = entity_id
         self.calls = []
 
-    def suggest(self, *, query, limit, offset):
-        self.calls.append(("suggest", query, limit, offset))
+    def suggest(self, *, query, limit, offset, cursor=None):
+        self.calls.append(("suggest", query, limit, offset, cursor))
         return {
             "items": [
                 {
@@ -108,10 +114,11 @@ class FakeEntityQueryService:
             "limit": limit,
             "offset": offset,
             "has_more": False,
+            "next_cursor": None,
         }
 
-    def detail(self, *, entity_id, limit, offset):
-        self.calls.append(("detail", entity_id, limit, offset))
+    def detail(self, *, entity_id, limit, offset, cursor=None):
+        self.calls.append(("detail", entity_id, limit, offset, cursor))
         return {
             "id": str(entity_id),
             "node_id": f"person:{entity_id}",
@@ -128,6 +135,7 @@ class FakeEntityQueryService:
                 "limit": limit,
                 "offset": offset,
                 "has_more": False,
+                "next_cursor": None,
             },
         }
 
@@ -154,9 +162,255 @@ def test_entity_routes_use_injected_query_service_without_live_database():
     assert detail.status_code == 200
     assert detail.json()["mentions"]["items"][0]["evidence"]
     assert service.calls == [
-        ("suggest", "Путин", 5, 2),
-        ("detail", entity_id, 3, 1),
+        ("suggest", "Путин", 5, 2, None),
+        ("detail", entity_id, 3, 1, None),
     ]
+
+
+def test_entity_cursor_round_trip_validates_scope_binding_and_shape():
+    entity_id = uuid4()
+    suggest_key = {
+        "match_rank": 1,
+        "canonical_name": "Владимир Путин",
+        "id": str(entity_id),
+    }
+    token = encode_entity_cursor(
+        scope="entity_suggest",
+        binding={"q": "путин"},
+        key=suggest_key,
+    )
+
+    assert decode_entity_cursor(
+        token,
+        scope="entity_suggest",
+        binding={"q": "путин"},
+    ) == suggest_key
+    with pytest.raises(ValueError, match="binding"):
+        decode_entity_cursor(
+            token,
+            scope="entity_suggest",
+            binding={"q": "лавров"},
+        )
+    with pytest.raises(ValueError, match="cursor"):
+        decode_entity_cursor(
+            "not-valid-base64",
+            scope="entity_suggest",
+            binding={"q": "путин"},
+        )
+
+
+def test_entity_routes_reject_rebound_cursor_and_cursor_with_offset():
+    entity_id = uuid4()
+    service = FakeEntityQueryService(entity_id)
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_entity_query_service] = lambda: service
+    client = TestClient(app)
+    token = encode_entity_cursor(
+        scope="entity_suggest",
+        binding={"q": "путин"},
+        key={
+            "match_rank": 1,
+            "canonical_name": "Владимир Путин",
+            "id": str(entity_id),
+        },
+    )
+
+    rebound = client.get(
+        "/api/v2/entities/suggest",
+        params={"q": "Лавров", "cursor": token},
+    )
+    mixed = client.get(
+        "/api/v2/entities/suggest",
+        params={"q": "Путин", "cursor": token, "offset": 1},
+    )
+
+    assert rebound.status_code == 400
+    assert mixed.status_code == 400
+    assert service.calls == []
+
+
+class QueryResult:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def fetchone(self):
+        return self.rows[0] if self.rows else None
+
+    def fetchall(self):
+        return self.rows
+
+
+class SequentialQuerySession:
+    def __init__(self, result_sets):
+        self.result_sets = list(result_sets)
+        self.calls = []
+
+    def execute(self, statement, params):
+        self.calls.append((str(statement), params))
+        return QueryResult(self.result_sets.pop(0))
+
+
+def session_factory_for(session):
+    @contextmanager
+    def factory():
+        yield session
+
+    return factory
+
+
+def test_suggest_service_uses_keyset_tuple_and_emits_bound_next_cursor(monkeypatch):
+    first_id = uuid4()
+    second_id = uuid4()
+    third_id = uuid4()
+    rows = [
+        {
+            "id": first_id,
+            "kind": "person",
+            "canonical_name": "Владимир Путин",
+            "normalized_name": "владимир путин",
+            "labels": {"ru": "Владимир Путин"},
+            "aliases": ["Путин"],
+            "normalized_aliases": ["путин"],
+            "match_rank": 1,
+        },
+        {
+            "id": second_id,
+            "kind": "person",
+            "canonical_name": "Путин Второй",
+            "normalized_name": "путин второй",
+            "labels": {"ru": "Путин Второй"},
+            "aliases": ["Путин II"],
+            "normalized_aliases": ["путин ii"],
+            "match_rank": 2,
+        },
+        {
+            "id": third_id,
+            "kind": "person",
+            "canonical_name": "Путин Третий",
+            "normalized_name": "путин третий",
+            "labels": {"ru": "Путин Третий"},
+            "aliases": [],
+            "normalized_aliases": [],
+            "match_rank": 2,
+        },
+    ]
+    session = SequentialQuerySession([rows])
+    monkeypatch.setattr(
+        "src.api.routes.entities.get_session",
+        session_factory_for(session),
+    )
+    cursor_key = {
+        "match_rank": 0,
+        "canonical_name": "Предыдущий",
+        "id": str(uuid4()),
+    }
+
+    response = SqlEntityQueryService().suggest(
+        query="Путин",
+        limit=2,
+        offset=0,
+        cursor=cursor_key,
+    )
+
+    sql, params = session.calls[0]
+    assert "c.match_rank > :cursor_rank" in sql
+    assert "c.canonical_name > :cursor_name" in sql
+    assert "c.id > CAST(:cursor_id AS uuid)" in sql
+    assert "ORDER BY c.match_rank, c.canonical_name, c.id" in sql
+    assert params["cursor_rank"] == 0
+    assert response["has_more"] is True
+    assert decode_entity_cursor(
+        response["next_cursor"],
+        scope="entity_suggest",
+        binding={"q": "путин"},
+    ) == {
+        "match_rank": 2,
+        "canonical_name": "Путин Второй",
+        "id": str(second_id),
+    }
+
+
+def test_detail_mentions_use_descending_keyset_and_entity_bound_cursor(monkeypatch):
+    entity_id = uuid4()
+    published = datetime(2026, 7, 15, 10, 0, tzinfo=timezone.utc)
+    created = datetime(2026, 7, 15, 11, 0, tzinfo=timezone.utc)
+    older = datetime(2026, 7, 14, 10, 0, tzinfo=timezone.utc)
+    entity_rows = [{
+        "id": entity_id,
+        "kind": "person",
+        "canonical_name": "Владимир Путин",
+        "normalized_name": "владимир путин",
+        "labels": {"ru": "Владимир Путин"},
+        "country_codes": ["RU"],
+        "provenance": {},
+        "created_at": created,
+        "updated_at": created,
+    }]
+    mention_rows = [
+        {
+            "article_id": 42,
+            "mention_text": "Путин",
+            "char_start": 0,
+            "char_end": 5,
+            "extractor": "legacy_registry",
+            "extractor_version": "1",
+            "confidence": 0.9,
+            "evidence": {"source": "analysis.entities"},
+            "created_at": created,
+            "title": "Article",
+            "url": "https://example.org/article",
+            "published_at": published,
+        },
+        {
+            "article_id": 41,
+            "mention_text": "Путин",
+            "char_start": 0,
+            "char_end": 5,
+            "extractor": "legacy_registry",
+            "extractor_version": "1",
+            "confidence": 0.9,
+            "evidence": {"source": "analysis.entities"},
+            "created_at": older,
+            "title": "Older",
+            "url": "https://example.org/older",
+            "published_at": older,
+        },
+    ]
+    session = SequentialQuerySession([entity_rows, [], mention_rows])
+    monkeypatch.setattr(
+        "src.api.routes.entities.get_session",
+        session_factory_for(session),
+    )
+    cursor_key = {
+        "published_at": datetime(2026, 7, 16, tzinfo=timezone.utc).isoformat(),
+        "created_at": datetime(2026, 7, 16, tzinfo=timezone.utc).isoformat(),
+        "article_id": 99,
+    }
+
+    response = SqlEntityQueryService().detail(
+        entity_id=entity_id,
+        limit=1,
+        offset=0,
+        cursor=cursor_key,
+    )
+
+    sql, params = session.calls[2]
+    assert "ar.published_at < CAST(:cursor_published_at AS timestamptz)" in sql
+    assert "aem.created_at < CAST(:cursor_created_at AS timestamptz)" in sql
+    assert "aem.article_id < :cursor_article_id" in sql
+    assert "ORDER BY ar.published_at DESC" in sql
+    assert params["cursor_article_id"] == 99
+    assert response["mentions"]["has_more"] is True
+    assert decode_entity_cursor(
+        response["mentions"]["next_cursor"],
+        scope="entity_mentions",
+        binding={"entity_id": str(entity_id)},
+    ) == {
+        "published_at": published.isoformat(),
+        "created_at": created.isoformat(),
+        "article_id": 42,
+    }
 
 
 def test_entity_detail_returns_not_found_from_injected_service():

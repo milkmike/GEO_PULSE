@@ -96,12 +96,10 @@ class LegacyEmbeddingProvider:
     def _validate_vector(self, vector: Any) -> list[float]:
         if vector is None:
             raise EmbeddingProviderError("provider returned no embedding")
-        result = [float(value) for value in vector]
-        if len(result) != self._profile.dimensions:
-            raise EmbeddingProviderError(
-                f"expected {self._profile.dimensions} dimensions, got {len(result)}"
-            )
-        return result
+        try:
+            return validate_embedding_vector(self._profile, vector)
+        except ValueError as exc:
+            raise EmbeddingProviderError(str(exc)) from exc
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
         if not texts:
@@ -402,45 +400,48 @@ class EmbeddingStore:
         job: EmbeddingJob,
         profile: EmbeddingProfile,
         embedding: list[float],
-    ) -> None:
+    ) -> bool:
         if profile.id is None or job.profile_id != profile.id:
             raise ValueError("embedding vector profile does not match the claimed job")
         values = validate_embedding_vector(profile, embedding)
         vector = "[" + ",".join(str(value) for value in values) + "]"
-        session.execute(
-            text(
-                """
-                INSERT INTO content_embeddings
-                    (profile_id, object_type, object_id, content_hash,
-                     embedding, status, error, updated_at)
-                VALUES
-                    (:profile_id, :object_type, :object_id, :content_hash,
-                     CAST(:embedding AS vector), 'ready', NULL, now())
-                ON CONFLICT (profile_id, object_type, object_id, content_hash)
-                DO UPDATE SET
-                    embedding = EXCLUDED.embedding,
-                    status = 'ready',
-                    error = NULL,
-                    updated_at = now()
-                """
-            ),
-            {
-                "profile_id": job.profile_id,
-                "object_type": job.object_type,
-                "object_id": job.object_id,
-                "content_hash": job.content_hash,
-                "embedding": vector,
-            },
-        )
-        session.execute(
-            text(
-                """
-                UPDATE embedding_jobs
-                SET status = 'completed', last_error = NULL, updated_at = now()
-                WHERE id = :job_id AND status = 'processing'
-                """
-            ),
-            {"job_id": job.id},
+        return bool(
+            session.execute(
+                text(
+                    """
+                    WITH owned AS (
+                        UPDATE embedding_jobs
+                        SET status = 'completed',
+                            last_error = NULL,
+                            updated_at = now()
+                        WHERE id = :job_id
+                          AND status = 'processing'
+                          AND attempts = :generation
+                        RETURNING profile_id, object_type, object_id, content_hash
+                    ), stored AS (
+                        INSERT INTO content_embeddings
+                            (profile_id, object_type, object_id, content_hash,
+                             embedding, status, error, updated_at)
+                        SELECT profile_id, object_type, object_id, content_hash,
+                               CAST(:embedding AS vector), 'ready', NULL, now()
+                        FROM owned
+                        ON CONFLICT (profile_id, object_type, object_id, content_hash)
+                        DO UPDATE SET
+                            embedding = EXCLUDED.embedding,
+                            status = 'ready',
+                            error = NULL,
+                            updated_at = now()
+                        RETURNING 1
+                    )
+                    SELECT EXISTS(SELECT 1 FROM stored)
+                    """
+                ),
+                {
+                    "job_id": job.id,
+                    "generation": job.attempts,
+                    "embedding": vector,
+                },
+            ).scalar_one()
         )
 
     def record_failure(
@@ -450,25 +451,36 @@ class EmbeddingStore:
         job: EmbeddingJob,
         error: str,
         retry: bool,
-    ) -> None:
-        session.execute(
-            text(
-                """
-                UPDATE embedding_jobs
-                SET status = :status,
-                    last_error = :error,
-                    available_at = CASE
-                        WHEN :retry THEN now() + make_interval(secs => LEAST(3600, attempts * 60))
-                        ELSE available_at
-                    END,
-                    updated_at = now()
-                WHERE id = :job_id AND status = 'processing'
-                """
-            ),
-            {
-                "job_id": job.id,
-                "status": "pending" if retry else "failed",
-                "error": (error or "unknown embedding error")[:2000],
-                "retry": retry,
-            },
+    ) -> bool:
+        return bool(
+            session.execute(
+                text(
+                    """
+                    WITH transitioned AS (
+                        UPDATE embedding_jobs
+                        SET status = :status,
+                            last_error = :error,
+                            available_at = CASE
+                                WHEN :retry THEN now() + make_interval(
+                                    secs => LEAST(3600, attempts * 60)
+                                )
+                                ELSE available_at
+                            END,
+                            updated_at = now()
+                        WHERE id = :job_id
+                          AND status = 'processing'
+                          AND attempts = :generation
+                        RETURNING 1
+                    )
+                    SELECT EXISTS(SELECT 1 FROM transitioned)
+                    """
+                ),
+                {
+                    "job_id": job.id,
+                    "generation": job.attempts,
+                    "status": "pending" if retry else "failed",
+                    "error": (error or "unknown embedding error")[:2000],
+                    "retry": retry,
+                },
+            ).scalar_one()
         )

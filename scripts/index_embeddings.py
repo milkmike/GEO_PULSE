@@ -180,13 +180,14 @@ def index_pending(
     if recovered:
         logger.warning("Requeued %d expired embedding job leases", recovered)
 
+    attempted = 0
     processed = 0
     indexed = 0
     failed = 0
-    while not limit or processed < limit:
+    while not limit or attempted < limit:
         fetch_size = batch_size
         if limit:
-            fetch_size = min(batch_size, limit - processed)
+            fetch_size = min(batch_size, limit - attempted)
         with session_factory() as session:
             jobs = store.claim_jobs(
                 session,
@@ -196,7 +197,7 @@ def index_pending(
             contents = [(job, content_loader(session, job)) for job in jobs]
         if not jobs:
             break
-        processed += len(jobs)
+        attempted += len(jobs)
 
         valid_jobs: list[EmbeddingJob] = []
         valid_texts: list[str] = []
@@ -230,31 +231,41 @@ def index_pending(
 
         with session_factory() as session:
             for job, error in invalid:
-                store.record_failure(session, job=job, error=error, retry=False)
-                failed += 1
+                if store.record_failure(
+                    session,
+                    job=job,
+                    error=error,
+                    retry=False,
+                ):
+                    failed += 1
+                    processed += 1
             if provider_error is not None:
                 for job in valid_jobs:
-                    store.record_failure(
+                    if store.record_failure(
                         session,
                         job=job,
                         error=provider_error,
                         retry=job.attempts < max_attempts,
-                    )
-                    failed += 1
+                    ):
+                        failed += 1
+                        processed += 1
             else:
                 for job, vector in successful:
-                    store.record_success(
+                    if store.record_success(
                         session,
                         job=job,
                         profile=profile,
                         embedding=vector,
-                    )
-                    indexed += 1
+                    ):
+                        indexed += 1
+                        processed += 1
         logger.info(
-            "Embedding batch: %d indexed, %d failed (processed=%d)",
+            "Embedding batch: %d indexed, %d failed "
+            "(processed=%d, attempted=%d)",
             indexed,
             failed,
             processed,
+            attempted,
         )
 
     return {"processed": processed, "indexed": indexed, "failed": failed}
