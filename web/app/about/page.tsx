@@ -17,8 +17,9 @@ import {
   Zap,
 } from "lucide-react";
 import SiteHeader from "@/components/SiteHeader";
+import TemperatureMethodologyBlock from "@/components/TemperatureMethodologyBlock";
 import { api } from "@/lib/api";
-import type { Meta, SourceRow } from "@/lib/types";
+import type { Meta, SourceRow, TemperatureMethodology } from "@/lib/types";
 
 interface StatsState {
   total: number;
@@ -72,6 +73,10 @@ export default function AboutPage() {
   const [stats, setStats] = useState<StatsState>({
     total: 0, active: 0, articles: 0, countries: 0, loaded: false, error: false,
   });
+  const [temperatureMethodology, setTemperatureMethodology] = useState<TemperatureMethodology | null>(null);
+  const [temperatureError, setTemperatureError] = useState(false);
+  const [temperatureLoading, setTemperatureLoading] = useState(true);
+  const [temperatureReload, setTemperatureReload] = useState(0);
 
   useEffect(() => {
     Promise.allSettled([api.sources(), api.meta()]).then(([sourcesResult, metaResult]) => {
@@ -91,6 +96,24 @@ export default function AboutPage() {
       });
     });
   }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setTemperatureLoading(true);
+    setTemperatureError(false);
+    api.temperatureMethodology(controller.signal)
+      .then((payload) => {
+        if (!controller.signal.aborted) setTemperatureMethodology(payload);
+      })
+      .catch((reason: unknown) => {
+        const aborted = reason instanceof DOMException && reason.name === "AbortError";
+        if (!controller.signal.aborted && !aborted) setTemperatureError(true);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setTemperatureLoading(false);
+      });
+    return () => controller.abort();
+  }, [temperatureReload]);
 
   const fmt = (n: number) => n.toLocaleString("ru");
   const ph = "…";
@@ -269,8 +292,31 @@ export default function AboutPage() {
         </p>
       </section>
 
-      {/* ── 03 data ── */}
-      <SectionHead num="03" title="Откуда данные" />
+      {/* ── 03 media temperature methodology ── */}
+      <SectionHead num="03" title="Как считается температура медиатона" />
+      {temperatureLoading && (
+        <div role="status" className="card px-5 py-8 text-center text-sm text-dim">
+          Загружаем актуальную методику…
+        </div>
+      )}
+      {!temperatureLoading && temperatureError && (
+        <div role="alert" className="card border-l-2 border-l-ru-red px-5 py-5 text-sm text-dim">
+          <p>Актуальная методика температуры сейчас недоступна.</p>
+          <button
+            type="button"
+            onClick={() => setTemperatureReload((value) => value + 1)}
+            className="mt-3 min-h-11 text-accent underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
+          >
+            повторить
+          </button>
+        </div>
+      )}
+      {!temperatureLoading && temperatureMethodology && (
+        <TemperatureMethodologyBlock methodology={temperatureMethodology} />
+      )}
+
+      {/* ── 04 data ── */}
+      <SectionHead num="04" title="Откуда данные" />
       <section className="prose-editorial">
         <ul className="mb-6 space-y-4">
           {[
@@ -323,8 +369,8 @@ export default function AboutPage() {
         </p>
       </section>
 
-      {/* ── 04 limitations ── */}
-      <SectionHead num="04" title="Ограничения и честные оговорки" />
+      {/* ── 05 limitations ── */}
+      <SectionHead num="05" title="Ограничения и честные оговорки" />
       <section className="prose-editorial">
         <p className="mb-5">
           Прибор, который молчит о своих погрешностях, — это уже немножко башня.
@@ -367,8 +413,8 @@ export default function AboutPage() {
         </ol>
       </section>
 
-      {/* ── 05 open source ── */}
-      <SectionHead num="05" title="Открытый код и контакты" />
+      {/* ── 06 open source ── */}
+      <SectionHead num="06" title="Открытый код и контакты" />
       <section className="prose-editorial">
         <p className="mb-5">
           «Массаракш» — открытый проект под лицензией <b>AGPL-3.0</b>: прибор с закрытой
