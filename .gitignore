@@ -19,3 +19,4 @@ sessions/
 
 # Local isolated development worktrees
 .worktrees/
+.superpowers/
