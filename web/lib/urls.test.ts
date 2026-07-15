@@ -14,6 +14,8 @@ describe("safeHttpUrl", () => {
     "https://example.com/%0Ahidden",
     "https://example.com/%1fhidden",
     "https://example.com/%7Fhidden",
+    "https://example.com/path%5csegment",
+    "https://example.com/\u007fhidden",
     "https://example..com/story",
     "https://-example.com/story",
     "https://example-.com/story",

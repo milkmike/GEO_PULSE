@@ -99,6 +99,10 @@ describe("SearchResults", () => {
   it.each([
     "javascript:alert(1)",
     "https://reader:secret@example.com/private",
+    "https://example.com/%0Ahidden",
+    "https://example.com/path%5csegment",
+    "https://example.com/\u007fhidden",
+    "https://example..com/story",
   ])("does not turn unsafe source URL %s into a link", (unsafeUrl) => {
     render(
       <SearchResults

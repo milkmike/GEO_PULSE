@@ -2,7 +2,7 @@ export function safeHttpUrl(value: string | null | undefined): string | null {
   if (
     !value
     || /[\s\\\u0000-\u001f\u007f]/u.test(value)
-    || /%(?:0[0-9a-f]|1[0-9a-f]|7f)/iu.test(value)
+    || /%(?:0[0-9a-f]|1[0-9a-f]|5c|7f)/iu.test(value)
   ) return null;
   try {
     const parsed = new URL(value);

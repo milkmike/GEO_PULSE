@@ -7,12 +7,12 @@ import binascii
 import json
 from datetime import datetime
 from typing import Any, Protocol
-from urllib.parse import urlparse
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import text
 
+from src.api.public_urls import safe_public_url
 from src.db import get_session
 from src.knowledge import normalize_entity_name, stable_node_id
 
@@ -113,28 +113,6 @@ def decode_entity_cursor(
     if payload.get("binding") != binding:
         raise ValueError("cursor binding does not match the request")
     return _validate_cursor_key(scope, payload.get("key"))
-
-
-def safe_public_url(value: str | None) -> str | None:
-    """Return only absolute HTTP(S) URLs without embedded credentials."""
-    if (
-        not value
-        or "\\" in value
-        or any(char.isspace() or ord(char) < 32 for char in value)
-    ):
-        return None
-    try:
-        parsed = urlparse(value)
-    except ValueError:
-        return None
-    if (
-        parsed.scheme not in {"http", "https"}
-        or not parsed.hostname
-        or parsed.username is not None
-        or parsed.password is not None
-    ):
-        return None
-    return value
 
 
 class EntityQueryService(Protocol):

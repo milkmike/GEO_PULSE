@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from typing import Callable
-from urllib.parse import urlparse
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+from src.api.public_urls import safe_public_url as _safe_http_url
 from src.search import (
     SearchQuery,
     SearchTimeoutError,
@@ -29,19 +29,6 @@ def get_search_service() -> SearchService:
     from src.search import search_articles
 
     return search_articles
-
-
-def _safe_http_url(value: object) -> str | None:
-    if not isinstance(value, str) or not value or any(ch.isspace() for ch in value):
-        return None
-    try:
-        parsed = urlparse(value)
-        if parsed.scheme.casefold() not in {"http", "https"} or not parsed.hostname:
-            return None
-        parsed.port
-    except ValueError:
-        return None
-    return value
 
 
 def _serialize_cursor(value: object) -> str | None:

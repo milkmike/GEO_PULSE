@@ -8,10 +8,9 @@ query-plan gate has passed.
 ## Feature-flag contract
 
 The integrated frontend has one tested Next.js server-only reader for all four
-flags and passes an immutable boolean snapshot to client components. Search and
-stories navigation/panels are wired in Task 8; investigation and signal-detail
-entry points remain off until Task 9 wires them. The flags do not use a
-`NEXT_PUBLIC_` prefix and default to `false` when missing or malformed.
+flags and passes an immutable boolean snapshot to client components. Search,
+stories, investigation, and signal-detail entry points are wired. The flags do
+not use a `NEXT_PUBLIC_` prefix and default to `false` when missing or malformed.
 
 Flags are Docker build arguments because Next.js may prerender the root layout.
 Changing a value therefore requires an explicit web image rebuild; restarting
@@ -66,7 +65,7 @@ story action scale of 1–6 before navigation is enabled.
 2. Check database free space, active connections, API 5xx rate, and p95 latency.
 3. Deploy code with all four flags set to `false`.
 4. Apply migrations in numeric order with fail-fast psql behavior. Apply the
-   complete migration chain on a clean disposable database and apply 019–021 a
+   complete migration chain on a clean disposable database and apply 019–023 a
    second time before touching production.
 5. Confirm `pg_trgm` and `vector` extensions, the generated article
    `search_vector`, and all new tables exist.
@@ -76,12 +75,13 @@ search must remain useful when no embedding profile/provider is available.
 
 ## Backfill
 
-The orchestration command is read-only by default. It uses four ordered stages:
+The orchestration command is read-only by default. It uses five ordered stages:
 
 1. canonical knowledge registry and legacy entity mentions;
 2. cross-country story membership from existing country threads;
 3. partial evidence for legacy signals where the saved payload is sufficient;
-4. deterministic RRI explanation-cache warmup.
+4. durable signal-evidence metadata derived from persisted signal rows;
+5. deterministic RRI explanation-cache warmup.
 
 Every write stage is idempotent, commits bounded batches, and saves its cursor
 only after the transaction commits. Before the first story write, the command
@@ -198,8 +198,7 @@ latency budget from the pre-rollout baseline; do not enable navigation if p95 or
 
 Before step 1, verify on the integrated image that each wired flag independently
 hides/shows its entry point, missing/malformed values behave as `false`, and the
-four variables are present in the running web container. Do not enable
-`FEATURE_INVESTIGATION` or `FEATURE_SIGNAL_DETAIL` before Task 9 lands.
+four variables are present in the running web container.
 
 1. Enable `FEATURE_SIGNAL_DETAIL`; observe 404/5xx and evidence completeness.
 2. Enable `FEATURE_INVESTIGATION`; observe explanation latency, cache hit ratio,
@@ -222,7 +221,7 @@ errors, and product-level empty/error rates against the captured baseline.
 2. Stop the manual backfill process. If a future scheduled embedding or story
    enrichment worker was enabled separately, stop it as well.
 3. Roll back the API/web image only if read endpoints themselves are unhealthy.
-4. Keep migrations 019–021 and all additive tables in place. Do not drop data or
+4. Keep migrations 019–023 and all additive tables in place. Do not drop data or
    remove columns during an incident. Existing collectors and APIs do not depend
    on the flags and continue operating.
 5. Preserve the checkpoint and logs for diagnosis. Resume the same apply command

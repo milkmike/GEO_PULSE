@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import re
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional
-from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+from src.api.public_urls import safe_public_url
 from src.countries import COUNTRIES
 from src.engine.explanations import load_index_explanation
 from src.engine.ru_index import INDEX_VERSION
@@ -24,44 +23,6 @@ def get_explanation_service() -> ExplanationService:
     """Dependency boundary for the persisted, deterministic read service."""
 
     return load_index_explanation
-
-
-def safe_public_url(value: object) -> str | None:
-    """Return only absolute HTTP(S) URLs with a valid host and no credentials."""
-
-    if (
-        not isinstance(value, str)
-        or not value
-        or "\\" in value
-        or any(char.isspace() or ord(char) < 32 for char in value)
-    ):
-        return None
-    try:
-        parsed = urlparse(value)
-        parsed.port
-        hostname = parsed.hostname
-        if (
-            parsed.scheme.casefold() not in {"http", "https"}
-            or not hostname
-            or parsed.username is not None
-            or parsed.password is not None
-        ):
-            return None
-        ascii_hostname = hostname.rstrip(".").encode("idna").decode("ascii")
-        if len(ascii_hostname) > 253:
-            return None
-        if ":" not in ascii_hostname:
-            label_pattern = re.compile(
-                r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$"
-            )
-            if any(
-                not label_pattern.fullmatch(label)
-                for label in ascii_hostname.split(".")
-            ):
-                return None
-    except (UnicodeError, ValueError):
-        return None
-    return value
 
 
 def _require_timezone(value: datetime, field: str) -> None:

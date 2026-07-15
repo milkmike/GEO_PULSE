@@ -10,12 +10,12 @@ import re
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any, Literal, Optional
-from urllib.parse import urlparse
 
 from fastapi import APIRouter, HTTPException, Path, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
+from src.api.public_urls import safe_public_url
 from src.countries import COUNTRIES, country_name_ru
 from src.db import get_session
 from src.stories import MERGE_THRESHOLD
@@ -370,35 +370,6 @@ def _json_list(value: Any) -> list[Any]:
         except json.JSONDecodeError:
             return []
     return []
-
-
-def safe_public_url(value: Any) -> str | None:
-    """Return only absolute HTTP(S) URLs with a parseable hostname."""
-
-    if not isinstance(value, str) or not value or any(char.isspace() for char in value):
-        return None
-    try:
-        parsed = urlparse(value)
-        if (
-            parsed.scheme.lower() not in {"http", "https"}
-            or not parsed.hostname
-            or parsed.username is not None
-            or parsed.password is not None
-        ):
-            return None
-        parsed.port  # force validation of a supplied port
-        hostname = parsed.hostname.rstrip(".").encode("idna").decode("ascii")
-        if len(hostname) > 253:
-            return None
-        if ":" not in hostname:
-            hostname_pattern = re.compile(
-                r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$"
-            )
-            if any(not hostname_pattern.fullmatch(label) for label in hostname.split(".")):
-                return None
-    except ValueError:
-        return None
-    return value
 
 
 def _first_safe_public_url(values: Any, *, fallback: Any = None) -> str | None:

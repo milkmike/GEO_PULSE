@@ -8,7 +8,7 @@ from typing import Any, Mapping, Protocol
 from fastapi import APIRouter, Depends, HTTPException, Path
 from sqlalchemy import text
 
-from src.api.routes.entities import safe_public_url
+from src.api.public_urls import safe_public_url
 from src.countries import country_name_ru
 from src.db import get_session
 from src.engine.signals import SignalEvidence

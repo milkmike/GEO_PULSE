@@ -4,6 +4,7 @@ import Link from "next/link";
 import { ArrowUpRight, BookOpenText, ChevronDown } from "lucide-react";
 import { Fragment, useState } from "react";
 import type { SearchArticle, SearchScoreComponents } from "@/lib/types";
+import { safeHttpUrl } from "@/lib/urls";
 import { useFeatureFlags } from "./FeatureFlagsProvider";
 
 const SCORE_LABELS: [keyof SearchScoreComponents, string][] = [
@@ -15,30 +16,6 @@ const SCORE_LABELS: [keyof SearchScoreComponents, string][] = [
   ["story", "сюжет"],
   ["vector", "семантика"],
 ];
-
-function safeArticleUrl(value: string | null): string | null {
-  if (
-    !value ||
-    value.includes("\\") ||
-    [...value].some((character) => /\s/.test(character) || character.charCodeAt(0) < 32)
-  ) {
-    return null;
-  }
-  try {
-    const parsed = new URL(value);
-    if (
-      !["http:", "https:"].includes(parsed.protocol) ||
-      !parsed.hostname ||
-      parsed.username ||
-      parsed.password
-    ) {
-      return null;
-    }
-    return parsed.href;
-  } catch {
-    return null;
-  }
-}
 
 function countryName(code: string): string {
   if (!code) return "страна не указана";
@@ -90,7 +67,7 @@ function ResultCard({
   storiesNavigation: boolean;
 }) {
   const [explanationOpen, setExplanationOpen] = useState(false);
-  const sourceUrl = safeArticleUrl(item.url);
+  const sourceUrl = safeHttpUrl(item.url);
   const textEvidence = item.evidence.find(
     (evidence) => evidence.type === "text_span" && evidence.text,
   )?.text;
