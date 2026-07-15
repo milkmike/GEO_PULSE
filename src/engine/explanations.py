@@ -69,6 +69,12 @@ def _weights(point: RriPoint) -> tuple[float, float]:
 
 
 def _component_contributions(point: RriPoint) -> dict[str, float]:
+    if point.media is None:
+        return {
+            "structural": float(point.structural or 0),
+            "media": 0.0,
+            "boost": 0.0,
+        }
     structural_weight, media_weight = _weights(point)
     return {
         "structural": float(point.structural or 0) * structural_weight,

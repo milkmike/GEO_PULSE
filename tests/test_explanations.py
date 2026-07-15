@@ -30,7 +30,20 @@ def rri_point(
     structural: float,
     media: float | None,
     boost: float,
+    structural_weight: float = 0.45,
+    media_weight: float = 0.55,
+    media_source: str = "temperature",
+    bound_rule: str | None = None,
 ) -> RriPoint:
+    details = {
+        "weights": {
+            "structural": structural_weight,
+            "media": media_weight,
+        },
+        "media": {"source": media_source},
+    }
+    if bound_rule:
+        details["bound_rule"] = bound_rule
     return RriPoint(
         country_code="KZ",
         time=time,
@@ -41,10 +54,7 @@ def rri_point(
         version="v1",
         article_count=3,
         gdelt_volume=None,
-        details={
-            "weights": {"structural": 0.45, "media": 0.55},
-            "media": {"source": "temperature"},
-        },
+        details=details,
     )
 
 
@@ -144,6 +154,117 @@ def test_bound_adjustment_is_not_mislabelled_as_rounding_residual():
         + exact["rounding_residual"]
         == exact["total_delta"]
     )
+
+
+def test_no_media_points_use_only_structural_contribution():
+    previous = rri_point(
+        time=NOW - timedelta(hours=24),
+        score=10.0,
+        structural=10.0,
+        media=None,
+        boost=5.0,
+        structural_weight=1.0,
+        media_weight=0.0,
+        media_source="none",
+    )
+    current = rri_point(
+        time=NOW,
+        score=12.0,
+        structural=12.0,
+        media=None,
+        boost=10.0,
+        structural_weight=1.0,
+        media_weight=0.0,
+        media_source="none",
+    )
+
+    exact = decompose_rri_shift(previous, current)
+
+    assert exact["total_delta"] == 2.0
+    assert exact["structural_delta"] == 2.0
+    assert exact["media_delta"] == 0.0
+    assert exact["boost_delta"] == 0.0
+    assert exact["exact_subtotal"] == 2.0
+    assert exact["calculation_adjustment_delta"] == 0.0
+    assert exact["rounding_residual"] == 0.0
+
+
+@pytest.mark.parametrize(
+    ("previous", "current", "expected"),
+    [
+        pytest.param(
+            rri_point(
+                time=NOW - timedelta(hours=24),
+                score=10.0,
+                structural=10.0,
+                media=None,
+                boost=5.0,
+                structural_weight=1.0,
+                media_weight=0.0,
+                media_source="none",
+            ),
+            rri_point(
+                time=NOW,
+                score=25.0,
+                structural=12.0,
+                media=20.0,
+                boost=3.0,
+                bound_rule="union_state_floor",
+            ),
+            {
+                "total_delta": 15.0,
+                "structural_delta": -4.6,
+                "media_delta": 11.0,
+                "boost_delta": 3.0,
+                "exact_subtotal": 9.4,
+                "calculation_adjustment_delta": 5.6,
+                "rounding_residual": 0.0,
+            },
+            id="no-media-to-media",
+        ),
+        pytest.param(
+            rri_point(
+                time=NOW - timedelta(hours=24),
+                score=19.4,
+                structural=12.0,
+                media=20.0,
+                boost=3.0,
+            ),
+            rri_point(
+                time=NOW,
+                score=25.0,
+                structural=14.0,
+                media=None,
+                boost=10.0,
+                structural_weight=1.0,
+                media_weight=0.0,
+                media_source="none",
+                bound_rule="union_state_floor",
+            ),
+            {
+                "total_delta": 5.6,
+                "structural_delta": 8.6,
+                "media_delta": -11.0,
+                "boost_delta": -3.0,
+                "exact_subtotal": -5.4,
+                "calculation_adjustment_delta": 11.0,
+                "rounding_residual": 0.0,
+            },
+            id="media-to-no-media",
+        ),
+    ],
+)
+def test_media_availability_transitions_follow_the_stored_formula_branch(
+    previous,
+    current,
+    expected,
+):
+    exact = decompose_rri_shift(previous, current)
+
+    assert {
+        field: exact[field]
+        for field in expected
+    } == expected
 
 
 def test_counterfactual_event_contribution_is_explicitly_estimated():
