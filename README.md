@@ -84,6 +84,8 @@ boost      — события action level ≥ 5 за последние 14 дн
 - **`/sources`** — все источники с тиром доверия, языком и живостью + матрица языкового покрытия (ru/en/нативный).
 - **`/about`** — миссия и методология (журнальный лонгрид).
 - **`/analytics`** — лента think tanks и OSINT-расследователей (Jamestown, ISW, Carnegie, RUSI, CSIS, Bellingcat, OCCRP…), архив до 2 лет.
+- **`/search`** — объяснимый поиск по проиндексированным публикациям, странам, темам и сущностям с прямой ссылкой на первоисточник.
+- **`/stories`** — межстрановые сюжеты: страны, события, сущности и доказательная подборка публикаций.
 
 ---
 
@@ -155,6 +157,11 @@ boost      — события action level ≥ 5 за последние 14 дн
 | `GET /api/v2/countries/{code}/entities` · `/fx` | Сущности в повестке страны · курс валюты к рублю |
 | `GET /api/v2/topics/{topic}/countries` | Тематическая линза: кто и как обсуждает тему |
 | `GET /api/v2/map` | Choropleth-данные карты |
+| `GET /api/v2/search/articles` | Гибридный лексический/структурный поиск; работает без embedding-провайдера |
+| `GET /api/v2/stories` · `/stories/{id}` · `/countries/{code}/stories` | Межстрановые сюжеты и страновые срезы |
+| `GET /api/v2/signals/{id}` | Сохранённые правило, порог, baseline и доказательства сигнала |
+| `GET /api/v2/countries/{code}/index-explanation` | Точные слагаемые сдвига RRI, отдельно оценки и контекст |
+| `GET /api/v2/methodology/temperature` | Единая исполняемая методология Термометра |
 | `GET /api/v1/sources` · `/api/v2/health/sources` | Реестр источников со статистикой (Redis-кеш) · живость |
 | `GET /world` | Встроенный мини-дашборд (vanilla JS) |
 | **`http://host:3334`** | **Next.js-дашборд: карта, фильтры, линза, досье, источники, embed-виджеты** |
@@ -194,6 +201,10 @@ docker compose up -d
 Существующая база: примените миграцию `scripts/migrations/008_world_expansion.sql`.
 
 **Встроенный мировой дашборд:** `http://localhost:8100/world` — интерактивная карта 99 стран, клик по стране открывает досье (индекс, слагаемые, темы, заголовки, сигналы, AI-брифинг).
+
+Перед включением поиска, сюжетов и расследований в production выполните dry-run
+backfill и release gate из
+[`docs/release/investigation-search-stories.md`](docs/release/investigation-search-stories.md).
 
 Первичный прогон мирового контура:
 

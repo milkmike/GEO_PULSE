@@ -16,7 +16,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
-from src.config import COUNTRY_NAMES
+from src.countries import COUNTRIES, country_name_ru
 from src.db import get_session
 from src.stories import MERGE_THRESHOLD
 
@@ -342,7 +342,7 @@ def _validate_country(country: str | None) -> str | None:
     if country is None:
         return None
     country = country.upper()
-    if country not in COUNTRY_NAMES:
+    if country not in COUNTRIES:
         raise HTTPException(status_code=404, detail="Unknown country code")
     return country
 
@@ -662,7 +662,7 @@ def get_story(
     result = story_to_dict(story)
     result["countries"] = [{
         "country_code": str(_value(row, "country_code")).strip(),
-        "country_name": COUNTRY_NAMES.get(str(_value(row, "country_code")).strip(), str(_value(row, "country_code")).strip()),
+        "country_name": country_name_ru(str(_value(row, "country_code")).strip()),
         "article_count": int(_value(row, "article_count", 0) or 0),
         "source_count": int(_value(row, "source_count", 0) or 0),
         "media_tone": float(_value(row, "media_tone")) if _value(row, "media_tone") is not None else None,
@@ -758,4 +758,4 @@ def get_country_stories(
         cursor=cursor,
         limit=limit,
     )
-    return {"country": country, "name": COUNTRY_NAMES[country], **payload}
+    return {"country": country, "name": country_name_ru(country), **payload}

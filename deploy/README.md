@@ -29,6 +29,9 @@ nano /opt/geopulse/.env     # DB_PASSWORD, OPENROUTER_API_KEY, JINA_API_KEY
 cd /opt/geopulse && bash deploy/deploy.sh
 ```
 
+Актуальный пример переменных, включая выключенные по умолчанию флаги поиска,
+сюжетов, расследований и деталей сигналов: [`deploy/.env.example`](.env.example).
+
 ## Что нужно в `.env` (минимум для мирового контура)
 
 | Переменная | Зачем | Обязательна |
@@ -75,3 +78,19 @@ docker compose run --rm ru-index python scripts/calc_ru_index.py   # перес�
 docker compose run --rm gdelt-collector python scripts/collect_gdelt.py --days 90
 docker compose restart api                           # перезапуск API
 ```
+
+## Выкладка поиска, сюжетов и расследований
+
+Сначала оставьте `FEATURE_SEARCH_NAVIGATION`, `FEATURE_STORIES_NAVIGATION`,
+`FEATURE_INVESTIGATION` и `FEATURE_SIGNAL_DETAIL` равными `false`. Примените
+миграции, запустите read-only dry-run, затем явный `--apply` с checkpoint,
+смонтированным из `./backups`. После проверки данных и планов запросов включайте
+флаги по одному: детали сигналов → расследования → сюжеты → поиск.
+
+Флаги становятся рабочими только в интегрированной frontend-сборке Tasks 8/9,
+где есть протестированный server-side reader и передача переменных через
+Docker Compose. Этот backend-релиз сам по себе навигацию не переключает.
+
+Полная последовательность, SQL-метрики, smoke-сценарии и rollback без удаления
+аддитивных таблиц описаны в
+[`docs/release/investigation-search-stories.md`](../docs/release/investigation-search-stories.md).
