@@ -17,9 +17,21 @@ set -euo pipefail
 APP_DIR="${APP_DIR:-/opt/geopulse}"
 LOG="${DEPLOY_LOG:-/var/log/geopulse-deploy.log}"
 STATE_FILE="${DEPLOY_STATE_FILE:-${APP_DIR}/.deploy-state/last-successful-commit}"
-cd "$APP_DIR"
+LOCK_FILE="${DEPLOY_LOCK_FILE:-${APP_DIR}/.deploy-state/auto-update.lock}"
 
 log() { echo "$(date -Is) $*" >> "$LOG"; }
+
+# A deployment can outlive the five-minute cron interval. Keep the lock on an
+# open file descriptor for this process's entire lifetime and skip overlaps
+# before either git or Docker can mutate state.
+mkdir -p "$(dirname "$LOCK_FILE")"
+exec 9>"$LOCK_FILE"
+if ! flock -n 9; then
+    log "SKIP: deployment already running"
+    exit 0
+fi
+
+cd "$APP_DIR"
 
 # Refuse to run on a dirty tracked tree — would block a clean fast-forward.
 # (.env and other gitignored files don't count and are safe to keep.)

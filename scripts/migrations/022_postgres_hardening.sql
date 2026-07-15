@@ -15,8 +15,9 @@ BEGIN
     SELECT 1
     FROM pg_index idx
     JOIN pg_class cls ON cls.oid = idx.indexrelid
-    JOIN pg_namespace ns ON ns.oid = cls.relnamespace
-    WHERE ns.nspname = current_schema()
+    JOIN pg_class target ON target.oid = idx.indrelid
+    WHERE idx.indrelid = 'public.articles'::regclass
+      AND cls.relnamespace = target.relnamespace
       AND cls.relname = 'idx_articles_search_snapshot_v2'
       AND idx.indisvalid AND idx.indisready
   ) THEN
@@ -37,8 +38,9 @@ BEGIN
     SELECT 1
     FROM pg_index idx
     JOIN pg_class cls ON cls.oid = idx.indexrelid
-    JOIN pg_namespace ns ON ns.oid = cls.relnamespace
-    WHERE ns.nspname = current_schema()
+    JOIN pg_class target ON target.oid = idx.indrelid
+    WHERE idx.indrelid = 'public.embedding_jobs'::regclass
+      AND cls.relnamespace = target.relnamespace
       AND cls.relname = 'idx_embedding_jobs_pending_v2'
       AND idx.indisvalid AND idx.indisready
   ) THEN
@@ -59,8 +61,9 @@ BEGIN
     SELECT 1
     FROM pg_index idx
     JOIN pg_class cls ON cls.oid = idx.indexrelid
-    JOIN pg_namespace ns ON ns.oid = cls.relnamespace
-    WHERE ns.nspname = current_schema()
+    JOIN pg_class target ON target.oid = idx.indrelid
+    WHERE idx.indrelid = 'public.embedding_jobs'::regclass
+      AND cls.relnamespace = target.relnamespace
       AND cls.relname = 'idx_embedding_jobs_processing_lease_v2'
       AND idx.indisvalid AND idx.indisready
   ) THEN

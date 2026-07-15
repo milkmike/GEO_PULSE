@@ -81,6 +81,7 @@ def _assert_success(result) -> None:
 
 
 def _reset(cursor, *, initialize: bool) -> None:
+    cursor.execute("DROP SCHEMA IF EXISTS role_schema CASCADE")
     cursor.execute("DROP SCHEMA public CASCADE")
     cursor.execute("CREATE SCHEMA public")
     if initialize:
@@ -90,6 +91,20 @@ def _reset(cursor, *, initialize: bool) -> None:
             AS $$ SELECT 'test-shim-no-timescaledb'::text $$
         """)
         cursor.execute((ROOT / "data" / "init.sql").read_text())
+
+
+def _runner_search_path(cursor, *, reset: bool) -> None:
+    from psycopg2 import sql
+
+    cursor.execute("SELECT current_user, current_database()")
+    role, database = cursor.fetchone()
+    if reset:
+        statement = sql.SQL("ALTER ROLE {} IN DATABASE {} RESET search_path")
+    else:
+        statement = sql.SQL(
+            "ALTER ROLE {} IN DATABASE {} SET search_path = role_schema, public"
+        )
+    cursor.execute(statement.format(sql.Identifier(role), sql.Identifier(database)))
 
 
 def _index_rows(cursor):
@@ -293,10 +308,21 @@ def test_actual_runner_upgrades_old_019_and_recovers_invalid_shadows():
                 [(path.name,) for path in sorted(MIGRATIONS.glob("*.sql"))
                  if path.name != "022_postgres_hardening.sql"],
             )
+            cursor.execute("CREATE SCHEMA role_schema")
+            _runner_search_path(cursor, reset=False)
+
+        probe = psycopg2.connect(dsn)
+        try:
+            with probe.cursor() as cursor:
+                cursor.execute("SELECT current_schema()")
+                assert cursor.fetchone()[0] == "role_schema"
+        finally:
+            probe.close()
 
         first = _run_migrations(dsn)
         _assert_success(first)
         assert "applying 022_postgres_hardening.sql" in first.stdout
+        assert "applying 001_api_usage.sql" not in first.stdout
         second = _run_migrations(dsn)
         _assert_success(second)
         assert "skip 022_postgres_hardening.sql (already applied)" in second.stdout
@@ -317,6 +343,8 @@ def test_actual_runner_upgrades_old_019_and_recovers_invalid_shadows():
             """)
             assert cursor.fetchone()[0] == 1
     finally:
+        with connection.cursor() as cursor:
+            _runner_search_path(cursor, reset=True)
         connection.close()
 
 

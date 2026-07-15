@@ -16,20 +16,20 @@ MIG_DIR="${MIG_DIR:-/scripts/migrations}"
 PSQL=(psql -v ON_ERROR_STOP=1 -X -q)
 
 echo "[migrate] applying pending migrations from ${MIG_DIR}"
-"${PSQL[@]}" -c "CREATE TABLE IF NOT EXISTS schema_migrations (
+"${PSQL[@]}" -c "CREATE TABLE IF NOT EXISTS public.schema_migrations (
     filename TEXT PRIMARY KEY, applied_at TIMESTAMPTZ DEFAULT now());"
 
 for f in "${MIG_DIR}"/*.sql; do
     b="$(basename "$f")"
     already="$("${PSQL[@]}" -tA -c \
-        "SELECT 1 FROM schema_migrations WHERE filename='${b}'")"
+        "SELECT 1 FROM public.schema_migrations WHERE filename='${b}'")"
     if [ "${already}" = "1" ]; then
         echo "[migrate] skip ${b} (already applied)"
         continue
     fi
     echo "[migrate] applying ${b}"
     "${PSQL[@]}" -f "$f"
-    "${PSQL[@]}" -c "INSERT INTO schema_migrations(filename) VALUES ('${b}')
+    "${PSQL[@]}" -c "INSERT INTO public.schema_migrations(filename) VALUES ('${b}')
                      ON CONFLICT DO NOTHING;"
 done
 

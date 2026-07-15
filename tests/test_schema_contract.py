@@ -46,8 +46,13 @@ def test_postgres_hardening_is_additive_for_databases_that_already_ran_019():
         "WHERE status = 'processing'",
         "indisvalid AND idx.indisready",
         "DROP CONSTRAINT thread_articles_thread_id_fkey",
+        "idx.indrelid = 'public.articles'::regclass",
+        "idx.indrelid = 'public.embedding_jobs'::regclass",
+        "cls.relnamespace = target.relnamespace",
     ):
         assert fragment in sql
+
+    assert "current_schema()" not in sql
 
     assert sql.index("CREATE INDEX CONCURRENTLY idx_articles_search_snapshot_v2") < sql.index(
         "DROP INDEX CONCURRENTLY IF EXISTS idx_articles_search_snapshot;"
@@ -86,6 +91,7 @@ def test_migration_runner_is_strict_and_records_only_success():
     assert "ON_ERROR_STOP=0" not in runner
     assert "some statements errored (tolerated)" not in runner
     assert "Record as applied regardless" not in runner
+    assert "public.schema_migrations" in runner
 
 
 def test_story_schema_contract():
