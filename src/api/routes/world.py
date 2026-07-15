@@ -12,6 +12,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import text
 
+from src.api.signal_article_context import load_signal_article_previews
 from src.countries import COUNTRIES, REGIONS, country_name_ru
 from src.db import get_session
 from src.engine.health import health_summary, source_health
@@ -700,6 +701,7 @@ def list_signals(days: int = Query(3, ge=1, le=30),
             """),
             params,
         ).fetchall()
+        previews = load_signal_article_previews(session, rows, limit=2)
 
     return {
         "signals": [
@@ -709,7 +711,18 @@ def list_signals(days: int = Query(3, ge=1, le=30),
              "title": r.title, "description": r.description, "payload": r.payload,
              "created_at": r.created_at.isoformat(),
              "expires_at": r.expires_at.isoformat() if r.expires_at else None,
-             "active": bool(r.expires_at and r.expires_at > datetime.now(timezone.utc))}
+             "active": bool(r.expires_at and r.expires_at > datetime.now(timezone.utc)),
+             "evidence_preview": previews.get(
+                 int(r.id),
+                 {
+                     "kind": "unavailable",
+                     "articles": [],
+                     "total": 0,
+                     "window_hours": None,
+                     "window_start": None,
+                     "window_end": None,
+                 },
+             )}
             for r in rows
         ],
         "total": len(rows),
