@@ -2,6 +2,7 @@ import json
 import base64
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
@@ -607,16 +608,17 @@ class FakeStorySession:
                 first_seen=NOW - timedelta(days=2), last_seen=NOW,
                 primary_url="https://example.test/az",
             )])
-        if "FROM story_entities se" in sql:
+        if "WITH entity_aggregates AS" in sql:
             return FakeResult(rows=[SimpleNamespace(
                 entity_id="entity-route", mentions=3, confidence=0.9,
                 evidence={"article_ids": [1, 2]}, canonical_name="Route",
                 kind="infrastructure",
             )])
-        if "FROM story_events sve" in sql:
+        if "WITH representative_events AS" in sql:
             return FakeResult(rows=[SimpleNamespace(
                 entity_id="entity-route", event_key="транскаспийский маршрут",
-                event_at=NOW, action_level=3, evidence={"articles": [1, 2]},
+                event_at=NOW, action_level=3,
+                evidence={"article_ids": [1], "representative_article_id": 1},
                 confidence=0.9,
             )])
         if "WITH ranked_articles" in sql:
@@ -782,9 +784,9 @@ class UnsafeUrlStorySession(FakeStorySession):
                     "https://safe.example/country-primary",
                 ],
             )])
-        if "FROM story_entities se" in sql:
+        if "WITH entity_aggregates AS" in sql:
             return super().execute(statement, params)
-        if "FROM story_events sve" in sql:
+        if "WITH representative_events AS" in sql:
             return super().execute(statement, params)
         if "FROM story_articles sa" in sql:
             urls = [
@@ -967,6 +969,81 @@ class SnapshotArticleSession(FakeStorySession):
         return super().execute(statement, params)
 
 
+class SnapshotDetailEvidenceSession(SnapshotArticleSession):
+    def execute(self, statement, params=None):
+        sql = str(statement)
+        params = params or {}
+        old_entity = SimpleNamespace(
+            entity_id="entity-old", mentions=2, confidence=0.75,
+            evidence={"article_ids": [1, 2]}, canonical_name="Old entity",
+            kind="person",
+        )
+        new_entity = SimpleNamespace(
+            entity_id="entity-new", mentions=1, confidence=0.99,
+            evidence={"article_ids": [3]}, canonical_name="New entity",
+            kind="person",
+        )
+        old_event = SimpleNamespace(
+            entity_id="entity-old", event_key="old event", event_at=NOW,
+            action_level=3,
+            evidence={"article_ids": [1], "representative_article_id": 1},
+            confidence=0.75,
+        )
+        new_event = SimpleNamespace(
+            entity_id="entity-new", event_key="new event",
+            event_at=NOW + timedelta(minutes=1), action_level=6,
+            evidence={"article_ids": [3], "representative_article_id": 3},
+            confidence=0.99,
+        )
+        if "WITH entity_aggregates AS" in sql:
+            self.calls.append((sql, params))
+            return FakeResult(rows=[old_entity])
+        if "WITH representative_events AS" in sql:
+            self.calls.append((sql, params))
+            return FakeResult(rows=[old_event])
+        if "FROM story_entities se" in sql:
+            self.calls.append((sql, params))
+            return FakeResult(rows=[new_entity if self.mutated else old_entity])
+        if "FROM story_events sve" in sql:
+            self.calls.append((sql, params))
+            return FakeResult(rows=[new_event if self.mutated else old_event])
+        return super().execute(statement, params)
+
+
+class FractionalRankSession(FakeStorySession):
+    def __init__(self):
+        super().__init__()
+        self.rows = []
+        for story_id, relevance in (
+            (9, Decimal("0.833333")),
+            (8, Decimal("0.833333")),
+            (7, Decimal("0.666667")),
+        ):
+            row = story_row(story_id)
+            row.relevance_score = relevance
+            self.rows.append(row)
+
+    def execute(self, statement, params=None):
+        sql = str(statement)
+        params = params or {}
+        if "ORDER BY lifecycle_rank ASC" in sql:
+            self.calls.append((sql, params))
+            rows = self.rows
+            if "cursor_relevance" in params:
+                cursor_relevance = Decimal(str(params["cursor_relevance"]))
+                cursor_id = params["cursor_id"]
+                rows = [
+                    row for row in rows
+                    if row.relevance_score < cursor_relevance
+                    or (
+                        row.relevance_score == cursor_relevance
+                        and row.id < cursor_id
+                    )
+                ]
+            return FakeResult(rows=rows[:params["limit"]])
+        return super().execute(statement, params)
+
+
 class FakeSessionContext:
     def __init__(self, session):
         self.session = session
@@ -1026,7 +1103,10 @@ def test_story_detail_includes_evidence_and_country_primary_urls(monkeypatch):
     payload = response.json()
     assert payload["countries"][0]["primary_url"] == "https://example.test/az"
     assert payload["entities"][0]["evidence"] == {"article_ids": [1, 2]}
-    assert payload["events"][0]["evidence"] == {"articles": [1, 2]}
+    assert payload["events"][0]["evidence"] == {
+        "article_ids": [1],
+        "representative_article_id": 1,
+    }
     assert payload["articles"][0]["is_primary"] is True
     detail_sql, detail_params = next(
         call for call in session.calls if "WHERE st.id = :story_id" in call[0]
@@ -1231,11 +1311,11 @@ def test_story_list_supports_topic_entity_date_filters_and_active_ranking(monkey
     assert "sa.membership_generation <= :membership_generation" in sql
     assert "action_level_snapshot" in sql
     assert "JOIN analysis" not in sql
-    assert "EXTRACT(EPOCH FROM (:ranking_at - rf.last_seen))" in sql
-    assert "rf.article_count::numeric" in sql
-    assert "rf.source_count::numeric" in sql
-    assert "rf.country_count" in sql
-    assert "rf.highest_action_level" in sql
+    assert "EXTRACT(EPOCH FROM (:ranking_at - raw.last_seen))" in sql
+    assert "raw.article_count::numeric" in sql
+    assert "raw.source_count::numeric" in sql
+    assert "raw.country_count" in sql
+    assert "raw.highest_action_level" in sql
     assert params["ranking_at"].tzinfo is not None
     assert invalid_range.status_code == 422
     assert mixed_timezone_invalid_range.status_code == 422
@@ -1287,8 +1367,10 @@ def test_story_activity_ranking_preserves_action_level_six():
 
     assert level_six[1] > level_five[1]
     assert "^[1-6]$" in stories_routes.STORY_RANK_FEATURES_CTE
-    assert "LEAST(rf.highest_action_level, 6)" in stories_routes.STORY_RELEVANCE_SQL
-    assert "/ 6" in stories_routes.STORY_RELEVANCE_SQL
+    assert "LEAST(raw.highest_action_level, 6)" in (
+        stories_routes.STORY_RELEVANCE_EXPRESSION_SQL
+    )
+    assert "/ 6" in stories_routes.STORY_RELEVANCE_EXPRESSION_SQL
 
 
 def test_story_cursor_pins_ranking_clock_for_stable_followup_page(monkeypatch):
@@ -1308,6 +1390,47 @@ def test_story_cursor_pins_ranking_clock_for_stable_followup_page(monkeypatch):
     second_ranking_at = list_calls[1][1]["ranking_at"]
     assert second_ranking_at == first_ranking_at
     assert "cursor_lifecycle_rank" in list_calls[1][1]
+
+
+def test_story_cursor_uses_one_fixed_decimal_rank_key_without_gaps(monkeypatch):
+    session = FractionalRankSession()
+    client, _ = story_client(monkeypatch, session)
+    cursor = None
+    observed_ids = []
+
+    while True:
+        params = {"limit": 1}
+        if cursor:
+            params["cursor"] = cursor
+        response = client.get("/api/v2/stories", params=params)
+        assert response.status_code == 200
+        payload = response.json()
+        observed_ids.extend(story["id"] for story in payload["stories"])
+        cursor = payload["next_cursor"]
+        if not cursor:
+            break
+
+    assert observed_ids == [9, 8, 7]
+    assert len(observed_ids) == len(set(observed_ids))
+    first_cursor = client.get("/api/v2/stories", params={"limit": 1}).json()[
+        "next_cursor"
+    ]
+    cursor_payload = json.loads(base64.urlsafe_b64decode(
+        first_cursor + "=" * (-len(first_cursor) % 4)
+    ).decode("utf-8"))
+    assert cursor_payload[5] == "0.833333"
+    followup_params = next(
+        params for _, params in session.calls if "cursor_relevance" in params
+    )
+    assert followup_params["cursor_relevance"] == Decimal("0.833333")
+    assert isinstance(followup_params["cursor_relevance"], Decimal)
+    list_sql = next(
+        sql for sql, _ in session.calls if "ORDER BY lifecycle_rank ASC" in sql
+    )
+    assert "ROUND(" in list_sql
+    assert "6)::numeric(8,6)" in list_sql
+    assert "AS relevance_score" in list_sql
+    assert stories_routes.STORY_RELEVANCE_SQL == "rf.relevance_score"
 
 
 def test_story_cursor_ignores_mutated_current_aggregates_after_first_page(monkeypatch):
@@ -1412,6 +1535,41 @@ def test_article_cursor_freezes_membership_set_and_rank_across_mutations(monkeyp
     assert "sa.membership_generation <= :membership_generation" in article_calls[1][0]
     assert "membership_confidence_snapshot" in article_calls[1][0]
     assert "JOIN analysis" not in article_calls[1][0]
+
+
+def test_article_cursor_freezes_entities_and_events_at_membership_generation(
+    monkeypatch,
+):
+    session = SnapshotDetailEvidenceSession()
+    client, _ = story_client(monkeypatch, session)
+
+    first = client.get("/api/v2/stories/7?article_limit=1")
+    session.mutated = True
+    second = client.get(
+        "/api/v2/stories/7",
+        params={
+            "article_limit": 1,
+            "article_cursor": first.json()["articles_next_cursor"],
+        },
+    )
+
+    assert first.status_code == second.status_code == 200
+    assert [item["entity_id"] for item in first.json()["entities"]] == ["entity-old"]
+    assert [item["entity_id"] for item in second.json()["entities"]] == ["entity-old"]
+    assert [item["event_key"] for item in first.json()["events"]] == ["old event"]
+    assert [item["event_key"] for item in second.json()["events"]] == ["old event"]
+    entity_sql, entity_params = next(
+        call for call in session.calls if "WITH entity_aggregates AS" in call[0]
+    )
+    event_sql, event_params = next(
+        call for call in session.calls if "WITH representative_events AS" in call[0]
+    )
+    assert "story_entities" not in entity_sql
+    assert "story_events" not in event_sql
+    assert "sa.membership_generation <= :membership_generation" in entity_sql
+    assert "sa.membership_generation <= :membership_generation" in event_sql
+    assert entity_params["membership_generation"] == 12
+    assert event_params["membership_generation"] == 12
 
 
 def test_article_cursor_rejects_invalid_ranking_context(monkeypatch):
@@ -1559,6 +1717,73 @@ def test_typed_invalid_story_and_article_cursors_return_400(monkeypatch):
 
     assert story_response.status_code == 400
     assert article_response.status_code == 400
+
+
+def test_story_cursor_rejects_noncanonical_or_unsafe_values(monkeypatch):
+    client, _ = story_client(monkeypatch)
+    valid = client.get("/api/v2/stories?limit=1").json()["next_cursor"]
+    payload = json.loads(base64.urlsafe_b64decode(
+        valid + "=" * (-len(valid) % 4)
+    ).decode("utf-8"))
+
+    tampered = ["$$$$", valid + "="]
+    for index, value in (
+        (2, "2026-07-15T12:00:00"),
+        (5, 2.0),
+        (6, "2026-07-15T12:00:00"),
+        (7, 0),
+    ):
+        changed = list(payload)
+        changed[index] = value
+        tampered.append(base64.urlsafe_b64encode(
+            json.dumps(changed, separators=(",", ":")).encode("utf-8")
+        ).decode("ascii").rstrip("="))
+
+    responses = [
+        client.get("/api/v2/stories", params={"limit": 1, "cursor": cursor})
+        for cursor in tampered
+    ]
+    assert all(response.status_code == 400 for response in responses)
+
+
+def test_article_cursor_rejects_noncanonical_or_unsafe_values(monkeypatch):
+    client, _ = story_client(monkeypatch, PaginatedArticleSession())
+    valid = client.get("/api/v2/stories/7?article_limit=1").json()[
+        "articles_next_cursor"
+    ]
+    payload = json.loads(base64.urlsafe_b64decode(
+        valid + "=" * (-len(valid) % 4)
+    ).decode("utf-8"))
+
+    tampered = ["$$$$", valid + "="]
+    for index, value in (
+        (2, "2026-07-15T12:00:00"),
+        (4, 2.0),
+        (5, "2026-07-15T12:00:00"),
+        (6, 0),
+    ):
+        changed = list(payload)
+        changed[index] = value
+        tampered.append(base64.urlsafe_b64encode(
+            json.dumps(changed, separators=(",", ":")).encode("utf-8")
+        ).decode("ascii").rstrip("="))
+
+    responses = [
+        client.get(
+            "/api/v2/stories/7",
+            params={"article_limit": 1, "article_cursor": cursor},
+        )
+        for cursor in tampered
+    ]
+    assert all(response.status_code == 400 for response in responses)
+
+
+def test_story_detail_requires_a_positive_story_id(monkeypatch):
+    client, _ = story_client(monkeypatch)
+
+    response = client.get("/api/v2/stories/0")
+
+    assert response.status_code == 422
 
 
 def test_story_api_serializes_only_http_urls_with_hostnames(monkeypatch):

@@ -51,6 +51,11 @@ fixed. The stories page surfaces that limitation.
 Story-detail article cursors carry the same membership-generation cutoff.
 Memberships committed after the first page are excluded, and ordering uses the
 immutable `membership_confidence_snapshot` saved in membership evidence.
+Entity and event evidence is rebuilt from only those visible memberships, not
+from the live materialized story aggregate tables. List and article cursors use
+a six-decimal PostgreSQL `numeric` rank key serialized as a decimal string;
+decoders accept only canonical unpadded base64url, bounded positive IDs,
+timezone-aware dates, and finite relevance values in the documented range.
 Migration 023 backfills missing or corrupt action/confidence snapshots in
 bounded, retry-safe batches, preserves a valid action level 6, and enforces the
 story action scale of 1–6 before navigation is enabled.

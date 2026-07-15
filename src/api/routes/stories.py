@@ -6,13 +6,13 @@ import base64
 import binascii
 import hashlib
 import json
-import math
 import re
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any, Literal, Optional
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Path, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
@@ -22,15 +22,41 @@ from src.stories import MERGE_THRESHOLD
 
 
 router = APIRouter(prefix="/api/v2", tags=["stories"])
-STORY_CURSOR_VERSION = "stories-v4-membership-generation"
-ARTICLE_CURSOR_VERSION = "story-articles-v4-membership-generation"
+STORY_CURSOR_VERSION = "stories-v5-fixed-decimal-rank"
+ARTICLE_CURSOR_VERSION = "story-articles-v5-fixed-decimal-rank"
 MAX_LINKED_SIGNALS = 5
 MAX_STORY_ALIAS_DEPTH = 32
 MAX_PRIMARY_URL_CANDIDATES = 5
 MAX_RRI_SHIFTS = 8
 MIN_MEANINGFUL_RRI_DELTA = 3.0
+CURSOR_DECIMAL_PLACES = Decimal("0.000001")
+MAX_STORY_ID = 2**63 - 1
+MAX_ARTICLE_ID = 2**31 - 1
+MAX_MEMBERSHIP_GENERATION = 2**63 - 1
 
-STORY_RANK_FEATURES_CTE = """
+STORY_RELEVANCE_EXPRESSION_SQL = """(
+    GREATEST(
+        0,
+        1 - LEAST(
+            GREATEST(EXTRACT(EPOCH FROM (:ranking_at - raw.last_seen)) / 86400, 0),
+            30
+        ) / 30
+    ) * 0.35
+    + LEAST(
+        raw.article_count::numeric
+        / GREATEST(EXTRACT(EPOCH FROM (raw.last_seen - raw.first_seen)) / 86400, 1),
+        20
+    ) / 20 * 0.25
+    + LEAST(raw.highest_action_level, 6)::numeric / 6 * 0.18
+    + LEAST(
+        raw.source_count::numeric
+        / GREATEST(raw.article_count, 1),
+        1
+    ) * 0.12
+    + LEAST(raw.country_count, 6)::numeric / 6 * 0.10
+)"""
+
+STORY_RANK_FEATURES_CTE = f"""
 WITH story_rank_raw AS (
     SELECT st_snapshot.id AS story_id,
            MIN(ar.published_at) AS first_seen,
@@ -65,34 +91,15 @@ WITH story_rank_raw AS (
                WHEN raw.first_seen >= :ranking_at - INTERVAL '2 days' THEN 2
                WHEN raw.last_seen >= :ranking_at - INTERVAL '14 days' THEN 3
                ELSE 4
-           END AS lifecycle_rank
+           END AS lifecycle_rank,
+           ROUND({STORY_RELEVANCE_EXPRESSION_SQL}, 6)::numeric(8,6)
+               AS relevance_score
     FROM story_rank_raw raw
 )
 """
 
 STORY_LIFECYCLE_RANK_SQL = "rf.lifecycle_rank"
-
-STORY_RELEVANCE_SQL = """(
-    GREATEST(
-        0,
-        1 - LEAST(
-            GREATEST(EXTRACT(EPOCH FROM (:ranking_at - rf.last_seen)) / 86400, 0),
-            30
-        ) / 30
-    ) * 0.35
-    + LEAST(
-        rf.article_count::numeric
-        / GREATEST(EXTRACT(EPOCH FROM (rf.last_seen - rf.first_seen)) / 86400, 1),
-        20
-    ) / 20 * 0.25
-    + LEAST(rf.highest_action_level, 6)::numeric / 6 * 0.18
-    + LEAST(
-        rf.source_count::numeric
-        / GREATEST(rf.article_count, 1),
-        1
-    ) * 0.12
-    + LEAST(rf.country_count, 6)::numeric / 6 * 0.10
-)"""
+STORY_RELEVANCE_SQL = "rf.relevance_score"
 
 STORY_FIELDS = """
     st.id, st.slug, st.title_ru, st.title_en, st.summary, st.lifecycle,
@@ -831,6 +838,58 @@ def _attach_story_context(
         story["country_context"] = country_contexts.get(story_id)
 
 
+def _canonical_cursor_relevance(value: Any) -> str:
+    try:
+        relevance = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise ValueError("Invalid cursor relevance") from exc
+    if not relevance.is_finite() or relevance < 0 or relevance > 1:
+        raise ValueError("Cursor relevance must be between zero and one")
+    rounded = relevance.quantize(CURSOR_DECIMAL_PLACES, rounding=ROUND_HALF_UP)
+    return format(rounded, ".6f")
+
+
+def _parse_cursor_relevance(value: Any) -> Decimal:
+    if not isinstance(value, str) or not re.fullmatch(
+        r"(?:0[.]\d{6}|1[.]000000)", value
+    ):
+        raise ValueError("Invalid cursor relevance key")
+    relevance = Decimal(value)
+    if not relevance.is_finite() or relevance < 0 or relevance > 1:
+        raise ValueError("Cursor relevance must be between zero and one")
+    return relevance
+
+
+def _decode_canonical_base64url_json(cursor: str) -> Any:
+    if not isinstance(cursor, str) or not cursor or len(cursor) > 4096:
+        raise ValueError("Invalid cursor encoding")
+    try:
+        raw_cursor = cursor.encode("ascii")
+    except UnicodeEncodeError as exc:
+        raise ValueError("Cursor must be ASCII") from exc
+    if re.fullmatch(rb"[A-Za-z0-9_-]+", raw_cursor) is None:
+        raise ValueError("Cursor is not canonical base64url")
+    padding = b"=" * (-len(raw_cursor) % 4)
+    decoded = base64.b64decode(
+        raw_cursor + padding,
+        altchars=b"-_",
+        validate=True,
+    )
+    canonical = base64.urlsafe_b64encode(decoded).rstrip(b"=")
+    if canonical != raw_cursor:
+        raise ValueError("Cursor is not canonical base64url")
+    return json.loads(decoded.decode("utf-8"))
+
+
+def _parse_cursor_datetime(value: Any) -> datetime:
+    if not isinstance(value, str):
+        raise ValueError("Cursor datetime must be a string")
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("Cursor datetime must include a timezone")
+    return parsed.astimezone(timezone.utc)
+
+
 def _encode_cursor(
     row: Any,
     context_hash: str,
@@ -838,15 +897,18 @@ def _encode_cursor(
     membership_generation: int,
 ) -> str:
     lifecycle = str(_value(row, "lifecycle", ""))
+    story_id = int(_value(row, "id"))
+    if not 1 <= story_id <= MAX_STORY_ID:
+        raise ValueError("Story cursor id must be positive")
     payload = json.dumps([
         STORY_CURSOR_VERSION,
         context_hash,
         _iso(ranking_at),
         membership_generation,
         int(_value(row, "lifecycle_rank", _lifecycle_rank(lifecycle))),
-        float(_value(row, "relevance_score", 0) or 0),
+        _canonical_cursor_relevance(_value(row, "relevance_score", 0) or 0),
         _iso(_value(row, "ranking_last_seen", _value(row, "last_seen"))),
-        int(_value(row, "id")),
+        story_id,
     ], separators=(",", ":")).encode("utf-8")
     return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
 
@@ -855,11 +917,9 @@ def _decode_cursor(
     cursor: str,
     *,
     expected_context_hash: str,
-) -> tuple[datetime, int, int, float, datetime, int]:
+) -> tuple[datetime, int, int, Decimal, datetime, int]:
     try:
-        padding = "=" * (-len(cursor) % 4)
-        decoded = base64.urlsafe_b64decode((cursor + padding).encode("ascii"))
-        payload = json.loads(decoded.decode("utf-8"))
+        payload = _decode_canonical_base64url_json(cursor)
         if not isinstance(payload, list) or len(payload) != 8:
             raise ValueError("wrong cursor shape")
         (
@@ -880,6 +940,7 @@ def _decode_cursor(
             not isinstance(membership_generation, int)
             or isinstance(membership_generation, bool)
             or membership_generation < 0
+            or membership_generation > MAX_MEMBERSHIP_GENERATION
         ):
             raise ValueError("invalid membership generation")
         if (
@@ -889,25 +950,20 @@ def _decode_cursor(
             or lifecycle_rank > 5
         ):
             raise ValueError("invalid lifecycle rank")
-        if not isinstance(relevance_score, (int, float)) or isinstance(relevance_score, bool):
-            raise ValueError("invalid relevance score")
-        if not math.isfinite(float(relevance_score)):
-            raise ValueError("invalid relevance score")
         if (
             not isinstance(ranking_at, str)
             or not isinstance(last_seen, str)
             or not isinstance(story_id, int)
             or isinstance(story_id, bool)
+            or not 1 <= story_id <= MAX_STORY_ID
         ):
             raise ValueError("invalid cursor types")
         return (
-            _as_utc_query_datetime(
-                datetime.fromisoformat(ranking_at.replace("Z", "+00:00"))
-            ),
+            _parse_cursor_datetime(ranking_at),
             membership_generation,
             lifecycle_rank,
-            float(relevance_score),
-            datetime.fromisoformat(last_seen.replace("Z", "+00:00")),
+            _parse_cursor_relevance(relevance_score),
+            _parse_cursor_datetime(last_seen),
             story_id,
         )
     except HTTPException:
@@ -925,14 +981,19 @@ def _encode_article_cursor(
     ranking_at: datetime,
     membership_generation: int,
 ) -> str:
+    article_id = int(_value(row, "article_id"))
+    if not 1 <= story_id <= MAX_STORY_ID:
+        raise ValueError("Article cursor story id must be positive")
+    if not 1 <= article_id <= MAX_ARTICLE_ID:
+        raise ValueError("Article cursor article id must be positive")
     payload = json.dumps([
         ARTICLE_CURSOR_VERSION,
         story_id,
         _iso(ranking_at),
         membership_generation,
-        float(_value(row, "relevance_score", 0) or 0),
+        _canonical_cursor_relevance(_value(row, "relevance_score", 0) or 0),
         _iso(_value(row, "published_at")),
-        int(_value(row, "article_id")),
+        article_id,
     ], separators=(",", ":")).encode("utf-8")
     return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
 
@@ -941,11 +1002,9 @@ def _decode_article_cursor(
     cursor: str,
     *,
     expected_story_id: int,
-) -> tuple[datetime, int, float, datetime, int]:
+) -> tuple[datetime, int, Decimal, datetime, int]:
     try:
-        padding = "=" * (-len(cursor) % 4)
-        decoded = base64.urlsafe_b64decode((cursor + padding).encode("ascii"))
-        payload = json.loads(decoded.decode("utf-8"))
+        payload = _decode_canonical_base64url_json(cursor)
         if not isinstance(payload, list) or len(payload) != 7:
             raise ValueError("wrong article cursor shape")
         (
@@ -961,27 +1020,26 @@ def _decode_article_cursor(
             raise HTTPException(
                 status_code=400, detail="Article cursor does not match story"
             )
-        if not isinstance(relevance_score, (int, float)) or isinstance(relevance_score, bool):
-            raise ValueError("invalid relevance score")
-        if not math.isfinite(float(relevance_score)):
-            raise ValueError("invalid relevance score")
         if (
-            not isinstance(ranking_at, str)
+            not isinstance(story_id, int)
+            or isinstance(story_id, bool)
+            or not 1 <= story_id <= MAX_STORY_ID
+            or not isinstance(ranking_at, str)
             or not isinstance(membership_generation, int)
             or isinstance(membership_generation, bool)
             or membership_generation < 0
+            or membership_generation > MAX_MEMBERSHIP_GENERATION
             or not isinstance(published_at, str)
             or not isinstance(article_id, int)
             or isinstance(article_id, bool)
+            or not 1 <= article_id <= MAX_ARTICLE_ID
         ):
             raise ValueError("invalid article cursor types")
         return (
-            _as_utc_query_datetime(
-                datetime.fromisoformat(ranking_at.replace("Z", "+00:00"))
-            ),
+            _parse_cursor_datetime(ranking_at),
             membership_generation,
-            float(relevance_score),
-            datetime.fromisoformat(published_at.replace("Z", "+00:00")),
+            _parse_cursor_relevance(relevance_score),
+            _parse_cursor_datetime(published_at),
             article_id,
         )
     except HTTPException:
@@ -1315,7 +1373,7 @@ def _resolve_canonical_story_id(session: Any, story_id: int) -> int:
 
 @router.get("/stories/{story_id}", response_model=StoryDetailResponse)
 def get_story(
-    story_id: int,
+    story_id: int = Path(..., ge=1, le=MAX_STORY_ID),
     article_cursor: Optional[str] = Query(default=None),
     article_limit: int = Query(default=50, ge=1, le=100),
 ):
@@ -1426,34 +1484,83 @@ def get_story(
             "membership_generation": membership_generation,
         }).fetchall()
         entity_rows = session.execute(text("""
-            SELECT se.entity_id::text AS entity_id, se.mentions,
-                   se.confidence, se.evidence,
+            WITH entity_aggregates AS (
+                SELECT aem.entity_id, COUNT(*)::integer AS mentions,
+                       AVG(aem.confidence) AS confidence,
+                       jsonb_build_object(
+                           'article_ids', jsonb_agg(DISTINCT aem.article_id)
+                       ) AS evidence
+                FROM story_articles sa
+                JOIN article_entity_mentions aem
+                  ON aem.article_id = sa.article_id
+                WHERE sa.story_id = :story_id
+                  AND sa.membership_generation <= :membership_generation
+                GROUP BY aem.entity_id
+            )
+            SELECT entity.entity_id::text AS entity_id, entity.mentions,
+                   entity.confidence, entity.evidence,
                    COALESCE(
                        to_jsonb(ce)->>'canonical_name',
                        to_jsonb(ce)->>'name_ru',
                        to_jsonb(ce)->>'name',
-                       se.entity_id::text
+                       entity.entity_id::text
                    ) AS canonical_name,
                    COALESCE(
                        to_jsonb(ce)->>'kind',
                        to_jsonb(ce)->>'entity_type',
                        'unknown'
                    ) AS kind
-            FROM story_entities se
-            LEFT JOIN canonical_entities ce ON ce.id = se.entity_id
-            WHERE se.story_id = :story_id
-            ORDER BY se.mentions DESC, se.entity_id
-        """), {"story_id": story_id}).fetchall()
+            FROM entity_aggregates entity
+            LEFT JOIN canonical_entities ce ON ce.id = entity.entity_id
+            ORDER BY entity.mentions DESC, entity.entity_id
+        """), {
+            "story_id": story_id,
+            "membership_generation": membership_generation,
+        }).fetchall()
         event_rows = session.execute(text("""
-            SELECT sve.entity_id::text AS entity_id, sve.event_key,
-                   sve.event_at, sve.action_level, sve.evidence,
-                   COALESCE(se.confidence, 0) AS confidence
-            FROM story_events sve
-            LEFT JOIN story_entities se
-              ON se.story_id = sve.story_id AND se.entity_id = sve.entity_id
-            WHERE sve.story_id = :story_id
-            ORDER BY sve.event_at DESC NULLS LAST, sve.entity_id
-        """), {"story_id": story_id}).fetchall()
+            WITH representative_events AS (
+                SELECT DISTINCT ON (aem.entity_id)
+                       aem.entity_id, ar.id AS article_id,
+                       COALESCE(
+                           NULLIF(an.event_key, ''), ar.title, 'story event'
+                       ) AS event_key,
+                       ar.published_at AS event_at,
+                       LEAST(6, GREATEST(1, COALESCE(an.action_level, 1)))
+                           AS action_level,
+                       jsonb_build_object(
+                           'article_ids', jsonb_build_array(ar.id),
+                           'representative_article_id', ar.id
+                       ) AS evidence
+                FROM story_articles sa
+                JOIN article_entity_mentions aem
+                  ON aem.article_id = sa.article_id
+                JOIN articles ar ON ar.id = sa.article_id
+                LEFT JOIN analysis an ON an.article_id = ar.id
+                WHERE sa.story_id = :story_id
+                  AND sa.membership_generation <= :membership_generation
+                ORDER BY aem.entity_id,
+                         ar.published_at DESC NULLS LAST, ar.id DESC
+            ), entity_confidence AS (
+                SELECT aem.entity_id, AVG(aem.confidence) AS confidence
+                FROM story_articles confidence_membership
+                JOIN article_entity_mentions aem
+                  ON aem.article_id = confidence_membership.article_id
+                WHERE confidence_membership.story_id = :story_id
+                  AND confidence_membership.membership_generation
+                      <= :membership_generation
+                GROUP BY aem.entity_id
+            )
+            SELECT event.entity_id::text AS entity_id, event.event_key,
+                   event.event_at, event.action_level, event.evidence,
+                   COALESCE(entity_confidence.confidence, 0) AS confidence
+            FROM representative_events event
+            LEFT JOIN entity_confidence
+              ON entity_confidence.entity_id = event.entity_id
+            ORDER BY event.event_at DESC NULLS LAST, event.entity_id
+        """), {
+            "story_id": story_id,
+            "membership_generation": membership_generation,
+        }).fetchall()
         article_rows = session.execute(text(f"""
             WITH ranked_articles AS (
                 SELECT ar.id AS article_id, ar.title, ar.url, ar.published_at,
@@ -1463,10 +1570,10 @@ def get_story(
                            WHEN jsonb_typeof(sa.evidence) = 'object'
                                 AND sa.evidence->>'membership_confidence_snapshot'
                                     ~ '^(0([.][0-9]+)?|1([.]0+)?)$'
-                           THEN (
+                           THEN ROUND((
                                sa.evidence->>'membership_confidence_snapshot'
-                           )::numeric
-                           ELSE 0::numeric
+                           )::numeric, 6)::numeric(8,6)
+                           ELSE 0::numeric(8,6)
                        END AS relevance_score,
                        ROW_NUMBER() OVER (
                            PARTITION BY s.country_code
