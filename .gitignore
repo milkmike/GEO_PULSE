@@ -16,3 +16,6 @@ sessions/
 
 # Claude Code local settings (per-machine permissions)
 .claude/settings.local.json
+
+# Local isolated development worktrees
+.worktrees/
