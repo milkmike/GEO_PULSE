@@ -17,13 +17,120 @@ const LIMITATION_LABEL: Record<string, string> = {
   threshold_not_persisted: "Исторический порог срабатывания не сохранён.",
 };
 
-const readableKey = (key: string) => key.replaceAll("_", " ");
+const DETECTOR_LABEL: Record<string, string> = {
+  tier_convergence: "конвергенция тиров",
+  official_silence: "молчание официальных источников",
+  velocity_spike: "информационный шторм",
+  tone_shift: "сдвиг тона",
+  volume_surge: "всплеск внимания",
+  index_shift: "сдвиг RRI",
+  notable_event: "значимое событие",
+  fx_move: "валютный сдвиг",
+  sanctions_escalation: "санкционное ужесточение",
+};
+
+const FIELD_LABEL: Record<string, string> = {
+  type: "Тип базового значения",
+  status: "Статус сохранения",
+  event_key: "Ключ события",
+  distinct_tiers: "Число разных тиров",
+  tiers: "Тиры источников",
+  article_count: "Число публикаций",
+  average_sentiment: "Средняя тональность",
+  maximum_action_level: "Максимальный уровень действия",
+  loud_articles: "Публикации вне официальных источников",
+  quiet_articles: "Публикации официальных источников",
+  hours_silent: "Часов без официальной реакции",
+  articles_24h: "Публикаций за 24 часа",
+  ratio: "Отношение к базовой линии",
+  daily_average: "Среднее число публикаций в день",
+  comparison_days: "Дней в базовой линии",
+  tone: "Текущий тон",
+  z_score: "Z-оценка",
+  mean: "Среднее значение",
+  standard_deviation: "Стандартное отклонение",
+  sample_days: "Дней в выборке",
+  excluded_recent_days: "Исключено последних дней",
+  share: "Доля повестки",
+  daily_volume: "Публикаций в день",
+  score: "Значение RRI",
+  delta: "Изменение",
+  delta_24h: "Изменение RRI",
+  level: "Уровень RRI",
+  comparison_hours: "Интервал сравнения, часов",
+  time: "Время точки",
+  action_level: "Уровень действия",
+  event_type: "Тип события",
+  sentiment: "Тональность",
+  reprint_count: "Число перепечаток",
+  currency: "Валюта",
+  change_1d_percent: "Изменение курса за день, %",
+  rate_to_rub: "Курс к рублю",
+  media_preceded: "Медиасигнал появился раньше",
+  preceding_media_signal_count: "Число предшествующих медиасигналов",
+  media_lookback_hours: "Глубина поиска медиасигналов, часов",
+  countries: "Страны",
+  day: "Дата снимка",
+  new_targets: "Новых санкционных целей",
+  target_count: "Всего санкционных целей",
+  lists_count: "Санкционных программ",
+  last_change: "Последнее обновление",
+  previous_target_count: "Целей в предыдущем снимке",
+  minimum_distinct_tiers: "Минимум разных тиров",
+  minimum_loud_articles: "Минимум публикаций вне официальных источников",
+  maximum_quiet_articles: "Максимум публикаций официальных источников",
+  minimum_silence_hours: "Минимум часов без официальной реакции",
+  minimum_articles_24h: "Минимум публикаций за 24 часа",
+  minimum_baseline_ratio: "Минимальное отношение к базовой линии",
+  absolute_z_score_min: "Минимальная абсолютная z-оценка",
+  standard_deviation_floor: "Нижняя граница стандартного отклонения",
+  minimum_share_ratio: "Минимальный рост доли повестки",
+  minimum_daily_volume: "Минимальный дневной объём",
+  absolute_delta_min: "Минимальный абсолютный сдвиг",
+  absolute_delta_sanity_max: "Максимальный допустимый сдвиг",
+  minimum_action_level: "Минимальный уровень действия",
+  absolute_daily_change_percent_min: "Минимальное дневное изменение курса, %",
+  minimum_new_targets: "Минимум новых санкционных целей",
+  enabled: "Включено",
+};
+
+const VALUE_LABEL: Record<string, string> = {
+  not_applicable: "сравнение не требуется",
+  active_source_availability: "доступность активных источников",
+  rolling_daily_average: "скользящее среднее по дням",
+  historical_tone_distribution: "историческое распределение тона",
+  historical_coverage_share: "историческая доля повестки",
+  rri_point: "Сохранённая точка RRI",
+  previous_fx_rate: "предыдущий курс валюты",
+  previous_sanctions_snapshot: "предыдущий снимок санкционного реестра",
+  available: "сохранено",
+  missing: "не найдено",
+  not_persisted: "не сохранялось",
+  reconstructed_from_signal_payload: "Восстановлено из payload сигнала",
+  persisted_trigger_window: "сохранённое окно срабатывания",
+  exact: "точно сохранено",
+  unknown: "неизвестно",
+  active: "активен",
+  expired: "истёк",
+  ally: "союзник",
+  partner: "партнёр",
+  neutral: "нейтральный",
+  cooling: "охлаждение",
+  tension: "напряжение",
+  hostile: "враждебный",
+};
+
+const readableKey = (key: string) => FIELD_LABEL[key] ?? `Параметр доказательства «${key}»`;
+
+function readableValue(value: string): string {
+  return VALUE_LABEL[value] ?? value;
+}
 
 function displayValue(value: unknown): string {
   if (value === null || value === undefined || value === "") return "не сохранено";
   if (typeof value === "boolean") return value ? "да" : "нет";
   if (typeof value === "number") return value.toLocaleString("ru-RU", { maximumFractionDigits: 3 });
-  if (typeof value === "string") return value;
+  if (typeof value === "string") return readableValue(value);
   if (Array.isArray(value)) return value.map(displayValue).join(", ");
   return "сложное значение сохранено в доказательстве";
 }
@@ -64,6 +171,9 @@ const fmtTime = (value: string) => new Date(value).toLocaleString("ru-RU", {
   day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit",
 });
 
+const stateLabel = (status: SignalDetail["state"]["status"]) =>
+  VALUE_LABEL[status] ?? `статус не распознан (${status})`;
+
 export default function SignalEvidence({ detail, storiesEnabled }: { detail: SignalDetail; storiesEnabled: boolean }) {
   const chartPoints = detail.chart_points
     .map((point) => ({ time: point.time, score: point.score }))
@@ -91,7 +201,7 @@ export default function SignalEvidence({ detail, storiesEnabled }: { detail: Sig
           <span>{SEVERITY_LABEL[detail.severity] ?? detail.severity}</span>
           <span>уверенность {Math.round(detail.confidence * 100)}%</span>
           <span className={detail.state.active ? "text-ally" : "text-dim"}>
-            {detail.state.active ? "● активен" : "истёк"}
+            {detail.state.active ? "● " : ""}{stateLabel(detail.state.status)}
           </span>
           {detail.evidence_completeness === "partial" && (
             <span className="rounded-full border border-cooling px-2 py-0.5 text-cooling">частичные доказательства</span>
@@ -102,6 +212,30 @@ export default function SignalEvidence({ detail, storiesEnabled }: { detail: Sig
         {detail.summary.description && detail.summary.description !== detail.summary.what_changed && (
           <p className="mt-2 text-sm text-dim">{detail.summary.description}</p>
         )}
+        <section role="region" aria-label="Состояние сигнала" className="mt-4 rounded-lg border border-line bg-panel2 p-3">
+          <dl className="grid gap-2 text-xs sm:grid-cols-3">
+            <div>
+              <dt className="text-dim">Создан</dt>
+              <dd className="mt-1 text-ru-white">
+                {detail.state.created_at
+                  ? <time dateTime={detail.state.created_at}>{fmtTime(detail.state.created_at)}</time>
+                  : "не сохранено"}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-dim">Действует до</dt>
+              <dd className="mt-1 text-ru-white">
+                {detail.state.expires_at
+                  ? <time dateTime={detail.state.expires_at}>{fmtTime(detail.state.expires_at)}</time>
+                  : "не сохранено"}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-dim">Текущий статус</dt>
+              <dd className="mt-1 text-ru-white">{stateLabel(detail.state.status)}</dd>
+            </div>
+          </dl>
+        </section>
       </header>
 
       <section aria-labelledby="signal-rule-heading" className="card p-5">
@@ -109,7 +243,9 @@ export default function SignalEvidence({ detail, storiesEnabled }: { detail: Sig
         <p className="mt-2 text-sm leading-relaxed text-dim">
           {detail.rule.description || "Описание исторического правила не сохранено."}
         </p>
-        <div className="mt-2 text-xs text-dim">Детектор {detail.rule.detector} · версия {detail.rule.version}</div>
+        <div className="mt-2 text-xs text-dim">
+          Детектор {DETECTOR_LABEL[detail.rule.detector] ?? `неизвестный (${detail.rule.detector})`} · версия {detail.rule.version}
+        </div>
         <div className="mt-4 grid gap-3 md:grid-cols-3">
           <EvidenceRecord title="Наблюдаемое значение" value={detail.values.observed} />
           <EvidenceRecord title="Базовое значение" value={detail.values.baseline} />
@@ -132,8 +268,12 @@ export default function SignalEvidence({ detail, storiesEnabled }: { detail: Sig
         ) : <p className="mt-2 text-sm text-dim">не сохранено</p>}
         {(detail.values.window.basis || detail.values.window.status) && (
           <p className="mt-1 text-xs text-dim">
-            {detail.values.window.basis ? readableKey(detail.values.window.basis) : ""}
-            {detail.values.window.status ? ` · ${readableKey(detail.values.window.status)}` : ""}
+            {detail.values.window.basis
+              ? `Основание: ${detail.values.window.basis === "not_persisted" ? "окно детектора не сохранялось" : readableValue(detail.values.window.basis)}`
+              : ""}
+            {detail.values.window.status
+              ? ` · Статус: ${detail.values.window.status === "unknown" ? "статус окна неизвестен" : readableValue(detail.values.window.status)}`
+              : ""}
           </p>
         )}
         <div className="mt-4">
@@ -229,7 +369,12 @@ export default function SignalEvidence({ detail, storiesEnabled }: { detail: Sig
         <section aria-labelledby="signal-limitations-heading" className="border-t border-line pt-5">
           <h2 id="signal-limitations-heading" className="card-title">Ограничения</h2>
           <ul className="mt-3 list-disc space-y-1 pl-5 text-sm leading-relaxed text-dim">
-            {detail.limitations.map((limitation) => <li key={limitation}>{LIMITATION_LABEL[limitation] ?? readableKey(limitation)}</li>)}
+            {detail.limitations.map((limitation) => (
+              <li key={limitation}>
+                {LIMITATION_LABEL[limitation]
+                  ?? (/\s/u.test(limitation) ? limitation : `Ограничение детектора (код: ${limitation})`)}
+              </li>
+            ))}
           </ul>
         </section>
       )}

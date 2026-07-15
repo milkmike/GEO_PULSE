@@ -69,14 +69,18 @@ describe("SignalEvidence", () => {
     expect(screen.getByRole("heading", { name: complete.summary.headline })).toBeVisible();
     expect(screen.getByText(/RRI: −10 → −2/i)).toBeVisible();
     expect(screen.getByText(/уверенность 82%/i)).toBeVisible();
-    expect(screen.getByText(/активен/i)).toBeVisible();
+    expect(screen.getAllByText(/активен/i).length).toBeGreaterThanOrEqual(1);
+    const state = screen.getByRole("region", { name: /состояние сигнала/i });
+    expect(state.querySelector('time[datetime="2026-07-15T20:00:00Z"]')).not.toBeNull();
+    expect(state.querySelector('time[datetime="2026-07-20T20:00:00Z"]')).not.toBeNull();
+    expect(state).toHaveTextContent(/текущий статус.*активен/i);
     expect(screen.getByTestId("signal-chart")).toBeVisible();
 
     const observed = screen.getByRole("region", { name: /наблюдаемое значение/i });
-    expect(within(observed).getByText("delta").closest("li")).toHaveTextContent("8");
-    expect(within(observed).getByText("article count").closest("li")).toHaveTextContent("0");
+    expect(within(observed).getByText("Изменение").closest("li")).toHaveTextContent("8");
+    expect(within(observed).getByText("Число публикаций").closest("li")).toHaveTextContent("0");
     const threshold = screen.getByRole("region", { name: /порог срабатывания/i });
-    expect(within(threshold).getByText("enabled").closest("li")).toHaveTextContent("нет");
+    expect(within(threshold).getByText("Включено").closest("li")).toHaveTextContent("нет");
     expect(screen.getByText(/текущее правило, не исторический порог/i)).toBeVisible();
 
     const article = screen.getByRole("link", { name: /El País: переговоры/i });
@@ -110,11 +114,56 @@ describe("SignalEvidence", () => {
     expect(screen.queryByRole("button", { name: /загрузить ещё/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /Переговоры в Испании/i })).not.toBeInTheDocument();
     expect(screen.getByText("Переговоры в Испании")).toBeVisible();
-    expect(within(screen.getByRole("region", { name: /наблюдаемое значение/i })).getByText(/value/i).closest("li")).toHaveTextContent("0");
+    expect(within(screen.getByRole("region", { name: /наблюдаемое значение/i })).getByText(/Параметр доказательства «value»/i).closest("li")).toHaveTextContent("0");
   });
 
   it("distinguishes a not-applicable baseline from missing evidence", () => {
     render(<SignalEvidence detail={{ ...complete, values: { ...complete.values, baseline: { type: "not_applicable" } } }} storiesEnabled />);
     expect(screen.getByRole("region", { name: /базовое значение/i })).toHaveTextContent("сравнение не требуется");
+  });
+
+  it("translates live evidence fields, value codes, window metadata and missing state timestamps", () => {
+    const liveCodes: SignalDetail = {
+      ...complete,
+      rule: {
+        ...complete.rule,
+        threshold: {
+          absolute_delta_min: 7,
+          absolute_delta_sanity_max: 18,
+          minimum_daily_volume: 10,
+        },
+      },
+      values: {
+        observed: {
+          delta_24h: -8,
+          preceding_media_signal_count: 0,
+          media_lookback_hours: 72,
+        },
+        baseline: {
+          type: "rri_point",
+          status: "reconstructed_from_signal_payload",
+          comparison_hours: 24,
+          standard_deviation: 1.5,
+        },
+        window: { start: null, end: null, basis: "not_persisted", status: "unknown" },
+      },
+      state: { created_at: null, expires_at: null, active: false, status: "expired" },
+      limitations: ["threshold_not_persisted"],
+    };
+    render(<SignalEvidence detail={liveCodes} storiesEnabled />);
+
+    expect(screen.getByText("Минимальный абсолютный сдвиг")).toBeVisible();
+    expect(screen.getByText("Максимальный допустимый сдвиг")).toBeVisible();
+    expect(screen.getByText("Число предшествующих медиасигналов")).toBeVisible();
+    expect(screen.getByText("Глубина поиска медиасигналов, часов")).toBeVisible();
+    expect(screen.getByText("Сохранённая точка RRI")).toBeVisible();
+    expect(screen.getByText("Восстановлено из payload сигнала")).toBeVisible();
+    expect(screen.getByText(/окно детектора не сохранялось/i)).toBeVisible();
+    expect(screen.getByText(/статус окна неизвестен/i)).toBeVisible();
+    const state = screen.getByRole("region", { name: /состояние сигнала/i });
+    expect(within(state).getAllByText("не сохранено")).toHaveLength(2);
+    expect(state).toHaveTextContent(/текущий статус.*истёк/i);
+    expect(screen.queryByText("absolute_delta_min")).not.toBeInTheDocument();
+    expect(screen.queryByText("reconstructed_from_signal_payload")).not.toBeInTheDocument();
   });
 });
