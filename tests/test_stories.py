@@ -1,16 +1,22 @@
+import json
+import base64
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from src.api.routes import stories as stories_routes
 from src.stories import (
     StoryCandidate,
+    StoryArticle,
+    build_stories,
     cluster_story_candidates,
     compute_source_hash,
     deterministic_story_copy,
+    merge_rejection_reasons,
     persist_story_cluster,
     resolve_story_copy,
     score_story_match,
@@ -89,6 +95,41 @@ def test_merge_threshold_is_inclusive_and_requires_two_features():
     )
 
 
+def test_identical_event_key_does_not_double_count_title_similarity():
+    left = candidate("AZ", title="Одинаковый заголовок")
+    same_title = candidate("KZ", title="Одинаковый заголовок")
+    different_title = candidate("KZ", title="Совершенно другая формулировка")
+
+    same_score = score_story_match(left, same_title)
+    different_score = score_story_match(left, different_title)
+
+    assert same_score.components["event_key"] == 1.0
+    assert same_score.total == different_score.total
+    assert "title" not in same_score.matched_features
+
+
+def test_tiny_entity_and_topic_overlap_is_not_independent_evidence():
+    shared_entity = {"shared"}
+    shared_topic = {"shared-topic"}
+    left = candidate(
+        "AZ",
+        entities=frozenset(shared_entity | {f"left-{index}" for index in range(9)}),
+        topics=frozenset(shared_topic | {f"left-topic-{index}" for index in range(9)}),
+    )
+    right = candidate(
+        "KZ",
+        entities=frozenset(shared_entity | {f"right-{index}" for index in range(9)}),
+        topics=frozenset(shared_topic | {f"right-topic-{index}" for index in range(9)}),
+    )
+
+    similarity = score_story_match(left, right)
+
+    assert similarity.components["entities"] == 0
+    assert similarity.components["topics"] == 0
+    assert "entities" not in similarity.matched_features
+    assert "topics" not in similarity.matched_features
+
+
 def test_gap_over_fourteen_days_needs_explicit_reactivation():
     old = candidate(
         "AZ",
@@ -96,9 +137,63 @@ def test_gap_over_fourteen_days_needs_explicit_reactivation():
         last_seen=NOW - timedelta(days=15, seconds=1),
     )
     new = candidate("KZ", first_seen=NOW, last_seen=NOW)
-    similarity = score_story_match(old, new)
+    similarity = replace(score_story_match(old, new), total=0.65)
 
     assert similarity.gap_days > 14
+    assert not should_merge(similarity)
+    assert should_merge(similarity, explicit_reactivation=True)
+
+
+def test_reactivation_requires_matching_event_and_entity_evidence():
+    old = candidate(
+        "AZ",
+        entities=frozenset(),
+        first_seen=NOW - timedelta(days=20),
+        last_seen=NOW - timedelta(days=15),
+    )
+    new = candidate(
+        "KZ",
+        entities=frozenset(),
+        first_seen=NOW,
+        last_seen=NOW,
+    )
+
+    similarity = replace(score_story_match(old, new), total=0.65)
+
+    assert similarity.gap_days == 15
+    assert similarity.total >= 0.65
+    assert not should_merge(similarity, explicit_reactivation=True)
+    assert "reactivation_requires_event_and_entity" in merge_rejection_reasons(
+        similarity, explicit_reactivation=True
+    )
+
+
+def test_article_activity_dates_expose_gap_hidden_by_thread_envelope():
+    old = replace(
+        candidate(
+            "AZ",
+            first_seen=NOW - timedelta(days=40),
+            last_seen=NOW,
+        ),
+        articles=(
+            StoryArticle(1, "AZ", "old", None, NOW - timedelta(days=40), "az-1"),
+            StoryArticle(3, "AZ", "new", None, NOW, "az-2"),
+        ),
+    )
+    middle = replace(
+        candidate(
+            "KZ",
+            first_seen=NOW - timedelta(days=20),
+            last_seen=NOW - timedelta(days=20),
+        ),
+        articles=(
+            StoryArticle(2, "KZ", "middle", None, NOW - timedelta(days=20), "kz-1"),
+        ),
+    )
+
+    similarity = score_story_match(old, middle)
+
+    assert similarity.gap_days == 20
     assert not should_merge(similarity)
     assert should_merge(similarity, explicit_reactivation=True)
 
@@ -142,6 +237,58 @@ def test_cluster_builder_emits_only_cross_country_stories():
     assert same_country == []
 
 
+def test_single_link_chain_cannot_bridge_a_non_cohesive_cluster():
+    left = candidate(
+        "AZ",
+        event_key="транскаспийский маршрут альфа",
+        title="транскаспийский маршрут альфа",
+        entities=frozenset({"x"}),
+    )
+    bridge = replace(
+        candidate("KZ"),
+        event_key="транскаспийский маршрут альфа бета",
+        title="транскаспийский маршрут альфа бета",
+        entities=frozenset({"x", "y"}),
+    )
+    unrelated_same_country = replace(
+        candidate("AZ"),
+        thread_id=3,
+        article_ids=(3,),
+        event_key="транскаспийский маршрут бета",
+        title="транскаспийский маршрут бета",
+        entities=frozenset({"y"}),
+    )
+
+    assert should_merge(score_story_match(left, bridge))
+    assert should_merge(score_story_match(bridge, unrelated_same_country))
+    assert not should_merge(score_story_match(left, unrelated_same_country))
+    clusters = cluster_story_candidates([left, bridge, unrelated_same_country])
+    assert all(len(cluster) == 2 for cluster in clusters)
+    assert not any(
+        {item.thread_id for item in cluster} == {1, 2, 3}
+        for cluster in clusters
+    )
+
+
+def test_non_cohesive_cluster_is_rejected_before_persistence():
+    left = candidate("AZ", event_key="маршрут альфа", entities=frozenset({"x"}))
+    bridge = replace(
+        candidate("KZ"),
+        event_key="маршрут альфа бета",
+        entities=frozenset({"x", "y"}),
+    )
+    unrelated = replace(
+        candidate("AZ"), thread_id=3, article_ids=(3,),
+        event_key="маршрут бета", entities=frozenset({"y"}),
+    )
+    session = PersistenceSession()
+
+    with pytest.raises(ValueError, match="cohesion"):
+        persist_story_cluster(session, [left, bridge, unrelated], now=NOW)
+
+    assert session.calls == []
+
+
 def test_story_copy_is_deterministic_and_llm_runs_only_for_changed_hash():
     candidates = [candidate("AZ"), candidate("KZ")]
     fallback = deterministic_story_copy(candidates)
@@ -174,6 +321,13 @@ def test_story_copy_is_deterministic_and_llm_runs_only_for_changed_hash():
     assert deterministic_story_copy(list(reversed(candidates))) == fallback
 
 
+def test_source_hash_changes_when_copy_action_priority_changes():
+    baseline = [candidate("AZ"), candidate("KZ")]
+    escalated = [replace(baseline[0], highest_action_level=4), baseline[1]]
+
+    assert compute_source_hash(baseline) != compute_source_hash(escalated)
+
+
 class FakeResult:
     def __init__(self, *, rows=None, row=None):
         self._rows = rows or []
@@ -189,14 +343,73 @@ class FakeResult:
 class PersistenceSession:
     def __init__(self):
         self.statements = []
+        self.calls = []
 
     def execute(self, statement, params=None):
         sql = str(statement)
         self.statements.append(sql)
+        self.calls.append((sql, params or {}))
         if "SELECT st.id, st.slug" in sql:
             return FakeResult(row=None)
         if "INSERT INTO stories" in sql:
             return FakeResult(row=(42,))
+        return FakeResult()
+
+
+class DuplicatePersistenceSession(PersistenceSession):
+    def __init__(self):
+        super().__init__()
+        self.matches = [
+            SimpleNamespace(
+                id=10, slug="story-primary", title_ru="Primary", title_en=None,
+                summary="Primary summary", summary_model=None, source_hash="old",
+                article_count=2, highest_action_level=2, generated_at=NOW,
+                meta={"merge_audit": [{"decision_id": "primary-audit"}]},
+                article_overlap=2, thread_overlap=1,
+            ),
+            SimpleNamespace(
+                id=11, slug="story-duplicate", title_ru="Duplicate", title_en=None,
+                summary="Duplicate summary", summary_model=None, source_hash="older",
+                article_count=3, highest_action_level=2, generated_at=NOW,
+                meta={
+                    "merge_audit": [{"decision_id": "duplicate-audit"}],
+                    "reactivations": [{"decision_id": "reactivation-audit"}],
+                },
+                article_overlap=1, thread_overlap=1,
+            ),
+        ]
+
+    def execute(self, statement, params=None):
+        sql = str(statement)
+        self.statements.append(sql)
+        self.calls.append((sql, params or {}))
+        if "SELECT st.id, st.slug" in sql:
+            return FakeResult(rows=self.matches, row=self.matches[0])
+        if "UPDATE stories SET" in sql and "RETURNING id" in sql:
+            return FakeResult(row=(10,))
+        return FakeResult()
+
+
+class UnchangedPersistenceSession(PersistenceSession):
+    def __init__(self, cluster):
+        super().__init__()
+        self.generated_at = NOW - timedelta(days=2)
+        self.match = SimpleNamespace(
+            id=10, slug="story-stable", title_ru="Stable", title_en=None,
+            summary="Stable summary", summary_model="model",
+            source_hash=compute_source_hash(cluster), article_count=2,
+            highest_action_level=3, generated_at=self.generated_at, meta={},
+            article_overlap=2, thread_overlap=2,
+        )
+
+    def execute(self, statement, params=None):
+        sql = str(statement)
+        self.statements.append(sql)
+        self.calls.append((sql, params or {}))
+        if "SELECT st.id, st.slug" in sql:
+            return FakeResult(rows=[self.match], row=self.match)
+        if "UPDATE stories SET" in sql and "RETURNING id" in sql:
+            return FakeResult(row=(10,))
         return FakeResult()
 
 
@@ -218,6 +431,8 @@ def story_row(story_id: int, *, last_seen: datetime = NOW):
         generated_at=NOW,
         countries=["AZ", "KZ"],
         primary_url="https://example.test/latest",
+        relevance_score=0.88,
+        meta={"topics": ["energy"], "merge_audit": [{"decision": "merge"}]},
     )
 
 
@@ -240,20 +455,97 @@ class FakeStorySession:
         if "FROM story_entities se" in sql:
             return FakeResult(rows=[SimpleNamespace(
                 entity_id="entity-route", mentions=3, confidence=0.9,
-                evidence={"article_ids": [1, 2]},
+                evidence={"article_ids": [1, 2]}, canonical_name="Route",
+                kind="infrastructure",
             )])
         if "FROM story_events sve" in sql:
             return FakeResult(rows=[SimpleNamespace(
                 entity_id="entity-route", event_key="транскаспийский маршрут",
                 event_at=NOW, action_level=3, evidence={"articles": [1, 2]},
+                confidence=0.9,
             )])
-        if "FROM story_articles sa" in sql:
+        if "WITH ranked_articles" in sql:
             return FakeResult(rows=[SimpleNamespace(
                 article_id=1, title="Новость", url="https://example.test/az",
                 published_at=NOW, source="Источник", country_code="AZ",
                 membership_confidence=0.81, evidence={"event_key": 1.0},
+                relevance_score=0.79, is_primary=True,
             )])
         return FakeResult(rows=[story_row(7), story_row(6, last_seen=NOW - timedelta(hours=1))])
+
+
+class UnsafeUrlStorySession(FakeStorySession):
+    def execute(self, statement, params=None):
+        sql = str(statement)
+        params = params or {}
+        self.calls.append((sql, params))
+        unsafe_story = story_row(7)
+        unsafe_story.primary_url = "data:text/html,boom"
+        if "WHERE st.id = :story_id" in sql:
+            return FakeResult(row=unsafe_story)
+        if "FROM story_countries sc" in sql and "json" not in sql.lower():
+            return FakeResult(rows=[SimpleNamespace(
+                country_code="AZ", article_count=4, source_count=2, media_tone=-0.2,
+                first_seen=NOW - timedelta(days=2), last_seen=NOW,
+                primary_url="javascript:alert(1)",
+            )])
+        if "FROM story_entities se" in sql:
+            return super().execute(statement, params)
+        if "FROM story_events sve" in sql:
+            return super().execute(statement, params)
+        if "FROM story_articles sa" in sql:
+            urls = [
+                "javascript:alert(1)",
+                "data:text/html,boom",
+                "https:///missing-host",
+                "https://safe.example/story",
+            ]
+            return FakeResult(rows=[SimpleNamespace(
+                article_id=index, title=f"Article {index}", url=url,
+                published_at=NOW - timedelta(minutes=index), source="Source",
+                country_code="AZ", membership_confidence=0.8,
+                evidence={"matched_features": ["event_key", "entities"]},
+            ) for index, url in enumerate(urls, start=1)])
+        return FakeResult(rows=[unsafe_story, story_row(6, last_seen=NOW - timedelta(hours=1))])
+
+
+class PaginatedArticleSession(FakeStorySession):
+    def execute(self, statement, params=None):
+        sql = str(statement)
+        params = params or {}
+        if "WITH ranked_articles" in sql:
+            self.calls.append((sql, params))
+            return FakeResult(rows=[SimpleNamespace(
+                article_id=index, title=f"Article {index}",
+                url=f"https://example.test/{index}",
+                published_at=NOW - timedelta(minutes=index), source="Source",
+                country_code="AZ" if index == 1 else "KZ",
+                membership_confidence=0.9 - index / 10,
+                relevance_score=0.95 - index / 10,
+                evidence={"matched_features": ["event_key", "entities"]},
+                is_primary=True,
+            ) for index in (1, 2)])
+        return super().execute(statement, params)
+
+
+class SupersededStorySession(FakeStorySession):
+    def execute(self, statement, params=None):
+        sql = str(statement)
+        params = params or {}
+        self.calls.append((sql, params))
+        if "WHERE st.slug = :story_slug" in sql:
+            return FakeResult(row=SimpleNamespace(id=11))
+        if "WHERE st.id = :story_id" in sql:
+            if params["story_id"] == 11:
+                old = story_row(11)
+                old.meta = {"merged_into_story_id": 10, "canonical_slug": "story-primary"}
+                return FakeResult(row=old)
+            if params["story_id"] == 10:
+                canonical = story_row(10)
+                canonical.slug = "story-primary"
+                return FakeResult(row=canonical)
+            return FakeResult(row=None)
+        return super().execute(statement, params)
 
 
 class FakeSessionContext:
@@ -267,8 +559,8 @@ class FakeSessionContext:
         return False
 
 
-def story_client(monkeypatch):
-    session = FakeStorySession()
+def story_client(monkeypatch, session=None):
+    session = session or FakeStorySession()
     monkeypatch.setattr(stories_routes, "get_session", lambda: FakeSessionContext(session))
     app = FastAPI()
     app.include_router(stories_routes.router)
@@ -306,6 +598,74 @@ def test_story_detail_includes_evidence_and_country_primary_urls(monkeypatch):
     assert payload["articles"][0]["is_primary"] is True
 
 
+def test_story_list_supports_topic_entity_date_filters_and_active_ranking(monkeypatch):
+    client, session = story_client(monkeypatch)
+
+    response = client.get(
+        "/api/v2/stories",
+        params={
+            "topic": "energy",
+            "entity_id": "entity-route",
+            "date_from": "2026-07-01T00:00:00+00:00",
+            "date_to": "2026-07-20T00:00:00+00:00",
+        },
+    )
+    invalid_range = client.get(
+        "/api/v2/stories",
+        params={
+            "date_from": "2026-07-20T00:00:00+00:00",
+            "date_to": "2026-07-01T00:00:00+00:00",
+        },
+    )
+
+    assert response.status_code == 200
+    sql, params = session.calls[0]
+    assert params["topic"] == "energy"
+    assert params["entity_id"] == "entity-route"
+    assert params["date_from"].isoformat().startswith("2026-07-01")
+    assert params["date_to"].isoformat().startswith("2026-07-20")
+    assert "story_entities" in sql
+    assert "meta->'topics'" in sql
+    assert "CASE WHEN st.lifecycle = 'resolved'" in sql
+    assert invalid_range.status_code == 400
+
+
+def test_story_detail_articles_use_bounded_cursor_pagination(monkeypatch):
+    client, session = story_client(monkeypatch, PaginatedArticleSession())
+
+    first_page = client.get("/api/v2/stories/7?article_limit=1")
+    too_large = client.get("/api/v2/stories/7?article_limit=101")
+
+    assert first_page.status_code == 200
+    payload = first_page.json()
+    assert len(payload["articles"]) == 1
+    assert payload["articles_next_cursor"]
+    assert too_large.status_code == 422
+    article_call = next(
+        call for call in session.calls if "WITH ranked_articles" in call[0]
+    )
+    assert article_call[1]["article_limit"] == 2
+
+
+def test_ranked_story_and_article_responses_explain_inclusion(monkeypatch):
+    client, _ = story_client(monkeypatch)
+
+    listing = client.get("/api/v2/stories?limit=1").json()["stories"][0]
+    detail = client.get("/api/v2/stories/7").json()
+
+    assert listing["why_included"]
+    assert listing["relevance_score"] == 0.88
+    assert listing["confidence"] == 0.81
+    assert listing["evidence"]["topics"] == ["energy"]
+    assert detail["entities"][0]["canonical_name"] == "Route"
+    assert detail["entities"][0]["kind"] == "infrastructure"
+    assert detail["events"][0]["confidence"] == 0.9
+    article = detail["articles"][0]
+    assert article["why_included"]
+    assert article["relevance_score"] == 0.79
+    assert article["confidence"] == 0.81
+
+
 def test_country_story_slice_and_missing_story(monkeypatch):
     client, _ = story_client(monkeypatch)
 
@@ -327,16 +687,75 @@ def test_invalid_story_cursor_is_rejected(monkeypatch):
     assert response.json()["detail"] == "Invalid story cursor"
 
 
-def test_slug_conflict_refreshes_story_header_before_memberships_change():
-    session = PersistenceSession()
+def test_typed_invalid_story_and_article_cursors_return_400(monkeypatch):
+    client, _ = story_client(monkeypatch)
+    invalid_story_cursor = base64.urlsafe_b64encode(
+        json.dumps([123, 7]).encode("utf-8")
+    ).decode("ascii")
+    invalid_article_cursor = base64.urlsafe_b64encode(
+        json.dumps([0.8, 123, 7]).encode("utf-8")
+    ).decode("ascii")
 
-    persist_story_cluster(session, [candidate("AZ"), candidate("KZ")], now=NOW)
+    story_response = client.get(
+        "/api/v2/stories", params={"cursor": invalid_story_cursor}
+    )
+    article_response = client.get(
+        "/api/v2/stories/7", params={"article_cursor": invalid_article_cursor}
+    )
 
-    insert_sql = next(sql for sql in session.statements if "INSERT INTO stories" in sql)
-    conflict_sql = insert_sql.split("ON CONFLICT (slug) DO UPDATE SET", 1)[1]
-    assert "title_ru = EXCLUDED.title_ru" in conflict_sql
-    assert "source_hash = EXCLUDED.source_hash" in conflict_sql
-    assert "article_count = EXCLUDED.article_count" in conflict_sql
+    assert story_response.status_code == 400
+    assert article_response.status_code == 400
+
+
+def test_story_api_serializes_only_http_urls_with_hostnames(monkeypatch):
+    client, _ = story_client(monkeypatch, UnsafeUrlStorySession())
+
+    listing = client.get("/api/v2/stories?limit=1")
+    detail = client.get("/api/v2/stories/7")
+
+    assert listing.status_code == 200
+    assert listing.json()["stories"][0]["primary_url"] is None
+    assert detail.status_code == 200
+    payload = detail.json()
+    assert payload["primary_url"] is None
+    assert payload["countries"][0]["primary_url"] is None
+    assert [article["url"] for article in payload["articles"]] == [
+        None,
+        None,
+        None,
+        "https://safe.example/story",
+    ]
+
+
+@pytest.mark.parametrize("url", [
+    "https://exa mple.com/story",
+    "https://-bad.example/story",
+    "https://example.com:not-a-port/story",
+    f"https://{chr(0xD800)}.example/story",
+])
+def test_malformed_http_hostnames_are_rejected(url):
+    assert stories_routes.safe_public_url(url) is None
+
+
+def test_independent_clusters_cannot_share_or_overwrite_story_identity():
+    first_session = PersistenceSession()
+    second_session = PersistenceSession()
+    first_cluster = [candidate("AZ"), candidate("KZ")]
+    second_cluster = [
+        replace(candidate("AZ"), thread_id=11, article_ids=(11,)),
+        replace(candidate("KZ"), thread_id=12, article_ids=(12,)),
+    ]
+
+    persist_story_cluster(first_session, first_cluster, now=NOW)
+    persist_story_cluster(second_session, second_cluster, now=NOW)
+
+    first_insert = next(call for call in first_session.calls if "INSERT INTO stories" in call[0])
+    second_insert = next(call for call in second_session.calls if "INSERT INTO stories" in call[0])
+    lookup_sql = next(sql for sql in first_session.statements if "SELECT st.id, st.slug" in sql)
+    assert first_insert[1]["slug"] != second_insert[1]["slug"]
+    assert "st.slug = :slug" not in lookup_sql
+    assert "thread_ids" in lookup_sql
+    assert "ON CONFLICT (slug) DO NOTHING" in first_insert[0]
 
 
 def test_persistence_recomputes_header_counts_from_saved_memberships():
@@ -351,10 +770,134 @@ def test_persistence_recomputes_header_counts_from_saved_memberships():
     assert "MAX(COALESCE(an.action_level, 1))" in aggregate_sql
 
 
-def test_persistence_checks_deterministic_slug_before_summary_generation():
+def test_persistence_checks_stable_thread_identity_before_summary_generation():
     session = PersistenceSession()
 
     persist_story_cluster(session, [candidate("AZ"), candidate("KZ")], now=NOW)
 
     lookup_sql = next(sql for sql in session.statements if "SELECT st.id, st.slug" in sql)
-    assert "st.slug = :slug" in lookup_sql
+    assert "thread_ids" in lookup_sql
+
+
+def test_overlapping_story_ids_are_reconciled_into_one_primary():
+    session = DuplicatePersistenceSession()
+
+    persist_story_cluster(session, [candidate("AZ"), candidate("KZ")], now=NOW)
+
+    reconcile_call = next(
+        call for call in session.calls
+        if "SELECT :primary_story_id" in call[0] and "FROM story_articles" in call[0]
+    )
+    supersede_call = next(
+        call for call in session.calls
+        if "merged_into_story_id" in call[0] and "UPDATE stories" in call[0]
+    )
+    assert reconcile_call[1] == {"primary_story_id": 10, "duplicate_story_ids": [11]}
+    assert supersede_call[1]["primary_story_id"] == 10
+    assert supersede_call[1]["duplicate_story_ids"] == [11]
+    assert not any("DELETE FROM stories" in sql for sql in session.statements)
+    assert not any("NOT (article_id = ANY" in sql for sql in session.statements)
+    lookup_sql = next(sql for sql in session.statements if "SELECT st.id, st.slug" in sql)
+    assert "FOR UPDATE OF st" in lookup_sql
+    update_call = next(
+        call for call in session.calls
+        if "UPDATE stories SET" in call[0] and "RETURNING id" in call[0]
+    )
+    merged_meta = json.loads(update_call[1]["meta"])
+    assert {item["decision_id"] for item in merged_meta["merge_audit"]} >= {
+        "primary-audit", "duplicate-audit",
+    }
+    assert {item["decision_id"] for item in merged_meta["reactivations"]} >= {
+        "reactivation-audit",
+    }
+    assert merged_meta["merged_story_ids"] == [11]
+
+
+def test_old_story_slug_resolves_to_canonical_story(monkeypatch):
+    client, _ = story_client(monkeypatch, SupersededStorySession())
+
+    response = client.get("/api/v2/stories/by-slug/story-duplicate")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["id"] == 10
+    assert payload["slug"] == "story-primary"
+    assert payload["redirected_from_story_id"] == 11
+
+
+def test_explicit_reactivation_is_persisted_in_audit_history():
+    session = PersistenceSession()
+    old = candidate(
+        "AZ",
+        first_seen=NOW - timedelta(days=20),
+        last_seen=NOW - timedelta(days=15),
+    )
+    new = candidate("KZ", first_seen=NOW, last_seen=NOW)
+
+    persist_story_cluster(
+        session,
+        [old, new],
+        now=NOW,
+        reactivation_pairs=frozenset({(1, 2)}),
+    )
+
+    story_insert = next(call for call in session.calls if "INSERT INTO stories" in call[0])
+    meta = json.loads(story_insert[1]["meta"])
+    assert meta["reactivations"][0]["thread_ids"] == [1, 2]
+    assert meta["reactivations"][0]["gap_days"] == 15
+    membership_evidence = [
+        json.loads(params["evidence"])
+        for sql, params in session.calls
+        if "INSERT INTO story_articles" in sql and "VALUES" in sql
+    ]
+    assert membership_evidence
+    assert all(item["explicit_reactivation"] is True for item in membership_evidence)
+
+
+def test_background_builder_wires_explicit_reactivation_pairs(monkeypatch):
+    import src.stories as stories_module
+
+    old = candidate(
+        "AZ",
+        first_seen=NOW - timedelta(days=20),
+        last_seen=NOW - timedelta(days=15),
+    )
+    new = candidate("KZ", first_seen=NOW, last_seen=NOW)
+    explicit_pairs = frozenset({(1, 2)})
+    observed = {}
+
+    monkeypatch.setattr(stories_module, "fetch_story_candidates", lambda session: [old, new])
+
+    def fake_cluster(items, *, reactivation_pairs):
+        observed["cluster_pairs"] = reactivation_pairs
+        return [tuple(items)]
+
+    def fake_persist(session, items, *, summarizer, now, reactivation_pairs):
+        observed["persist_pairs"] = reactivation_pairs
+        return 7, 2
+
+    monkeypatch.setattr(stories_module, "cluster_story_candidates", fake_cluster)
+    monkeypatch.setattr(stories_module, "persist_story_cluster", fake_persist)
+    monkeypatch.setattr(stories_module, "refresh_story_lifecycles", lambda session, now: None)
+
+    result = build_stories(object(), now=NOW, reactivation_pairs=explicit_pairs)
+
+    assert result.stories_upserted == 1
+    assert observed == {
+        "cluster_pairs": explicit_pairs,
+        "persist_pairs": explicit_pairs,
+    }
+
+
+def test_unchanged_copy_preserves_generated_at():
+    cluster = [candidate("AZ"), candidate("KZ")]
+    session = UnchangedPersistenceSession(cluster)
+
+    persist_story_cluster(session, cluster, now=NOW)
+
+    update_call = next(
+        call for call in session.calls
+        if "UPDATE stories SET" in call[0] and "RETURNING id" in call[0]
+    )
+    assert "generated_at = :generated_at" in update_call[0]
+    assert update_call[1]["generated_at"] == session.generated_at

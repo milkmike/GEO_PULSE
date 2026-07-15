@@ -24,6 +24,8 @@ logger = logging.getLogger(__name__)
 
 MERGE_THRESHOLD = 0.65
 MAX_MERGE_GAP_DAYS = 14.0
+MIN_MEANINGFUL_OVERLAP = 0.20
+TITLE_FALLBACK_EVENT_CEILING = 0.85
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,6 +131,22 @@ def _as_utc(value: datetime) -> datetime:
 
 
 def _gap_days(left: StoryCandidate, right: StoryCandidate) -> float:
+    left_activity = [
+        _as_utc(article.published_at)
+        for article in left.articles
+        if article.published_at is not None
+    ]
+    right_activity = [
+        _as_utc(article.published_at)
+        for article in right.articles
+        if article.published_at is not None
+    ]
+    if left_activity and right_activity:
+        return min(
+            abs((left_date - right_date).total_seconds()) / 86400.0
+            for left_date in left_activity
+            for right_date in right_activity
+        )
     if not left.first_seen or not left.last_seen or not right.first_seen or not right.last_seen:
         return 0.0
     left_first, left_last = _as_utc(left.first_seen), _as_utc(left.last_seen)
@@ -148,10 +166,12 @@ def score_story_match(left: StoryCandidate, right: StoryCandidate) -> StorySimil
     """
 
     gap_days = _gap_days(left, right)
+    raw_entity_overlap = _jaccard(left.entities, right.entities)
+    raw_topic_overlap = _jaccard(left.topics, right.topics)
     components = {
         "event_key": trigram_similarity(left.event_key, right.event_key),
-        "entities": _jaccard(left.entities, right.entities),
-        "topics": _jaccard(left.topics, right.topics),
+        "entities": raw_entity_overlap if raw_entity_overlap >= MIN_MEANINGFUL_OVERLAP else 0.0,
+        "topics": raw_topic_overlap if raw_topic_overlap >= MIN_MEANINGFUL_OVERLAP else 0.0,
         "time": max(0.0, 1.0 - gap_days / MAX_MERGE_GAP_DAYS),
         "source_diversity": 1.0 if left.sources and right.sources and left.sources != right.sources else 0.0,
         "country_diversity": 1.0 if left.country_code != right.country_code else 0.0,
@@ -166,16 +186,25 @@ def score_story_match(left: StoryCandidate, right: StoryCandidate) -> StorySimil
         "country_diversity": 0.05,
         "title": 0.05,
     }
-    total = round(sum(components[name] * weight for name, weight in weights.items()), 6)
+    effective_components = dict(components)
+    if components["event_key"] >= TITLE_FALLBACK_EVENT_CEILING:
+        effective_components["title"] = 0.0
+    total = round(
+        sum(effective_components[name] * weight for name, weight in weights.items()),
+        6,
+    )
 
     matched_features: set[str] = set()
     if components["event_key"] >= 0.45:
         matched_features.add("event_key")
-    if components["entities"] > 0:
+    if components["entities"] >= MIN_MEANINGFUL_OVERLAP:
         matched_features.add("entities")
-    if components["topics"] > 0:
+    if components["topics"] >= MIN_MEANINGFUL_OVERLAP:
         matched_features.add("topics")
-    if components["title"] >= 0.65:
+    if (
+        components["title"] >= 0.65
+        and components["event_key"] < TITLE_FALLBACK_EVENT_CEILING
+    ):
         matched_features.add("title")
 
     evidence = {
@@ -183,6 +212,18 @@ def score_story_match(left: StoryCandidate, right: StoryCandidate) -> StorySimil
         "shared_entities": sorted(left.entities & right.entities),
         "shared_topics": sorted(left.topics & right.topics),
         "event_keys": [left.event_key, right.event_key],
+        "raw_entity_overlap": raw_entity_overlap,
+        "raw_topic_overlap": raw_topic_overlap,
+        "title_used_as_fallback": effective_components["title"] > 0,
+        "non_merge_reasons": [
+            reason
+            for condition, reason in (
+                (total < MERGE_THRESHOLD, "score_below_threshold"),
+                (len(matched_features) < 2, "insufficient_independent_features"),
+                (gap_days > MAX_MERGE_GAP_DAYS, "time_window_exceeded"),
+            )
+            if condition
+        ],
     }
     return StorySimilarity(
         total=total,
@@ -193,6 +234,26 @@ def score_story_match(left: StoryCandidate, right: StoryCandidate) -> StorySimil
     )
 
 
+def merge_rejection_reasons(
+    similarity: StorySimilarity,
+    *,
+    explicit_reactivation: bool = False,
+) -> tuple[str, ...]:
+    """Return stable, explainable reasons a pair cannot merge."""
+
+    reasons = []
+    if similarity.total < MERGE_THRESHOLD:
+        reasons.append("score_below_threshold")
+    if len(similarity.matched_features) < 2:
+        reasons.append("insufficient_independent_features")
+    if similarity.gap_days > MAX_MERGE_GAP_DAYS:
+        if not explicit_reactivation:
+            reasons.append("time_window_exceeded")
+        elif not {"event_key", "entities"}.issubset(similarity.matched_features):
+            reasons.append("reactivation_requires_event_and_entity")
+    return tuple(reasons)
+
+
 def should_merge(
     similarity: StorySimilarity,
     *,
@@ -200,13 +261,9 @@ def should_merge(
 ) -> bool:
     """Apply threshold, independent-evidence, and time-window merge gates."""
 
-    if similarity.total < MERGE_THRESHOLD:
-        return False
-    if len(similarity.matched_features) < 2:
-        return False
-    if similarity.gap_days > MAX_MERGE_GAP_DAYS and not explicit_reactivation:
-        return False
-    return True
+    return not merge_rejection_reasons(
+        similarity, explicit_reactivation=explicit_reactivation
+    )
 
 
 def transition_lifecycle(
@@ -251,38 +308,25 @@ def cluster_story_candidates(
     """Cluster country threads globally, returning cross-country groups only."""
 
     ordered = sorted(candidates, key=lambda item: (item.country_code, item.thread_id))
-    parent = list(range(len(ordered)))
-
-    def find(index: int) -> int:
-        while parent[index] != index:
-            parent[index] = parent[parent[index]]
-            index = parent[index]
-        return index
-
-    def union(left_index: int, right_index: int) -> None:
-        left_root, right_root = find(left_index), find(right_index)
-        if left_root != right_root:
-            parent[right_root] = left_root
-
-    for left_index, left in enumerate(ordered):
-        for right_index in range(left_index + 1, len(ordered)):
-            right = ordered[right_index]
-            if left.country_code == right.country_code:
-                continue
-            pair = tuple(sorted((left.thread_id, right.thread_id)))
-            if should_merge(
-                score_story_match(left, right),
-                explicit_reactivation=pair in reactivation_pairs,
+    grouped: list[list[StoryCandidate]] = []
+    for candidate in ordered:
+        for cluster in grouped:
+            if all(
+                should_merge(
+                    score_story_match(candidate, member),
+                    explicit_reactivation=tuple(sorted(
+                        (candidate.thread_id, member.thread_id)
+                    )) in reactivation_pairs,
+                )
+                for member in cluster
             ):
-                union(left_index, right_index)
-
-    grouped: dict[int, list[StoryCandidate]] = {}
-    for index, item in enumerate(ordered):
-        grouped.setdefault(find(index), []).append(item)
+                cluster.append(candidate)
+                break
+        else:
+            grouped.append([candidate])
 
     clusters = [
-        tuple(items)
-        for items in grouped.values()
+        tuple(items) for items in grouped
         if len({item.country_code for item in items}) >= 2
     ]
     return sorted(
@@ -308,6 +352,7 @@ def compute_source_hash(candidates: Sequence[StoryCandidate]) -> str:
             "entities": sorted(item.entities),
             "topics": sorted(item.topics),
             "sources": sorted(item.sources),
+            "highest_action_level": item.highest_action_level,
             "last_seen": item.last_seen.isoformat() if item.last_seen else None,
         })
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -486,28 +531,41 @@ def fetch_story_candidates(session: Any) -> list[StoryCandidate]:
 
 def _story_slug(candidates: Sequence[StoryCandidate], first_seen: datetime) -> str:
     identity = "|".join(sorted(_normalized_text(item.event_key) for item in candidates))
-    digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16]
-    return f"story-{first_seen.date().isoformat()}-{digest}"
+    event_digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:10]
+    anchor_thread_id = min(item.thread_id for item in candidates)
+    anchor_digest = hashlib.sha256(str(anchor_thread_id).encode("ascii")).hexdigest()[:10]
+    return f"story-{first_seen.date().isoformat()}-{event_digest}-{anchor_digest}"
 
 
 def _membership_evidence(
     candidate: StoryCandidate,
     cluster: Sequence[StoryCandidate],
+    reactivation_pairs: frozenset[tuple[int, int]],
 ) -> tuple[float, dict[str, Any]]:
     matches = [
-        score_story_match(candidate, other)
+        (other, score_story_match(candidate, other))
         for other in cluster
         if other.thread_id != candidate.thread_id and other.country_code != candidate.country_code
     ]
     if not matches:
-        return 1.0, {"thread_id": candidate.thread_id, "country": candidate.country_code}
-    best = max(matches, key=lambda match: match.total)
+        return 1.0, {
+            "thread_id": candidate.thread_id,
+            "country": candidate.country_code,
+            "explicit_reactivation": False,
+        }
+    best_other, best = max(matches, key=lambda match: match[1].total)
+    pair = tuple(sorted((candidate.thread_id, best_other.thread_id)))
+    explicit_reactivation = (
+        pair in reactivation_pairs and best.gap_days > MAX_MERGE_GAP_DAYS
+    )
     return max(MERGE_THRESHOLD, best.total), {
         "thread_id": candidate.thread_id,
         "country": candidate.country_code,
         "components": best.components,
         "matched_features": sorted(best.matched_features),
         "gap_days": round(best.gap_days, 3),
+        "explicit_reactivation": explicit_reactivation,
+        "non_merge_reasons": best.evidence.get("non_merge_reasons", []),
     }
 
 
@@ -517,11 +575,27 @@ def persist_story_cluster(
     *,
     summarizer: Callable[[dict[str, Any]], dict[str, Any] | None] | None = None,
     now: datetime | None = None,
+    reactivation_pairs: frozenset[tuple[int, int]] = frozenset(),
 ) -> tuple[int, int]:
     """Idempotently persist one cross-country cluster and all derived slices."""
 
     if len({item.country_code for item in candidates}) < 2:
         raise ValueError("A story must contain at least two countries")
+    pairwise_matches = [
+        (
+            left,
+            right,
+            score_story_match(left, right),
+            tuple(sorted((left.thread_id, right.thread_id))) in reactivation_pairs,
+        )
+        for index, left in enumerate(candidates)
+        for right in candidates[index + 1:]
+    ]
+    if any(
+        not should_merge(similarity, explicit_reactivation=explicit_reactivation)
+        for _, _, similarity, explicit_reactivation in pairwise_matches
+    ):
+        raise ValueError("Story cluster failed complete-link cohesion")
     now = _as_utc(now or datetime.now(timezone.utc))
     articles = {
         article.article_id: article
@@ -540,24 +614,39 @@ def persist_story_cluster(
     first_seen, last_seen = min(dates), max(dates)
     source_hash = compute_source_hash(candidates)
     proposed_slug = _story_slug(candidates, first_seen)
+    thread_ids = sorted(item.thread_id for item in candidates)
 
-    existing = session.execute(text("""
+    existing_matches = session.execute(text("""
         SELECT st.id, st.slug, st.title_ru, st.title_en, st.summary,
                st.summary_model, st.source_hash, st.article_count,
-               st.highest_action_level,
+               st.highest_action_level, st.generated_at, st.meta,
                (SELECT COUNT(*) FROM story_articles overlap_sa
                 WHERE overlap_sa.story_id = st.id
-                  AND overlap_sa.article_id = ANY(:article_ids)) AS article_overlap
+                  AND overlap_sa.article_id = ANY(:article_ids)) AS article_overlap,
+                (SELECT COUNT(*)
+                FROM jsonb_array_elements_text(COALESCE(st.meta->'thread_ids', '[]'::jsonb))
+                     AS stored_thread(value)
+                WHERE stored_thread.value::bigint = ANY(:thread_ids)) AS thread_overlap
         FROM stories st
-        WHERE st.slug = :slug
-           OR EXISTS (
+        WHERE EXISTS (
                SELECT 1 FROM story_articles matching_sa
                WHERE matching_sa.story_id = st.id
                  AND matching_sa.article_id = ANY(:article_ids)
            )
-        ORDER BY article_overlap DESC, (st.slug = :slug) DESC, st.id
-        LIMIT 1
-    """), {"article_ids": article_ids, "slug": proposed_slug}).fetchone()
+           OR EXISTS (
+               SELECT 1
+               FROM jsonb_array_elements_text(COALESCE(st.meta->'thread_ids', '[]'::jsonb))
+                    AS matching_thread(value)
+               WHERE matching_thread.value::bigint = ANY(:thread_ids)
+           )
+        ORDER BY
+            CASE WHEN COALESCE(st.meta, '{}'::jsonb) ? 'merged_into_story_id'
+                 THEN 1 ELSE 0 END,
+            article_overlap DESC, thread_overlap DESC, st.id
+        FOR UPDATE OF st
+    """), {"article_ids": article_ids, "thread_ids": thread_ids}).fetchall()
+    existing = existing_matches[0] if existing_matches else None
+    duplicate_story_ids = [_value(row, "id") for row in existing_matches[1:]]
     previous_copy = None
     if existing:
         previous_copy = StoryCopy(
@@ -566,6 +655,10 @@ def persist_story_cluster(
             summary=_value(existing, "summary") or "",
             summary_model=_value(existing, "summary_model"),
         )
+    copy_regenerated = (
+        previous_copy is None
+        or source_hash != (_value(existing, "source_hash") if existing else None)
+    )
     copy = resolve_story_copy(
         candidates,
         source_hash=source_hash,
@@ -590,17 +683,89 @@ def persist_story_cluster(
         highest_action_level=highest_action,
         previous_action_level=int(_value(existing, "highest_action_level", 1) or 1) if existing else 1,
     )
-    pair_scores = [
-        score_story_match(left, right).total
-        for index, left in enumerate(candidates)
-        for right in candidates[index + 1:]
-        if left.country_code != right.country_code
-    ]
-    confidence = round(sum(pair_scores) / len(pair_scores), 3) if pair_scores else MERGE_THRESHOLD
-    meta = json.dumps({
-        "thread_ids": sorted(item.thread_id for item in candidates),
+    pair_scores = [similarity.total for _, _, similarity, _ in pairwise_matches]
+    confidence = round(min(pair_scores), 3) if pair_scores else MERGE_THRESHOLD
+    existing_meta: dict[str, Any] = {}
+    merge_audit: list[dict[str, Any]] = []
+    reactivation_history: list[dict[str, Any]] = []
+    merged_story_ids: set[int] = set(duplicate_story_ids)
+    for matched_story in existing_matches:
+        matched_meta = _value(matched_story, "meta", {}) or {}
+        if isinstance(matched_meta, str):
+            try:
+                matched_meta = json.loads(matched_meta)
+            except json.JSONDecodeError:
+                matched_meta = {}
+        if not isinstance(matched_meta, dict):
+            continue
+        if not existing_meta:
+            existing_meta = dict(matched_meta)
+        merge_audit.extend(
+            item for item in (matched_meta.get("merge_audit") or [])
+            if isinstance(item, dict)
+        )
+        reactivation_history.extend(
+            item for item in (matched_meta.get("reactivations") or [])
+            if isinstance(item, dict)
+        )
+        merged_story_ids.update(
+            story_id for story_id in (matched_meta.get("merged_story_ids") or [])
+            if isinstance(story_id, int) and not isinstance(story_id, bool)
+        )
+
+    def preserve_audit_order(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        deduplicated: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for item in items:
+            decision_id = item.get("decision_id")
+            identity = str(decision_id) if decision_id else hashlib.sha256(
+                json.dumps(item, sort_keys=True, ensure_ascii=False).encode("utf-8")
+            ).hexdigest()
+            if identity not in seen:
+                deduplicated.append(item)
+                seen.add(identity)
+        return deduplicated
+
+    merge_audit = preserve_audit_order(merge_audit)
+    reactivation_history = preserve_audit_order(reactivation_history)
+    known_audit_ids = {
+        item.get("decision_id") for item in merge_audit if isinstance(item, dict)
+    }
+    known_reactivation_ids = {
+        item.get("decision_id")
+        for item in reactivation_history if isinstance(item, dict)
+    }
+    for left, right, similarity, explicit_reactivation in pairwise_matches:
+        pair = sorted((left.thread_id, right.thread_id))
+        decision_id = hashlib.sha256(
+            f"{pair[0]}:{pair[1]}:{source_hash}:{int(explicit_reactivation)}".encode("ascii")
+        ).hexdigest()
+        audit_entry = {
+            "decision_id": decision_id,
+            "decision": "reactivation" if explicit_reactivation else "merge",
+            "thread_ids": pair,
+            "score": similarity.total,
+            "gap_days": round(similarity.gap_days, 3),
+            "matched_features": sorted(similarity.matched_features),
+            "components": similarity.components,
+            "decided_at": now.isoformat(),
+        }
+        if decision_id not in known_audit_ids:
+            merge_audit.append(audit_entry)
+            known_audit_ids.add(decision_id)
+        if explicit_reactivation and similarity.gap_days > MAX_MERGE_GAP_DAYS:
+            if decision_id not in known_reactivation_ids:
+                reactivation_history.append(audit_entry)
+                known_reactivation_ids.add(decision_id)
+    meta_payload = dict(existing_meta)
+    meta_payload.update({
+        "thread_ids": thread_ids,
         "topics": sorted({topic for item in candidates for topic in item.topics}),
-    }, ensure_ascii=False)
+        "merge_audit": merge_audit,
+        "reactivations": reactivation_history,
+        "merged_story_ids": sorted(merged_story_ids),
+    })
+    meta = json.dumps(meta_payload, ensure_ascii=False)
     params = {
         "slug": _value(existing, "slug") if existing else proposed_slug,
         "title_ru": copy.title_ru,
@@ -617,6 +782,7 @@ def persist_story_cluster(
         "summary_model": copy.summary_model,
         "source_hash": source_hash,
         "meta": meta,
+        "generated_at": now if copy_regenerated else _value(existing, "generated_at"),
         "now": now,
     }
     if existing:
@@ -629,12 +795,12 @@ def persist_story_cluster(
                 country_count = :country_count, highest_action_level = :highest_action_level,
                 clustering_confidence = :confidence, summary_model = :summary_model,
                 source_hash = :source_hash, meta = CAST(:meta AS jsonb),
-                generated_at = :now, updated_at = :now
+                generated_at = :generated_at, updated_at = :now
             WHERE id = :story_id
             RETURNING id
         """), params).fetchone()[0]
     else:
-        story_id = session.execute(text("""
+        inserted = session.execute(text("""
             INSERT INTO stories (
                 slug, title_ru, title_en, summary, lifecycle, first_seen, last_seen,
                 article_count, source_count, country_count, highest_action_level,
@@ -644,34 +810,54 @@ def persist_story_cluster(
                 :slug, :title_ru, :title_en, :summary, :lifecycle, :first_seen, :last_seen,
                 :article_count, :source_count, :country_count, :highest_action_level,
                 :confidence, :summary_model, :source_hash, CAST(:meta AS jsonb),
-                :now, :now
+                :generated_at, :now
             )
-            ON CONFLICT (slug) DO UPDATE SET
-                title_ru = EXCLUDED.title_ru,
-                title_en = EXCLUDED.title_en,
-                summary = EXCLUDED.summary,
-                lifecycle = EXCLUDED.lifecycle,
-                first_seen = LEAST(stories.first_seen, EXCLUDED.first_seen),
-                last_seen = GREATEST(stories.last_seen, EXCLUDED.last_seen),
-                article_count = EXCLUDED.article_count,
-                source_count = EXCLUDED.source_count,
-                country_count = EXCLUDED.country_count,
-                highest_action_level = EXCLUDED.highest_action_level,
-                clustering_confidence = EXCLUDED.clustering_confidence,
-                summary_model = EXCLUDED.summary_model,
-                source_hash = EXCLUDED.source_hash,
-                meta = EXCLUDED.meta,
-                generated_at = EXCLUDED.generated_at,
-                updated_at = EXCLUDED.updated_at
+            ON CONFLICT (slug) DO NOTHING
             RETURNING id
-        """), params).fetchone()[0]
+        """), params).fetchone()
+        if not inserted:
+            raise RuntimeError("Story slug collision without article or thread identity overlap")
+        story_id = inserted[0]
 
-    session.execute(text("""
-        DELETE FROM story_articles
-        WHERE story_id = :story_id AND NOT (article_id = ANY(:article_ids))
-    """), {"story_id": story_id, "article_ids": article_ids})
+    if duplicate_story_ids:
+        reconciliation_params = {
+            "primary_story_id": story_id,
+            "duplicate_story_ids": duplicate_story_ids,
+        }
+        session.execute(text("""
+            INSERT INTO story_articles (
+                story_id, article_id, membership_confidence, evidence, added_at
+            )
+            SELECT :primary_story_id, article_id, membership_confidence, evidence, added_at
+            FROM story_articles
+            WHERE story_id = ANY(:duplicate_story_ids)
+            ON CONFLICT (story_id, article_id) DO UPDATE SET
+                membership_confidence = GREATEST(
+                    story_articles.membership_confidence,
+                    EXCLUDED.membership_confidence
+                ),
+                evidence = story_articles.evidence || EXCLUDED.evidence
+        """), reconciliation_params)
+        session.execute(text("""
+            UPDATE stories SET
+                lifecycle = 'resolved',
+                meta = COALESCE(meta, '{}'::jsonb) || jsonb_build_object(
+                    'merged_into_story_id', :primary_story_id,
+                    'canonical_slug', :canonical_slug,
+                    'superseded_at', :now
+                ),
+                updated_at = :now
+            WHERE id = ANY(:duplicate_story_ids)
+        """), {
+            **reconciliation_params,
+            "canonical_slug": params["slug"],
+            "now": now,
+        })
+
     for candidate in candidates:
-        membership_confidence, evidence = _membership_evidence(candidate, candidates)
+        membership_confidence, evidence = _membership_evidence(
+            candidate, candidates, reactivation_pairs
+        )
         for article_id in candidate.article_ids:
             session.execute(text("""
                 INSERT INTO story_articles (
@@ -780,16 +966,25 @@ def build_stories(
     *,
     summarizer: Callable[[dict[str, Any]], dict[str, Any] | None] | None = None,
     now: datetime | None = None,
+    reactivation_pairs: frozenset[tuple[int, int]] = frozenset(),
 ) -> StoryBuildResult:
     """Run the global story build inside the existing background cycle."""
 
     now = _as_utc(now or datetime.now(timezone.utc))
     candidates = fetch_story_candidates(session)
-    clusters = cluster_story_candidates(candidates)
+    clusters = cluster_story_candidates(
+        candidates, reactivation_pairs=reactivation_pairs
+    )
     stories_upserted = 0
     memberships = 0
     for cluster in clusters:
-        _, count = persist_story_cluster(session, cluster, summarizer=summarizer, now=now)
+        _, count = persist_story_cluster(
+            session,
+            cluster,
+            summarizer=summarizer,
+            now=now,
+            reactivation_pairs=reactivation_pairs,
+        )
         stories_upserted += 1
         memberships += count
     refresh_story_lifecycles(session, now=now)
