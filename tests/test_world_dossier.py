@@ -61,7 +61,7 @@ def test_country_dossier_history_uses_utc_daily_last_persisted_points(monkeypatc
         version="v1",
         delta_24h=7.25,
     )
-    session = SequentialSession([[latest], [daily_last], [], [], []])
+    session = SequentialSession([[latest], [daily_last], [], [], [], []])
 
     @contextmanager
     def session_factory():
@@ -91,6 +91,81 @@ def test_country_dossier_history_uses_utc_daily_last_persisted_points(monkeypatc
     assert "AVG(" not in history_sql.upper()
     assert session.calls[1][1] == {"cc": "ES", "days": 30}
     assert all(sql.lstrip().upper().startswith("SELECT") for sql, _ in session.calls)
+
+
+def test_country_dossier_batches_and_serializes_signal_article_previews(monkeypatch):
+    created_at = datetime(2026, 7, 15, 3, 0, tzinfo=timezone.utc)
+    signals = [
+        SimpleNamespace(
+            id=81,
+            signal_type="tone_shift",
+            severity="warning",
+            confidence=0.8,
+            title="Изменение риторики",
+            description=None,
+            payload={"tone": -4.2},
+            created_at=created_at,
+        ),
+        SimpleNamespace(
+            id=82,
+            signal_type="official_silence",
+            severity="info",
+            confidence=0.5,
+            title="Официальное молчание",
+            description=None,
+            payload={},
+            created_at=created_at,
+        ),
+    ]
+    preview = SimpleNamespace(
+        signal_id=81,
+        kind="context",
+        total=47,
+        window_hours=72,
+        window_start=datetime(2026, 7, 12, 3, 0, tzinfo=timezone.utc),
+        window_end=created_at,
+        article_id=501,
+        title="Правительство прокомментировало отношения с Россией",
+        url="https://example.es/story",
+        published_at=datetime(2026, 7, 15, 1, 30, tzinfo=timezone.utc),
+        source_name="Ejemplo",
+        country_code="ES",
+    )
+    session = SequentialSession([[], [], signals, [preview], [], []])
+
+    @contextmanager
+    def session_factory():
+        yield session
+
+    monkeypatch.setattr(world, "get_session", session_factory)
+
+    dossier = world.country_dossier("es", days=30)
+
+    assert dossier["signals"][0]["evidence_preview"] == {
+        "kind": "context",
+        "total": 47,
+        "window_hours": 72,
+        "window_start": "2026-07-12T03:00:00+00:00",
+        "window_end": "2026-07-15T03:00:00+00:00",
+        "articles": [{
+            "id": 501,
+            "title": "Правительство прокомментировало отношения с Россией",
+            "url": "https://example.es/story",
+            "published_at": "2026-07-15T01:30:00+00:00",
+            "source_name": "Ejemplo",
+            "country_code": "ES",
+        }],
+    }
+    assert dossier["signals"][1]["evidence_preview"] == {
+        "kind": "unavailable",
+        "articles": [],
+        "total": 0,
+        "window_hours": None,
+        "window_start": None,
+        "window_end": None,
+    }
+    assert len(session.calls) == 6
+    assert session.calls[3][1] == {"signal_ids": [81, 82], "lim": 2}
 
 
 def test_signal_list_treats_null_expiry_as_inactive(monkeypatch):

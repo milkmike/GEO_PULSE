@@ -343,6 +343,7 @@ def country_dossier(code: str, days: int = Query(30, ge=1, le=365)):
             """),
             {"cc": code, "days": days},
         ).fetchall()
+        signal_previews = load_signal_article_previews(session, signals, limit=2)
 
         gdelt = session.execute(
             text("""
@@ -412,7 +413,18 @@ def country_dossier(code: str, days: int = Query(30, ge=1, le=365)):
             {"id": r.id, "type": r.signal_type, "severity": r.severity,
              "confidence": float(r.confidence or 0), "title": r.title,
              "description": r.description, "payload": r.payload,
-             "created_at": r.created_at.isoformat()}
+             "created_at": r.created_at.isoformat(),
+             "evidence_preview": signal_previews.get(
+                 int(r.id),
+                 {
+                     "kind": "unavailable",
+                     "articles": [],
+                     "total": 0,
+                     "window_hours": None,
+                     "window_start": None,
+                     "window_end": None,
+                 },
+             )}
             for r in signals
         ],
     }
