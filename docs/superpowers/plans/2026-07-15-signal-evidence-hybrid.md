@@ -16,7 +16,9 @@
 - Return total candidate count and exact context-window bounds with every preview.
 - Use persisted `signal_evidence.article_ids` before contextual articles.
 - Contextual articles are relevant, non-duplicate articles from sources in the signal country, published in a 72-hour window ending at the observed period.
-- For legacy `tone_shift` and `volume_surge`, derive the observed period from the latest `gdelt_daily.day` on or before the signal creation date calculated in UTC; do not anchor it to delayed detector execution time.
+- Context fallback without persisted article IDs is allowed only for `tone_shift`, `volume_surge`, and `index_shift`.
+- For legacy `tone_shift` and `volume_surge`, match the observed `gdelt_daily` row to the saved numeric values in signal `payload`, with latest-day fallback only when no payload match exists; do not anchor it to delayed detector execution time.
+- Build one materialized candidate-article pool across the min/max eligible window and materialize ranked context top rows once; never range-scan articles per signal or per window.
 - Label contextual articles as possible context; never claim that correlation proves causation.
 - Sanitize every public article URL with the existing `safe_public_url` helper.
 - Avoid N+1 API or SQL calls on the signal feed.
@@ -73,9 +75,14 @@ Expected: FAIL because `evidence_preview` and the batch loader do not exist.
 
 Create `src/api/signal_article_context.py`. Execute one PostgreSQL query for all
 requested signal IDs. Its `requested` CTE joins `signals` to `signal_evidence`
-and derives `context_end`: for legacy `tone_shift`/`volume_surge`, use one day
-after the latest `gdelt_daily.day` on or before signal creation; otherwise use
-`created_at`. Derive `context_start = context_end - INTERVAL '72 hours'`. Its
+and derives `context_end`: for legacy `tone_shift`, prefer a `gdelt_daily` row
+whose `tone_avg` matches `payload.tone`; for `volume_surge`, prefer values matching
+`payload.share` and `payload.volume`; use latest-day fallback only when no numeric
+payload match exists. Derive `context_start = context_end - INTERVAL '72 hours'`.
+Only `tone_shift`, `volume_surge`, and `index_shift` are context eligible. Build
+`context_article_pool AS MATERIALIZED` once for all eligible countries between
+the global minimum start and maximum end, join that pool to distinct windows,
+and build `context_top AS MATERIALIZED` once. Its
 `exact_candidates` CTE unnests the first persisted article IDs with
 ordinality; its `context_candidates` CTE runs only where the evidence array is
 empty and filters:
@@ -197,11 +204,11 @@ Add `context_preview` to the fixture. Assert the page renders heading
 `Новостной контекст`, the source link, and this caveat:
 
 ```text
-Эти публикации вышли за 72 часа до срабатывания и отобраны как возможный контекст. Они не доказывают причину сдвига.
+Публикации отобраны в 72-часовом окне наблюдаемого периода как возможный контекст. Они не доказывают причину сдвига.
 ```
 
 Also assert that `Публикации-доказательства` is used for exact evidence, empty
-context says `За 72 часа до сигнала релевантные публикации не найдены.`, and the
+context says `В сохранённом 72-часовом окне релевантные публикации не найдены.`, and the
 technical heading changes from `Почему сработал сигнал` to `Как сработал
 детектор`.
 
@@ -250,7 +257,7 @@ Commit: `feat: add news context to signal detail`
 Extend the signal fixture with two context articles and assert:
 
 ```tsx
-expect(screen.getByText("Публикации за 72 часа до сигнала")).toBeVisible();
+expect(screen.getByText("Публикации в окне сигнала")).toBeVisible();
 expect(screen.getByText("Контекст для проверки; причинная связь не установлена.")).toBeVisible();
 expect(screen.getByText("2 из 47 релевантных публикаций")).toBeVisible();
 expect(screen.getByRole("link", { name: /Ejemplo.*Правительство/i }))
@@ -281,7 +288,7 @@ Use these headings:
 ```ts
 const heading = preview.kind === "evidence"
   ? "На чём основан сигнал"
-  : "Публикации за 72 часа до сигнала";
+  : "Публикации в окне сигнала";
 ```
 
 When `detailEnabled`, render a separate internal Link with the exact label
