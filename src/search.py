@@ -10,6 +10,7 @@ import unicodedata
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal, ROUND_HALF_UP
 
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
@@ -41,6 +42,22 @@ WITH search_query AS (
         ELSE NULL
     END AS tsq
 ),
+latest_article AS (
+    SELECT COALESCE(a.collected_at, a.published_at) AS collected_at, a.id
+    FROM articles a
+    ORDER BY COALESCE(a.collected_at, a.published_at) DESC, a.id DESC
+    LIMIT 1
+),
+snapshot AS (
+    SELECT COALESCE(
+               CAST(:snapshot_collected_at AS TIMESTAMPTZ),
+               (SELECT collected_at FROM latest_article)
+           ) AS snapshot_collected_at,
+           COALESCE(
+               CAST(:snapshot_article_id AS INTEGER),
+               (SELECT id FROM latest_article)
+           ) AS snapshot_article_id
+),
 base_articles AS (
     SELECT a.id, a.search_vector, a.title_normalized, a.published_at,
            GREATEST(0.0, LEAST(1.0,
@@ -50,7 +67,14 @@ base_articles AS (
     FROM articles a
     JOIN sources s ON s.id = a.source_id
     LEFT JOIN analysis an ON an.article_id = a.id
+    CROSS JOIN snapshot snapshot_state
     WHERE a.is_duplicate = FALSE
+      AND (
+          snapshot_state.snapshot_collected_at IS NULL
+          OR (COALESCE(a.collected_at, a.published_at), a.id) <=
+             (snapshot_state.snapshot_collected_at,
+              snapshot_state.snapshot_article_id)
+      )
       AND (:country IS NULL OR s.country_code = :country)
       AND (:topic IS NULL OR an.topics @> ARRAY[CAST(:topic AS TEXT)])
       AND (:entity_id IS NULL OR EXISTS (
@@ -205,10 +229,14 @@ raw_candidate_features AS (
 ),
 candidate_features AS (
     SELECT raw_candidate_features.*,
-           lexical_score * 0.35 + entity_score * 0.25 +
-           topic_score * 0.15 + freshness_score * 0.10 +
-           trust_score * 0.10 + story_score * 0.05
-               AS candidate_hybrid_score
+           ROUND((
+               CAST(lexical_score AS NUMERIC) * 0.35 +
+               CAST(entity_score AS NUMERIC) * 0.25 +
+               CAST(topic_score AS NUMERIC) * 0.15 +
+               CAST(freshness_score AS NUMERIC) * 0.10 +
+               CAST(trust_score AS NUMERIC) * 0.10 +
+               CAST(story_score AS NUMERIC) * 0.05
+           )::NUMERIC, 6)::DOUBLE PRECISION AS candidate_hybrid_score
     FROM raw_candidate_features
 ),
 limited_candidates AS (
@@ -230,6 +258,8 @@ SELECT a.id, a.title, a.summary, a.url, a.published_at, a.language,
        COALESCE(entity_data.exact_entity_match, FALSE) AS exact_entity_match,
        story_data.story_id, story_data.story_slug, story_data.story_title,
        story_data.story_confidence,
+       snapshot_state.snapshot_collected_at,
+       snapshot_state.snapshot_article_id,
        candidates.lexical_score,
        CASE
            WHEN :q = '' THEN NULL
@@ -253,6 +283,7 @@ JOIN articles a ON a.id = candidates.id
 JOIN sources s ON s.id = a.source_id
 LEFT JOIN analysis an ON an.article_id = a.id
 CROSS JOIN search_query sq
+CROSS JOIN snapshot snapshot_state
 LEFT JOIN LATERAL (
     SELECT jsonb_agg(DISTINCT jsonb_build_object(
                'id', ce.id,
@@ -360,6 +391,11 @@ def _unit_interval(value: float) -> float:
     return min(1.0, max(0.0, float(value)))
 
 
+def _round_rank(value: float | Decimal) -> float:
+    bounded = min(Decimal("1"), max(Decimal("0"), Decimal(str(value))))
+    return float(bounded.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP))
+
+
 def combine_scores(
     *,
     lexical: float,
@@ -380,18 +416,21 @@ def combine_scores(
         "trust": _unit_interval(trust),
         "story": _unit_interval(story),
     }
-    final = (
-        components["lexical"] * LEXICAL_WEIGHT
-        + components["entity"] * ENTITY_WEIGHT
-        + components["topic"] * TOPIC_WEIGHT
-        + components["freshness"] * FRESHNESS_WEIGHT
-        + components["trust"] * TRUST_WEIGHT
-        + components["story"] * STORY_WEIGHT
+    final = sum(
+        Decimal(str(components[name])) * Decimal(str(weight))
+        for name, weight in (
+            ("lexical", LEXICAL_WEIGHT),
+            ("entity", ENTITY_WEIGHT),
+            ("topic", TOPIC_WEIGHT),
+            ("freshness", FRESHNESS_WEIGHT),
+            ("trust", TRUST_WEIGHT),
+            ("story", STORY_WEIGHT),
+        )
     )
     return SearchScore(
         **components,
         vector=None if vector is None else _unit_interval(vector),
-        final=round(_unit_interval(final), 6),
+        final=_round_rank(final),
     )
 
 
@@ -444,6 +483,8 @@ def encode_cursor(
     published_at: datetime,
     article_id: int,
     ranking_at: datetime,
+    snapshot_collected_at: datetime,
+    snapshot_article_id: int,
 ) -> str:
     """Serialize stable page ordering plus its ranking-time snapshot."""
 
@@ -451,13 +492,17 @@ def encode_cursor(
         "article_id": int(article_id),
         "published_at": published_at.isoformat(),
         "ranking_at": ranking_at.isoformat(),
-        "relevance_score": round(_unit_interval(relevance_score), 6),
+        "relevance_score": _round_rank(relevance_score),
+        "snapshot_article_id": int(snapshot_article_id),
+        "snapshot_collected_at": snapshot_collected_at.isoformat(),
     }
     raw = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
     return base64.urlsafe_b64encode(raw.encode("ascii")).decode("ascii").rstrip("=")
 
 
-def decode_cursor(cursor: str) -> tuple[float, datetime, int, datetime]:
+def decode_cursor(
+    cursor: str,
+) -> tuple[float, datetime, int, datetime, datetime, int]:
     """Decode and validate an opaque search cursor."""
 
     try:
@@ -468,22 +513,37 @@ def decode_cursor(cursor: str) -> tuple[float, datetime, int, datetime]:
             "published_at",
             "ranking_at",
             "relevance_score",
+            "snapshot_article_id",
+            "snapshot_collected_at",
         }:
             raise ValueError
         relevance_score = float(payload["relevance_score"])
         published_at = datetime.fromisoformat(payload["published_at"])
         article_id = int(payload["article_id"])
         ranking_at = datetime.fromisoformat(payload["ranking_at"])
+        snapshot_collected_at = datetime.fromisoformat(
+            payload["snapshot_collected_at"]
+        )
+        snapshot_article_id = int(payload["snapshot_article_id"])
         if (
             not 0 <= relevance_score <= 1
             or published_at.tzinfo is None
             or ranking_at.tzinfo is None
+            or snapshot_collected_at.tzinfo is None
             or article_id < 1
+            or snapshot_article_id < 1
         ):
             raise ValueError
     except (binascii.Error, TypeError, ValueError, UnicodeError, json.JSONDecodeError) as exc:
         raise ValueError("invalid search cursor") from exc
-    return relevance_score, published_at, article_id, ranking_at
+    return (
+        relevance_score,
+        published_at,
+        article_id,
+        ranking_at,
+        snapshot_collected_at,
+        snapshot_article_id,
+    )
 
 
 def _row_value(row: object, name: str, default=None):
@@ -654,6 +714,10 @@ def search_articles(
         if cursor_values
         else _aware_datetime(now or datetime.now(timezone.utc))
     )
+    snapshot_collected_at = (
+        _aware_datetime(cursor_values[4]) if cursor_values else None
+    )
+    snapshot_article_id = cursor_values[5] if cursor_values else None
     params = {
         "q": query.q,
         "country": query.country,
@@ -665,6 +729,8 @@ def search_articles(
         "language": query.language,
         "sort": query.sort,
         "ranking_at": ranking_at,
+        "snapshot_collected_at": snapshot_collected_at,
+        "snapshot_article_id": snapshot_article_id,
         "candidate_limit": 500,
     }
     try:
@@ -676,6 +742,12 @@ def search_articles(
         if pgcode == "57014" or "statement timeout" in str(exc).casefold():
             raise SearchTimeoutError("article search timed out") from exc
         raise
+
+    if not cursor_values and rows:
+        snapshot_collected_at = _aware_datetime(
+            _row_value(rows[0], "snapshot_collected_at")
+        )
+        snapshot_article_id = int(_row_value(rows[0], "snapshot_article_id"))
 
     ranked = [_serialize_candidate(row, query, ranking_at) for row in rows]
     if query.sort == "newest":
@@ -698,7 +770,7 @@ def search_articles(
         )
 
     if cursor_values:
-        cursor_score, cursor_published_at, cursor_id, _ = cursor_values
+        cursor_score, cursor_published_at, cursor_id, _, _, _ = cursor_values
         cursor_published_at = _aware_datetime(cursor_published_at)
         if query.sort == "newest":
             ranked = [
@@ -722,6 +794,8 @@ def search_articles(
             "published_at": last_published_at.isoformat(),
             "article_id": last_item["article_id"],
             "ranking_at": ranking_at.isoformat(),
+            "snapshot_collected_at": snapshot_collected_at.isoformat(),
+            "snapshot_article_id": snapshot_article_id,
         }
     return {
         "items": [item for item, _ in page_rows],

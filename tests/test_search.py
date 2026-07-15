@@ -135,10 +135,42 @@ def test_explanation_names_strongest_observed_match_without_semantic_claims():
 def test_cursor_serialization_is_stable_and_round_trips():
     published_at = datetime(2026, 7, 14, 12, 30, tzinfo=timezone.utc)
     ranking_at = datetime(2026, 7, 15, 9, 0, tzinfo=timezone.utc)
-    first = encode_cursor(.712345, published_at, 321, ranking_at)
-    second = encode_cursor(.712345, published_at, 321, ranking_at)
+    snapshot_at = datetime(2026, 7, 15, 8, 55, tzinfo=timezone.utc)
+    first = encode_cursor(
+        .712345,
+        published_at,
+        321,
+        ranking_at,
+        snapshot_at,
+        900,
+    )
+    second = encode_cursor(
+        .712345,
+        published_at,
+        321,
+        ranking_at,
+        snapshot_at,
+        900,
+    )
     assert first == second
-    assert decode_cursor(first) == (.712345, published_at, 321, ranking_at)
+    assert decode_cursor(first) == (
+        .712345,
+        published_at,
+        321,
+        ranking_at,
+        snapshot_at,
+        900,
+    )
+
+    half_up = encode_cursor(
+        .1234565,
+        published_at,
+        321,
+        ranking_at,
+        snapshot_at,
+        900,
+    )
+    assert decode_cursor(half_up)[0] == .123457
 
 
 class FakeSearchService:
@@ -207,6 +239,8 @@ class FakeSearchService:
                 "published_at": "2026-07-14T12:30:00+00:00",
                 "article_id": 123,
                 "ranking_at": "2026-07-15T09:00:00+00:00",
+                "snapshot_collected_at": "2026-07-15T08:55:00+00:00",
+                "snapshot_article_id": 900,
             },
         }
 
@@ -331,6 +365,8 @@ def test_search_service_uses_parameterized_hybrid_candidates_and_deterministic_r
             summary="Точное каноническое упоминание.",
             url="https://example.es/entity",
             published_at=published_at,
+            snapshot_collected_at=published_at,
+            snapshot_article_id=11,
             language="es",
             source_name="Entidad",
             country_code="ES",
@@ -380,6 +416,8 @@ def test_search_service_uses_parameterized_hybrid_candidates_and_deterministic_r
             summary="Только текстовое совпадение.",
             url="https://example.es/body",
             published_at=published_at,
+            snapshot_collected_at=published_at,
+            snapshot_article_id=11,
             language="es",
             source_name="Texto",
             country_code="ES",
@@ -440,6 +478,9 @@ def test_search_service_uses_parameterized_hybrid_candidates_and_deterministic_r
     sql, params = fake_session.calls[-1]
     compact_sql = " ".join(sql.split())
     assert "websearch_to_tsquery('simple', :q)" in sql
+    assert "latest_article AS" in sql
+    assert "snapshot AS" in sql
+    assert "snapshot_state.snapshot_collected_at" in sql
     assert "article_entity_mentions" in sql
     assert "canonical_entities" in sql
     assert "@> ARRAY[CAST(:topic AS TEXT)]" in sql
@@ -454,6 +495,9 @@ def test_search_service_uses_parameterized_hybrid_candidates_and_deterministic_r
         assert sql.index(candidate_source) < sql.index("limited_candidates AS")
     assert "candidate_hybrid_score" in sql
     assert "THEN candidate_hybrid_score END DESC" in sql
+    assert "ROUND((" in sql
+    assert ")::NUMERIC, 6)::DOUBLE PRECISION" in sql
+    assert sql.index("ROUND((") < sql.index("limited_candidates AS")
     assert (
         "GREATEST(0.0, LEAST(1.0, COALESCE(s.weight, 0.5)"
         in compact_sql
@@ -469,6 +513,8 @@ def test_search_service_uses_parameterized_hybrid_candidates_and_deterministic_r
     assert params["date_from"] is None
     assert params["sort"] == "relevance"
     assert params["ranking_at"] == published_at
+    assert params["snapshot_collected_at"] is None
+    assert params["snapshot_article_id"] is None
     assert params["candidate_limit"] == 500
 
     first_page = search_articles(
@@ -482,6 +528,8 @@ def test_search_service_uses_parameterized_hybrid_candidates_and_deterministic_r
         datetime.fromisoformat(next_cursor["published_at"]),
         next_cursor["article_id"],
         datetime.fromisoformat(next_cursor["ranking_at"]),
+        datetime.fromisoformat(next_cursor["snapshot_collected_at"]),
+        next_cursor["snapshot_article_id"],
     )
     later_page = search_articles(
         SearchQuery(q="путин", country="ES", cursor=cursor),
@@ -490,6 +538,8 @@ def test_search_service_uses_parameterized_hybrid_candidates_and_deterministic_r
     )
     _, later_params = fake_session.calls[-1]
     assert later_params["ranking_at"] == published_at
+    assert later_params["snapshot_collected_at"] == published_at
+    assert later_params["snapshot_article_id"] == 11
     assert [item["article_id"] for item in later_page["items"]] == [11]
     assert all(item["scores"]["freshness"] == 1 for item in later_page["items"])
 
@@ -507,3 +557,112 @@ def test_search_service_uses_parameterized_hybrid_candidates_and_deterministic_r
         "article_id": 10,
         "topic": "diplomacy",
     } in topic_item["evidence"]
+
+
+def test_cursor_snapshot_excludes_articles_ingested_between_pages():
+    ranking_at = datetime(2026, 7, 15, 12, tzinfo=timezone.utc)
+    snapshot_at = ranking_at - timedelta(minutes=5)
+
+    def make_row(article_id, lexical_score, collected_at):
+        return SimpleNamespace(
+            id=article_id,
+            title=f"Article {article_id}",
+            summary=None,
+            url=f"https://example.test/{article_id}",
+            published_at=ranking_at - timedelta(days=1),
+            collected_at=collected_at,
+            language="en",
+            source_name="Example",
+            country_code="ES",
+            tier="mainstream",
+            source_weight=.5,
+            topics=[],
+            sentiment=None,
+            action_level=None,
+            matched_entities=[],
+            exact_entity_match=False,
+            story_id=None,
+            story_slug=None,
+            story_title=None,
+            story_confidence=None,
+            lexical_score=lexical_score,
+            lexical_field="title",
+            match_snippet=f"Article {article_id}",
+        )
+
+    first_pool = [
+        make_row(10, .9, snapshot_at - timedelta(seconds=1)),
+        make_row(20, .8, snapshot_at),
+    ]
+    changed_pool = [
+        *first_pool,
+        make_row(30, .7, snapshot_at + timedelta(seconds=1)),
+    ]
+
+    class FakeResult:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def fetchall(self):
+            return self.rows
+
+    class ChangingPoolSession:
+        def __init__(self):
+            self.query_count = 0
+            self.query_params = []
+
+        def execute(self, statement, params=None):
+            if params is None:
+                return FakeResult([])
+            self.query_params.append(params)
+            pool = first_pool if self.query_count == 0 else changed_pool
+            self.query_count += 1
+            cutoff_at = params.get("snapshot_collected_at")
+            cutoff_id = params.get("snapshot_article_id")
+            if cutoff_at is not None:
+                pool = [
+                    row for row in pool
+                    if (row.collected_at, row.id) <= (cutoff_at, cutoff_id)
+                ]
+            rows = [
+                SimpleNamespace(
+                    **vars(row),
+                    snapshot_collected_at=snapshot_at,
+                    snapshot_article_id=20,
+                )
+                for row in pool
+            ]
+            return FakeResult(rows)
+
+    session = ChangingPoolSession()
+
+    @contextmanager
+    def session_factory():
+        yield session
+
+    first_page = search_articles(
+        SearchQuery(q="article", limit=1),
+        session_factory=session_factory,
+        now=ranking_at,
+    )
+    cursor_data = first_page["next_cursor"]
+    assert cursor_data["snapshot_collected_at"] == snapshot_at.isoformat()
+    assert cursor_data["snapshot_article_id"] == 20
+
+    cursor = encode_cursor(
+        cursor_data["relevance_score"],
+        datetime.fromisoformat(cursor_data["published_at"]),
+        cursor_data["article_id"],
+        datetime.fromisoformat(cursor_data["ranking_at"]),
+        datetime.fromisoformat(cursor_data["snapshot_collected_at"]),
+        cursor_data["snapshot_article_id"],
+    )
+    second_page = search_articles(
+        SearchQuery(q="article", cursor=cursor),
+        session_factory=session_factory,
+        now=ranking_at + timedelta(days=1),
+    )
+
+    assert [item["article_id"] for item in second_page["items"]] == [20]
+    assert session.query_params[-1]["snapshot_collected_at"] == snapshot_at
+    assert session.query_params[-1]["snapshot_article_id"] == 20
