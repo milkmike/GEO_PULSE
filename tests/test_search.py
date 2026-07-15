@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from src.api.main import app
 from src.api.routes.search import get_search_service
 from src.search import (
+    ARTICLE_SEARCH_SQL,
     SearchQuery,
     SearchTimeoutError,
     combine_scores,
@@ -480,6 +481,25 @@ def test_search_endpoint_returns_retryable_503_on_timeout():
 
     assert response.status_code == 503
     assert response.json()["detail"] == "article search timed out; retry the request"
+
+
+def test_full_text_search_bounds_ids_before_expensive_rank_calculation():
+    assert "full_text_candidate_ids AS" in ARTICLE_SEARCH_SQL
+    candidate_ids_sql = ARTICLE_SEARCH_SQL[
+        ARTICLE_SEARCH_SQL.index("full_text_candidate_ids AS"):
+        ARTICLE_SEARCH_SQL.index("full_text_candidates AS")
+    ]
+    ranked_candidates_sql = ARTICLE_SEARCH_SQL[
+        ARTICLE_SEARCH_SQL.index("full_text_candidates AS"):
+        ARTICLE_SEARCH_SQL.index("trigram_candidates AS")
+    ]
+
+    assert "a.search_vector @@ sq.tsq" in candidate_ids_sql
+    assert "ORDER BY a.published_at DESC, a.id DESC" in candidate_ids_sql
+    assert "LIMIT :candidate_limit" in candidate_ids_sql
+    assert "ts_rank_cd" not in candidate_ids_sql
+    assert "FROM full_text_candidate_ids candidate" in ranked_candidates_sql
+    assert "ts_rank_cd" in ranked_candidates_sql
 
 
 def test_search_service_uses_parameterized_hybrid_candidates_and_deterministic_ranking():

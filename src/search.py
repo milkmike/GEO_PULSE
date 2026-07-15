@@ -128,10 +128,8 @@ matching_entity_ids AS MATERIALIZED (
       AND ea.ambiguous = FALSE
       AND ea.normalized_alias = :q
 ),
-full_text_candidates AS MATERIALIZED (
-    SELECT a.id,
-           ts_rank_cd(a.search_vector, sq.tsq, 32) AS lexical_score,
-           'full_text'::TEXT AS match_kind
+full_text_candidate_ids AS MATERIALIZED (
+    SELECT a.id, a.published_at
     FROM articles a
     JOIN matching_sources s ON s.id = a.source_id
     LEFT JOIN analysis an ON an.article_id = a.id
@@ -160,6 +158,16 @@ full_text_candidates AS MATERIALIZED (
       AND (:date_from IS NULL OR a.published_at >= CAST(:date_from AS DATE))
       AND (:date_to IS NULL OR a.published_at < CAST(:date_to AS DATE) + INTERVAL '1 day')
       AND (:language IS NULL OR a.language = :language)
+    ORDER BY a.published_at DESC, a.id DESC
+    LIMIT :candidate_limit
+),
+full_text_candidates AS MATERIALIZED (
+    SELECT a.id,
+           ts_rank_cd(a.search_vector, sq.tsq, 32) AS lexical_score,
+           'full_text'::TEXT AS match_kind
+    FROM full_text_candidate_ids candidate
+    JOIN articles a ON a.id = candidate.id
+    CROSS JOIN search_query sq
 ),
 trigram_candidates AS (
     SELECT a.id,
