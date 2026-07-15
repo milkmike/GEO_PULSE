@@ -130,13 +130,24 @@ def test_signal_evidence_array_indexes_are_present_for_new_and_existing_installs
     assert "LEAST(1.0, GREATEST(" in migration_sql
     assert "0.0," in migration_sql
     assert "CALL public.backfill_story_action_snapshots()" in migration_sql
+    assert "CREATE TABLE IF NOT EXISTS public.story_membership_clock" in migration_sql
+    assert "ADD COLUMN IF NOT EXISTS membership_generation BIGINT" in migration_sql
+    assert "membership_generation BIGINT NOT NULL DEFAULT 0" in init_sql
+    assert "CHECK (membership_generation >= 0)" in init_sql
+    assert "story_articles_membership_generation_nonnegative" in migration_sql
+    assert "INSERT INTO story_membership_clock" in init_sql
+    assert "CHECK (highest_action_level BETWEEN 1 AND 6)" in init_sql
+    assert "CHECK (action_level BETWEEN 1 AND 6)" in init_sql
+    assert "stories_highest_action_level_range" in migration_sql
+    assert "story_events_action_level_range" in migration_sql
 
 
 def test_story_snapshot_backfill_replaces_corrupt_json_values_safely():
     sql = migration("023_signal_evidence_array_indexes.sql")
 
     assert "jsonb_typeof(sa.evidence->'action_level_snapshot') = 'number'" in sql
-    assert "sa.evidence->>'action_level_snapshot' ~ '^[1-5]$'" in sql
+    assert "sa.evidence->>'action_level_snapshot' ~ '^[1-6]$'" in sql
+    assert "LEAST(6, GREATEST(1" in sql
     assert "sa.evidence->'membership_confidence_snapshot'" in sql
     assert ") = 'number'" in sql
     assert "BETWEEN 0.0 AND 1.0" in sql

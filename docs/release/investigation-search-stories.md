@@ -37,19 +37,23 @@ invoke an LLM, embedding provider, or cache-warming write.
 ## Story pagination consistency
 
 `GET /api/v2/stories` returns an additive `consistency` object. Its mode is
-`rank_snapshot_live_filters`: `ranking_at` freezes story memberships and the
-derived ranking features (first/last activity, counts, action level, and
-lifecycle priority) across cursor pages. Lifecycle, confidence, topic, entity,
-and merge-state filters still read current rows. This is deliberately **not** a
-full point-in-time snapshot; the filtered result set can change while the rank
-clock stays fixed. Clients must surface or log that limitation instead of
-describing the cursor as PIT-consistent.
+`membership_generation_live_filters`: the first page reads the committed
+`membership_generation`, and every cursor carries that same cutoff. Membership,
+first/last activity, counts, countries, primary article URL, six-level action
+score, relevance, and lifecycle priority are derived only from memberships at
+or below the cutoff. The builder increments the singleton membership clock in
+the same transaction that writes a complete batch, so a batch is never partly
+visible. Lifecycle, confidence, topic, entity, and merge-state filters still
+read current rows. This is deliberately **not** a full point-in-time snapshot;
+the filtered result set can change while the membership-derived rank stays
+fixed. The stories page surfaces that limitation.
 
-Story-detail article cursors carry the same kind of `ranking_at` boundary.
-Memberships added later are excluded, and ordering uses the immutable
-`membership_confidence_snapshot` saved in membership evidence. Migration 023
-backfills missing or corrupt action/confidence snapshots in bounded, retry-safe
-batches before navigation is enabled.
+Story-detail article cursors carry the same membership-generation cutoff.
+Memberships committed after the first page are excluded, and ordering uses the
+immutable `membership_confidence_snapshot` saved in membership evidence.
+Migration 023 backfills missing or corrupt action/confidence snapshots in
+bounded, retry-safe batches, preserves a valid action level 6, and enforces the
+story action scale of 1–6 before navigation is enabled.
 
 ## Before rollout
 

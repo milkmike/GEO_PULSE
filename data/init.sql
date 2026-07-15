@@ -465,7 +465,8 @@ CREATE TABLE IF NOT EXISTS stories (
   article_count INTEGER NOT NULL DEFAULT 0,
   source_count INTEGER NOT NULL DEFAULT 0,
   country_count INTEGER NOT NULL DEFAULT 0,
-  highest_action_level INTEGER NOT NULL DEFAULT 1,
+  highest_action_level INTEGER NOT NULL DEFAULT 1
+    CHECK (highest_action_level BETWEEN 1 AND 6),
   clustering_confidence NUMERIC(4,3) NOT NULL DEFAULT 0,
   summary_model VARCHAR(120),
   source_hash CHAR(64),
@@ -477,16 +478,28 @@ CREATE TABLE IF NOT EXISTS stories (
 CREATE INDEX IF NOT EXISTS idx_stories_lifecycle_last_seen
   ON stories(lifecycle, last_seen DESC);
 
+CREATE TABLE IF NOT EXISTS story_membership_clock (
+  singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
+  generation BIGINT NOT NULL DEFAULT 0 CHECK (generation >= 0)
+);
+INSERT INTO story_membership_clock (singleton, generation)
+VALUES (TRUE, 0)
+ON CONFLICT (singleton) DO NOTHING;
+
 CREATE TABLE IF NOT EXISTS story_articles (
   story_id BIGINT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
   article_id INTEGER NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
   membership_confidence NUMERIC(4,3) NOT NULL,
   evidence JSONB NOT NULL DEFAULT '{}',
+  membership_generation BIGINT NOT NULL DEFAULT 0
+    CHECK (membership_generation >= 0),
   added_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY(story_id, article_id)
 );
 CREATE INDEX IF NOT EXISTS idx_story_articles_membership
   ON story_articles(article_id, story_id);
+CREATE INDEX IF NOT EXISTS idx_story_articles_generation
+  ON story_articles(story_id, membership_generation, article_id);
 
 CREATE TABLE IF NOT EXISTS story_countries (
   story_id BIGINT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
@@ -515,7 +528,8 @@ CREATE TABLE IF NOT EXISTS story_events (
   entity_id UUID NOT NULL REFERENCES canonical_entities(id) ON DELETE CASCADE,
   event_key TEXT NOT NULL,
   event_at TIMESTAMPTZ,
-  action_level INTEGER NOT NULL DEFAULT 1,
+  action_level INTEGER NOT NULL DEFAULT 1
+    CHECK (action_level BETWEEN 1 AND 6),
   evidence JSONB NOT NULL DEFAULT '{}',
   PRIMARY KEY(story_id, entity_id)
 );

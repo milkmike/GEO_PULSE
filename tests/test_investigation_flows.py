@@ -38,6 +38,9 @@ class _Rows:
     def fetchall(self):
         return self._rows
 
+    def fetchone(self):
+        return self._rows[0] if self._rows else None
+
 
 class _StorySession:
     def __init__(self, row):
@@ -48,6 +51,8 @@ class _StorySession:
         sql = str(statement)
         self.statements.append(sql)
         assert _is_read_only_sql(sql)
+        if "FROM story_membership_clock" in sql:
+            return _Rows([SimpleNamespace(generation=12)])
         return _Rows([self.row])
 
 

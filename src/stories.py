@@ -799,6 +799,23 @@ def _story_slug(candidates: Sequence[StoryCandidate], first_seen: datetime) -> s
     return f"story-{first_seen.date().isoformat()}-{event_digest}-{anchor_digest}"
 
 
+def allocate_story_membership_generation(session: Any) -> int:
+    """Reserve one generation inside the caller's current transaction."""
+
+    row = session.execute(text("""
+        UPDATE story_membership_clock
+        SET generation = generation + 1
+        WHERE singleton IS TRUE
+        RETURNING generation
+    """)).fetchone()
+    if row is None:
+        raise RuntimeError("Story membership clock is not initialized")
+    generation = int(row[0])
+    if generation < 1:
+        raise RuntimeError("Story membership generation must be positive")
+    return generation
+
+
 def _membership_evidence(
     candidate: StoryCandidate,
     cluster: Sequence[StoryCandidate],
@@ -853,11 +870,30 @@ def persist_story_cluster(
     summarizer: Callable[[dict[str, Any]], dict[str, Any] | None] | None = None,
     now: datetime | None = None,
     reactivation_pairs: frozenset[tuple[int, int]] = frozenset(),
+    membership_generation: int | None = None,
 ) -> tuple[int, int]:
     """Idempotently persist one cross-country cluster and all derived slices."""
 
+    action_levels = [
+        item.highest_action_level for item in candidates
+    ] + [
+        article.action_level
+        for item in candidates
+        for article in item.articles
+    ]
+    if any(
+        isinstance(level, bool)
+        or not isinstance(level, int)
+        or not 1 <= level <= 6
+        for level in action_levels
+    ):
+        raise ValueError("action_level must be between 1 and 6")
     if len({item.country_code for item in candidates}) < 2:
         raise ValueError("A story must contain at least two countries")
+    if membership_generation is None:
+        membership_generation = allocate_story_membership_generation(session)
+    if membership_generation < 1:
+        raise ValueError("membership_generation must be positive")
     pairwise_matches = sorted(
         [
             (
@@ -1254,10 +1290,12 @@ def persist_story_cluster(
             "primary_story_id": story_id,
             "duplicate_story_ids": duplicate_story_ids,
             "now": now,
+            "membership_generation": membership_generation,
         }
         session.execute(text("""
             INSERT INTO story_articles (
-                story_id, article_id, membership_confidence, evidence, added_at
+                story_id, article_id, membership_confidence, evidence,
+                membership_generation, added_at
             )
             SELECT :primary_story_id, article_id, membership_confidence,
                    (CASE
@@ -1278,6 +1316,7 @@ def persist_story_cluster(
                            ))
                        END
                    ),
+                   :membership_generation AS membership_generation,
                    :now AS added_at
             FROM story_articles
             WHERE story_id = ANY(:duplicate_story_ids)
@@ -1294,7 +1333,7 @@ def persist_story_cluster(
                                 story_articles.evidence->'action_level_snapshot'
                             ) = 'number'
                             AND story_articles.evidence->>'action_level_snapshot'
-                                ~ '^[1-5]$'
+                                ~ '^[1-6]$'
                             THEN story_articles.evidence->'action_level_snapshot'
                             ELSE EXCLUDED.evidence->'action_level_snapshot'
                         END
@@ -1343,8 +1382,12 @@ def persist_story_cluster(
         for article_id in candidate.article_ids:
             session.execute(text("""
                 INSERT INTO story_articles (
-                    story_id, article_id, membership_confidence, evidence
-                ) VALUES (:story_id, :article_id, :confidence, CAST(:evidence AS jsonb))
+                    story_id, article_id, membership_confidence, evidence,
+                    membership_generation
+                ) VALUES (
+                    :story_id, :article_id, :confidence, CAST(:evidence AS jsonb),
+                    :membership_generation
+                )
                 ON CONFLICT (story_id, article_id) DO UPDATE SET
                     membership_confidence = EXCLUDED.membership_confidence,
                     evidence = EXCLUDED.evidence || jsonb_build_object(
@@ -1354,7 +1397,7 @@ def persist_story_cluster(
                                 story_articles.evidence->'action_level_snapshot'
                             ) = 'number'
                             AND story_articles.evidence->>'action_level_snapshot'
-                                ~ '^[1-5]$'
+                                ~ '^[1-6]$'
                             THEN story_articles.evidence->'action_level_snapshot'
                             ELSE EXCLUDED.evidence->'action_level_snapshot'
                         END
@@ -1379,6 +1422,7 @@ def persist_story_cluster(
                 "article_id": article_id,
                 "confidence": membership_confidence,
                 "evidence": json.dumps(evidence, ensure_ascii=False),
+                "membership_generation": membership_generation,
             })
 
     session.execute(text("""
@@ -1394,7 +1438,8 @@ def persist_story_cluster(
             SELECT sa.story_id, COUNT(DISTINCT ar.id) AS article_count,
                    COUNT(DISTINCT ar.source_id) AS source_count,
                    COUNT(DISTINCT s.country_code) AS country_count,
-                   MAX(COALESCE(an.action_level, 1)) AS highest_action_level,
+                   MAX(LEAST(6, GREATEST(1, COALESCE(an.action_level, 1))))
+                       AS highest_action_level,
                    MIN(ar.published_at) AS first_seen,
                    MAX(ar.published_at) AS last_seen
             FROM story_articles sa
@@ -1452,7 +1497,9 @@ def persist_story_cluster(
             SELECT DISTINCT ON (aem.entity_id)
                    aem.entity_id, ar.id AS article_id,
                    COALESCE(NULLIF(an.event_key, ''), ar.title, 'story event') AS event_key,
-                   ar.published_at, COALESCE(an.action_level, 1) AS action_level
+                   ar.published_at,
+                   LEAST(6, GREATEST(1, COALESCE(an.action_level, 1)))
+                       AS action_level
             FROM story_articles sa
             JOIN article_entity_mentions aem ON aem.article_id = sa.article_id
             JOIN articles ar ON ar.id = sa.article_id
@@ -1493,6 +1540,9 @@ def build_stories(
     clusters = cluster_story_candidates(
         candidates, reactivation_pairs=effective_reactivation_pairs
     )
+    membership_generation = (
+        allocate_story_membership_generation(session) if clusters else None
+    )
     stories_upserted = 0
     memberships = 0
     for cluster in clusters:
@@ -1502,6 +1552,7 @@ def build_stories(
             summarizer=summarizer,
             now=now,
             reactivation_pairs=effective_reactivation_pairs,
+            membership_generation=membership_generation,
         )
         stories_upserted += 1
         memberships += count

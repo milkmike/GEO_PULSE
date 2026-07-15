@@ -285,7 +285,9 @@ def test_non_cohesive_cluster_is_rejected_before_persistence():
     session = PersistenceSession()
 
     with pytest.raises(ValueError, match="cohesion"):
-        persist_story_cluster(session, [left, bridge, unrelated], now=NOW)
+        persist_story_cluster(
+            session, [left, bridge, unrelated], now=NOW, membership_generation=1
+        )
 
     assert session.calls == []
 
@@ -589,6 +591,8 @@ class FakeStorySession:
         sql = str(statement)
         params = params or {}
         self.calls.append((sql, params))
+        if "FROM story_membership_clock" in sql:
+            return FakeResult(row=SimpleNamespace(generation=12))
         if "WITH RECURSIVE forward_chain AS" in sql:
             if params["story_id"] not in {6, 7}:
                 return FakeResult(rows=[])
@@ -597,7 +601,7 @@ class FakeStorySession:
             )])
         if "WHERE st.id = :story_id" in sql:
             return FakeResult(row=story_row(7) if params["story_id"] == 7 else None)
-        if "FROM story_countries sc" in sql and "SELECT TRIM(sc.country_code)" in sql:
+        if "country_stats" in sql and "primary_url_candidates" in sql:
             return FakeResult(rows=[SimpleNamespace(
                 country_code="AZ", article_count=2, source_count=2, media_tone=-0.2,
                 first_seen=NOW - timedelta(days=2), last_seen=NOW,
@@ -708,7 +712,7 @@ class CountryStoryContextSession(FakeStorySession):
     def execute(self, statement, params=None):
         sql = str(statement)
         params = params or {}
-        if "SELECT sc.story_id," in sql:
+        if "COUNT(DISTINCT ar.id)::integer AS article_count" in sql and params.get("country_code"):
             self.calls.append((sql, params))
             return FakeResult(rows=[SimpleNamespace(
                 story_id=7,
@@ -755,6 +759,8 @@ class UnsafeUrlStorySession(FakeStorySession):
         sql = str(statement)
         params = params or {}
         self.calls.append((sql, params))
+        if "FROM story_membership_clock" in sql:
+            return FakeResult(row=SimpleNamespace(generation=12))
         if "WITH RECURSIVE forward_chain AS" in sql:
             return super().execute(statement, params)
         unsafe_story = story_row(7)
@@ -766,7 +772,7 @@ class UnsafeUrlStorySession(FakeStorySession):
         ]
         if "WHERE st.id = :story_id" in sql:
             return FakeResult(row=unsafe_story)
-        if "FROM story_countries sc" in sql and "SELECT TRIM(sc.country_code)" in sql:
+        if "country_stats" in sql and "primary_url_candidates" in sql:
             return FakeResult(rows=[SimpleNamespace(
                 country_code="AZ", article_count=4, source_count=2, media_tone=-0.2,
                 first_seen=NOW - timedelta(days=2), last_seen=NOW,
@@ -909,7 +915,7 @@ class SnapshotArticleSession(FakeStorySession):
         if "WITH ranked_articles" in sql:
             self.calls.append((sql, params))
             stable_query = (
-                "sa.added_at <= :ranking_at" in sql
+                "sa.membership_generation <= :membership_generation" in sql
                 and "membership_confidence_snapshot" in sql
                 and "JOIN analysis" not in sql
             )
@@ -992,15 +998,23 @@ def test_story_list_filters_cursor_and_primary_url(monkeypatch):
     assert [story["id"] for story in payload["stories"]] == [7]
     assert payload["stories"][0]["primary_url"] == "https://example.test/latest"
     assert payload["next_cursor"]
-    assert payload["consistency"]["mode"] == "rank_snapshot_live_filters"
     assert payload["consistency"]["ranking_at"]
+    assert payload["consistency"]["membership_generation"] == 12
+    assert payload["consistency"]["mode"] == "membership_generation_live_filters"
     assert "membership" in payload["consistency"]["frozen_features"]
     assert "lifecycle" in payload["consistency"]["live_filters"]
     assert "not a full point-in-time snapshot" in payload["consistency"]["limitation"]
-    _, params = session.calls[0]
+    list_sql, params = next(
+        call for call in session.calls if "ORDER BY lifecycle_rank ASC" in call[0]
+    )
     assert params["country"] == "AZ"
     assert params["lifecycle"] == "developing"
     assert params["min_confidence"] == 0.7
+    assert params["membership_generation"] == 12
+    assert "sa.membership_generation <= :membership_generation" in list_sql
+    assert "primary_membership.membership_generation <= :membership_generation" in list_sql
+    assert "rf.article_count AS article_count" in list_sql
+    assert "rf.country_codes" in list_sql
 
 
 def test_story_detail_includes_evidence_and_country_primary_urls(monkeypatch):
@@ -1019,6 +1033,18 @@ def test_story_detail_includes_evidence_and_country_primary_urls(monkeypatch):
     )
     assert ":ranking_at" in detail_sql
     assert detail_params["ranking_at"].tzinfo is not None
+    assert detail_params["membership_generation"] == 12
+    article_sql, article_params = next(
+        call for call in session.calls if "WITH ranked_articles" in call[0]
+    )
+    assert "sa.membership_generation <= :membership_generation" in article_sql
+    assert article_params["membership_generation"] == 12
+    country_sql, country_params = next(
+        call for call in session.calls
+        if "country_stats" in call[0] and "primary_url_candidates" in call[0]
+    )
+    assert "sa.membership_generation <= :membership_generation" in country_sql
+    assert country_params["membership_generation"] == 12
 
 
 def test_story_cards_and_detail_expose_bounded_proven_signal_context(monkeypatch):
@@ -1125,9 +1151,18 @@ def test_country_story_card_includes_its_country_specific_slice(monkeypatch):
         "source_count": 2,
         "media_tone": -1.25,
     }
-    sql, params = next(call for call in session.calls if "SELECT sc.story_id," in call[0])
-    assert "story_countries" in sql
-    assert params == {"story_ids": [7], "country_code": "AZ"}
+    sql, params = next(
+        call for call in session.calls
+        if "COUNT(DISTINCT ar.id)::integer AS article_count" in call[0]
+        and call[1].get("country_code") == "AZ"
+    )
+    assert "story_articles" in sql
+    assert "membership_generation <= :membership_generation" in sql
+    assert params == {
+        "story_ids": [7],
+        "country_code": "AZ",
+        "membership_generation": 12,
+    }
 
 
 def test_story_list_reports_bounded_actual_indexed_coverage(monkeypatch):
@@ -1184,14 +1219,16 @@ def test_story_list_supports_topic_entity_date_filters_and_active_ranking(monkey
     )
 
     assert response.status_code == 200
-    sql, params = session.calls[0]
+    sql, params = next(
+        call for call in session.calls if "ORDER BY lifecycle_rank ASC" in call[0]
+    )
     assert params["topic"] == "energy"
     assert params["entity_id"] == "entity-route"
     assert params["date_from"].isoformat().startswith("2026-07-01")
     assert params["date_to"].isoformat().startswith("2026-07-20")
     assert "story_entities" in sql
     assert "meta->'topics'" in sql
-    assert "sa.added_at <= :ranking_at" in sql
+    assert "sa.membership_generation <= :membership_generation" in sql
     assert "action_level_snapshot" in sql
     assert "JOIN analysis" not in sql
     assert "EXTRACT(EPOCH FROM (:ranking_at - rf.last_seen))" in sql
@@ -1226,6 +1263,32 @@ def test_story_activity_ranking_favors_recent_broad_active_story_over_stale_conf
 
     assert active < stale  # lifecycle rank is the primary ascending key
     assert active[1] > stale[1]
+
+
+def test_story_activity_ranking_preserves_action_level_six():
+    level_five = stories_routes._story_activity_score(
+        action_level=5,
+        article_count=4,
+        source_count=2,
+        country_count=2,
+        first_seen=NOW - timedelta(days=1),
+        last_seen=NOW,
+        ranking_at=NOW,
+    )
+    level_six = stories_routes._story_activity_score(
+        action_level=6,
+        article_count=4,
+        source_count=2,
+        country_count=2,
+        first_seen=NOW - timedelta(days=1),
+        last_seen=NOW,
+        ranking_at=NOW,
+    )
+
+    assert level_six[1] > level_five[1]
+    assert "^[1-6]$" in stories_routes.STORY_RANK_FEATURES_CTE
+    assert "LEAST(rf.highest_action_level, 6)" in stories_routes.STORY_RELEVANCE_SQL
+    assert "/ 6" in stories_routes.STORY_RELEVANCE_SQL
 
 
 def test_story_cursor_pins_ranking_clock_for_stable_followup_page(monkeypatch):
@@ -1265,28 +1328,24 @@ def test_story_cursor_ignores_mutated_current_aggregates_after_first_page(monkey
         sql for sql, params in session.calls
         if "cursor_lifecycle_rank" in params and "ORDER BY lifecycle_rank ASC" in sql
     )
-    assert "sa.added_at <= :ranking_at" in list_sql
+    assert "sa.membership_generation <= :membership_generation" in list_sql
     assert "action_level_snapshot" in list_sql
     assert "JOIN analysis" not in list_sql
     assert "COALESCE(st.article_count" not in list_sql
 
 
-def test_merge_after_first_page_is_excluded_from_the_rank_snapshot(monkeypatch):
+def test_merge_after_first_page_is_excluded_by_membership_generation(monkeypatch):
     client, list_session = story_client(monkeypatch)
     first = client.get("/api/v2/stories?limit=1")
     cursor = first.json()["next_cursor"]
-    ranking_at = next(
-        params["ranking_at"]
-        for sql, params in list_session.calls
-        if "ORDER BY lifecycle_rank ASC" in sql
-    )
-    merge_at = ranking_at + timedelta(seconds=1)
+    membership_generation = first.json()["consistency"]["membership_generation"]
     merge_session = DuplicatePersistenceSession()
 
     persist_story_cluster(
         merge_session,
         [candidate("AZ"), candidate("KZ")],
-        now=merge_at,
+        now=NOW - timedelta(hours=1),
+        membership_generation=membership_generation + 1,
     )
     second = client.get("/api/v2/stories", params={"limit": 1, "cursor": cursor})
 
@@ -1295,14 +1354,14 @@ def test_merge_after_first_page_is_excluded_from_the_rank_snapshot(monkeypatch):
         call for call in merge_session.calls
         if "SELECT :primary_story_id" in call[0] and "FROM story_articles" in call[0]
     )
-    assert reconcile_params["now"] == merge_at
-    assert ":now AS added_at" in reconcile_sql
+    assert reconcile_params["membership_generation"] == membership_generation + 1
+    assert ":membership_generation AS membership_generation" in reconcile_sql
     second_list_sql, second_list_params = next(
         call for call in list_session.calls
         if "cursor_lifecycle_rank" in call[1]
     )
-    assert second_list_params["ranking_at"] == ranking_at
-    assert "sa.added_at <= :ranking_at" in second_list_sql
+    assert second_list_params["membership_generation"] == membership_generation
+    assert "sa.membership_generation <= :membership_generation" in second_list_sql
 
 
 def test_story_detail_articles_use_bounded_cursor_pagination(monkeypatch):
@@ -1325,8 +1384,9 @@ def test_story_detail_articles_use_bounded_cursor_pagination(monkeypatch):
         + "=" * (-len(payload["articles_next_cursor"]) % 4)
     ).decode("utf-8"))
     assert cursor_payload[0] == stories_routes.ARTICLE_CURSOR_VERSION
-    assert len(cursor_payload) == 6
+    assert len(cursor_payload) == 7
     assert datetime.fromisoformat(cursor_payload[2].replace("Z", "+00:00")).tzinfo
+    assert cursor_payload[3] == 12
 
 
 def test_article_cursor_freezes_membership_set_and_rank_across_mutations(monkeypatch):
@@ -1348,7 +1408,8 @@ def test_article_cursor_freezes_membership_set_and_rank_across_mutations(monkeyp
     assert [item["article_id"] for item in second.json()["articles"]] == [2]
     article_calls = [call for call in session.calls if "WITH ranked_articles" in call[0]]
     assert article_calls[1][1]["ranking_at"] == article_calls[0][1]["ranking_at"]
-    assert "sa.added_at <= :ranking_at" in article_calls[1][0]
+    assert article_calls[1][1]["membership_generation"] == 12
+    assert "sa.membership_generation <= :membership_generation" in article_calls[1][0]
     assert "membership_confidence_snapshot" in article_calls[1][0]
     assert "JOIN analysis" not in article_calls[1][0]
 
@@ -1550,8 +1611,8 @@ def test_independent_clusters_cannot_share_or_overwrite_story_identity():
         replace(candidate("KZ"), thread_id=12, article_ids=(12,)),
     ]
 
-    persist_story_cluster(first_session, first_cluster, now=NOW)
-    persist_story_cluster(second_session, second_cluster, now=NOW)
+    persist_story_cluster(first_session, first_cluster, now=NOW, membership_generation=1)
+    persist_story_cluster(second_session, second_cluster, now=NOW, membership_generation=1)
 
     first_insert = next(call for call in first_session.calls if "INSERT INTO stories" in call[0])
     second_insert = next(call for call in second_session.calls if "INSERT INTO stories" in call[0])
@@ -1569,25 +1630,53 @@ def test_genuinely_independent_slug_collision_is_not_silently_reused():
         RuntimeError,
         match="Story slug collision without article or thread identity overlap",
     ):
-        persist_story_cluster(session, [candidate("AZ"), candidate("KZ")], now=NOW)
+        persist_story_cluster(
+            session, [candidate("AZ"), candidate("KZ")], now=NOW,
+            membership_generation=1,
+        )
 
 
 def test_persistence_recomputes_header_counts_from_saved_memberships():
     session = PersistenceSession()
 
-    persist_story_cluster(session, [candidate("AZ"), candidate("KZ")], now=NOW)
+    persist_story_cluster(
+        session, [candidate("AZ"), candidate("KZ")], now=NOW,
+        membership_generation=1,
+    )
 
     aggregate_sql = "\n".join(session.statements)
     assert "UPDATE stories st SET" in aggregate_sql
     assert "COUNT(DISTINCT ar.source_id)" in aggregate_sql
     assert "COUNT(DISTINCT s.country_code)" in aggregate_sql
-    assert "MAX(COALESCE(an.action_level, 1))" in aggregate_sql
+    assert "MAX(LEAST(6, GREATEST(1, COALESCE(an.action_level, 1))))" in aggregate_sql
+
+
+@pytest.mark.parametrize("invalid_action_level", [0, 7])
+def test_persistence_rejects_action_levels_outside_story_scale(invalid_action_level):
+    session = PersistenceSession()
+    invalid_candidate = replace(
+        candidate("AZ"),
+        highest_action_level=invalid_action_level,
+    )
+
+    with pytest.raises(ValueError, match="action_level must be between 1 and 6"):
+        persist_story_cluster(
+            session,
+            [invalid_candidate, candidate("KZ")],
+            now=NOW,
+            membership_generation=1,
+        )
+
+    assert not session.calls
 
 
 def test_persistence_uses_real_entity_confidence_and_one_representative_event_row():
     session = PersistenceSession()
 
-    persist_story_cluster(session, [candidate("AZ"), candidate("KZ")], now=NOW)
+    persist_story_cluster(
+        session, [candidate("AZ"), candidate("KZ")], now=NOW,
+        membership_generation=1,
+    )
 
     aggregate_sql = "\n".join(session.statements)
     assert "AVG(aem.confidence)" in aggregate_sql
@@ -1598,7 +1687,10 @@ def test_persistence_uses_real_entity_confidence_and_one_representative_event_ro
 def test_membership_evidence_reproduces_score_and_names_peer():
     session = PersistenceSession()
 
-    persist_story_cluster(session, [candidate("AZ"), candidate("KZ")], now=NOW)
+    persist_story_cluster(
+        session, [candidate("AZ"), candidate("KZ")], now=NOW,
+        membership_generation=1,
+    )
 
     evidence_rows = [
         json.loads(params["evidence"])
@@ -1635,10 +1727,41 @@ def test_membership_evidence_reproduces_score_and_names_peer():
     assert "jsonb_typeof" in membership_sql
 
 
+def test_persistence_assigns_generation_only_to_new_memberships():
+    session = DuplicatePersistenceSession()
+
+    persist_story_cluster(
+        session,
+        [candidate("AZ"), candidate("KZ")],
+        now=NOW,
+        membership_generation=17,
+    )
+
+    reconciliation_sql, reconciliation_params = next(
+        call for call in session.calls
+        if "SELECT :primary_story_id" in call[0] and "FROM story_articles" in call[0]
+    )
+    membership_sql, membership_params = next(
+        call for call in session.calls
+        if "INSERT INTO story_articles" in call[0] and "VALUES" in call[0]
+    )
+    assert reconciliation_params["membership_generation"] == 17
+    assert ":membership_generation AS membership_generation" in reconciliation_sql
+    assert membership_params["membership_generation"] == 17
+    assert "membership_generation" in membership_sql.split("VALUES", 1)[0]
+    assert ":membership_generation" in membership_sql.split("VALUES", 1)[1]
+    assert "membership_generation =" not in membership_sql.split(
+        "ON CONFLICT (story_id, article_id) DO UPDATE SET", 1
+    )[1]
+
+
 def test_persistence_checks_stable_thread_identity_before_summary_generation():
     session = PersistenceSession()
 
-    persist_story_cluster(session, [candidate("AZ"), candidate("KZ")], now=NOW)
+    persist_story_cluster(
+        session, [candidate("AZ"), candidate("KZ")], now=NOW,
+        membership_generation=1,
+    )
 
     lookup_sql = next(sql for sql in session.statements if "SELECT st.id, st.slug" in sql)
     assert "thread_ids" in lookup_sql
@@ -1647,7 +1770,10 @@ def test_persistence_checks_stable_thread_identity_before_summary_generation():
 def test_overlapping_story_ids_are_reconciled_into_one_primary():
     session = DuplicatePersistenceSession()
 
-    persist_story_cluster(session, [candidate("AZ"), candidate("KZ")], now=NOW)
+    persist_story_cluster(
+        session, [candidate("AZ"), candidate("KZ")], now=NOW,
+        membership_generation=1,
+    )
 
     reconcile_call = next(
         call for call in session.calls
@@ -1661,6 +1787,7 @@ def test_overlapping_story_ids_are_reconciled_into_one_primary():
         "primary_story_id": 10,
         "duplicate_story_ids": [11],
         "now": NOW,
+        "membership_generation": 1,
     }
     assert ":now AS added_at" in reconcile_call[0]
     conflict_clause = reconcile_call[0].split(
@@ -1766,6 +1893,7 @@ def test_explicit_reactivation_is_persisted_in_audit_history():
         [old, new],
         now=NOW,
         reactivation_pairs=frozenset({(1, 2)}),
+        membership_generation=1,
     )
 
     story_insert = next(call for call in session.calls if "INSERT INTO stories" in call[0])
@@ -1788,7 +1916,10 @@ def test_explicit_reactivation_is_persisted_in_audit_history():
 def test_resolved_story_reopens_only_with_event_and_entity_gate_and_is_audited():
     session = ResolvedPersistenceSession()
 
-    persist_story_cluster(session, [candidate("AZ"), candidate("KZ")], now=NOW)
+    persist_story_cluster(
+        session, [candidate("AZ"), candidate("KZ")], now=NOW,
+        membership_generation=1,
+    )
 
     update_call = next(
         call for call in session.calls
@@ -1808,7 +1939,9 @@ def test_resolved_story_without_entity_gate_stays_closed_and_new_story_is_create
         candidate("KZ", entities=frozenset()),
     ]
 
-    story_id, _ = persist_story_cluster(session, cluster, now=NOW)
+    story_id, _ = persist_story_cluster(
+        session, cluster, now=NOW, membership_generation=1
+    )
 
     assert story_id == 42
     assert any("INSERT INTO stories" in sql for sql in session.statements)
@@ -1855,9 +1988,13 @@ def test_denied_reactivation_uses_new_activity_epoch_and_is_idempotent():
     ]
     session = DeniedReactivationPersistenceSession(cluster)
 
-    first_story_id, _ = persist_story_cluster(session, cluster, now=NOW)
+    first_story_id, _ = persist_story_cluster(
+        session, cluster, now=NOW, membership_generation=1
+    )
     first_slug = session.active_story.slug
-    second_story_id, _ = persist_story_cluster(session, cluster, now=NOW)
+    second_story_id, _ = persist_story_cluster(
+        session, cluster, now=NOW, membership_generation=2
+    )
 
     story_inserts = [
         params for sql, params in session.calls if "INSERT INTO stories" in sql
@@ -1890,6 +2027,8 @@ def test_background_builder_derives_reactivation_pairs_from_resolved_story(monke
     class ResolvedPairSession:
         def execute(self, statement, params=None):
             sql = str(statement)
+            if "UPDATE story_membership_clock" in sql:
+                return FakeResult(row=(5,))
             if "lifecycle = 'resolved'" in sql:
                 return FakeResult(rows=[SimpleNamespace(
                     id=10,
@@ -1901,8 +2040,12 @@ def test_background_builder_derives_reactivation_pairs_from_resolved_story(monke
 
     monkeypatch.setattr(stories_module, "fetch_story_candidates", lambda session: [old, new])
 
-    def fake_persist(session, items, *, summarizer, now, reactivation_pairs):
+    def fake_persist(
+        session, items, *, summarizer, now, reactivation_pairs,
+        membership_generation,
+    ):
         observed["pairs"] = reactivation_pairs
+        observed["membership_generation"] = membership_generation
         return 10, 2
 
     monkeypatch.setattr(stories_module, "persist_story_cluster", fake_persist)
@@ -1912,6 +2055,45 @@ def test_background_builder_derives_reactivation_pairs_from_resolved_story(monke
 
     assert result.stories_upserted == 1
     assert observed["pairs"] == frozenset({(1, 2)})
+    assert observed["membership_generation"] == 5
+
+
+def test_background_builder_allocates_one_generation_for_the_whole_transaction(monkeypatch):
+    import src.stories as stories_module
+
+    observed = {"allocation_calls": 0, "persist_generations": []}
+
+    class GenerationSession:
+        def execute(self, statement, params=None):
+            sql = str(statement)
+            if "UPDATE story_membership_clock" in sql:
+                observed["allocation_calls"] += 1
+                return FakeResult(row=(23,))
+            return FakeResult(rows=[])
+
+    candidates = [candidate("AZ"), candidate("KZ")]
+    monkeypatch.setattr(stories_module, "fetch_story_candidates", lambda session: candidates)
+    monkeypatch.setattr(
+        stories_module,
+        "cluster_story_candidates",
+        lambda items, *, reactivation_pairs: [tuple(items), tuple(items)],
+    )
+    monkeypatch.setattr(stories_module, "derive_reactivation_pairs", lambda session, items: frozenset())
+
+    def fake_persist(session, items, **kwargs):
+        observed["persist_generations"].append(kwargs.get("membership_generation"))
+        return 7, 2
+
+    monkeypatch.setattr(stories_module, "persist_story_cluster", fake_persist)
+    monkeypatch.setattr(stories_module, "refresh_story_lifecycles", lambda session, now: None)
+
+    result = build_stories(GenerationSession(), now=NOW)
+
+    assert result.stories_upserted == 2
+    assert observed == {
+        "allocation_calls": 1,
+        "persist_generations": [23, 23],
+    }
 
 
 def test_background_builder_wires_explicit_reactivation_pairs(monkeypatch):
@@ -1932,13 +2114,22 @@ def test_background_builder_wires_explicit_reactivation_pairs(monkeypatch):
         observed["cluster_pairs"] = reactivation_pairs
         return [tuple(items)]
 
-    def fake_persist(session, items, *, summarizer, now, reactivation_pairs):
+    def fake_persist(
+        session, items, *, summarizer, now, reactivation_pairs,
+        membership_generation,
+    ):
         observed["persist_pairs"] = reactivation_pairs
+        observed["membership_generation"] = membership_generation
         return 7, 2
 
     monkeypatch.setattr(stories_module, "cluster_story_candidates", fake_cluster)
     monkeypatch.setattr(stories_module, "persist_story_cluster", fake_persist)
     monkeypatch.setattr(stories_module, "refresh_story_lifecycles", lambda session, now: None)
+    monkeypatch.setattr(
+        stories_module,
+        "allocate_story_membership_generation",
+        lambda session: 8,
+    )
 
     result = build_stories(object(), now=NOW, reactivation_pairs=explicit_pairs)
 
@@ -1946,6 +2137,7 @@ def test_background_builder_wires_explicit_reactivation_pairs(monkeypatch):
     assert observed == {
         "cluster_pairs": explicit_pairs,
         "persist_pairs": explicit_pairs,
+        "membership_generation": 8,
     }
 
 
@@ -1953,7 +2145,7 @@ def test_unchanged_copy_preserves_generated_at():
     cluster = [candidate("AZ"), candidate("KZ")]
     session = UnchangedPersistenceSession(cluster)
 
-    persist_story_cluster(session, cluster, now=NOW)
+    persist_story_cluster(session, cluster, now=NOW, membership_generation=1)
 
     update_call = next(
         call for call in session.calls
