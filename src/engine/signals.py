@@ -10,7 +10,7 @@ Detectors (worldmonitor-inspired, adapted to GEO PULSE's tier structure):
   velocity_spike    a country's relevant article flow ≥ 1.5× the 30d baseline.
   tone_shift        GDELT tone z-score |z| ≥ 1.6 vs the country's own 90d norm.
   volume_surge      GDELT Russia-coverage share ≥ 2.0× the 30d average.
-  index_shift       RRI moved ≥ 7 points in 24h or crossed a level boundary.
+  index_shift       RRI moved by 7–18 points in 24h.
 
 Article-volume detectors (tier_convergence, official_silence, velocity_spike)
 exclude is_backfill rows so a historical archive backfill (old published_at,
@@ -130,6 +130,7 @@ def _evidence(
     confidence: float,
     rule: str,
     limitations: tuple[str, ...],
+    completeness: Literal["complete", "partial"] = "complete",
     article_ids: tuple[int, ...] = (),
     rri_points: tuple[Mapping[str, Any], ...] = (),
     evidence_ids: tuple[str, ...] = (),
@@ -146,7 +147,7 @@ def _evidence(
         rri_points=rri_points,
         evidence_ids=evidence_ids,
         confidence=confidence,
-        completeness="complete",
+        completeness=completeness,
         explanation={"rule": rule, "limitations": list(limitations)},
     )
 
@@ -184,13 +185,18 @@ def _emit(session, signal_type: str, country_code: str | None, dedup_key: str,
             f"evidence version {evidence.detector_version!r} does not match "
             f"detector version {expected_version!r}"
         )
+    normalized_dedup_key = dedup_key[:200]
+    session.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:dk, 0))"),
+        {"dk": normalized_dedup_key},
+    )
     existing = session.execute(
         text("""
             SELECT id FROM signals
             WHERE dedup_key = :dk AND expires_at > NOW()
             LIMIT 1
         """),
-        {"dk": dedup_key},
+        {"dk": normalized_dedup_key},
     ).fetchone()
     if existing:
         return False
@@ -209,7 +215,7 @@ def _emit(session, signal_type: str, country_code: str | None, dedup_key: str,
             "type": signal_type, "cc": country_code, "severity": severity,
             "confidence": round(float(evidence.confidence), 2), "title": title[:500],
             "description": description, "payload": json.dumps(payload, ensure_ascii=False),
-            "dk": dedup_key[:200], "ttl": ttl,
+            "dk": normalized_dedup_key, "ttl": ttl,
         },
     ).fetchone()
     signal_id = int(inserted.id)
@@ -326,7 +332,7 @@ def detect_tier_convergence(session) -> int:
                     "average_sentiment": float(r.avg_sent or 0),
                     "maximum_action_level": int(r.max_al or 1),
                 },
-                baseline={},
+                baseline={"type": "not_applicable"},
                 window_start=detected_at - timedelta(hours=24),
                 window_end=detected_at,
                 confidence=confidence,
@@ -412,7 +418,10 @@ def detect_official_silence(session) -> int:
                     "hours_silent": round(age_h, 1),
                     "average_sentiment": float(r.avg_sent or 0),
                 },
-                baseline={"official_or_mainstream_sources_available": True},
+                baseline={
+                    "type": "active_source_availability",
+                    "official_or_mainstream_sources_available": True,
+                },
                 window_start=detected_at - timedelta(hours=24),
                 window_end=detected_at,
                 confidence=confidence,
@@ -482,6 +491,7 @@ def detect_velocity_spike(session) -> int:
                     "ratio": round(ratio, 2),
                 },
                 baseline={
+                    "type": "rolling_daily_average",
                     "daily_average": round(float(r.base), 2),
                     "comparison_days": 29,
                 },
@@ -563,6 +573,7 @@ def detect_gdelt_shifts(session) -> int:
                         "z_score": round(z, 2),
                     },
                     baseline={
+                        "type": "historical_tone_distribution",
                         "mean": round(mean, 2),
                         "standard_deviation": round(std, 2),
                         "sample_days": len(baseline),
@@ -609,6 +620,7 @@ def detect_gdelt_shifts(session) -> int:
                             "daily_volume": cur_vol,
                         },
                         baseline={
+                            "type": "historical_coverage_share",
                             "share": round(base_share, 5),
                             "sample_days": len(shares[2:32]),
                             "excluded_recent_days": 2,
@@ -683,7 +695,8 @@ def detect_index_shifts(session) -> int:
         }
         rri_points = []
         evidence_ids = []
-        if r.baseline_time is not None and r.baseline_score is not None:
+        has_baseline = r.baseline_time is not None and r.baseline_score is not None
+        if has_baseline:
             rri_points.append({
                 "country_code": r.country_code,
                 "time": r.baseline_time.isoformat(),
@@ -696,6 +709,14 @@ def detect_index_shifts(session) -> int:
             )
         rri_points.append(observed_point)
         evidence_ids.append(f"rri:{r.country_code}:{point_time.isoformat()}")
+        baseline_evidence = {
+            "type": "rri_point",
+            "status": "available" if has_baseline else "missing",
+            "comparison_hours": 24,
+            "score": float(r.baseline_score) if has_baseline else None,
+            "time": r.baseline_time.isoformat() if has_baseline else None,
+            "level": r.baseline_level if has_baseline else None,
+        }
         emitted += _emit(
             session, "index_shift", r.country_code,
             dedup_key=f"index_shift:{r.country_code}:{day_bucket}",
@@ -716,20 +737,7 @@ def detect_index_shifts(session) -> int:
                     "delta_24h": delta,
                     "level": r.level,
                 },
-                baseline={
-                    "comparison_hours": 24,
-                    "score": (
-                        float(r.baseline_score)
-                        if r.baseline_score is not None
-                        else None
-                    ),
-                    "time": (
-                        r.baseline_time.isoformat()
-                        if r.baseline_time is not None
-                        else None
-                    ),
-                    "level": r.baseline_level,
-                },
+                baseline=baseline_evidence,
                 window_start=r.baseline_time or point_time - timedelta(hours=24),
                 window_end=point_time,
                 confidence=confidence,
@@ -739,7 +747,10 @@ def detect_index_shifts(session) -> int:
                 ),
                 limitations=(
                     "Сигнал фиксирует изменение RRI, но сам по себе не устанавливает новостную причину.",
-                ),
+                ) + ((
+                    "Сохранённая точка сравнения RRI недоступна; доказательство сдвига частичное.",
+                ) if not has_baseline else ()),
+                completeness="complete" if has_baseline else "partial",
                 rri_points=tuple(rri_points),
                 evidence_ids=tuple(evidence_ids),
             ),
@@ -842,7 +853,7 @@ def detect_notable_events(session) -> int:
                     ),
                     "reprint_count": int(r.reprint_count or 0),
                 },
-                baseline={},
+                baseline={"type": "not_applicable"},
                 window_start=detected_at - timedelta(hours=48),
                 window_end=detected_at,
                 confidence=confidence,
@@ -872,10 +883,24 @@ def detect_fx_moves(session) -> int:
 
     rows = session.execute(
         text("""
-            SELECT DISTINCT ON (currency) currency, day, rate_to_rub, change_1d_pct
-            FROM fx_rates
-            WHERE day > CURRENT_DATE - 3 AND change_1d_pct IS NOT NULL
-            ORDER BY currency, day DESC
+            WITH latest AS (
+                SELECT DISTINCT ON (currency)
+                       currency, day, rate_to_rub, change_1d_pct
+                FROM fx_rates
+                WHERE day > CURRENT_DATE - 3 AND change_1d_pct IS NOT NULL
+                ORDER BY currency, day DESC
+            )
+            SELECT l.currency, l.day, l.rate_to_rub, l.change_1d_pct,
+                   previous.day AS baseline_day,
+                   previous.rate_to_rub AS baseline_rate
+            FROM latest l
+            LEFT JOIN LATERAL (
+                SELECT f.day, f.rate_to_rub
+                FROM fx_rates f
+                WHERE f.currency = l.currency AND f.day < l.day
+                ORDER BY f.day DESC
+                LIMIT 1
+            ) previous ON TRUE
         """)
     ).fetchall()
 
@@ -898,6 +923,18 @@ def detect_fx_moves(session) -> int:
         confidence = 0.8 if predicted else 0.65
         rate_day = r.day
         rate_day_start = _day_start(rate_day)
+        has_baseline = r.baseline_day is not None and r.baseline_rate is not None
+        baseline = {
+            "type": "previous_fx_rate",
+            "status": "available" if has_baseline else "missing",
+            "day": r.baseline_day.isoformat() if has_baseline else None,
+            "rate_to_rub": float(r.baseline_rate) if has_baseline else None,
+        }
+        evidence_ids = [f"fx_rate:{r.currency}:{rate_day.isoformat()}"]
+        if has_baseline:
+            evidence_ids.append(
+                f"fx_rate:{r.currency}:{r.baseline_day.isoformat()}"
+            )
 
         direction = "укрепилась к рублю" if change > 0 else "ослабла к рублю"
         names = ", ".join(country_name_ru(c) for c in countries[:4]) or r.currency
@@ -924,21 +961,24 @@ def detect_fx_moves(session) -> int:
                     "change_1d_percent": change,
                     "rate_to_rub": float(r.rate_to_rub),
                     "media_preceded": predicted,
+                    "preceding_media_signal_count": int(media.n if media else 0),
+                    "media_lookback_hours": 72,
                     "countries": list(countries),
                 },
-                baseline={
-                    "comparison_days": 1,
-                    "media_lookback_hours": 72,
-                    "preceding_media_signal_count": int(media.n if media else 0),
-                },
-                window_start=rate_day_start,
+                baseline=baseline,
+                window_start=(
+                    _day_start(r.baseline_day) if has_baseline else rate_day_start
+                ),
                 window_end=rate_day_start + timedelta(days=1),
                 confidence=confidence,
                 rule="Абсолютное дневное движение валюты к рублю не меньше 2%",
                 limitations=(
                     "Предшествование медиа-сигналов валютному движению не доказывает причинность.",
-                ),
-                evidence_ids=(f"fx_rate:{r.currency}:{rate_day.isoformat()}",),
+                ) + ((
+                    "Предыдущая сохранённая валютная ставка недоступна; доказательство движения частичное.",
+                ) if not has_baseline else ()),
+                completeness="complete" if has_baseline else "partial",
+                evidence_ids=tuple(evidence_ids),
             ),
             severity="warning" if abs(change) >= 4 else "info",
         )
@@ -999,6 +1039,7 @@ def detect_sanctions_escalation(session) -> int:
                     "last_change": str(r.last_change) if r.last_change else None,
                 },
                 baseline={
+                    "type": "previous_sanctions_snapshot",
                     "previous_target_count": int(r.target_count) - int(r.delta),
                 },
                 window_start=detected_at - timedelta(days=2),

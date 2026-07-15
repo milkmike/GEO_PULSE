@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Mapping, Protocol
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Path
 from sqlalchemy import text
 
 from src.api.routes.entities import safe_public_url
@@ -15,6 +15,12 @@ from src.engine.signals import SignalEvidence
 
 
 router = APIRouter(prefix="/api/v2/signals", tags=["signals"])
+
+MAX_SIGNAL_ARTICLES = 100
+MAX_SIGNAL_STORY_IDS = 100
+MAX_SIGNAL_RRI_POINTS = 100
+MAX_SIGNAL_EVIDENCE_IDS = 200
+MAX_SIGNAL_COUNTRIES = 50
 
 
 def _value(row: Any, name: str, default: Any = None) -> Any:
@@ -106,13 +112,15 @@ class SqlSignalDetailService:
             else:
                 evidence = legacy_signal_evidence(signal)
 
-            articles = self._load_articles(session, evidence.article_ids)
+            bounded_article_ids = evidence.article_ids[:MAX_SIGNAL_ARTICLES]
+            bounded_story_ids = evidence.story_ids[:MAX_SIGNAL_STORY_IDS]
+            articles = self._load_articles(session, bounded_article_ids)
             story = self._load_story(
                 session,
-                story_ids=evidence.story_ids,
-                article_ids=evidence.article_ids,
+                story_ids=bounded_story_ids,
+                article_ids=bounded_article_ids,
             )
-            countries = self._load_countries(
+            countries, countries_total = self._load_countries(
                 session,
                 story_id=_value(story, "id") if story else None,
                 signal_country=_value(signal, "country_code"),
@@ -125,10 +133,12 @@ class SqlSignalDetailService:
             article_rows=articles,
             story_row=story,
             countries=countries,
+            countries_total=countries_total,
         )
 
     @staticmethod
     def _load_articles(session: Any, article_ids: tuple[int, ...]) -> list[Any]:
+        article_ids = article_ids[:MAX_SIGNAL_ARTICLES]
         if not article_ids:
             return []
         return session.execute(
@@ -154,6 +164,8 @@ class SqlSignalDetailService:
         story_ids: tuple[int, ...],
         article_ids: tuple[int, ...],
     ) -> Any | None:
+        story_ids = story_ids[:MAX_SIGNAL_STORY_IDS]
+        article_ids = article_ids[:MAX_SIGNAL_ARTICLES]
         if not story_ids and not article_ids:
             return None
         return session.execute(
@@ -192,21 +204,32 @@ class SqlSignalDetailService:
         story_id: int | None,
         signal_country: str | None,
         payload: Mapping[str, Any],
-    ) -> list[dict[str, Any]]:
+    ) -> tuple[list[dict[str, Any]], int]:
         if story_id is not None:
             rows = session.execute(
                 text(
                     """
-                    SELECT sc.country_code, c.name_ru, sc.article_count, sc.media_tone
+                    SELECT sc.country_code, c.name_ru, sc.article_count, sc.media_tone,
+                           COUNT(*) OVER() AS total_count
                     FROM story_countries sc
                     JOIN countries c ON c.code = sc.country_code
                     WHERE sc.story_id = :story_id
                     ORDER BY CASE WHEN sc.country_code = :signal_country THEN 0 ELSE 1 END,
                              sc.article_count DESC, sc.country_code
+                    LIMIT :limit
                     """
                 ),
-                {"story_id": story_id, "signal_country": signal_country},
+                {
+                    "story_id": story_id,
+                    "signal_country": signal_country,
+                    "limit": MAX_SIGNAL_COUNTRIES,
+                },
             ).fetchall()
+            total = (
+                int(_value(rows[0], "total_count"))
+                if rows and _value(rows[0], "total_count") is not None
+                else len(rows)
+            )
             result = [
                 {
                     "code": (_value(row, "country_code") or "").strip(),
@@ -218,10 +241,10 @@ class SqlSignalDetailService:
                         else None
                     ),
                 }
-                for row in rows
+                for row in rows[:MAX_SIGNAL_COUNTRIES]
             ]
             if result:
-                return result
+                return result, total
 
         codes: list[str] = []
         if signal_country:
@@ -229,11 +252,13 @@ class SqlSignalDetailService:
         payload_countries = payload.get("countries", ())
         if isinstance(payload_countries, (list, tuple)):
             codes.extend(str(code).strip().upper() for code in payload_countries if code)
-        return [
+        total = len(codes)
+        result = [
             {"code": code, "name": country_name_ru(code)}
             for index, code in enumerate(codes)
             if code and code not in codes[:index]
         ]
+        return result[:MAX_SIGNAL_COUNTRIES], min(total, len(result))
 
     @staticmethod
     def _serialize(
@@ -243,6 +268,7 @@ class SqlSignalDetailService:
         article_rows: list[Any],
         story_row: Any | None,
         countries: list[dict[str, Any]],
+        countries_total: int,
     ) -> dict[str, Any]:
         explanation = dict(evidence.explanation)
         expires_at = _value(signal, "expires_at")
@@ -276,6 +302,18 @@ class SqlSignalDetailService:
                 "confidence": float(_value(story_row, "clustering_confidence") or 0),
             }
 
+        article_ids = evidence.article_ids[:MAX_SIGNAL_ARTICLES]
+        story_ids = evidence.story_ids[:MAX_SIGNAL_STORY_IDS]
+        rri_points = evidence.rri_points[:MAX_SIGNAL_RRI_POINTS]
+        evidence_ids = evidence.evidence_ids[:MAX_SIGNAL_EVIDENCE_IDS]
+
+        def truncation(total: int, returned: int) -> dict[str, int | bool]:
+            return {
+                "total": total,
+                "returned": returned,
+                "truncated": total > returned,
+            }
+
         return {
             "id": int(_value(signal, "id")),
             "type": _value(signal, "signal_type"),
@@ -299,8 +337,15 @@ class SqlSignalDetailService:
                     "end": _iso(evidence.window_end),
                 },
             },
-            "chart_points": [dict(point) for point in evidence.rri_points],
+            "chart_points": [dict(point) for point in rri_points],
             "articles": articles,
+            "articles_page": {
+                "total": len(evidence.article_ids),
+                "returned": len(articles),
+                "limit": MAX_SIGNAL_ARTICLES,
+                "truncated": len(evidence.article_ids) > MAX_SIGNAL_ARTICLES,
+                "has_more": len(evidence.article_ids) > MAX_SIGNAL_ARTICLES,
+            },
             "related_story": related_story,
             "countries": countries,
             "state": {
@@ -311,11 +356,22 @@ class SqlSignalDetailService:
             },
             "confidence": float(evidence.confidence),
             "evidence_completeness": evidence.completeness,
-            "evidence_ids": list(evidence.evidence_ids),
+            "evidence_ids": list(evidence_ids),
             "evidence": {
-                "article_ids": list(evidence.article_ids),
-                "story_ids": list(evidence.story_ids),
-                "rri_points": [dict(point) for point in evidence.rri_points],
+                "article_ids": list(article_ids),
+                "story_ids": list(story_ids),
+                "rri_points": [dict(point) for point in rri_points],
+            },
+            "evidence_truncation": {
+                "evidence_ids": truncation(
+                    len(evidence.evidence_ids), len(evidence_ids)
+                ),
+                "article_ids": truncation(
+                    len(evidence.article_ids), len(article_ids)
+                ),
+                "story_ids": truncation(len(evidence.story_ids), len(story_ids)),
+                "rri_points": truncation(len(evidence.rri_points), len(rri_points)),
+                "countries": truncation(countries_total, len(countries)),
             },
             "limitations": list(explanation.get("limitations") or ()),
         }
@@ -327,11 +383,10 @@ def get_signal_detail_service() -> SignalDetailService:
 
 @router.get("/{signal_id}")
 def signal_detail(
-    signal_id: int,
+    signal_id: int = Path(..., ge=1),
     service: SignalDetailService = Depends(get_signal_detail_service),
 ):
     result = service.detail(signal_id=signal_id)
     if result is None:
         raise HTTPException(status_code=404, detail="Signal not found")
     return result
-
