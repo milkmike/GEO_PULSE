@@ -23,7 +23,15 @@ export interface PlotProps {
   layout: Record<string, unknown>;
   config?: Record<string, unknown>;
   className?: string;
-  onClick?: (point: { location?: string }) => void;
+  onClick?: (point: PlotClickPoint) => void;
+}
+
+export interface PlotClickPoint {
+  location?: string;
+  customdata?: unknown;
+  x?: string | number;
+  y?: number;
+  pointIndex?: number;
 }
 
 /** Thin client-only Plotly wrapper (plotly.js can't render on the server). */
@@ -44,7 +52,7 @@ export default function Plot({ data, layout, config, className, onClick }: PlotP
       }).then(() => {
         if (cancelled || !ref.current || !onClick) return;
         const node = ref.current as HTMLElement & {
-          on?: (ev: string, cb: (e: { points?: { location?: string }[] }) => void) => void;
+          on?: (ev: string, cb: (e: { points?: PlotClickPoint[] }) => void) => void;
           removeAllListeners?: (ev: string) => void;
         };
         node.removeAllListeners?.("plotly_click");

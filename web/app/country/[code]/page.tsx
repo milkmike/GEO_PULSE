@@ -1,7 +1,8 @@
 "use client";
 
-import { use, useEffect, useMemo, useRef, useState } from "react";
+import { use, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import SiteHeader from "@/components/SiteHeader";
 import AgreementsPanel from "@/components/AgreementsPanel";
 import Markdown from "@/components/Markdown";
@@ -13,6 +14,8 @@ import SparklineStrip from "@/components/SparklineStrip";
 import DynamicsPanel from "@/components/DynamicsPanel";
 import SortableGrid, { type SortableItem } from "@/components/SortableGrid";
 import StoriesPanel from "@/components/StoriesPanel";
+import InvestigationPanel from "@/components/InvestigationPanel";
+import RriShiftList from "@/components/RriShiftList";
 import { useFeatureFlags } from "@/components/FeatureFlagsProvider";
 import TierDivergencePanel from "@/components/TierDivergencePanel";
 import SanctionsPanel from "@/components/SanctionsPanel";
@@ -21,8 +24,10 @@ import VoxPanel from "@/components/VoxPanel";
 import { api, apiBase } from "@/lib/api";
 import { COUNTRY_TIPS } from "@/lib/explain";
 import { fmt, fmtDate, LEVEL_COLOR, LEVEL_RU } from "@/lib/format";
+import { deriveRriShiftMarkers, validateInvestigationAt } from "@/lib/rri-shifts";
+import type { RriShiftMarker } from "@/lib/rri-shifts";
 import type {
-  AgreementGroup, Brief, Dossier, EntityStat, FxSeries, Headline, Signal, TopicStat,
+  AgreementGroup, Brief, Dossier, EntityStat, FxSeries, Headline, TopicStat,
   StoryListItem, TradeYear, UNVoteYear,
 } from "@/lib/types";
 
@@ -45,7 +50,11 @@ const CHART_BASE = {
 };
 
 export default function CountryPage({ params }: { params: Promise<{ code: string }> }) {
-  const { storiesNavigation } = useFeatureFlags();
+  const { storiesNavigation, investigation, signalDetail } = useFeatureFlags();
+  const { push: routerPush, replace: routerReplace } = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const queryString = searchParams.toString();
   const { code } = use(params);
   const cc = code.toUpperCase();
 
@@ -65,6 +74,9 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
   const [storiesState, setStoriesState] = useState<"loading" | "ready" | "error">("loading");
   const [storiesReload, setStoriesReload] = useState(0);
   const activeStoriesRequest = useRef("");
+  const [invalidAtMessage, setInvalidAtMessage] = useState<string | null>(null);
+  const markerTriggerRef = useRef<HTMLElement | null>(null);
+  const rriHeadingRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     setBrief(null);
@@ -116,6 +128,49 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
       .catch((e) => setBriefState(String(e).includes("404") ? "empty" : "error"));
   };
 
+  const markers = useMemo(
+    () => investigation && dossier ? deriveRriShiftMarkers(dossier.index_history) : [],
+    [dossier, investigation],
+  );
+  const rawAt = investigation ? new URLSearchParams(queryString).get("at") : null;
+  const selectedAt = rawAt && dossier && validateInvestigationAt(rawAt, dossier.index_history)
+    ? rawAt
+    : null;
+
+  const hrefFor = useCallback((paramsValue: URLSearchParams) => {
+    const query = paramsValue.toString();
+    return query ? `${pathname}?${query}` : pathname;
+  }, [pathname]);
+
+  const selectMarker = useCallback((marker: RriShiftMarker, trigger?: HTMLElement) => {
+    markerTriggerRef.current = trigger ?? null;
+    const next = new URLSearchParams(queryString);
+    const wasOpen = Boolean(next.get("at"));
+    next.set("at", marker.at);
+    setInvalidAtMessage(null);
+    const href = hrefFor(next);
+    if (wasOpen) routerReplace(href);
+    else routerPush(href);
+  }, [hrefFor, queryString, routerPush, routerReplace]);
+
+  const closeInvestigation = useCallback(() => {
+    const next = new URLSearchParams(queryString);
+    next.delete("at");
+    routerReplace(hrefFor(next));
+  }, [hrefFor, queryString, routerReplace]);
+
+  useEffect(() => {
+    if (!investigation || !dossier || !rawAt) return;
+    if (validateInvestigationAt(rawAt, dossier.index_history)) {
+      setInvalidAtMessage(null);
+      return;
+    }
+    const next = new URLSearchParams(queryString);
+    next.delete("at");
+    setInvalidAtMessage("Некорректная или устаревшая ссылка на сдвиг RRI удалена.");
+    routerReplace(hrefFor(next));
+  }, [dossier, hrefFor, investigation, queryString, rawAt, routerReplace]);
+
   const indexChart = useMemo(() => {
     if (!dossier || dossier.index_history.length < 2) return null;
     const color = dossier.index ? LEVEL_COLOR[dossier.index.level] : "#9ca3af";
@@ -131,6 +186,17 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
         hovertemplate: "%{x}: %{y:+.1f}<extra>RRI</extra>",
       },
     ];
+    if (investigation && markers.length > 0) {
+      data.push({
+        x: markers.map((marker) => marker.day),
+        y: markers.map((marker) => marker.score),
+        customdata: markers.map((marker) => marker.at),
+        name: "Заметные сдвиги",
+        mode: "markers",
+        marker: { color: "#fbbf24", size: 9, symbol: "diamond", line: { color: "#111827", width: 1 } },
+        hovertemplate: "%{x}: %{y:+.1f}<br>открыть расследование<extra></extra>",
+      });
+    }
     if (dossier.temperature_history.length > 1) {
       data.push({
         x: dossier.temperature_history.map((t) => t.time.slice(0, 10)),
@@ -142,7 +208,7 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
       });
     }
     return data;
-  }, [dossier]);
+  }, [dossier, investigation, markers]);
 
   const gdeltChart = useMemo(() => {
     if (!dossier || dossier.gdelt.length < 2) return null;
@@ -211,7 +277,9 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
   const panels: SortableItem[] = [
     {
       id: "sparklines", cellClassName: "md:col-span-2", tip: COUNTRY_TIPS.sparklines,
-      node: <SparklineStrip dossier={dossier} />,
+      node: (
+        <SparklineStrip dossier={dossier} />
+      ),
     },
     {
       id: "dynamics", cellClassName: "md:col-span-2", tip: COUNTRY_TIPS.dynamics,
@@ -301,12 +369,18 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
       id: "index", cellClassName: "md:col-span-2", tip: COUNTRY_TIPS.index,
       node: indexChart ? (
         <section className="card">
-          <div className="card-title px-4 pt-3">Индекс и термометр · 90 дней</div>
+          <div ref={rriHeadingRef} tabIndex={-1} className="card-title px-4 pt-3">Индекс и термометр · 90 дней</div>
           <Plot
             data={indexChart}
             layout={{ ...CHART_BASE, height: 230 } as unknown as Record<string, unknown>}
             className="w-full"
+            onClick={investigation ? (point) => {
+              if (typeof point.customdata !== "string") return;
+              const marker = markers.find((candidate) => candidate.at === point.customdata);
+              if (marker) selectMarker(marker);
+            } : undefined}
           />
+          {investigation && <RriShiftList markers={markers} onSelect={selectMarker} />}
         </section>
       ) : null,
     },
@@ -393,8 +467,10 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
           <div className="card-title px-4 pb-1 pt-3">Сигналы · 90 дней</div>
           <div className="max-h-[300px] overflow-y-auto">
             <SignalFeed
-              signals={dossier.signals.slice(0, 12) as unknown as Signal[]}
+              signals={dossier.signals.slice(0, 12)}
               emptyText="Сигналов не было"
+              detailEnabled={signalDetail}
+              showCountry={false}
             />
           </div>
         </section>
@@ -467,6 +543,20 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
       <div className="mt-4 grid gap-3 md:grid-cols-2">
         <SortableGrid storageKey="country-panel-order" defaultOrder={PANEL_ORDER} items={panels} />
       </div>
+
+      {invalidAtMessage && <p role="status" className="mt-3 text-xs text-cooling">{invalidAtMessage}</p>}
+
+      {investigation && (
+        <InvestigationPanel
+          open={Boolean(selectedAt)}
+          countryCode={cc}
+          countryName={country.name}
+          at={selectedAt}
+          triggerRef={markerTriggerRef}
+          fallbackFocusRef={rriHeadingRef}
+          onClose={closeInvestigation}
+        />
+      )}
 
       <div className="mt-4 text-[11px] text-dim">
         API: <code className="text-gray-500">{apiBase()}/api/v2/countries/{cc}</code>

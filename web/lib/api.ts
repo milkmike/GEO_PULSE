@@ -1,8 +1,9 @@
 import type {
   AgreementGroup, ArticleSearchRequest, ArticleSearchResponse, Brief, CountrySummary,
   Dossier, EntityStat, EntitySuggestionsResponse, FxSeries, Headline, Health, MapEntry,
-  Meta, Signal, SourceHealthRow, SourceRow, StoriesListResponse, StoriesRequest,
-  StoryDetailResponse, Thread, TopicStat, TradeYear, UNVoteYear,
+  IndexExplanation, IndexExplanationRequest, Meta, Signal, SignalDetail, SourceHealthRow,
+  SourceRow, StoriesListResponse, StoriesRequest, StoryDetailResponse, TemperatureMethodology,
+  Thread, TopicStat, TradeYear, UNVoteYear,
 } from "./types";
 
 /** API base: build-time env wins; otherwise same host on :8100 (compose default). */
@@ -53,6 +54,23 @@ function storyParams(request: StoriesRequest, cursor?: string | null): URLSearch
 }
 
 export const api = {
+  indexExplanation: (
+    code: string,
+    request: IndexExplanationRequest,
+    signal?: AbortSignal,
+  ) => {
+    const params = new URLSearchParams({ at: request.at });
+    if (request.windowHours != null) params.set("window_hours", String(request.windowHours));
+    if (request.rriVersion) params.set("rri_version", request.rriVersion);
+    return get<IndexExplanation>(
+      `/api/v2/countries/${encodeURIComponent(code.trim().toUpperCase())}/index-explanation?${params.toString()}`,
+      signal,
+    );
+  },
+  signalDetail: (signalId: number, signal?: AbortSignal) =>
+    get<SignalDetail>(`/api/v2/signals/${signalId}`, signal),
+  temperatureMethodology: (signal?: AbortSignal) =>
+    get<TemperatureMethodology>("/api/v2/methodology/temperature", signal),
   stories: (
     request: StoriesRequest = {},
     cursor?: string | null,

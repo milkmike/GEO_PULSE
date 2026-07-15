@@ -1,6 +1,8 @@
 "use client";
 
 import Plot from "./Plot";
+import RriShiftList from "./RriShiftList";
+import type { RriShiftMarker } from "@/lib/rri-shifts";
 
 type SparkDossier = {
   index?: { score: number; level: string } | null;
@@ -28,7 +30,19 @@ function spark(x: (string | number)[], y: (number | null)[], color: string) {
   };
 }
 
-export default function SparklineStrip({ dossier }: { dossier: SparkDossier }) {
+interface SparklineStripProps {
+  dossier: SparkDossier;
+  investigationEnabled?: boolean;
+  markers?: RriShiftMarker[];
+  onSelectMarker?: (marker: RriShiftMarker, trigger: HTMLButtonElement) => void;
+}
+
+export default function SparklineStrip({
+  dossier,
+  investigationEnabled = false,
+  markers = [],
+  onSelectMarker,
+}: SparklineStripProps) {
   const ih = dossier.index_history ?? [];
   const gd = dossier.gdelt ?? [];
   if (ih.length < 2 && gd.length < 2) return null;
@@ -66,23 +80,31 @@ export default function SparklineStrip({ dossier }: { dossier: SparkDossier }) {
   );
 
   return (
-    <div className="flex gap-3">
-      <Cell
-        title="индекс RRI"
-        value={dossier.index ? `${dossier.index.score > 0 ? "+" : ""}${dossier.index.score.toFixed(0)}` : "—"}
-        plot={rri}
-      />
-      <Cell
-        title="тон GDELT"
-        value={tones.length ? `${tones[tones.length - 1] > 0 ? "+" : ""}${tones[tones.length - 1].toFixed(1)}` : "—"}
-        plot={tone}
-        badge={Math.abs(shock) >= 1.6 ? "медиа-шок" : undefined}
-      />
-      <Cell
-        title="объём упоминаний"
-        value={gd.length ? String(gd[gd.length - 1].volume ?? "—") : "—"}
-        plot={vol}
-      />
+    <div>
+      <div className="flex gap-3">
+        <Cell
+          title="индекс RRI"
+          value={dossier.index ? `${dossier.index.score > 0 ? "+" : ""}${dossier.index.score.toFixed(0)}` : "—"}
+          plot={rri}
+        />
+        <Cell
+          title="тон GDELT"
+          value={tones.length ? `${tones[tones.length - 1] > 0 ? "+" : ""}${tones[tones.length - 1].toFixed(1)}` : "—"}
+          plot={tone}
+          badge={Math.abs(shock) >= 1.6 ? "медиа-шок" : undefined}
+        />
+        <Cell
+          title="объём упоминаний"
+          value={gd.length ? String(gd[gd.length - 1].volume ?? "—") : "—"}
+          plot={vol}
+        />
+      </div>
+      {investigationEnabled && onSelectMarker && (
+        <div className="card mt-2 pt-2">
+          <div className="px-2 pb-2 text-[10px] uppercase tracking-wide text-dim">Сдвиги дневного RRI</div>
+          <RriShiftList markers={markers} onSelect={onSelectMarker} compact />
+        </div>
+      )}
     </div>
   );
 }

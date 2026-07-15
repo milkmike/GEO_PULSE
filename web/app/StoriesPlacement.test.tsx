@@ -6,6 +6,13 @@ import HomePage from "./page";
 import CountryPage from "./country/[code]/page";
 import { FeatureFlagsProvider } from "@/components/FeatureFlagsProvider";
 
+const navigation = vi.hoisted(() => ({ push: vi.fn(), replace: vi.fn() }));
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: navigation.push, replace: navigation.replace }),
+  usePathname: () => "/country/es",
+  useSearchParams: () => new URLSearchParams(),
+}));
+
 const apiMocks = vi.hoisted(() => ({
   countries: vi.fn(), signals: vi.fn(), worldBrief: vi.fn(), meta: vi.fn(),
   worldHeadlines: vi.fn(), topicCountries: vi.fn(), topicBrief: vi.fn(), stories: vi.fn(),

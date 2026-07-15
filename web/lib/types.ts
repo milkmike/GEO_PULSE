@@ -50,6 +50,25 @@ export interface Signal {
   active: boolean;
 }
 
+export type SignalListItem = Omit<Signal, "country_code" | "country_name" | "active" | "expires_at"> & {
+  country_code?: string | null;
+  country_name?: string | null;
+  active?: boolean | null;
+  expires_at?: string | null;
+};
+
+export interface RriHistoryPoint {
+  day: string;
+  time: string;
+  score: number;
+  structural: number | null;
+  media: number | null;
+  boost: number | null;
+  version: string;
+  delta_24h: number | null;
+  aggregation: "daily_last";
+}
+
 export interface Dossier {
   country: {
     code: string; name: string; name_en: string; iso3: string; flag: string;
@@ -62,10 +81,10 @@ export interface Dossier {
     boost: number | null; delta_24h: number | null; delta_7d: number | null;
     details: Record<string, unknown> | null; updated_at: string; version: string;
   } | null;
-  index_history: { day: string; score: number; structural: number | null; media: number | null }[];
+  index_history: RriHistoryPoint[];
   temperature_history: { time: string; temperature: number; article_count: number | null }[];
   gdelt: { day: string; volume: number | null; volume_share: number | null; tone: number | null }[];
-  signals: Omit<Signal, "country_code" | "country_name" | "active" | "expires_at">[];
+  signals: SignalListItem[];
 }
 
 export interface TopicStat {
@@ -469,4 +488,215 @@ export interface StoriesRequest {
   min_confidence?: number;
   min_action_level?: number;
   limit?: number;
+}
+
+export interface IndexExplanationRequest {
+  at: string;
+  windowHours?: number;
+  rriVersion?: string;
+}
+
+export interface EstimatedContribution {
+  status: "estimated" | "omitted";
+  label: "estimated";
+  method: string;
+  event_key: string | null;
+  input_article_ids: number[];
+  removed_article_ids: number[];
+  why_included: string;
+  relevance_score: number | null;
+  confidence: number | null;
+  evidence: {
+    input_article_ids: number[];
+    removed_article_ids: number[];
+    relevance_basis: string;
+  };
+  reason?: string;
+  estimated_delta?: number;
+  actual_media_estimate?: number;
+  counterfactual_media_estimate?: number;
+}
+
+export interface InvestigationContextItem {
+  scope: "article" | "story" | "signal" | string;
+  id: number;
+  label: string | null;
+  url: string | null;
+  occurred_at: string | null;
+  why_included: string;
+  relevance_score: number;
+  confidence: number;
+  evidence: Record<string, unknown>;
+}
+
+export interface IndexExplanation {
+  country_code: string;
+  from_time: string;
+  to_time: string;
+  rri_version: string;
+  exact_changes: {
+    from_value: number;
+    to_value: number;
+    total_delta: number;
+    structural_delta: number;
+    media_delta: number;
+    boost_delta: number;
+    exact_subtotal: number;
+    calculation_adjustment_delta: number;
+    rounding_residual: number;
+    from_time: string;
+    to_time: string;
+    rri_version: string;
+    weights: {
+      from: { structural: number; media: number };
+      to: { structural: number; media: number };
+    };
+    calculation_adjustments: {
+      from: number;
+      to: number;
+      from_rule: unknown;
+      to_rule: unknown;
+    };
+    input_counts: {
+      from_articles: number | null;
+      to_articles: number | null;
+      from_gdelt_volume: number | null;
+      to_gdelt_volume: number | null;
+    };
+  };
+  estimated_contributions: EstimatedContribution[];
+  context: InvestigationContextItem[];
+  related_story_ids: number[];
+  related_signal_ids: number[];
+  evidence_completeness: "complete" | "partial";
+  limitations: string[];
+  cache: { status: "hit" | "miss"; input_hash: string };
+}
+
+export interface SignalDetail {
+  id: number;
+  type: string;
+  severity: "info" | "warning" | "critical";
+  summary: {
+    headline: string;
+    description: string | null;
+    what_changed: string | null;
+  };
+  rule: {
+    detector: string;
+    version: string;
+    description: string | null;
+    threshold: Record<string, unknown>;
+    current_rule_reference?: Record<string, unknown> | string | null;
+  };
+  values: {
+    observed: Record<string, unknown>;
+    baseline: Record<string, unknown>;
+    window: {
+      start: string | null;
+      end: string | null;
+      basis?: string | null;
+      status?: string | null;
+    };
+  };
+  chart_points: Record<string, unknown>[];
+  articles: Array<{
+    id: number;
+    title: string | null;
+    url: string | null;
+    published_at: string | null;
+    source_name: string | null;
+    country_code: string | null;
+    sentiment: number | null;
+    action_level: number | null;
+    event_key: string | null;
+  }>;
+  articles_page: {
+    total: number;
+    returned: number;
+    limit: number;
+    truncated: boolean;
+    has_more: boolean;
+  };
+  related_story: null | {
+    id: number;
+    slug: string | null;
+    title: string | null;
+    summary: string | null;
+    lifecycle: string;
+    last_seen: string | null;
+    confidence: number;
+  };
+  countries: Array<{
+    code: string;
+    name: string;
+    article_count?: number;
+    media_tone?: number | null;
+  }>;
+  state: {
+    created_at: string | null;
+    expires_at: string | null;
+    active: boolean;
+    status: "active" | "expired";
+  };
+  confidence: number;
+  evidence_completeness: "complete" | "partial";
+  evidence_ids: string[];
+  evidence: {
+    article_ids: number[];
+    story_ids: number[];
+    rri_points: Record<string, unknown>[];
+  };
+  evidence_truncation: Record<
+    "evidence_ids" | "article_ids" | "story_ids" | "rri_points" | "countries",
+    { total: number; returned: number; truncated: boolean }
+  >;
+  limitations: string[];
+}
+
+export interface TemperatureMethodology {
+  methodology_version: string;
+  name: string;
+  plain_language: Array<{ id: string; title: string; body: string }>;
+  technical: {
+    input_eligibility: Record<string, boolean>;
+    window_days: number;
+    time_decay: { kind: string; tau_seconds: number; formula: string };
+    source_weights: { field: string; default: number; cluster_order: string };
+    event_type_weights: Record<string, number>;
+    action_level_weights: Record<string, number>;
+    reprint_importance: { base: number; formula: string };
+    event_clustering: {
+      key: string;
+      minimum_raw_key_length: number;
+      normalization_after_gate: string;
+    };
+    cluster_diminishing: { base: number; formula: string; unclustered_weight: number };
+    aggregation: { numerator: string; denominator: string; raw_sentiment: string };
+    normalization: {
+      factor: number;
+      formula: string;
+      temperature_round_digits: number;
+      raw_sentiment_round_digits: number;
+      component_round_digits: number;
+    };
+    trend: Record<string, string | number>;
+    anomaly: Record<string, string | number>;
+    upstream_analysis: Record<string, string | boolean>;
+  };
+  worked_example: {
+    articles: Array<{
+      sentiment: number;
+      source_weight: number;
+      event_type: string;
+      action_level: number;
+      age_seconds: number;
+      reprint_count: number;
+      duplicate_index: number;
+    }>;
+    weighted_numerator: number;
+    weighted_denominator: number;
+    temperature: number;
+  };
+  limitations: string[];
 }
