@@ -26,6 +26,15 @@ MERGE_THRESHOLD = 0.65
 MAX_MERGE_GAP_DAYS = 14.0
 MIN_MEANINGFUL_OVERLAP = 0.20
 TITLE_FALLBACK_EVENT_CEILING = 0.85
+STORY_COMPONENT_WEIGHTS = {
+    "event_key": 0.35,
+    "entities": 0.25,
+    "topics": 0.15,
+    "time": 0.10,
+    "source_diversity": 0.05,
+    "country_diversity": 0.05,
+    "title": 0.05,
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,20 +186,14 @@ def score_story_match(left: StoryCandidate, right: StoryCandidate) -> StorySimil
         "country_diversity": 1.0 if left.country_code != right.country_code else 0.0,
         "title": trigram_similarity(left.title, right.title),
     }
-    weights = {
-        "event_key": 0.35,
-        "entities": 0.25,
-        "topics": 0.15,
-        "time": 0.10,
-        "source_diversity": 0.05,
-        "country_diversity": 0.05,
-        "title": 0.05,
-    }
     effective_components = dict(components)
     if components["event_key"] >= TITLE_FALLBACK_EVENT_CEILING:
         effective_components["title"] = 0.0
     total = round(
-        sum(effective_components[name] * weight for name, weight in weights.items()),
+        sum(
+            effective_components[name] * weight
+            for name, weight in STORY_COMPONENT_WEIGHTS.items()
+        ),
         6,
     )
 
@@ -215,6 +218,9 @@ def score_story_match(left: StoryCandidate, right: StoryCandidate) -> StorySimil
         "raw_entity_overlap": raw_entity_overlap,
         "raw_topic_overlap": raw_topic_overlap,
         "title_used_as_fallback": effective_components["title"] > 0,
+        "effective_components": effective_components,
+        "weights": STORY_COMPONENT_WEIGHTS,
+        "score": total,
         "non_merge_reasons": [
             reason
             for condition, reason in (
@@ -338,28 +344,98 @@ def cluster_story_candidates(
     )
 
 
-def compute_source_hash(candidates: Sequence[StoryCandidate]) -> str:
-    """Hash every deterministic story input that can affect persisted copy."""
+def _copy_input_payload(
+    candidates: Sequence[StoryCandidate],
+    *,
+    member_article_ids: Sequence[int] | None = None,
+    member_evidence: Sequence[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Return the exact deterministic and LLM copy inputs in stable form."""
 
-    payload = []
-    for item in sorted(candidates, key=lambda candidate: (candidate.country_code, candidate.thread_id)):
-        payload.append({
+    def stable_value(value: Any) -> Any:
+        if isinstance(value, datetime):
+            return _as_utc(value).isoformat()
+        if isinstance(value, dict):
+            return {
+                str(key): stable_value(item)
+                for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
+            }
+        if isinstance(value, (set, frozenset, tuple, list)):
+            converted = [stable_value(item) for item in value]
+            try:
+                return sorted(converted)
+            except TypeError:
+                return converted
+        return value
+
+    candidate_payload = []
+    for item in sorted(
+        candidates, key=lambda candidate: (candidate.country_code, candidate.thread_id)
+    ):
+        candidate_payload.append({
             "thread_id": item.thread_id,
             "country": item.country_code,
-            "event_key": _normalized_text(item.event_key),
-            "title": _normalized_text(item.title),
+            "event_key": item.event_key,
+            "normalized_event_key": _normalized_text(item.event_key),
+            "title": item.title,
+            "normalized_title": _normalized_text(item.title),
             "article_ids": sorted(item.article_ids),
             "entities": sorted(item.entities),
             "topics": sorted(item.topics),
             "sources": sorted(item.sources),
+            "first_seen": _as_utc(item.first_seen).isoformat() if item.first_seen else None,
+            "last_seen": _as_utc(item.last_seen).isoformat() if item.last_seen else None,
             "highest_action_level": item.highest_action_level,
-            "last_seen": item.last_seen.isoformat() if item.last_seen else None,
         })
+    final_article_ids = sorted({
+        int(article_id)
+        for article_id in (
+            member_article_ids
+            if member_article_ids is not None
+            else [
+                article_id
+                for candidate in candidates
+                for article_id in candidate.article_ids
+            ]
+        )
+    })
+    stable_evidence = [stable_value(item) for item in (member_evidence or ())]
+    stable_evidence.sort(
+        key=lambda item: (
+            int(item.get("article_id", 0)) if isinstance(item, dict) else 0,
+            json.dumps(item, ensure_ascii=False, sort_keys=True),
+        )
+    )
+    return {
+        "candidates": candidate_payload,
+        "member_article_ids": final_article_ids,
+        "member_evidence": stable_evidence,
+    }
+
+
+def compute_source_hash(
+    candidates: Sequence[StoryCandidate],
+    *,
+    member_article_ids: Sequence[int] | None = None,
+    member_evidence: Sequence[dict[str, Any]] | None = None,
+) -> str:
+    """Hash every deterministic story input that can affect persisted copy."""
+
+    payload = _copy_input_payload(
+        candidates,
+        member_article_ids=member_article_ids,
+        member_evidence=member_evidence,
+    )
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
-def deterministic_story_copy(candidates: Sequence[StoryCandidate]) -> StoryCopy:
+def deterministic_story_copy(
+    candidates: Sequence[StoryCandidate],
+    *,
+    member_article_ids: Sequence[int] | None = None,
+    member_evidence: Sequence[dict[str, Any]] | None = None,
+) -> StoryCopy:
     """Build stable user-facing copy even when no LLM is configured."""
 
     if not candidates:
@@ -375,8 +451,26 @@ def deterministic_story_copy(candidates: Sequence[StoryCandidate]) -> StoryCopy:
         ),
     )[0]
     title = (canonical.title or canonical.event_key or "Международный сюжет").strip()[:500]
-    countries = sorted({item.country_code for item in candidates})
-    article_count = len({article_id for item in candidates for article_id in item.article_ids})
+    countries = sorted(
+        {item.country_code for item in candidates}
+        | {
+            str(item.get("country_code"))
+            for item in (member_evidence or ())
+            if isinstance(item, dict) and item.get("country_code")
+        }
+    )
+    article_count = len({
+        int(article_id)
+        for article_id in (
+            member_article_ids
+            if member_article_ids is not None
+            else [
+                article_id
+                for item in candidates
+                for article_id in item.article_ids
+            ]
+        )
+    })
     summary = (
         f"Сюжет объединяет {article_count} публикаций из стран "
         f"{', '.join(countries)} по событию «{title.rstrip('.')}»."
@@ -384,17 +478,60 @@ def deterministic_story_copy(candidates: Sequence[StoryCandidate]) -> StoryCopy:
     return StoryCopy(title_ru=title, title_en=None, summary=summary)
 
 
-def _summary_payload(candidates: Sequence[StoryCandidate], fallback: StoryCopy) -> dict[str, Any]:
+def _summary_payload(
+    candidates: Sequence[StoryCandidate],
+    fallback: StoryCopy,
+    *,
+    member_article_ids: Sequence[int] | None = None,
+    member_evidence: Sequence[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    copy_inputs = _copy_input_payload(
+        candidates,
+        member_article_ids=member_article_ids,
+        member_evidence=member_evidence,
+    )
+    final_evidence = [
+        item for item in copy_inputs["member_evidence"] if isinstance(item, dict)
+    ]
     return {
         "fallback": {
             "title_ru": fallback.title_ru,
             "summary": fallback.summary,
         },
-        "countries": sorted({item.country_code for item in candidates}),
-        "event_keys": sorted({item.event_key for item in candidates if item.event_key}),
-        "titles": sorted({item.title for item in candidates if item.title}),
-        "topics": sorted({topic for item in candidates for topic in item.topics}),
-        "article_count": len({article_id for item in candidates for article_id in item.article_ids}),
+        "countries": sorted(
+            {item.country_code for item in candidates}
+            | {
+                str(item.get("country_code"))
+                for item in final_evidence if item.get("country_code")
+            }
+        ),
+        "event_keys": sorted(
+            {item.event_key for item in candidates if item.event_key}
+            | {
+                str(item.get("event_key"))
+                for item in final_evidence if item.get("event_key")
+            }
+        ),
+        "titles": sorted(
+            {item.title for item in candidates if item.title}
+            | {
+                str(item.get("title"))
+                for item in final_evidence if item.get("title")
+            }
+        ),
+        "topics": sorted(
+            {topic for item in candidates for topic in item.topics}
+            | {
+                str(topic)
+                for item in final_evidence
+                for topic in (item.get("topics") or [])
+                if topic
+            }
+        ),
+        "article_count": len(copy_inputs["member_article_ids"]),
+        "article_ids": copy_inputs["member_article_ids"],
+        "member_evidence": copy_inputs["member_evidence"],
+        "candidate_inputs": copy_inputs["candidates"],
     }
 
 
@@ -405,16 +542,27 @@ def resolve_story_copy(
     previous_source_hash: str | None,
     previous_copy: StoryCopy | None,
     summarizer: Callable[[dict[str, Any]], dict[str, Any] | None] | None,
+    member_article_ids: Sequence[int] | None = None,
+    member_evidence: Sequence[dict[str, Any]] | None = None,
 ) -> StoryCopy:
     """Use generated copy only on source changes; otherwise preserve stored copy."""
 
-    fallback = deterministic_story_copy(candidates)
+    fallback = deterministic_story_copy(
+        candidates,
+        member_article_ids=member_article_ids,
+        member_evidence=member_evidence,
+    )
     if source_hash == previous_source_hash and previous_copy is not None:
         return previous_copy
     if summarizer is None:
         return fallback
     try:
-        generated = summarizer(_summary_payload(candidates, fallback))
+        generated = summarizer(_summary_payload(
+            candidates,
+            fallback,
+            member_article_ids=member_article_ids,
+            member_evidence=member_evidence,
+        ))
     except Exception as exc:
         logger.warning("Story summarizer failed; deterministic copy retained: %s", exc)
         return fallback
@@ -529,6 +677,120 @@ def fetch_story_candidates(session: Any) -> list[StoryCandidate]:
     return candidates
 
 
+def derive_reactivation_pairs(
+    session: Any,
+    candidates: Sequence[StoryCandidate],
+) -> frozenset[tuple[int, int]]:
+    """Derive explicit long-gap pairs anchored in a persisted resolved story."""
+
+    if not hasattr(session, "execute"):
+        return frozenset()
+    rows = session.execute(text("""
+        SELECT st.id, st.lifecycle, st.last_seen, st.meta
+        FROM stories st
+        WHERE st.lifecycle = 'resolved'
+          AND NOT (COALESCE(st.meta, '{}'::jsonb) ? 'merged_into_story_id')
+        ORDER BY st.id
+    """)).fetchall()
+    by_thread_id = {candidate.thread_id: candidate for candidate in candidates}
+    pairs: set[tuple[int, int]] = set()
+    ordered = sorted(candidates, key=lambda item: (item.country_code, item.thread_id))
+    for row in rows:
+        if _value(row, "lifecycle") != "resolved":
+            continue
+        persisted_last_seen = _value(row, "last_seen")
+        if persisted_last_seen is None:
+            continue
+        persisted_last_seen = _as_utc(persisted_last_seen)
+        meta = _value(row, "meta", {}) or {}
+        if isinstance(meta, str):
+            try:
+                meta = json.loads(meta)
+            except json.JSONDecodeError:
+                meta = {}
+        if not isinstance(meta, dict):
+            continue
+        stored_thread_ids = {
+            thread_id for thread_id in (meta.get("thread_ids") or [])
+            if isinstance(thread_id, int) and not isinstance(thread_id, bool)
+        }
+        anchors = [
+            by_thread_id[thread_id]
+            for thread_id in sorted(stored_thread_ids)
+            if thread_id in by_thread_id
+        ]
+        for anchor in anchors:
+            for candidate in ordered:
+                if (
+                    candidate.thread_id == anchor.thread_id
+                    or candidate.country_code == anchor.country_code
+                ):
+                    continue
+                candidate_activity = [
+                    _as_utc(article.published_at)
+                    for article in candidate.articles
+                    if article.published_at is not None
+                ] or [
+                    _as_utc(date)
+                    for date in (candidate.first_seen, candidate.last_seen)
+                    if date is not None
+                ]
+                if not any(date > persisted_last_seen for date in candidate_activity):
+                    continue
+                pair = tuple(sorted((anchor.thread_id, candidate.thread_id)))
+                similarity = score_story_match(anchor, candidate)
+                if (
+                    similarity.gap_days > MAX_MERGE_GAP_DAYS
+                    and should_merge(similarity, explicit_reactivation=True)
+                ):
+                    pairs.add(pair)
+    return frozenset(pairs)
+
+
+def fetch_story_member_evidence(
+    session: Any,
+    article_ids: Sequence[int],
+) -> list[dict[str, Any]]:
+    """Load deterministic evidence for the complete persisted membership union."""
+
+    if not article_ids:
+        return []
+    rows = session.execute(text("""
+        SELECT ar.id AS article_id, ar.title, ar.published_at,
+               TRIM(s.country_code) AS country_code, s.name AS source_name,
+               COALESCE(NULLIF(an.event_key, ''), ar.title, '') AS event_key,
+               COALESCE(an.topics, ARRAY[]::text[]) AS topics,
+               COALESCE(an.action_level, 1) AS action_level,
+               COALESCE((
+                   SELECT array_agg(DISTINCT aem.entity_id::text ORDER BY aem.entity_id::text)
+                   FROM article_entity_mentions aem
+                   WHERE aem.article_id = ar.id
+               ), ARRAY[]::text[]) AS entity_ids
+        FROM articles ar
+        JOIN sources s ON s.id = ar.source_id
+        LEFT JOIN analysis an ON an.article_id = ar.id
+        WHERE ar.id = ANY(:article_ids)
+        ORDER BY ar.id
+    """), {"article_ids": list(article_ids)}).fetchall()
+    return [{
+        "article_id": int(_value(row, "article_id")),
+        "title": _value(row, "title"),
+        "published_at": _iso_datetime(_value(row, "published_at")),
+        "country_code": str(_value(row, "country_code", "")).strip(),
+        "source_name": _value(row, "source_name"),
+        "event_key": _value(row, "event_key"),
+        "topics": sorted(str(topic) for topic in (_value(row, "topics") or [])),
+        "action_level": int(_value(row, "action_level", 1) or 1),
+        "entity_ids": sorted(str(entity_id) for entity_id in (_value(row, "entity_ids") or [])),
+    } for row in rows]
+
+
+def _iso_datetime(value: datetime | str | None) -> str | None:
+    if isinstance(value, datetime):
+        return _as_utc(value).isoformat()
+    return value
+
+
 def _story_slug(candidates: Sequence[StoryCandidate], first_seen: datetime) -> str:
     identity = "|".join(sorted(_normalized_text(item.event_key) for item in candidates))
     event_digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:10]
@@ -541,6 +803,8 @@ def _membership_evidence(
     candidate: StoryCandidate,
     cluster: Sequence[StoryCandidate],
     reactivation_pairs: frozenset[tuple[int, int]],
+    *,
+    story_reactivation: bool = False,
 ) -> tuple[float, dict[str, Any]]:
     matches = [
         (other, score_story_match(candidate, other))
@@ -553,19 +817,30 @@ def _membership_evidence(
             "country": candidate.country_code,
             "explicit_reactivation": False,
         }
-    best_other, best = max(matches, key=lambda match: match[1].total)
+    best_other, best = max(
+        matches,
+        key=lambda match: (match[1].total, -match[0].thread_id),
+    )
     pair = tuple(sorted((candidate.thread_id, best_other.thread_id)))
-    explicit_reactivation = (
+    explicit_reactivation = story_reactivation or (
         pair in reactivation_pairs and best.gap_days > MAX_MERGE_GAP_DAYS
     )
     return max(MERGE_THRESHOLD, best.total), {
         "thread_id": candidate.thread_id,
         "country": candidate.country_code,
+        "peer_thread_id": best_other.thread_id,
+        "score": best.total,
         "components": best.components,
+        "effective_components": best.evidence.get(
+            "effective_components", best.components
+        ),
+        "weights": best.evidence.get("weights", STORY_COMPONENT_WEIGHTS),
         "matched_features": sorted(best.matched_features),
         "gap_days": round(best.gap_days, 3),
         "explicit_reactivation": explicit_reactivation,
-        "non_merge_reasons": best.evidence.get("non_merge_reasons", []),
+        "non_merge_reasons": list(merge_rejection_reasons(
+            best, explicit_reactivation=explicit_reactivation
+        )),
     }
 
 
@@ -581,16 +856,20 @@ def persist_story_cluster(
 
     if len({item.country_code for item in candidates}) < 2:
         raise ValueError("A story must contain at least two countries")
-    pairwise_matches = [
-        (
-            left,
-            right,
-            score_story_match(left, right),
-            tuple(sorted((left.thread_id, right.thread_id))) in reactivation_pairs,
-        )
-        for index, left in enumerate(candidates)
-        for right in candidates[index + 1:]
-    ]
+    pairwise_matches = sorted(
+        [
+            (
+                left,
+                right,
+                score_story_match(left, right),
+                tuple(sorted((left.thread_id, right.thread_id)))
+                in reactivation_pairs,
+            )
+            for index, left in enumerate(candidates)
+            for right in candidates[index + 1:]
+        ],
+        key=lambda match: tuple(sorted((match[0].thread_id, match[1].thread_id))),
+    )
     if any(
         not should_merge(similarity, explicit_reactivation=explicit_reactivation)
         for _, _, similarity, explicit_reactivation in pairwise_matches
@@ -602,24 +881,38 @@ def persist_story_cluster(
         for candidate in candidates
         for article in candidate.articles
     }
-    article_ids = sorted({article_id for item in candidates for article_id in item.article_ids})
-    dates = [
-        date
-        for item in candidates
-        for date in (item.first_seen, item.last_seen)
-        if date is not None
+    current_article_ids = sorted({
+        article_id for item in candidates for article_id in item.article_ids
+    })
+    activity_dates = [
+        _as_utc(article.published_at)
+        for article in articles.values()
+        if article.published_at is not None
     ]
-    if not article_ids or not dates:
+    if not activity_dates:
+        activity_dates = [
+            _as_utc(date)
+            for item in candidates
+            for date in (item.first_seen, item.last_seen)
+            if date is not None
+        ]
+    if not current_article_ids or not activity_dates:
         raise ValueError("A story requires article memberships and timestamps")
-    first_seen, last_seen = min(dates), max(dates)
-    source_hash = compute_source_hash(candidates)
-    proposed_slug = _story_slug(candidates, first_seen)
+    current_first_seen, current_last_seen = min(activity_dates), max(activity_dates)
+    proposed_slug = _story_slug(candidates, current_first_seen)
     thread_ids = sorted(item.thread_id for item in candidates)
 
-    existing_matches = session.execute(text("""
+    matched_rows = session.execute(text("""
         SELECT st.id, st.slug, st.title_ru, st.title_en, st.summary,
                st.summary_model, st.source_hash, st.article_count,
                st.highest_action_level, st.generated_at, st.meta,
+               st.lifecycle, st.first_seen, st.last_seen,
+               (SELECT COALESCE(
+                    array_agg(member_sa.article_id ORDER BY member_sa.article_id),
+                    ARRAY[]::integer[]
+                )
+                FROM story_articles member_sa
+                WHERE member_sa.story_id = st.id) AS member_article_ids,
                (SELECT COUNT(*) FROM story_articles overlap_sa
                 WHERE overlap_sa.story_id = st.id
                   AND overlap_sa.article_id = ANY(:article_ids)) AS article_overlap,
@@ -644,9 +937,63 @@ def persist_story_cluster(
                  THEN 1 ELSE 0 END,
             article_overlap DESC, thread_overlap DESC, st.id
         FOR UPDATE OF st
-    """), {"article_ids": article_ids, "thread_ids": thread_ids}).fetchall()
+    """), {"article_ids": current_article_ids, "thread_ids": thread_ids}).fetchall()
+
+    reactivation_gate_matches = [
+        similarity
+        for left, right, similarity, _ in pairwise_matches
+        if left.country_code != right.country_code
+    ]
+    reactivation_gate_passed = bool(reactivation_gate_matches) and all(
+        {"event_key", "entities"}.issubset(similarity.matched_features)
+        for similarity in reactivation_gate_matches
+    )
+    existing_matches: list[Any] = []
+    reactivated_matches: list[tuple[Any, datetime, datetime]] = []
+    for matched_row in matched_rows:
+        if _value(matched_row, "lifecycle") != "resolved":
+            existing_matches.append(matched_row)
+            continue
+        prior_last_seen = _value(matched_row, "last_seen")
+        if prior_last_seen is None:
+            # A resolved identity cannot be reopened without a persisted temporal anchor.
+            continue
+        prior_last_seen = _as_utc(prior_last_seen)
+        new_activity = sorted(date for date in activity_dates if date > prior_last_seen)
+        if not new_activity:
+            existing_matches.append(matched_row)
+            continue
+        if not reactivation_gate_passed:
+            # Keep the resolved story closed; this cluster receives a new identity.
+            continue
+        existing_matches.append(matched_row)
+        reactivated_matches.append((matched_row, prior_last_seen, new_activity[0]))
+
     existing = existing_matches[0] if existing_matches else None
     duplicate_story_ids = [_value(row, "id") for row in existing_matches[1:]]
+    article_ids = sorted({
+        int(article_id)
+        for article_id in current_article_ids
+    } | {
+        int(article_id)
+        for row in existing_matches
+        for article_id in (_value(row, "member_article_ids", []) or [])
+        if article_id is not None
+    })
+    persisted_dates = [
+        _as_utc(value)
+        for row in existing_matches
+        for value in (_value(row, "first_seen"), _value(row, "last_seen"))
+        if value is not None
+    ]
+    first_seen = min([current_first_seen, *persisted_dates])
+    last_seen = max([current_last_seen, *persisted_dates])
+    member_evidence = fetch_story_member_evidence(session, article_ids)
+    source_hash = compute_source_hash(
+        candidates,
+        member_article_ids=article_ids,
+        member_evidence=member_evidence,
+    )
     previous_copy = None
     if existing:
         previous_copy = StoryCopy(
@@ -665,6 +1012,8 @@ def persist_story_cluster(
         previous_source_hash=_value(existing, "source_hash") if existing else None,
         previous_copy=previous_copy,
         summarizer=summarizer,
+        member_article_ids=article_ids,
+        member_evidence=member_evidence,
     )
 
     recent_count = sum(
@@ -683,12 +1032,23 @@ def persist_story_cluster(
         highest_action_level=highest_action,
         previous_action_level=int(_value(existing, "highest_action_level", 1) or 1) if existing else 1,
     )
+    story_reactivation = bool(reactivated_matches)
+    if (
+        existing
+        and _value(existing, "lifecycle") == "resolved"
+        and not story_reactivation
+    ):
+        lifecycle = "resolved"
     pair_scores = [similarity.total for _, _, similarity, _ in pairwise_matches]
     confidence = round(min(pair_scores), 3) if pair_scores else MERGE_THRESHOLD
     existing_meta: dict[str, Any] = {}
     merge_audit: list[dict[str, Any]] = []
     reactivation_history: list[dict[str, Any]] = []
     merged_story_ids: set[int] = set(duplicate_story_ids)
+    persisted_thread_ids: set[int] = set(thread_ids)
+    persisted_topics: set[str] = {
+        topic for candidate in candidates for topic in candidate.topics
+    }
     for matched_story in existing_matches:
         matched_meta = _value(matched_story, "meta", {}) or {}
         if isinstance(matched_meta, str):
@@ -700,6 +1060,13 @@ def persist_story_cluster(
             continue
         if not existing_meta:
             existing_meta = dict(matched_meta)
+        persisted_thread_ids.update(
+            thread_id for thread_id in (matched_meta.get("thread_ids") or [])
+            if isinstance(thread_id, int) and not isinstance(thread_id, bool)
+        )
+        persisted_topics.update(
+            str(topic) for topic in (matched_meta.get("topics") or []) if topic
+        )
         merge_audit.extend(
             item for item in (matched_meta.get("merge_audit") or [])
             if isinstance(item, dict)
@@ -737,30 +1104,87 @@ def persist_story_cluster(
     }
     for left, right, similarity, explicit_reactivation in pairwise_matches:
         pair = sorted((left.thread_id, right.thread_id))
+        pair_reactivation = (
+            explicit_reactivation
+            and similarity.gap_days > MAX_MERGE_GAP_DAYS
+        )
         decision_id = hashlib.sha256(
-            f"{pair[0]}:{pair[1]}:{source_hash}:{int(explicit_reactivation)}".encode("ascii")
+            f"{pair[0]}:{pair[1]}:{source_hash}:{int(pair_reactivation)}".encode("ascii")
         ).hexdigest()
         audit_entry = {
             "decision_id": decision_id,
-            "decision": "reactivation" if explicit_reactivation else "merge",
+            "decision": "reactivation" if pair_reactivation else "merge",
             "thread_ids": pair,
             "score": similarity.total,
             "gap_days": round(similarity.gap_days, 3),
             "matched_features": sorted(similarity.matched_features),
             "components": similarity.components,
+            "effective_components": similarity.evidence.get(
+                "effective_components", similarity.components
+            ),
+            "weights": similarity.evidence.get("weights", STORY_COMPONENT_WEIGHTS),
             "decided_at": now.isoformat(),
         }
         if decision_id not in known_audit_ids:
             merge_audit.append(audit_entry)
             known_audit_ids.add(decision_id)
-        if explicit_reactivation and similarity.gap_days > MAX_MERGE_GAP_DAYS:
+        if pair_reactivation:
             if decision_id not in known_reactivation_ids:
                 reactivation_history.append(audit_entry)
                 known_reactivation_ids.add(decision_id)
+    for reactivated_story, prior_last_seen, new_activity_at in reactivated_matches:
+        story_id_value = int(_value(reactivated_story, "id"))
+        decision_id = hashlib.sha256(
+            (
+                f"story:{story_id_value}:{prior_last_seen.isoformat()}:"
+                f"{new_activity_at.isoformat()}:{source_hash}"
+            ).encode("utf-8")
+        ).hexdigest()
+        story_audit_entry = {
+            "decision_id": decision_id,
+            "decision": "reactivation",
+            "story_id": story_id_value,
+            "thread_ids": thread_ids,
+            "score": confidence,
+            "gap_days": round(
+                (new_activity_at - prior_last_seen).total_seconds() / 86400.0,
+                3,
+            ),
+            "prior_last_seen": prior_last_seen.isoformat(),
+            "new_activity_at": new_activity_at.isoformat(),
+            "matched_features": ["entities", "event_key"],
+            "gate": {
+                "required_features": ["event_key", "entities"],
+                "passed": True,
+            },
+            "pair_evidence": [
+                {
+                    "thread_ids": sorted((left.thread_id, right.thread_id)),
+                    "score": similarity.total,
+                    "matched_features": sorted(similarity.matched_features),
+                    "components": similarity.components,
+                    "effective_components": similarity.evidence.get(
+                        "effective_components", similarity.components
+                    ),
+                    "weights": similarity.evidence.get(
+                        "weights", STORY_COMPONENT_WEIGHTS
+                    ),
+                }
+                for left, right, similarity, _ in pairwise_matches
+                if left.country_code != right.country_code
+            ],
+            "decided_at": now.isoformat(),
+        }
+        if decision_id not in known_audit_ids:
+            merge_audit.append(story_audit_entry)
+            known_audit_ids.add(decision_id)
+        if decision_id not in known_reactivation_ids:
+            reactivation_history.append(story_audit_entry)
+            known_reactivation_ids.add(decision_id)
     meta_payload = dict(existing_meta)
     meta_payload.update({
-        "thread_ids": thread_ids,
-        "topics": sorted({topic for item in candidates for topic in item.topics}),
+        "thread_ids": sorted(persisted_thread_ids),
+        "topics": sorted(persisted_topics),
         "merge_audit": merge_audit,
         "reactivations": reactivation_history,
         "merged_story_ids": sorted(merged_story_ids),
@@ -856,7 +1280,10 @@ def persist_story_cluster(
 
     for candidate in candidates:
         membership_confidence, evidence = _membership_evidence(
-            candidate, candidates, reactivation_pairs
+            candidate,
+            candidates,
+            reactivation_pairs,
+            story_reactivation=story_reactivation,
         )
         for article_id in candidate.article_ids:
             session.execute(text("""
@@ -921,7 +1348,7 @@ def persist_story_cluster(
         INSERT INTO story_entities (
             story_id, entity_id, mentions, confidence, evidence
         )
-        SELECT :story_id, aem.entity_id, COUNT(*), 1.0,
+        SELECT :story_id, aem.entity_id, COUNT(*), AVG(aem.confidence),
                jsonb_build_object('article_ids', jsonb_agg(DISTINCT aem.article_id))
         FROM story_articles sa
         JOIN article_entity_mentions aem ON aem.article_id = sa.article_id
@@ -934,17 +1361,24 @@ def persist_story_cluster(
         INSERT INTO story_events (
             story_id, entity_id, event_key, event_at, action_level, evidence
         )
-        SELECT :story_id, aem.entity_id,
-               (array_agg(COALESCE(NULLIF(an.event_key, ''), ar.title, 'story event')
-                          ORDER BY ar.published_at DESC NULLS LAST))[1],
-               MAX(ar.published_at), MAX(COALESCE(an.action_level, 1)),
-               jsonb_build_object('article_ids', jsonb_agg(DISTINCT ar.id))
-        FROM story_articles sa
-        JOIN article_entity_mentions aem ON aem.article_id = sa.article_id
-        JOIN articles ar ON ar.id = sa.article_id
-        LEFT JOIN analysis an ON an.article_id = ar.id
-        WHERE sa.story_id = :story_id
-        GROUP BY aem.entity_id
+        SELECT :story_id, representative.entity_id, representative.event_key,
+               representative.published_at, representative.action_level,
+               jsonb_build_object(
+                   'article_ids', jsonb_build_array(representative.article_id),
+                   'representative_article_id', representative.article_id
+               )
+        FROM (
+            SELECT DISTINCT ON (aem.entity_id)
+                   aem.entity_id, ar.id AS article_id,
+                   COALESCE(NULLIF(an.event_key, ''), ar.title, 'story event') AS event_key,
+                   ar.published_at, COALESCE(an.action_level, 1) AS action_level
+            FROM story_articles sa
+            JOIN article_entity_mentions aem ON aem.article_id = sa.article_id
+            JOIN articles ar ON ar.id = sa.article_id
+            LEFT JOIN analysis an ON an.article_id = ar.id
+            WHERE sa.story_id = :story_id
+            ORDER BY aem.entity_id, ar.published_at DESC NULLS LAST, ar.id DESC
+        ) representative
     """), {"story_id": story_id})
     return story_id, len(article_ids)
 
@@ -972,8 +1406,11 @@ def build_stories(
 
     now = _as_utc(now or datetime.now(timezone.utc))
     candidates = fetch_story_candidates(session)
+    effective_reactivation_pairs = frozenset(
+        set(reactivation_pairs) | set(derive_reactivation_pairs(session, candidates))
+    )
     clusters = cluster_story_candidates(
-        candidates, reactivation_pairs=reactivation_pairs
+        candidates, reactivation_pairs=effective_reactivation_pairs
     )
     stories_upserted = 0
     memberships = 0
@@ -983,7 +1420,7 @@ def build_stories(
             cluster,
             summarizer=summarizer,
             now=now,
-            reactivation_pairs=reactivation_pairs,
+            reactivation_pairs=effective_reactivation_pairs,
         )
         stories_upserted += 1
         memberships += count

@@ -328,6 +328,35 @@ def test_source_hash_changes_when_copy_action_priority_changes():
     assert compute_source_hash(baseline) != compute_source_hash(escalated)
 
 
+def test_source_hash_tracks_raw_copy_text_changes():
+    baseline = [candidate("AZ", title="Headline."), candidate("KZ")]
+    punctuation_changed = [replace(baseline[0], title="headline"), baseline[1]]
+
+    assert deterministic_story_copy(baseline).title_ru != deterministic_story_copy(
+        punctuation_changed
+    ).title_ru
+    assert compute_source_hash(baseline) != compute_source_hash(punctuation_changed)
+
+
+def test_copy_hash_and_summary_include_final_persisted_membership_union():
+    candidates = [candidate("AZ"), candidate("KZ")]
+    current_hash = compute_source_hash(candidates)
+    union_hash = compute_source_hash(
+        candidates,
+        member_article_ids=(1, 2, 99),
+        member_evidence=({"article_id": 99, "title": "Historical evidence"},),
+    )
+    copy = deterministic_story_copy(
+        candidates,
+        member_article_ids=(1, 2, 99),
+        member_evidence=({"article_id": 99, "country_code": "UZ"},),
+    )
+
+    assert union_hash != current_hash
+    assert "3 публикаций" in copy.summary
+    assert "UZ" in copy.summary
+
+
 class FakeResult:
     def __init__(self, *, rows=None, row=None):
         self._rows = rows or []
@@ -366,6 +395,7 @@ class DuplicatePersistenceSession(PersistenceSession):
                 article_count=2, highest_action_level=2, generated_at=NOW,
                 meta={"merge_audit": [{"decision_id": "primary-audit"}]},
                 article_overlap=2, thread_overlap=1,
+                member_article_ids=[1, 2, 90],
             ),
             SimpleNamespace(
                 id=11, slug="story-duplicate", title_ru="Duplicate", title_en=None,
@@ -376,6 +406,7 @@ class DuplicatePersistenceSession(PersistenceSession):
                     "reactivations": [{"decision_id": "reactivation-audit"}],
                 },
                 article_overlap=1, thread_overlap=1,
+                member_article_ids=[2, 91],
             ),
         ]
 
@@ -410,6 +441,42 @@ class UnchangedPersistenceSession(PersistenceSession):
             return FakeResult(rows=[self.match], row=self.match)
         if "UPDATE stories SET" in sql and "RETURNING id" in sql:
             return FakeResult(row=(10,))
+        return FakeResult()
+
+
+class ResolvedPersistenceSession(PersistenceSession):
+    def __init__(self):
+        super().__init__()
+        self.match = SimpleNamespace(
+            id=10,
+            slug="story-resolved",
+            title_ru="Resolved",
+            title_en=None,
+            summary="Resolved summary",
+            summary_model=None,
+            source_hash="old-source-hash",
+            article_count=2,
+            highest_action_level=3,
+            generated_at=NOW - timedelta(days=15),
+            lifecycle="resolved",
+            first_seen=NOW - timedelta(days=30),
+            last_seen=NOW - timedelta(days=15),
+            meta={"thread_ids": [1, 2]},
+            article_overlap=0,
+            thread_overlap=2,
+            member_article_ids=[90, 91],
+        )
+
+    def execute(self, statement, params=None):
+        sql = str(statement)
+        self.statements.append(sql)
+        self.calls.append((sql, params or {}))
+        if "SELECT st.id, st.slug" in sql:
+            return FakeResult(rows=[self.match], row=self.match)
+        if "UPDATE stories SET" in sql and "RETURNING id" in sql:
+            return FakeResult(row=(10,))
+        if "INSERT INTO stories" in sql:
+            return FakeResult(row=(42,))
         return FakeResult()
 
 
@@ -528,6 +595,16 @@ class PaginatedArticleSession(FakeStorySession):
         return super().execute(statement, params)
 
 
+class BoundArticleSession(PaginatedArticleSession):
+    def execute(self, statement, params=None):
+        sql = str(statement)
+        params = params or {}
+        if "WHERE st.id = :story_id" in sql and params.get("story_id") in {6, 7}:
+            self.calls.append((sql, params))
+            return FakeResult(row=story_row(params["story_id"]))
+        return super().execute(statement, params)
+
+
 class SupersededStorySession(FakeStorySession):
     def execute(self, statement, params=None):
         sql = str(statement)
@@ -617,6 +694,13 @@ def test_story_list_supports_topic_entity_date_filters_and_active_ranking(monkey
             "date_to": "2026-07-01T00:00:00+00:00",
         },
     )
+    mixed_timezone_invalid_range = client.get(
+        "/api/v2/stories",
+        params={
+            "date_from": "2026-07-20T00:00:00",
+            "date_to": "2026-07-01T00:00:00+00:00",
+        },
+    )
 
     assert response.status_code == 200
     sql, params = session.calls[0]
@@ -627,7 +711,8 @@ def test_story_list_supports_topic_entity_date_filters_and_active_ranking(monkey
     assert "story_entities" in sql
     assert "meta->'topics'" in sql
     assert "CASE WHEN st.lifecycle = 'resolved'" in sql
-    assert invalid_range.status_code == 400
+    assert invalid_range.status_code == 422
+    assert mixed_timezone_invalid_range.status_code == 422
 
 
 def test_story_detail_articles_use_bounded_cursor_pagination(monkeypatch):
@@ -645,6 +730,72 @@ def test_story_detail_articles_use_bounded_cursor_pagination(monkeypatch):
         call for call in session.calls if "WITH ranked_articles" in call[0]
     )
     assert article_call[1]["article_limit"] == 2
+
+
+@pytest.mark.parametrize("changed_params", [
+    {"country": "AZ"},
+    {"lifecycle": "resolved"},
+    {"min_confidence": 0.1},
+    {"min_action_level": 2},
+    {"since": "2026-07-01T00:00:00+00:00"},
+    {"topic": "different"},
+    {"entity_id": "entity-other"},
+    {"date_from": "2026-07-01T00:00:00+00:00"},
+    {"date_to": "2026-07-20T00:00:00+00:00"},
+])
+def test_story_cursor_is_bound_to_all_filters(monkeypatch, changed_params):
+    client, _ = story_client(monkeypatch)
+
+    first_page = client.get("/api/v2/stories?limit=1")
+    cursor = first_page.json()["next_cursor"]
+    mismatched = client.get(
+        "/api/v2/stories",
+        params={"limit": 1, "cursor": cursor, **changed_params},
+    )
+
+    assert first_page.status_code == 200
+    assert mismatched.status_code == 400
+    assert mismatched.json()["detail"] == "Story cursor does not match query"
+
+
+def test_story_cursor_is_bound_to_scope_and_sort_version(monkeypatch):
+    client, _ = story_client(monkeypatch)
+
+    first_page = client.get("/api/v2/stories?country=AZ&limit=1")
+    cursor = first_page.json()["next_cursor"]
+    wrong_scope = client.get(
+        "/api/v2/countries/AZ/stories",
+        params={"limit": 1, "cursor": cursor},
+    )
+    cursor_payload = json.loads(base64.urlsafe_b64decode(
+        cursor + "=" * (-len(cursor) % 4)
+    ).decode("utf-8"))
+    cursor_payload[0] = "stories-v1-obsolete-sort"
+    wrong_version_cursor = base64.urlsafe_b64encode(
+        json.dumps(cursor_payload).encode("utf-8")
+    ).decode("ascii")
+    wrong_version = client.get(
+        "/api/v2/stories",
+        params={"country": "AZ", "limit": 1, "cursor": wrong_version_cursor},
+    )
+
+    assert wrong_scope.status_code == 400
+    assert wrong_version.status_code == 400
+
+
+def test_article_cursor_is_bound_to_canonical_story(monkeypatch):
+    client, _ = story_client(monkeypatch, BoundArticleSession())
+
+    first_page = client.get("/api/v2/stories/7?article_limit=1")
+    cursor = first_page.json()["articles_next_cursor"]
+    mismatched = client.get(
+        "/api/v2/stories/6",
+        params={"article_limit": 1, "article_cursor": cursor},
+    )
+
+    assert first_page.status_code == 200
+    assert mismatched.status_code == 400
+    assert mismatched.json()["detail"] == "Article cursor does not match story"
 
 
 def test_ranked_story_and_article_responses_explain_inclusion(monkeypatch):
@@ -731,6 +882,8 @@ def test_story_api_serializes_only_http_urls_with_hostnames(monkeypatch):
     "https://exa mple.com/story",
     "https://-bad.example/story",
     "https://example.com:not-a-port/story",
+    "https://user:secret@example.com/story",
+    "https://user@example.com/story",
     f"https://{chr(0xD800)}.example/story",
 ])
 def test_malformed_http_hostnames_are_rejected(url):
@@ -770,6 +923,40 @@ def test_persistence_recomputes_header_counts_from_saved_memberships():
     assert "MAX(COALESCE(an.action_level, 1))" in aggregate_sql
 
 
+def test_persistence_uses_real_entity_confidence_and_one_representative_event_row():
+    session = PersistenceSession()
+
+    persist_story_cluster(session, [candidate("AZ"), candidate("KZ")], now=NOW)
+
+    aggregate_sql = "\n".join(session.statements)
+    assert "AVG(aem.confidence)" in aggregate_sql
+    assert "DISTINCT ON (aem.entity_id)" in aggregate_sql
+    assert "representative_article_id" in aggregate_sql
+
+
+def test_membership_evidence_reproduces_score_and_names_peer():
+    session = PersistenceSession()
+
+    persist_story_cluster(session, [candidate("AZ"), candidate("KZ")], now=NOW)
+
+    evidence_rows = [
+        json.loads(params["evidence"])
+        for sql, params in session.calls
+        if "INSERT INTO story_articles" in sql and "VALUES" in sql
+    ]
+    assert evidence_rows
+    for evidence in evidence_rows:
+        assert evidence["peer_thread_id"] in {1, 2}
+        assert evidence["peer_thread_id"] != evidence["thread_id"]
+        assert evidence["effective_components"]
+        assert evidence["weights"]
+        reproduced = sum(
+            evidence["effective_components"][name] * weight
+            for name, weight in evidence["weights"].items()
+        )
+        assert round(reproduced, 6) == evidence["score"]
+
+
 def test_persistence_checks_stable_thread_identity_before_summary_generation():
     session = PersistenceSession()
 
@@ -803,6 +990,8 @@ def test_overlapping_story_ids_are_reconciled_into_one_primary():
         call for call in session.calls
         if "UPDATE stories SET" in call[0] and "RETURNING id" in call[0]
     )
+    assert update_call[1]["article_count"] == 4
+    assert "4 публикаций" in update_call[1]["summary"]
     merged_meta = json.loads(update_call[1]["meta"])
     assert {item["decision_id"] for item in merged_meta["merge_audit"]} >= {
         "primary-audit", "duplicate-audit",
@@ -852,6 +1041,81 @@ def test_explicit_reactivation_is_persisted_in_audit_history():
     ]
     assert membership_evidence
     assert all(item["explicit_reactivation"] is True for item in membership_evidence)
+    assert all(
+        "time_window_exceeded" not in item["non_merge_reasons"]
+        for item in membership_evidence
+    )
+
+
+def test_resolved_story_reopens_only_with_event_and_entity_gate_and_is_audited():
+    session = ResolvedPersistenceSession()
+
+    persist_story_cluster(session, [candidate("AZ"), candidate("KZ")], now=NOW)
+
+    update_call = next(
+        call for call in session.calls
+        if "UPDATE stories SET" in call[0] and "RETURNING id" in call[0]
+    )
+    meta = json.loads(update_call[1]["meta"])
+    assert meta["reactivations"]
+    assert meta["reactivations"][-1]["decision"] == "reactivation"
+    assert meta["reactivations"][-1]["story_id"] == 10
+    assert "4 публикаций" in update_call[1]["summary"]
+
+
+def test_resolved_story_without_entity_gate_stays_closed_and_new_story_is_created():
+    session = ResolvedPersistenceSession()
+    cluster = [
+        candidate("AZ", entities=frozenset()),
+        candidate("KZ", entities=frozenset()),
+    ]
+
+    story_id, _ = persist_story_cluster(session, cluster, now=NOW)
+
+    assert story_id == 42
+    assert any("INSERT INTO stories" in sql for sql in session.statements)
+    assert not any(
+        "UPDATE stories SET" in sql and "RETURNING id" in sql
+        for sql in session.statements
+    )
+
+
+def test_background_builder_derives_reactivation_pairs_from_resolved_story(monkeypatch):
+    import src.stories as stories_module
+
+    old = candidate(
+        "AZ",
+        first_seen=NOW - timedelta(days=20),
+        last_seen=NOW - timedelta(days=15),
+    )
+    new = candidate("KZ", first_seen=NOW, last_seen=NOW)
+    observed = {}
+
+    class ResolvedPairSession:
+        def execute(self, statement, params=None):
+            sql = str(statement)
+            if "lifecycle = 'resolved'" in sql:
+                return FakeResult(rows=[SimpleNamespace(
+                    id=10,
+                    lifecycle="resolved",
+                    last_seen=NOW - timedelta(days=15),
+                    meta={"thread_ids": [old.thread_id]},
+                )])
+            return FakeResult()
+
+    monkeypatch.setattr(stories_module, "fetch_story_candidates", lambda session: [old, new])
+
+    def fake_persist(session, items, *, summarizer, now, reactivation_pairs):
+        observed["pairs"] = reactivation_pairs
+        return 10, 2
+
+    monkeypatch.setattr(stories_module, "persist_story_cluster", fake_persist)
+    monkeypatch.setattr(stories_module, "refresh_story_lifecycles", lambda session, now: None)
+
+    result = build_stories(ResolvedPairSession(), now=NOW)
+
+    assert result.stories_upserted == 1
+    assert observed["pairs"] == frozenset({(1, 2)})
 
 
 def test_background_builder_wires_explicit_reactivation_pairs(monkeypatch):

@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
 import json
 import math
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Optional
 from urllib.parse import urlparse
 
@@ -21,6 +22,8 @@ from src.stories import MERGE_THRESHOLD
 
 
 router = APIRouter(prefix="/api/v2", tags=["stories"])
+STORY_CURSOR_VERSION = "stories-v2-active-relevance"
+ARTICLE_CURSOR_VERSION = "story-articles-v2-relevance"
 
 STORY_RELEVANCE_SQL = """(
     COALESCE(st.clustering_confidence, 0) * 0.70
@@ -172,7 +175,12 @@ def safe_public_url(value: Any) -> str | None:
         return None
     try:
         parsed = urlparse(value)
-        if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
+        if (
+            parsed.scheme.lower() not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+        ):
             return None
         parsed.port  # force validation of a supplied port
         hostname = parsed.hostname.rstrip(".").encode("idna").decode("ascii")
@@ -232,8 +240,10 @@ def story_to_dict(row: Any) -> dict[str, Any]:
     }
 
 
-def _encode_cursor(row: Any) -> str:
+def _encode_cursor(row: Any, context_hash: str) -> str:
     payload = json.dumps([
+        STORY_CURSOR_VERSION,
+        context_hash,
         1 if _value(row, "lifecycle") == "resolved" else 0,
         float(_value(row, "relevance_score", 0) or 0),
         _iso(_value(row, "last_seen")),
@@ -242,14 +252,22 @@ def _encode_cursor(row: Any) -> str:
     return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
 
 
-def _decode_cursor(cursor: str) -> tuple[int, float, datetime, int]:
+def _decode_cursor(
+    cursor: str,
+    *,
+    expected_context_hash: str,
+) -> tuple[int, float, datetime, int]:
     try:
         padding = "=" * (-len(cursor) % 4)
         decoded = base64.urlsafe_b64decode((cursor + padding).encode("ascii"))
         payload = json.loads(decoded.decode("utf-8"))
-        if not isinstance(payload, list) or len(payload) != 4:
+        if not isinstance(payload, list) or len(payload) != 6:
             raise ValueError("wrong cursor shape")
-        resolved_rank, relevance_score, last_seen, story_id = payload
+        version, context_hash, resolved_rank, relevance_score, last_seen, story_id = payload
+        if version != STORY_CURSOR_VERSION or context_hash != expected_context_hash:
+            raise HTTPException(
+                status_code=400, detail="Story cursor does not match query"
+            )
         if resolved_rank not in (0, 1) or isinstance(resolved_rank, bool):
             raise ValueError("invalid lifecycle rank")
         if not isinstance(relevance_score, (int, float)) or isinstance(relevance_score, bool):
@@ -264,6 +282,8 @@ def _decode_cursor(cursor: str) -> tuple[int, float, datetime, int]:
             datetime.fromisoformat(last_seen.replace("Z", "+00:00")),
             story_id,
         )
+    except HTTPException:
+        raise
     except (
         AttributeError, binascii.Error, json.JSONDecodeError, OverflowError,
         TypeError, UnicodeDecodeError, ValueError,
@@ -271,8 +291,10 @@ def _decode_cursor(cursor: str) -> tuple[int, float, datetime, int]:
         raise HTTPException(status_code=400, detail="Invalid story cursor") from exc
 
 
-def _encode_article_cursor(row: Any) -> str:
+def _encode_article_cursor(row: Any, story_id: int) -> str:
     payload = json.dumps([
+        ARTICLE_CURSOR_VERSION,
+        story_id,
         float(_value(row, "relevance_score", 0) or 0),
         _iso(_value(row, "published_at")),
         int(_value(row, "article_id")),
@@ -280,14 +302,22 @@ def _encode_article_cursor(row: Any) -> str:
     return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
 
 
-def _decode_article_cursor(cursor: str) -> tuple[float, datetime, int]:
+def _decode_article_cursor(
+    cursor: str,
+    *,
+    expected_story_id: int,
+) -> tuple[float, datetime, int]:
     try:
         padding = "=" * (-len(cursor) % 4)
         decoded = base64.urlsafe_b64decode((cursor + padding).encode("ascii"))
         payload = json.loads(decoded.decode("utf-8"))
-        if not isinstance(payload, list) or len(payload) != 3:
+        if not isinstance(payload, list) or len(payload) != 5:
             raise ValueError("wrong article cursor shape")
-        relevance_score, published_at, article_id = payload
+        version, story_id, relevance_score, published_at, article_id = payload
+        if version != ARTICLE_CURSOR_VERSION or story_id != expected_story_id:
+            raise HTTPException(
+                status_code=400, detail="Article cursor does not match story"
+            )
         if not isinstance(relevance_score, (int, float)) or isinstance(relevance_score, bool):
             raise ValueError("invalid relevance score")
         if not math.isfinite(float(relevance_score)):
@@ -299,6 +329,8 @@ def _decode_article_cursor(cursor: str) -> tuple[float, datetime, int]:
             datetime.fromisoformat(published_at.replace("Z", "+00:00")),
             article_id,
         )
+    except HTTPException:
+        raise
     except (
         AttributeError, binascii.Error, json.JSONDecodeError, OverflowError,
         TypeError, UnicodeDecodeError, ValueError,
@@ -315,8 +347,17 @@ def _validate_country(country: str | None) -> str | None:
     return country
 
 
+def _as_utc_query_datetime(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
 def _list_stories(
     *,
+    scope: str,
     country: str | None,
     lifecycle: str | None,
     min_confidence: float,
@@ -329,8 +370,27 @@ def _list_stories(
     cursor: str | None,
     limit: int,
 ) -> dict[str, Any]:
+    since = _as_utc_query_datetime(since)
+    date_from = _as_utc_query_datetime(date_from)
+    date_to = _as_utc_query_datetime(date_to)
     if date_from and date_to and date_from > date_to:
-        raise HTTPException(status_code=400, detail="date_from must not exceed date_to")
+        raise HTTPException(status_code=422, detail="date_from must not exceed date_to")
+    context_payload = {
+        "version": STORY_CURSOR_VERSION,
+        "scope": scope,
+        "country": country,
+        "lifecycle": lifecycle,
+        "min_confidence": min_confidence,
+        "min_action_level": min_action_level,
+        "since": _iso(since),
+        "topic": topic,
+        "entity_id": entity_id,
+        "date_from": _iso(date_from),
+        "date_to": _iso(date_to),
+    }
+    context_hash = hashlib.sha256(json.dumps(
+        context_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")).hexdigest()
     conditions = [
         "st.country_count >= 2",
         "st.clustering_confidence >= :min_confidence",
@@ -368,7 +428,9 @@ def _list_stories(
         conditions.append("st.first_seen <= :date_to")
         params["date_to"] = date_to
     if cursor:
-        cursor_resolved, cursor_relevance, cursor_last_seen, cursor_id = _decode_cursor(cursor)
+        cursor_resolved, cursor_relevance, cursor_last_seen, cursor_id = _decode_cursor(
+            cursor, expected_context_hash=context_hash
+        )
         conditions.append(
             "((CASE WHEN st.lifecycle = 'resolved' THEN 1 ELSE 0 END) > :cursor_resolved "
             "OR ((CASE WHEN st.lifecycle = 'resolved' THEN 1 ELSE 0 END) = :cursor_resolved "
@@ -399,7 +461,7 @@ def _list_stories(
     page = rows[:limit]
     return {
         "stories": [story_to_dict(row) for row in page],
-        "next_cursor": _encode_cursor(page[-1]) if has_more and page else None,
+        "next_cursor": _encode_cursor(page[-1], context_hash) if has_more and page else None,
     }
 
 
@@ -423,6 +485,7 @@ def list_stories(
     """List persisted stories with stable cursor pagination."""
 
     return _list_stories(
+        scope="stories",
         country=_validate_country(country),
         lifecycle=lifecycle,
         min_confidence=min_confidence,
@@ -468,28 +531,10 @@ def get_story(
 ):
     """Return a story with membership, entity, event, and country evidence."""
 
-    article_conditions = []
     article_params: dict[str, Any] = {
         "story_id": story_id,
         "article_limit": article_limit + 1,
     }
-    if article_cursor:
-        cursor_relevance, cursor_published_at, cursor_article_id = (
-            _decode_article_cursor(article_cursor)
-        )
-        article_conditions.append(
-            "(ranked.relevance_score < :article_cursor_relevance OR "
-            "(ranked.relevance_score = :article_cursor_relevance AND "
-            "(ranked.published_at < :article_cursor_published_at OR "
-            "(ranked.published_at = :article_cursor_published_at "
-            "AND ranked.article_id < :article_cursor_article_id))))"
-        )
-        article_params.update({
-            "article_cursor_relevance": cursor_relevance,
-            "article_cursor_published_at": cursor_published_at,
-            "article_cursor_article_id": cursor_article_id,
-        })
-    article_where = "WHERE " + " AND ".join(article_conditions) if article_conditions else ""
 
     redirected_from_story_id: int | None = None
     with get_session() as session:
@@ -518,6 +563,30 @@ def get_story(
             if not story:
                 raise HTTPException(status_code=404, detail="Canonical story not found")
             article_params["story_id"] = story_id
+
+        article_conditions = []
+        if article_cursor:
+            cursor_relevance, cursor_published_at, cursor_article_id = (
+                _decode_article_cursor(
+                    article_cursor, expected_story_id=story_id
+                )
+            )
+            article_conditions.append(
+                "(ranked.relevance_score < :article_cursor_relevance OR "
+                "(ranked.relevance_score = :article_cursor_relevance AND "
+                "(ranked.published_at < :article_cursor_published_at OR "
+                "(ranked.published_at = :article_cursor_published_at "
+                "AND ranked.article_id < :article_cursor_article_id))))"
+            )
+            article_params.update({
+                "article_cursor_relevance": cursor_relevance,
+                "article_cursor_published_at": cursor_published_at,
+                "article_cursor_article_id": cursor_article_id,
+            })
+        article_where = (
+            "WHERE " + " AND ".join(article_conditions)
+            if article_conditions else ""
+        )
 
         country_rows = session.execute(text("""
             SELECT TRIM(sc.country_code) AS country_code, sc.article_count,
@@ -648,7 +717,7 @@ def get_story(
         })
     result["articles"] = articles
     result["articles_next_cursor"] = (
-        _encode_article_cursor(article_page[-1])
+        _encode_article_cursor(article_page[-1], story_id)
         if has_more_articles and article_page else None
     )
     result["redirected_from_story_id"] = redirected_from_story_id
@@ -676,6 +745,7 @@ def get_country_stories(
 
     country = _validate_country(code)
     payload = _list_stories(
+        scope="country_stories",
         country=country,
         lifecycle=lifecycle,
         min_confidence=min_confidence,
