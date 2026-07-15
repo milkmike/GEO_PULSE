@@ -23,6 +23,7 @@ from src.api.routes.threads import router as threads_router
 from src.api.routes.vox import router as vox_router
 from src.api.routes.articles import router as articles_router
 from src.api.routes.world import router as world_router
+from src.api.routes.entities import router as entities_router
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -157,6 +158,7 @@ app.include_router(threads_router)
 app.include_router(vox_router)
 app.include_router(articles_router)
 app.include_router(world_router)
+app.include_router(entities_router)
 
 _STATIC_DIR = Path(__file__).parent / "static"
 
