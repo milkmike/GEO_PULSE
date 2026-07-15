@@ -192,6 +192,9 @@ function ArticleReferenceRow({ article }: { article: SignalArticleReference }) {
           {title}
         </a>
       ) : <span className="font-semibold">{title}</span>}
+      {!href && (
+        <div className="mt-1 text-xs text-cooling">Ссылка на первоисточник не сохранена.</div>
+      )}
       <div className="mt-1 text-xs text-dim">
         {article.source_name || "Источник не сохранён"}
         {article.published_at && ` · ${fmtTime(article.published_at)}`}
@@ -342,11 +345,16 @@ export default function SignalEvidence({ detail, storiesEnabled }: { detail: Sig
 
       {detail.context_preview && (
         <section aria-labelledby="signal-context-heading" className="card border-cooling/50 bg-cooling/5 p-5">
-          <h2 id="signal-context-heading" className="card-title">Новостной контекст</h2>
+          <h2 id="signal-context-heading" className="card-title">Публикации в окне сигнала</h2>
+          {detail.context_preview.window_start && detail.context_preview.window_end && (
+            <p className="mt-2 text-xs text-dim">
+              Окно контекста: {fmtTime(detail.context_preview.window_start)} — {fmtTime(detail.context_preview.window_end)}
+            </p>
+          )}
           {detail.context_preview.kind === "unavailable" ? (
             <p className="mt-2 text-sm text-dim">Новостной контекст для этого сигнала недоступен.</p>
           ) : detail.context_preview.articles.length === 0 ? (
-            <p className="mt-2 text-sm text-dim">За 72 часа до сигнала релевантные публикации не найдены.</p>
+            <p className="mt-2 text-sm text-dim">В сохранённом 72-часовом окне релевантные публикации не найдены.</p>
           ) : (
             <ul className="mt-3 space-y-2">
               {detail.context_preview.articles.map((article) => (
@@ -363,7 +371,7 @@ export default function SignalEvidence({ detail, storiesEnabled }: { detail: Sig
                 Отобраны по уровню события, выраженности тона, числу перепечаток и времени публикации.
               </p>
               <p className="mt-2 text-sm leading-relaxed text-dim">
-                Эти публикации вышли за 72 часа до срабатывания и отобраны как возможный контекст. Они не доказывают причину сдвига.
+                Публикации отобраны в 72-часовом окне наблюдаемого периода как возможный контекст. Они не доказывают причину сдвига.
               </p>
             </>
           )}

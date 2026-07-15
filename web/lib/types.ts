@@ -48,6 +48,7 @@ export interface Signal {
   created_at: string;
   expires_at: string | null;
   active: boolean;
+  evidence_preview?: SignalEvidencePreview | null;
 }
 
 export type SignalListItem = Omit<Signal, "country_code" | "country_name" | "active" | "expires_at"> & {

@@ -29,6 +29,7 @@ const signal: SignalListItem = {
   created_at: "2026-07-15T20:00:00Z",
   expires_at: "2026-07-20T20:00:00Z",
   active: true,
+  evidence_preview: null,
 };
 
 describe("SignalFeed", () => {

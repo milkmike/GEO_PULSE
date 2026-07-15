@@ -5,6 +5,10 @@ import SignalEvidence from "./SignalEvidence";
 
 vi.mock("@/components/Plot", () => ({ default: () => <div data-testid="signal-chart">chart</div> }));
 
+const fmtContextTime = (value: string) => new Date(value).toLocaleString("ru-RU", {
+  day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit",
+});
+
 const complete: SignalDetail = {
   id: 17,
   type: "index_shift",
@@ -94,17 +98,24 @@ describe("SignalEvidence", () => {
     expect(screen.getByText(/не доказывает причинность/i)).toBeVisible();
   });
 
-  it("renders nearby articles as non-causal news context", () => {
+  it("renders a legacy GDELT observation window without tying it to signal creation", () => {
+    const windowStart = "2026-07-13T00:00:00Z";
+    const windowEnd = "2026-07-16T00:00:00Z";
     const contextual: SignalDetail = {
       ...complete,
+      type: "tone_shift",
+      state: {
+        ...complete.state,
+        created_at: "2026-07-15T12:00:00Z",
+      },
       articles: [],
       articles_page: { total: 0, returned: 0, limit: 100, truncated: false, has_more: false },
       context_preview: {
         kind: "context",
         total: 8,
         window_hours: 72,
-        window_start: "2026-07-12T20:00:00Z",
-        window_end: "2026-07-15T20:00:00Z",
+        window_start: windowStart,
+        window_end: windowEnd,
         articles: [{
           id: 501,
           title: "Контекст сдвига",
@@ -118,14 +129,18 @@ describe("SignalEvidence", () => {
 
     render(<SignalEvidence detail={contextual} storiesEnabled />);
 
-    expect(screen.getByRole("heading", { name: "Новостной контекст" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Публикации в окне сигнала" })).toBeVisible();
     expect(screen.getByRole("link", { name: "Контекст сдвига" })).toHaveAttribute(
       "href",
       "https://example.es/context",
     );
     expect(screen.getByText(
-      "Эти публикации вышли за 72 часа до срабатывания и отобраны как возможный контекст. Они не доказывают причину сдвига.",
+      "Публикации отобраны в 72-часовом окне наблюдаемого периода как возможный контекст. Они не доказывают причину сдвига.",
     )).toBeVisible();
+    expect(screen.getByText(
+      `Окно контекста: ${fmtContextTime(windowStart)} — ${fmtContextTime(windowEnd)}`,
+    )).toBeVisible();
+    expect(screen.queryByText(/до сигнала|до срабатывания/i)).not.toBeInTheDocument();
     expect(screen.getByText("Показано 1 из 8")).toBeVisible();
     expect(screen.getByText(
       "Отобраны по уровню события, выраженности тона, числу перепечаток и времени публикации.",
@@ -148,7 +163,7 @@ describe("SignalEvidence", () => {
     };
     const { rerender } = render(<SignalEvidence detail={noMatches} storiesEnabled />);
 
-    expect(screen.getByText("За 72 часа до сигнала релевантные публикации не найдены.")).toBeVisible();
+    expect(screen.getByText("В сохранённом 72-часовом окне релевантные публикации не найдены.")).toBeVisible();
 
     rerender(<SignalEvidence detail={{
       ...noMatches,
@@ -163,7 +178,7 @@ describe("SignalEvidence", () => {
     }} storiesEnabled />);
 
     expect(screen.getByText("Новостной контекст для этого сигнала недоступен.")).toBeVisible();
-    expect(screen.queryByText("За 72 часа до сигнала релевантные публикации не найдены.")).not.toBeInTheDocument();
+    expect(screen.queryByText("В сохранённом 72-часовом окне релевантные публикации не найдены.")).not.toBeInTheDocument();
   });
 
   it("keeps partial missing inputs honest and never exposes unsafe links or fake controls", () => {
@@ -186,6 +201,7 @@ describe("SignalEvidence", () => {
     expect(screen.getAllByText(/не сохранено/i).length).toBeGreaterThanOrEqual(2);
     expect(screen.getByText(/график доказательства не сохранён/i)).toBeVisible();
     expect(screen.getByText("Опасная ссылка").closest("a")).toBeNull();
+    expect(screen.getByText("Ссылка на первоисточник не сохранена.")).toBeVisible();
     expect(screen.getByText(/показана 1 из 140/i)).toBeVisible();
     expect(screen.queryByRole("button", { name: /загрузить ещё/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /Переговоры в Испании/i })).not.toBeInTheDocument();
