@@ -173,7 +173,10 @@ deduplication and ranking stage.
 For a country or tier filter, entity/topic/story and structured branches read
 the newest 500 non-duplicate articles per matching source through
 `idx_articles_source_candidates`, then calculate the unchanged hybrid score
-inside that source-scoped snapshot window. A text-empty, language-only request
+inside that source-scoped snapshot window. The cursor's ingestion timestamp and
+maximum article ID are applied inside the index scan before its per-source
+`LIMIT`, so more than 500 later arrivals cannot displace the older page-two
+window. A text-empty, language-only request
 reads the newest 500 non-duplicate articles for that language through
 `idx_articles_language_published_id`, then applies the same exact score inside
 that window. Thus `sort=relevance` means relevance within the documented recent
@@ -199,14 +202,16 @@ GEO_PULSE_SEARCH_PERF_TEST_DATABASE_URL="$DISPOSABLE_DATABASE_URL" \
 ```
 
 The test creates 100,001 synthetic articles and runs `EXPLAIN (ANALYZE,
-BUFFERS, FORMAT JSON)` over the exact `ARTICLE_SEARCH_SQL` for four cases:
-5,000 lexical hits, a sparse topic match, language-only structured search, and
-a high-fanout entity mentioned by the whole corpus but filtered to Spain. The
-gate requires the expected GIN/language/source indexes, forbids every executed
-`Seq Scan` of `articles`, caps language and source-driven aggregate/sort work at
-500 rows, and enforces the hard two-second statement budget per query. Preserve
-the JSON plans with the release evidence; nodes under an unexecuted fallback
-branch have `Actual Loops = 0` and do not fail the gate.
+BUFFERS, FORMAT JSON)` over the exact `ARTICLE_SEARCH_SQL` for lexical, sparse
+topic, language-only, canonical-entity-plus-country, and structured
+entity-ID-plus-country requests. It then inserts 600 post-snapshot articles and
+verifies that the older 500-row country window remains available through the
+original cursor high-water marks. The gate requires the expected
+GIN/language/source indexes, forbids every executed `Seq Scan` of `articles`,
+caps language and source-driven aggregate/sort work at 500 rows, and enforces
+the hard two-second statement budget per query. Preserve the JSON plans with
+the release evidence; nodes under an unexecuted fallback branch have
+`Actual Loops = 0` and do not fail the gate.
 
 Run the remaining lookup plans separately:
 

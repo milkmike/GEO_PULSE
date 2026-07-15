@@ -220,6 +220,62 @@ def test_actual_search_plans_use_selective_indexes_and_bounded_candidates():
                 text("EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " + ARTICLE_SEARCH_SQL),
                 {**params, "q": "vladimir putin", "country": "ES"},
             ).scalar_one()
+            structured_entity_params = {
+                **params,
+                "q": "",
+                "entity_id": "00000000-0000-0000-0000-000000000001",
+                "country": "ES",
+            }
+            structured_entity_country_plan_document = connection.execute(
+                text("EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " + ARTICLE_SEARCH_SQL),
+                structured_entity_params,
+            ).scalar_one()
+            structured_entity_rows = connection.execute(
+                text(ARTICLE_SEARCH_SQL), structured_entity_params
+            ).mappings().all()
+
+            connection.execute(text("""
+                INSERT INTO articles(
+                    id, source_id, title, summary, body, url,
+                    published_at, collected_at, language, title_normalized,
+                    is_duplicate, search_vector
+                )
+                SELECT 200000 + sequence_id,
+                       1,
+                       'Post-snapshot article ' || sequence_id,
+                       'Post-snapshot summary',
+                       'Post-snapshot body',
+                       'https://example.test/post-snapshot/' || sequence_id,
+                       TIMESTAMPTZ '2026-07-16 12:00:00+00'
+                           - make_interval(secs => sequence_id),
+                       TIMESTAMPTZ '2026-07-16 12:00:00+00'
+                           - make_interval(secs => sequence_id),
+                       'es',
+                       'post snapshot article ' || sequence_id,
+                       FALSE,
+                       setweight(to_tsvector(
+                           'simple', 'Post-snapshot article ' || sequence_id
+                       ), 'A')
+                FROM generate_series(1, 600) AS generated(sequence_id);
+                ANALYZE articles;
+            """))
+            snapshot_params = {
+                **params,
+                "q": "",
+                "country": "ES",
+                "snapshot_collected_at": datetime(
+                    2026, 7, 15, 11, tzinfo=timezone.utc
+                ),
+                "snapshot_collected_article_id": 3600,
+                "snapshot_max_article_id": 100001,
+            }
+            snapshot_rows = connection.execute(
+                text(ARTICLE_SEARCH_SQL), snapshot_params
+            ).mappings().all()
+            snapshot_plan_document = connection.execute(
+                text("EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " + ARTICLE_SEARCH_SQL),
+                snapshot_params,
+            ).scalar_one()
 
         lexical_root = lexical_plan_document[0]
         lexical_nodes = [
@@ -301,5 +357,46 @@ def test_actual_search_plans_use_selective_indexes_and_bounded_candidates():
             for node in entity_country_nodes
         ), entity_country_plan_document
         assert entity_country_root["Execution Time"] < 2000, entity_country_plan_document
+
+        structured_entity_country_root = structured_entity_country_plan_document[0]
+        structured_entity_country_nodes = [
+            node for node in _walk_plan(structured_entity_country_root["Plan"])
+            if node.get("Actual Loops", 0) > 0
+        ]
+        assert len(structured_entity_rows) == 500
+        assert any(
+            node.get("Node Type") in {"Index Scan", "Index Only Scan"}
+            and node.get("Index Name") == "idx_articles_source_candidates"
+            and node.get("Actual Rows", 0) <= 500
+            for node in structured_entity_country_nodes
+        ), structured_entity_country_plan_document
+        assert not any(
+            node.get("Node Type") in {"Aggregate", "Sort", "Unique"}
+            and node.get("Actual Rows", 0) > 500
+            for node in structured_entity_country_nodes
+        ), structured_entity_country_plan_document
+        assert structured_entity_country_root["Execution Time"] < 2000, (
+            structured_entity_country_plan_document
+        )
+
+        snapshot_root = snapshot_plan_document[0]
+        snapshot_nodes = [
+            node for node in _walk_plan(snapshot_root["Plan"])
+            if node.get("Actual Loops", 0) > 0
+        ]
+        assert len(snapshot_rows) == 500
+        assert all(row["id"] <= 100001 for row in snapshot_rows)
+        assert any(
+            node.get("Node Type") in {"Index Scan", "Index Only Scan"}
+            and node.get("Index Name") == "idx_articles_source_candidates"
+            and node.get("Actual Rows", 0) <= 500
+            for node in snapshot_nodes
+        ), snapshot_plan_document
+        assert not any(
+            node.get("Node Type") == "Seq Scan"
+            and node.get("Relation Name") == "articles"
+            for node in snapshot_nodes
+        ), snapshot_plan_document
+        assert snapshot_root["Execution Time"] < 2000, snapshot_plan_document
     finally:
         engine.dispose()

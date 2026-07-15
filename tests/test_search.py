@@ -633,6 +633,29 @@ def test_search_service_uses_parameterized_hybrid_candidates_and_deterministic_r
     ]
     assert "ORDER BY a.published_at DESC, a.id DESC" in language_candidates_sql
     assert "LIMIT :candidate_limit" in language_candidates_sql
+    source_candidates_sql = sql[
+        sql.index("source_filtered_articles AS"):
+        sql.index("matching_entity_ids AS")
+    ]
+    assert source_candidates_sql.index(
+        "snapshot_state.snapshot_collected_at IS NULL"
+    ) < source_candidates_sql.index("LIMIT :candidate_limit")
+    assert source_candidates_sql.index(
+        "candidate.id <= snapshot_state.snapshot_max_article_id"
+    ) < source_candidates_sql.index("LIMIT :candidate_limit")
+    structured_entity_sql = sql[
+        sql.index("structured_entity_candidates AS"):
+        sql.index("structured_topic_candidates AS")
+    ]
+    structured_topic_sql = sql[
+        sql.index("structured_topic_candidates AS"):
+        sql.index("structured_source_candidates AS")
+    ]
+    for structured_sql in (structured_entity_sql, structured_topic_sql):
+        assert "FROM source_filtered_articles source_article" in structured_sql
+        assert "(:country IS NOT NULL OR :tier IS NOT NULL)" in structured_sql
+        assert ":country IS NULL" in structured_sql
+        assert ":tier IS NULL" in structured_sql
     assert "candidate_hybrid_score" in sql
     assert "THEN candidate_hybrid_score END DESC" in sql
     assert "ROUND((" in sql
