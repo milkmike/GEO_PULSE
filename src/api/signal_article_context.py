@@ -38,11 +38,23 @@ def load_signal_article_previews(
             """
             WITH requested_base AS (
                 SELECT signal.id AS signal_id,
+                       signal.signal_type,
                        signal.country_code,
                        signal.created_at,
                        COALESCE(evidence.article_ids, '{}'::integer[]) AS article_ids,
                        evidence.window_start AS evidence_window_start,
                        evidence.window_end AS evidence_window_end,
+                       CASE
+                           WHEN cardinality(
+                                    COALESCE(evidence.article_ids, '{}'::integer[])
+                                ) = 0
+                                AND signal.country_code IS NOT NULL
+                                AND signal.signal_type IN (
+                                    'tone_shift', 'volume_surge', 'index_shift'
+                                )
+                               THEN TRUE
+                           ELSE FALSE
+                       END AS context_eligible,
                        CASE
                            WHEN signal.signal_type IN ('tone_shift', 'volume_surge')
                                 AND gdelt_anchor.day IS NOT NULL
@@ -57,15 +69,69 @@ def load_signal_article_previews(
                     SELECT gdelt.day
                     FROM gdelt_daily gdelt
                     WHERE signal.signal_type IN ('tone_shift', 'volume_surge')
+                      AND cardinality(
+                            COALESCE(evidence.article_ids, '{}'::integer[])
+                          ) = 0
                       AND gdelt.country_code = signal.country_code
                       AND gdelt.day <= (signal.created_at AT TIME ZONE 'UTC')::date
-                    ORDER BY gdelt.day DESC
+                    ORDER BY
+                        CASE
+                            WHEN signal.signal_type = 'tone_shift'
+                                 AND jsonb_typeof(signal.payload -> 'tone') = 'number'
+                                 AND gdelt.tone_avg IS NOT NULL
+                                 AND ABS(
+                                     gdelt.tone_avg
+                                     - CASE
+                                           WHEN jsonb_typeof(
+                                               signal.payload -> 'tone'
+                                           ) = 'number'
+                                               THEN (
+                                                   signal.payload ->> 'tone'
+                                               )::numeric
+                                       END
+                                 ) <= 0.01
+                                THEN 0
+                            WHEN signal.signal_type = 'volume_surge'
+                                 AND jsonb_typeof(signal.payload -> 'share') = 'number'
+                                 AND jsonb_typeof(signal.payload -> 'volume') = 'number'
+                                 AND gdelt.volume_share IS NOT NULL
+                                 AND gdelt.volume IS NOT NULL
+                                 AND ABS(
+                                     gdelt.volume_share
+                                     - CASE
+                                           WHEN jsonb_typeof(
+                                               signal.payload -> 'share'
+                                           ) = 'number'
+                                               THEN (
+                                                   signal.payload ->> 'share'
+                                               )::numeric
+                                       END
+                                 ) <= 0.00001
+                                 AND ABS(
+                                     gdelt.volume
+                                     - CASE
+                                           WHEN jsonb_typeof(
+                                               signal.payload -> 'volume'
+                                           ) = 'number'
+                                               THEN (
+                                                   signal.payload ->> 'volume'
+                                               )::numeric
+                                       END
+                                 ) <= 0.01
+                                THEN 0
+                            ELSE 1
+                        END,
+                        gdelt.day DESC
                     LIMIT 1
                 ) gdelt_anchor ON TRUE
                 WHERE signal.id = ANY(CAST(:signal_ids AS integer[]))
             ), requested AS (
                 SELECT requested_base.*,
-                       context_end - INTERVAL '72 hours' AS context_start
+                       CASE
+                           WHEN context_eligible
+                               THEN context_end - INTERVAL '72 hours'
+                           ELSE NULL
+                       END AS context_start
                 FROM requested_base
             ), exact_candidates AS (
                 SELECT requested.signal_id,
@@ -95,16 +161,17 @@ def load_signal_article_previews(
                        title, url, published_at, source_name, country_code
                 FROM exact_ranked
                 WHERE candidate_rank <= :lim
-            ), context_windows AS (
+            ), context_windows AS MATERIALIZED (
                 SELECT DISTINCT country_code, context_start, context_end
                 FROM requested
-                WHERE cardinality(requested.article_ids) = 0
-                  AND country_code IS NOT NULL
-            ), context_candidates AS (
-                SELECT context_windows.country_code AS window_country_code,
-                       context_windows.context_start,
-                       context_windows.context_end,
-                       ar.id AS article_id,
+                WHERE context_eligible
+            ), context_pool_bounds AS (
+                SELECT MIN(context_start) AS global_start,
+                       MAX(context_end) AS global_end,
+                       ARRAY_AGG(DISTINCT country_code) AS country_codes
+                FROM context_windows
+            ), context_article_pool AS MATERIALIZED (
+                SELECT ar.id AS article_id,
                        ar.title,
                        ar.url,
                        ar.published_at,
@@ -113,15 +180,34 @@ def load_signal_article_previews(
                        analysis.action_level AS analysis_action_level,
                        ABS(analysis.sentiment) AS absolute_sentiment,
                        ar.reprint_count
-                FROM context_windows
+                FROM context_pool_bounds
                 JOIN sources source
-                  ON source.country_code = context_windows.country_code
+                  ON source.country_code = ANY(context_pool_bounds.country_codes)
                 JOIN articles ar ON ar.source_id = source.id
                 JOIN analysis analysis ON analysis.article_id = ar.id
-                WHERE ar.published_at >= context_windows.context_start
-                  AND ar.published_at < context_windows.context_end
+                WHERE context_pool_bounds.global_start IS NOT NULL
+                  AND ar.published_at >= context_pool_bounds.global_start
+                  AND ar.published_at < context_pool_bounds.global_end
                   AND ar.is_duplicate = FALSE
                   AND analysis.is_relevant = TRUE
+            ), context_candidates AS (
+                SELECT context_windows.country_code AS window_country_code,
+                       context_windows.context_start,
+                       context_windows.context_end,
+                       context_article_pool.article_id,
+                       context_article_pool.title,
+                       context_article_pool.url,
+                       context_article_pool.published_at,
+                       context_article_pool.source_name,
+                       context_article_pool.country_code,
+                       context_article_pool.analysis_action_level,
+                       context_article_pool.absolute_sentiment,
+                       context_article_pool.reprint_count
+                FROM context_windows
+                JOIN context_article_pool
+                  ON context_article_pool.country_code = context_windows.country_code
+                 AND context_article_pool.published_at >= context_windows.context_start
+                 AND context_article_pool.published_at < context_windows.context_end
             ), context_ranked AS (
                 SELECT context_candidates.*,
                        COUNT(*) OVER (
@@ -140,7 +226,7 @@ def load_signal_article_previews(
                                     article_id ASC
                        ) AS candidate_rank
                 FROM context_candidates
-            ), context_top AS (
+            ), context_top AS MATERIALIZED (
                 SELECT *
                 FROM context_ranked
                 WHERE candidate_rank <= :lim
@@ -159,7 +245,7 @@ def load_signal_article_previews(
                   ON context_top.window_country_code = requested.country_code
                  AND context_top.context_start = requested.context_start
                  AND context_top.context_end = requested.context_end
-                WHERE cardinality(requested.article_ids) = 0
+                WHERE requested.context_eligible
             ), preview_rows AS (
                 SELECT * FROM exact_previews
                 UNION ALL
@@ -169,28 +255,28 @@ def load_signal_article_previews(
                    CASE
                        WHEN cardinality(requested.article_ids) > 0
                            THEN 'evidence'
-                       WHEN requested.country_code IS NOT NULL
+                       WHEN requested.context_eligible
                            THEN 'context'
                        ELSE 'unavailable'
                    END AS kind,
                    COALESCE(preview_rows.total, 0) AS total,
                    CASE
                        WHEN cardinality(requested.article_ids) = 0
-                            AND requested.country_code IS NOT NULL
+                            AND requested.context_eligible
                            THEN 72
                        ELSE NULL
                    END AS window_hours,
                    CASE
                        WHEN cardinality(requested.article_ids) > 0
                            THEN requested.evidence_window_start
-                       WHEN requested.country_code IS NOT NULL
+                       WHEN requested.context_eligible
                            THEN requested.context_start
                        ELSE NULL
                    END AS window_start,
                    CASE
                        WHEN cardinality(requested.article_ids) > 0
                            THEN requested.evidence_window_end
-                       WHEN requested.country_code IS NOT NULL
+                       WHEN requested.context_eligible
                            THEN requested.context_end
                        ELSE NULL
                    END AS window_end,

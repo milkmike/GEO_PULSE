@@ -1,5 +1,6 @@
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+import re
 from types import SimpleNamespace
 
 import pytest
@@ -193,29 +194,42 @@ def test_signal_list_includes_context_article_preview_in_one_batch(monkeypatch):
     assert "LEFT JOIN signal_evidence" in preview_sql
     assert "WITH ORDINALITY" in preview_sql
     assert "cardinality(requested.article_ids) = 0" in preview_sql
-    assert "context_windows AS" in preview_sql
+    assert "context_windows AS MATERIALIZED" in preview_sql
     assert (
         "SELECT DISTINCT country_code, context_start, context_end FROM requested"
         in preview_sql
     )
-    assert "ar.published_at >= context_windows.context_start" in preview_sql
-    assert "ar.published_at < context_windows.context_end" in preview_sql
-    assert "ar.published_at > context_windows.context_start" not in preview_sql
-    assert "ar.published_at <= context_windows.context_end" not in preview_sql
+    assert re.search(
+        r"signal\.signal_type IN \(\s*'tone_shift', 'volume_surge', 'index_shift'\s*\)",
+        preview_sql,
+    )
+    assert "context_article_pool AS MATERIALIZED" in preview_sql
+    assert "MIN(context_start) AS global_start" in preview_sql
+    assert "MAX(context_end) AS global_end" in preview_sql
+    assert "ar.published_at >= context_pool_bounds.global_start" in preview_sql
+    assert "ar.published_at < context_pool_bounds.global_end" in preview_sql
+    assert "context_article_pool.published_at >= context_windows.context_start" in preview_sql
+    assert "context_article_pool.published_at < context_windows.context_end" in preview_sql
+    assert "context_article_pool.published_at > context_windows.context_start" not in preview_sql
+    assert "context_article_pool.published_at <= context_windows.context_end" not in preview_sql
     assert "ar.is_duplicate = FALSE" in preview_sql
     assert "analysis.is_relevant = TRUE" in preview_sql
-    assert "source.country_code = context_windows.country_code" in preview_sql
+    assert "source.country_code = ANY(context_pool_bounds.country_codes)" in preview_sql
     assert "ROW_NUMBER() OVER" in preview_sql
     assert "context_ranked AS" in preview_sql
     assert (
         "PARTITION BY window_country_code, context_start, context_end"
         in preview_sql
     )
-    assert "context_top AS" in preview_sql
+    assert "context_top AS MATERIALIZED" in preview_sql
     assert "context_previews AS" in preview_sql
     assert "JOIN context_top" in preview_sql
     assert "FROM requested LEFT JOIN LATERAL ( WITH exact_candidates AS" not in preview_sql
     assert "JOIN articles ar ON ar.source_id = source.id" in preview_sql
+    assert preview_sql.count("JOIN articles ar ON ar.source_id = source.id") == 1
+    assert "FROM context_windows JOIN articles" not in preview_sql
+    assert "FROM context_windows JOIN sources" not in preview_sql
+    assert "FROM context_windows JOIN context_article_pool" in preview_sql
     assert "LEFT JOIN candidates" not in preview_sql
     assert "evidence_ordinality ASC NULLS LAST" in preview_sql
     assert "analysis_action_level DESC NULLS LAST" in preview_sql
@@ -255,10 +269,10 @@ def test_signal_list_batches_exact_previews_and_sanitizes_urls(monkeypatch):
         SimpleNamespace(
             id=33,
             signal_type="official_silence",
-            country_code=None,
+            country_code="DE",
             severity="info",
             confidence=0.5,
-            title="Сигнал без странового контекста",
+            title="Сигнал без допустимого контекстного fallback",
             description=None,
             payload={},
             created_at=created_at,
@@ -361,7 +375,7 @@ def test_signal_list_batches_exact_previews_and_sanitizes_urls(monkeypatch):
     assert session.calls[1][1]["lim"] == 2
 
 
-def test_legacy_gdelt_signal_context_uses_latest_aggregate_day(monkeypatch):
+def test_legacy_gdelt_signal_context_prefers_payload_matching_aggregate_day(monkeypatch):
     created_at = datetime(2026, 7, 15, 12, 0, tzinfo=timezone.utc)
     signal = SimpleNamespace(
         id=3675,
@@ -419,9 +433,33 @@ def test_legacy_gdelt_signal_context_uses_latest_aggregate_day(monkeypatch):
     assert "signal.signal_type IN ('tone_shift', 'volume_surge')" in preview_sql
     assert "gdelt.day <= (signal.created_at AT TIME ZONE 'UTC')::date" in preview_sql
     assert "gdelt.day <= signal.created_at::date" not in preview_sql
-    assert "ORDER BY gdelt.day DESC" in preview_sql
+    assert "jsonb_typeof(signal.payload -> 'tone') = 'number'" in preview_sql
+    compact_preview_sql = re.sub(r"\s+", "", preview_sql)
+    assert (
+        "gdelt.tone_avg-CASEWHENjsonb_typeof(signal.payload->'tone')='number'"
+        "THEN(signal.payload->>'tone')::numericEND)<=0.01"
+        in compact_preview_sql
+    )
+    assert "jsonb_typeof(signal.payload -> 'share') = 'number'" in preview_sql
+    assert "jsonb_typeof(signal.payload -> 'volume') = 'number'" in preview_sql
+    assert (
+        "gdelt.volume_share-CASEWHENjsonb_typeof(signal.payload->'share')='number'"
+        "THEN(signal.payload->>'share')::numericEND)<=0.00001"
+        in compact_preview_sql
+    )
+    assert (
+        "gdelt.volume-CASEWHENjsonb_typeof(signal.payload->'volume')='number'"
+        "THEN(signal.payload->>'volume')::numericEND)<=0.01"
+        in compact_preview_sql
+    )
+    assert preview_sql.index("gdelt.tone_avg") < preview_sql.index("gdelt.day DESC")
+    assert "gdelt.day DESC" in preview_sql
     assert "gdelt_anchor.day::timestamp AT TIME ZONE 'UTC'" in preview_sql
     assert "+ INTERVAL '1 day'" in preview_sql
+    assert re.search(
+        r"cardinality\(\s*COALESCE\(evidence\.article_ids, '\{\}'::integer\[\]\)\s*\) = 0",
+        preview_sql,
+    )
     assert session.calls[1][1] == {"signal_ids": [3675], "lim": 2}
 
 
