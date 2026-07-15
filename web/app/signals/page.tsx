@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import SignalFeed from "@/components/SignalFeed";
+import { useFeatureFlags } from "@/components/FeatureFlagsProvider";
 import SiteHeader from "@/components/SiteHeader";
 import { api } from "@/lib/api";
 import { SIGNAL_RU } from "@/lib/format";
@@ -10,6 +11,7 @@ import type { Signal } from "@/lib/types";
 const SEVERITIES = ["critical", "warning", "info"] as const;
 
 export default function SignalsPage() {
+  const { signalDetail } = useFeatureFlags();
   const [signals, setSignals] = useState<Signal[]>([]);
   const [type, setType] = useState<string>("");
   const [severity, setSeverity] = useState<string>("");
@@ -73,7 +75,7 @@ export default function SignalsPage() {
       </div>
 
       <div className="card">
-        <SignalFeed signals={filtered} emptyText="Ничего не найдено" />
+        <SignalFeed signals={filtered} emptyText="Ничего не найдено" detailEnabled={signalDetail} />
       </div>
     </main>
   );

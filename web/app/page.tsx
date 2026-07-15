@@ -24,7 +24,7 @@ import type { Brief, CountrySummary, Headline, Meta, Signal, StoryListItem } fro
 const HOME_ORDER = ["map", "ranking", "stories", "headlines", "signals", "brief", "radar"];
 
 export default function HomePage() {
-  const { storiesNavigation } = useFeatureFlags();
+  const { storiesNavigation, signalDetail } = useFeatureFlags();
   const [countries, setCountries] = useState<CountrySummary[]>([]);
   const [signals, setSignals] = useState<Signal[]>([]);
   const [headlines, setHeadlines] = useState<Headline[]>([]);
@@ -189,7 +189,7 @@ export default function HomePage() {
             </Link>
           </div>
           <div className="max-h-[340px] overflow-y-auto">
-            <SignalFeed signals={signals.slice(0, 30)} />
+            <SignalFeed signals={signals.slice(0, 30)} detailEnabled={signalDetail} />
           </div>
         </section>
       ),
