@@ -950,6 +950,7 @@ def persist_story_cluster(
     )
     existing_matches: list[Any] = []
     reactivated_matches: list[tuple[Any, datetime, datetime]] = []
+    denied_reactivation_starts: list[datetime] = []
     for matched_row in matched_rows:
         if _value(matched_row, "lifecycle") != "resolved":
             existing_matches.append(matched_row)
@@ -965,11 +966,14 @@ def persist_story_cluster(
             continue
         if not reactivation_gate_passed:
             # Keep the resolved story closed; this cluster receives a new identity.
+            denied_reactivation_starts.append(new_activity[0])
             continue
         existing_matches.append(matched_row)
         reactivated_matches.append((matched_row, prior_last_seen, new_activity[0]))
 
     existing = existing_matches[0] if existing_matches else None
+    if existing is None and denied_reactivation_starts:
+        proposed_slug = _story_slug(candidates, min(denied_reactivation_starts))
     duplicate_story_ids = [_value(row, "id") for row in existing_matches[1:]]
     article_ids = sorted({
         int(article_id)

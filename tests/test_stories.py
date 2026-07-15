@@ -22,6 +22,7 @@ from src.stories import (
     score_story_match,
     should_merge,
     transition_lifecycle,
+    _story_slug,
 )
 
 
@@ -480,6 +481,83 @@ class ResolvedPersistenceSession(PersistenceSession):
         return FakeResult()
 
 
+class DeniedReactivationPersistenceSession(PersistenceSession):
+    def __init__(self, cluster):
+        super().__init__()
+        old_first_seen = NOW - timedelta(days=30)
+        self.old_story = SimpleNamespace(
+            id=10,
+            slug=_story_slug(cluster, old_first_seen),
+            title_ru="Resolved",
+            title_en=None,
+            summary="Resolved summary",
+            summary_model=None,
+            source_hash="old-source-hash",
+            article_count=2,
+            highest_action_level=3,
+            generated_at=NOW - timedelta(days=15),
+            lifecycle="resolved",
+            first_seen=old_first_seen,
+            last_seen=NOW - timedelta(days=15),
+            meta={"thread_ids": [1, 2]},
+            article_overlap=2,
+            thread_overlap=2,
+            member_article_ids=[90, 91],
+        )
+        self.active_story = None
+
+    def execute(self, statement, params=None):
+        sql = str(statement)
+        params = params or {}
+        self.statements.append(sql)
+        self.calls.append((sql, params))
+        if "SELECT st.id, st.slug" in sql:
+            rows = (
+                [self.active_story, self.old_story]
+                if self.active_story is not None
+                else [self.old_story]
+            )
+            return FakeResult(rows=rows, row=rows[0])
+        if "UPDATE stories SET" in sql and "RETURNING id" in sql:
+            return FakeResult(row=(params["story_id"],))
+        if "INSERT INTO stories" in sql:
+            if params["slug"] == self.old_story.slug:
+                return FakeResult(row=None)
+            self.active_story = SimpleNamespace(
+                id=42,
+                slug=params["slug"],
+                title_ru=params["title_ru"],
+                title_en=params["title_en"],
+                summary=params["summary"],
+                summary_model=params["summary_model"],
+                source_hash=params["source_hash"],
+                article_count=params["article_count"],
+                highest_action_level=params["highest_action_level"],
+                generated_at=params["generated_at"],
+                lifecycle=params["lifecycle"],
+                first_seen=params["first_seen"],
+                last_seen=params["last_seen"],
+                meta=json.loads(params["meta"]),
+                article_overlap=4,
+                thread_overlap=2,
+                member_article_ids=[1, 2, 90, 91],
+            )
+            return FakeResult(row=(42,))
+        return FakeResult()
+
+
+class IndependentSlugCollisionSession(PersistenceSession):
+    def execute(self, statement, params=None):
+        sql = str(statement)
+        self.statements.append(sql)
+        self.calls.append((sql, params or {}))
+        if "SELECT st.id, st.slug" in sql:
+            return FakeResult(row=None)
+        if "INSERT INTO stories" in sql:
+            return FakeResult(row=None)
+        return FakeResult()
+
+
 def story_row(story_id: int, *, last_seen: datetime = NOW):
     return SimpleNamespace(
         id=story_id,
@@ -911,6 +989,16 @@ def test_independent_clusters_cannot_share_or_overwrite_story_identity():
     assert "ON CONFLICT (slug) DO NOTHING" in first_insert[0]
 
 
+def test_genuinely_independent_slug_collision_is_not_silently_reused():
+    session = IndependentSlugCollisionSession()
+
+    with pytest.raises(
+        RuntimeError,
+        match="Story slug collision without article or thread identity overlap",
+    ):
+        persist_story_cluster(session, [candidate("AZ"), candidate("KZ")], now=NOW)
+
+
 def test_persistence_recomputes_header_counts_from_saved_memberships():
     session = PersistenceSession()
 
@@ -1078,6 +1166,64 @@ def test_resolved_story_without_entity_gate_stays_closed_and_new_story_is_create
         "UPDATE stories SET" in sql and "RETURNING id" in sql
         for sql in session.statements
     )
+
+
+def test_denied_reactivation_uses_new_activity_epoch_and_is_idempotent():
+    cluster = [
+        replace(
+            candidate(
+                "AZ",
+                entities=frozenset(),
+                first_seen=NOW - timedelta(days=30),
+                last_seen=NOW,
+            ),
+            article_ids=(1, 90),
+            articles=(
+                StoryArticle(
+                    90, "AZ", "Old AZ", None,
+                    NOW - timedelta(days=30), "source-az-old",
+                ),
+                StoryArticle(1, "AZ", "New AZ", None, NOW, "source-az-new"),
+            ),
+        ),
+        replace(
+            candidate(
+                "KZ",
+                entities=frozenset(),
+                first_seen=NOW - timedelta(days=15),
+                last_seen=NOW,
+            ),
+            article_ids=(2, 91),
+            articles=(
+                StoryArticle(
+                    91, "KZ", "Old KZ", None,
+                    NOW - timedelta(days=15), "source-kz-old",
+                ),
+                StoryArticle(2, "KZ", "New KZ", None, NOW, "source-kz-new"),
+            ),
+        ),
+    ]
+    session = DeniedReactivationPersistenceSession(cluster)
+
+    first_story_id, _ = persist_story_cluster(session, cluster, now=NOW)
+    first_slug = session.active_story.slug
+    second_story_id, _ = persist_story_cluster(session, cluster, now=NOW)
+
+    story_inserts = [
+        params for sql, params in session.calls if "INSERT INTO stories" in sql
+    ]
+    updated_story_ids = {
+        params.get("story_id")
+        for sql, params in session.calls
+        if "UPDATE stories SET" in sql and "RETURNING id" in sql
+    }
+    assert first_story_id == second_story_id == 42
+    assert first_slug != session.old_story.slug
+    assert first_slug.startswith(f"story-{NOW.date().isoformat()}-")
+    assert len(story_inserts) == 1
+    assert session.active_story.slug == first_slug
+    assert session.old_story.lifecycle == "resolved"
+    assert 10 not in updated_story_ids
 
 
 def test_background_builder_derives_reactivation_pairs_from_resolved_story(monkeypatch):
