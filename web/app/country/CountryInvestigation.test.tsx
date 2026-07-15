@@ -11,6 +11,12 @@ const navigation = vi.hoisted(() => ({
   replace: vi.fn(),
   query: "foo=bar",
 }));
+const panelState = vi.hoisted(() => ({ last: null as null | {
+  open: boolean;
+  at: string | null;
+  triggerRef: { current: HTMLElement | null };
+  fallbackFocusRef: { current: HTMLElement | null };
+} }));
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: navigation.push, replace: navigation.replace }),
   usePathname: () => "/country/es",
@@ -35,7 +41,15 @@ vi.mock("@/components/Plot", () => ({
   },
 }));
 vi.mock("@/components/InvestigationPanel", () => ({
-  default: ({ open, at }: { open: boolean; at: string | null }) => open ? <div data-testid="investigation-panel">{at}</div> : null,
+  default: (props: {
+    open: boolean;
+    at: string | null;
+    triggerRef: { current: HTMLElement | null };
+    fallbackFocusRef: { current: HTMLElement | null };
+  }) => {
+    panelState.last = props;
+    return props.open ? <div data-testid="investigation-panel">{props.at}</div> : null;
+  },
 }));
 vi.mock("@/components/AgreementsPanel", () => ({ default: () => null }));
 vi.mock("@/components/Markdown", () => ({ default: () => null }));
@@ -81,6 +95,7 @@ describe("country investigation flow", () => {
     navigation.query = "foo=bar";
     navigation.push.mockReset();
     navigation.replace.mockReset();
+    panelState.last = null;
     Object.values(apiMocks).forEach((mock) => mock.mockReset());
     apiMocks.dossier.mockResolvedValue(dossier);
     apiMocks.topics.mockResolvedValue({ topics: [] });
@@ -98,11 +113,13 @@ describe("country investigation flow", () => {
     await renderCountry(true);
     const marker = (await screen.findAllByRole("button", { name: /15 июл.*дневными точками RRI.*\+8,0/i }))[0];
     await user.click(marker);
+    expect(panelState.last?.triggerRef.current).toBe(marker);
     expect(navigation.push).toHaveBeenLastCalledWith(
       "/country/es?foo=bar&at=2026-07-15T20%3A00%3A00Z",
     );
 
     await user.click(screen.getByRole("button", { name: "plot marker" }));
+    expect(panelState.last?.triggerRef.current).toBeNull();
     expect(navigation.push).toHaveBeenLastCalledWith(
       "/country/es?foo=bar&at=2026-07-15T20%3A00%3A00Z",
     );
@@ -112,6 +129,8 @@ describe("country investigation flow", () => {
     navigation.query = "foo=bar&at=2026-07-15T20%3A00%3A00Z";
     await renderCountry(true);
     expect(await screen.findByTestId("investigation-panel")).toHaveTextContent("2026-07-15T20:00:00Z");
+    expect(panelState.last?.triggerRef.current).toBeNull();
+    expect(panelState.last?.fallbackFocusRef.current).toHaveTextContent(/индекс и термометр/i);
 
     navigation.query = "foo=bar&at=2026-07-15T20%3A00%3A00";
     await renderCountry(true);

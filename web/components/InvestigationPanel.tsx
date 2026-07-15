@@ -24,7 +24,46 @@ const LIMITATION_LABELS: Record<string, string> = {
     "Материалы находятся рядом по времени и не доказывают причинность.",
   article_level_inputs_unavailable:
     "Для части периода не сохранены входы на уровне отдельных публикаций.",
+  counterfactual_requires_article_temperature_media:
+    "Контрфактическая оценка доступна только для медиаслоя, рассчитанного по публикациям.",
+  counterfactual_reconstructs_media_window_not_historical_input_snapshot:
+    "Медиаокно восстановлено из доступных публикаций; исторический снимок входов не сохранялся.",
+  counterfactual_article_inputs_missing:
+    "Для контрфактической оценки не найдены сохранённые входные публикации.",
+  counterfactual_event_clusters_unavailable:
+    "В доступных публикациях нет пригодных кластеров событий для контрфактической оценки.",
 };
+
+const REASON_LABELS: Record<string, string> = {
+  article_inputs_missing: "Для реконструкции нет сохранённых входных публикаций.",
+  event_cluster_not_found: "Запрошенный кластер события не найден среди входных публикаций.",
+  counterfactual_inputs_insufficient: "После исключения кластера недостаточно данных для сравнения.",
+  media_component_not_article_temperature:
+    "Медиаслой этой точки RRI рассчитан не по публикациям, поэтому контрфактическая оценка неприменима.",
+};
+
+const WHY_LABELS: Record<string, string> = {
+  event_cluster_present_in_reconstructed_temperature_window:
+    "Кластер события найден в восстановленном окне публикаций термометра.",
+  counterfactual_requested_for_event_cluster:
+    "Для кластера запрошена проверка сценария без связанных публикаций.",
+  counterfactual_status_disclosed_for_selected_rri_window:
+    "Статус контрфактической оценки раскрыт для выбранного окна RRI.",
+  published_in_selected_window: "Материал опубликован в запрошенном временном окне.",
+};
+
+const CONTEXT_LABELS: Record<string, string> = {
+  published_or_active_in_selected_window:
+    "Материал был опубликован или оставался активным и попал в запрошенное временное окно.",
+  published_in_selected_window: "Материал опубликован в запрошенном временном окне.",
+};
+
+function codeLabel(labels: Record<string, string>, value: string | undefined, kind: string): string {
+  if (!value) return `${kind} не сохранено.`;
+  if (labels[value]) return labels[value];
+  if (/\s/u.test(value)) return value;
+  return `${kind} не распознано (код: ${value}).`;
+}
 
 const fmtSigned = (value: number, digits = 1) =>
   `${value > 0 ? "+" : value < 0 ? "−" : ""}${Math.abs(value).toLocaleString("ru-RU", {
@@ -35,6 +74,23 @@ const fmtSigned = (value: number, digits = 1) =>
 const fmtTime = (value: string) => new Date(value).toLocaleString("ru-RU", {
   day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit",
 });
+
+function isConnectedFocusTarget(value: Element | null | undefined): value is HTMLElement {
+  if (!(value instanceof HTMLElement) || !value.isConnected) return false;
+  if (value === document.body || value === document.documentElement) return false;
+  if (value.hidden || value.closest("[inert], [aria-hidden='true']")) return false;
+  return true;
+}
+
+function isRestorableActiveElement(value: Element | null | undefined): value is HTMLElement {
+  if (!isConnectedFocusTarget(value)) return false;
+  if (value instanceof HTMLButtonElement || value instanceof HTMLInputElement
+    || value instanceof HTMLSelectElement || value instanceof HTMLTextAreaElement) {
+    return !value.disabled;
+  }
+  if (value instanceof HTMLAnchorElement) return Boolean(value.href);
+  return value.tabIndex >= 0;
+}
 
 function ContextLink({ item }: { item: IndexExplanation["context"][number] }) {
   const { storiesNavigation, signalDetail } = useFeatureFlags();
@@ -102,8 +158,15 @@ export default function InvestigationPanel({
 
   useEffect(() => {
     if (!open) return;
-    restoreRef.current = triggerRef?.current
-      ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
+    const trigger = triggerRef?.current;
+    const activeElement = document.activeElement;
+    restoreRef.current = isRestorableActiveElement(trigger)
+      ? trigger
+      : isRestorableActiveElement(activeElement)
+        ? activeElement
+        : isConnectedFocusTarget(fallbackFocusRef?.current)
+          ? fallbackFocusRef.current
+          : null;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     queueMicrotask(() => closeRef.current?.focus());
@@ -133,9 +196,11 @@ export default function InvestigationPanel({
     return () => {
       document.removeEventListener("keydown", handleKeyDown);
       document.body.style.overflow = previousOverflow;
-      const target = restoreRef.current?.isConnected
+      const target = isRestorableActiveElement(restoreRef.current)
         ? restoreRef.current
-        : fallbackFocusRef?.current;
+        : isConnectedFocusTarget(fallbackFocusRef?.current)
+          ? fallbackFocusRef.current
+          : null;
       queueMicrotask(() => target?.focus());
     };
   }, [open]);
@@ -206,13 +271,16 @@ export default function InvestigationPanel({
 
           {explanation && exact && (
             <>
-              <div className="flex flex-wrap gap-2 text-xs text-dim">
-                <span>{fmtTime(explanation.from_time)} → {fmtTime(explanation.to_time)}</span>
+              <section role="region" aria-label="Запрошенное окно" className="flex flex-wrap gap-2 text-xs text-dim">
+                <span>
+                  Запрошенное окно: <time dateTime={explanation.from_time}>{fmtTime(explanation.from_time)}</time>
+                  {" → "}<time dateTime={explanation.to_time}>{fmtTime(explanation.to_time)}</time>
+                </span>
                 <span>· {explanation.rri_version}</span>
                 {explanation.evidence_completeness === "partial" && (
                   <span className="rounded-full border border-cooling px-2 py-0.5 text-cooling">частичные доказательства</span>
                 )}
-              </div>
+              </section>
 
               <section role="region" aria-labelledby={`${headingId}-exact`} className="rounded-lg border border-ally/40 bg-ally/5 p-4">
                 <div className="flex items-baseline justify-between gap-4">
@@ -220,7 +288,11 @@ export default function InvestigationPanel({
                   <strong className="tnum text-xl text-ally">{fmtSigned(exact.total_delta)}</strong>
                 </div>
                 <p className="mt-1 text-xs text-dim">
-                  Точные сохранённые снимки за 24 часа: {fmtSigned(exact.from_value)} → {fmtSigned(exact.to_value)}
+                  Сохранённые точки расчёта: {fmtSigned(exact.from_value)} → {fmtSigned(exact.to_value)}
+                </p>
+                <p className="mt-1 text-xs text-dim">
+                  Фактические точки RRI: <time dateTime={exact.from_time}>{fmtTime(exact.from_time)}</time>
+                  {" → "}<time dateTime={exact.to_time}>{fmtTime(exact.to_time)}</time>
                 </p>
                 <dl className="mt-3 grid grid-cols-2 gap-2 text-sm">
                   {[
@@ -260,7 +332,14 @@ export default function InvestigationPanel({
                           ? <span className="tnum text-cooling">{fmtSigned(item.estimated_delta)}</span>
                           : <span className="text-xs text-dim">оценка пропущена</span>}
                       </div>
-                      <p className="mt-1 text-xs text-dim">{item.status === "omitted" ? item.reason : item.why_included}</p>
+                      <p className="mt-1 text-xs text-dim">
+                        {codeLabel(WHY_LABELS, item.why_included, "Основание включения")}
+                      </p>
+                      {item.status === "omitted" && (
+                        <p className="mt-1 text-xs text-cooling">
+                          Оценка пропущена: {codeLabel(REASON_LABELS, item.reason, "Причина")}
+                        </p>
+                      )}
                       {item.confidence != null && <p className="mt-1 text-[11px] text-dim">Уверенность: {Math.round(item.confidence * 100)}%</p>}
                     </article>
                   ))}
@@ -277,7 +356,9 @@ export default function InvestigationPanel({
                   {explanation.context.map((item) => (
                     <li key={`${item.scope}-${item.id}`} className="rounded bg-panel2 px-3 py-3 text-sm">
                       <ContextLink item={item} />
-                      <div className="mt-1 text-xs leading-relaxed text-dim">{item.why_included}</div>
+                      <div className="mt-1 text-xs leading-relaxed text-dim">
+                        {codeLabel(CONTEXT_LABELS, item.why_included, "Основание контекста")}
+                      </div>
                       {item.occurred_at && <time className="mt-1 block text-[11px] text-dim" dateTime={item.occurred_at}>{fmtTime(item.occurred_at)}</time>}
                     </li>
                   ))}
@@ -288,7 +369,9 @@ export default function InvestigationPanel({
                 <section aria-labelledby={`${headingId}-limitations`} className="border-t border-line pt-4">
                   <h3 id={`${headingId}-limitations`} className="card-title">Ограничения</h3>
                   <ul className="mt-2 list-disc space-y-1 pl-5 text-xs leading-relaxed text-dim">
-                    {explanation.limitations.map((item) => <li key={item}>{LIMITATION_LABELS[item] ?? item.replaceAll("_", " ")}</li>)}
+                    {explanation.limitations.map((item) => (
+                      <li key={item}>{codeLabel(LIMITATION_LABELS, item, "Ограничение методики")}</li>
+                    ))}
                   </ul>
                 </section>
               )}
