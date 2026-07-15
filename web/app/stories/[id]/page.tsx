@@ -173,6 +173,11 @@ export default function StoryDetailPage({ params }: { params: Promise<{ id: stri
   }
 
   if (!story) return null;
+  const rriShifts = story.rri_shifts?.length
+    ? story.rri_shifts
+    : story.latest_rri_shift
+      ? [story.latest_rri_shift]
+      : [];
 
   return (
     <main className="mx-auto max-w-[1240px] px-3 pb-16">
@@ -274,10 +279,17 @@ export default function StoryDetailPage({ params }: { params: Promise<{ id: stri
         <section className="card p-4" aria-labelledby="story-context-title">
           <div className="flex items-center gap-2 text-dim"><Gauge aria-hidden="true" size={14} /><p className="card-title">контекст и ограничения</p></div>
           <h2 id="story-context-title" className="sr-only">Контекст и ограничения</h2>
-          {story.latest_rri_shift ? (
+          {rriShifts.length ? (
             <div className="mt-3 rounded-md border border-ru-blue/30 bg-bg/50 p-3">
-              <p className="text-sm font-semibold">Временной контекст RRI · {story.latest_rri_shift.country_name} · <span className="tnum">{signed(story.latest_rri_shift.delta_24h)}</span></p>
-              <p className="mt-1 text-xs leading-5 text-dim">{story.latest_rri_shift.limitation}</p>
+              <p className="text-sm font-semibold">Временной контекст RRI · значимые сдвиги рядом с сюжетом</p>
+              <ul className="mt-2 space-y-2">
+                {rriShifts.map((shift) => (
+                  <li key={`${shift.country_code}-${shift.at}`} className="border-t border-line pt-2 first:border-0 first:pt-0">
+                    <p className="text-xs font-semibold">{shift.country_name} · <span className="tnum">{signed(shift.delta_24h)}</span></p>
+                    <p className="mt-1 text-xs leading-5 text-dim">{shift.limitation}</p>
+                  </li>
+                ))}
+              </ul>
             </div>
           ) : <p className="mt-3 text-xs text-dim">Сопоставимого изменения RRI в окне сюжета нет.</p>}
           <ul className="mt-4 space-y-2 text-xs leading-5 text-dim">

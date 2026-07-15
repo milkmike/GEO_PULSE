@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useEffect, useMemo, useState } from "react";
+import { use, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import SiteHeader from "@/components/SiteHeader";
 import AgreementsPanel from "@/components/AgreementsPanel";
@@ -64,6 +64,7 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
   const [countryStories, setCountryStories] = useState<StoryListItem[]>([]);
   const [storiesState, setStoriesState] = useState<"loading" | "ready" | "error">("loading");
   const [storiesReload, setStoriesReload] = useState(0);
+  const activeStoriesRequest = useRef("");
 
   useEffect(() => {
     setBrief(null);
@@ -80,14 +81,32 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
   }, [cc]);
 
   useEffect(() => {
-    if (!storiesNavigation) return;
+    if (!storiesNavigation) {
+      activeStoriesRequest.current = "";
+      setCountryStories([]);
+      return;
+    }
+    const controller = new AbortController();
+    const requestKey = `${cc}:${storiesReload}`;
+    activeStoriesRequest.current = requestKey;
     setStoriesState("loading");
-    api.countryStories(cc, { limit: 6 })
+    setCountryStories([]);
+    api.countryStories(cc, { limit: 6 }, null, controller.signal)
       .then((payload) => {
+        if (controller.signal.aborted || activeStoriesRequest.current !== requestKey || payload.country !== cc) return;
         setCountryStories(payload.stories.slice(0, 6));
         setStoriesState("ready");
       })
-      .catch(() => setStoriesState("error"));
+      .catch((reason: unknown) => {
+        if (
+          !controller.signal.aborted
+          && activeStoriesRequest.current === requestKey
+          && !(reason instanceof DOMException && reason.name === "AbortError")
+        ) {
+          setStoriesState("error");
+        }
+      });
+    return () => controller.abort();
   }, [cc, storiesNavigation, storiesReload]);
 
   const generateBrief = () => {

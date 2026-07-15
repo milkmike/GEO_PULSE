@@ -384,6 +384,14 @@ export interface StoryListItem {
 export interface StoriesListResponse {
   stories: StoryListItem[];
   next_cursor: string | null;
+  coverage?: StoryCoverage;
+}
+
+export interface StoryCoverage {
+  selected_from: string | null;
+  selected_to: string | null;
+  available_from: string | null;
+  available_to: string | null;
 }
 
 export interface CountryStoriesResponse extends StoriesListResponse {
@@ -434,6 +442,7 @@ export interface StoryDetailResponse extends Omit<StoryListItem, "countries"> {
   countries: StoryCountrySlice[];
   entities: StoryEntityEvidence[];
   events: StoryEventEvidence[];
+  rri_shifts: StoryRriShift[];
   articles: StoryArticleEvidence[];
   articles_next_cursor: string | null;
   redirected_from_story_id: number | null;

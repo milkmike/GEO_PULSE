@@ -2,6 +2,7 @@
 
 import {
   FormEvent,
+  KeyboardEvent,
   Suspense,
   useEffect,
   useMemo,
@@ -16,6 +17,7 @@ import { api } from "@/lib/api";
 import type {
   EntitySuggestion,
   Meta,
+  StoryCoverage,
   StoriesRequest,
   StoryLifecycle,
   StoryListItem,
@@ -100,6 +102,23 @@ function isAbort(reason: unknown): boolean {
   return reason instanceof DOMException && reason.name === "AbortError";
 }
 
+function periodLabel(period: Period): string {
+  if (period === "all") return "всё доступное время";
+  return `последние ${PERIOD_DAYS[period]} дней`;
+}
+
+function shortDate(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return new Intl.DateTimeFormat("ru-RU", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(date);
+}
+
 function StoriesPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -119,6 +138,8 @@ function StoriesPageContent() {
   const [suggestions, setSuggestions] = useState<EntitySuggestion[]>([]);
   const [suggestionsOpen, setSuggestionsOpen] = useState(false);
   const [suggestionsLoading, setSuggestionsLoading] = useState(false);
+  const [activeSuggestion, setActiveSuggestion] = useState(-1);
+  const [coverage, setCoverage] = useState<StoryCoverage | null>(null);
   const loadMoreController = useRef<AbortController | null>(null);
   const activeParamsKey = useRef(paramsKey);
   activeParamsKey.current = paramsKey;
@@ -133,6 +154,7 @@ function StoriesPageContent() {
     setEntityQuery(nextDraft.entity_label);
     setSuggestions([]);
     setSuggestionsOpen(false);
+    setActiveSuggestion(-1);
   }, [paramsKey]);
 
   useEffect(() => {
@@ -154,6 +176,7 @@ function StoriesPageContent() {
     if (query.length < 2 || query === draft.entity_label) {
       setSuggestions([]);
       setSuggestionsOpen(false);
+      setActiveSuggestion(-1);
       setSuggestionsLoading(false);
       return;
     }
@@ -165,6 +188,7 @@ function StoriesPageContent() {
           if (controller.signal.aborted) return;
           setSuggestions(payload.items);
           setSuggestionsOpen(payload.items.length > 0);
+          setActiveSuggestion(-1);
         })
         .catch((reason: unknown) => {
           if (!isAbort(reason)) {
@@ -189,11 +213,13 @@ function StoriesPageContent() {
     setError(null);
     setStories([]);
     setNextCursor(null);
+    setCoverage(null);
     api.stories(request, null, controller.signal)
       .then((payload) => {
         if (controller.signal.aborted || activeParamsKey.current !== paramsKey) return;
         setStories(payload.stories);
         setNextCursor(payload.next_cursor);
+        setCoverage(payload.coverage ?? null);
       })
       .catch((reason: unknown) => {
         if (!isAbort(reason)) {
@@ -228,6 +254,36 @@ function StoriesPageContent() {
     }));
     setEntityQuery(entity.label);
     setSuggestionsOpen(false);
+    setActiveSuggestion(-1);
+  }
+
+  function entityKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key === "Escape") {
+      setSuggestionsOpen(false);
+      setActiveSuggestion(-1);
+      return;
+    }
+    if (!suggestions.length) return;
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setSuggestionsOpen(true);
+      setActiveSuggestion((current) => (
+        !suggestionsOpen || current < 0 ? 0 : (current + 1) % suggestions.length
+      ));
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setSuggestionsOpen(true);
+      setActiveSuggestion((current) => (
+        !suggestionsOpen || current < 0
+          ? suggestions.length - 1
+          : current === 0
+            ? suggestions.length - 1
+            : current - 1
+      ));
+    } else if (event.key === "Enter" && suggestionsOpen && activeSuggestion >= 0) {
+      event.preventDefault();
+      chooseEntity(suggestions[activeSuggestion]);
+    }
   }
 
   async function more() {
@@ -257,6 +313,10 @@ function StoriesPageContent() {
       }
     }
   }
+
+  const selectedPeriodLabel = periodLabel(periodFromParams(params));
+  const indexedFrom = shortDate(coverage?.available_from);
+  const indexedTo = shortDate(coverage?.available_to);
 
   return (
     <main className="mx-auto max-w-[1240px] px-3 pb-16">
@@ -353,15 +413,22 @@ function StoriesPageContent() {
                 id="story-entity"
                 role="combobox"
                 aria-label="Сущность"
+                aria-autocomplete="list"
                 aria-expanded={suggestionsOpen}
                 aria-controls="story-entity-options"
+                aria-activedescendant={activeSuggestion >= 0 ? `story-entity-option-${activeSuggestion}` : undefined}
                 value={entityQuery}
                 onChange={(event) => {
                   setEntityQuery(event.target.value);
                   setDraft((current) => ({ ...current, entity_id: "", entity_label: "" }));
+                  setActiveSuggestion(-1);
                 }}
                 onFocus={() => setSuggestionsOpen(suggestions.length > 0)}
-                onBlur={() => setSuggestionsOpen(false)}
+                onBlur={() => {
+                  setSuggestionsOpen(false);
+                  setActiveSuggestion(-1);
+                }}
+                onKeyDown={entityKeyDown}
                 placeholder="Путин, Мадрид…"
                 className="min-h-11 w-full rounded-md border border-line bg-panel2 pl-8 pr-8 text-base text-fg outline-none focus:border-accent sm:text-xs"
               />
@@ -382,15 +449,19 @@ function StoriesPageContent() {
             </div>
             {suggestionsOpen && (
               <div id="story-entity-options" role="listbox" className="absolute inset-x-0 top-full z-30 mt-1 overflow-hidden rounded-md border border-line bg-panel shadow-2xl">
-                {suggestions.map((entity) => (
+                {suggestions.map((entity, index) => (
                   <button
                     key={entity.id}
+                    id={`story-entity-option-${index}`}
                     type="button"
                     role="option"
-                    aria-selected={draft.entity_id === entity.id}
+                    tabIndex={-1}
+                    aria-selected={index === activeSuggestion}
                     onPointerDown={(event) => event.preventDefault()}
                     onClick={() => chooseEntity(entity)}
-                    className="flex min-h-11 w-full items-center justify-between border-b border-line px-3 text-left text-sm last:border-0 hover:bg-white/5"
+                    className={`flex min-h-11 w-full items-center justify-between border-b border-line px-3 text-left text-sm last:border-0 ${
+                      index === activeSuggestion ? "bg-ru-blue/15 text-ru-white" : "hover:bg-white/5"
+                    }`}
                   >
                     <span>{entity.label}</span><span className="tnum text-[9px] uppercase text-dim">{entity.kind}</span>
                   </button>
@@ -435,8 +506,14 @@ function StoriesPageContent() {
           <div className="border-y border-line py-12 text-center">
             <p className="display text-[26px]">По этой линзе сюжетов пока нет</p>
             <p className="mx-auto mt-2 max-w-xl text-[12px] leading-5 text-dim">
-              Уберите один из фильтров или расширьте период. Сюжет появляется только после подтверждения связи материалами как минимум из двух стран.
+              Выбранный период: {selectedPeriodLabel}. Уберите один из фильтров или расширьте период.
+              Сюжет появляется только после подтверждения связи материалами как минимум из двух стран.
             </p>
+            {indexedFrom && indexedTo && (
+              <p className="tnum mt-2 text-[10px] uppercase tracking-[0.08em] text-dim">
+                Проиндексированное покрытие: {indexedFrom}–{indexedTo}
+              </p>
+            )}
           </div>
         )}
         {!loading && stories.length > 0 && (

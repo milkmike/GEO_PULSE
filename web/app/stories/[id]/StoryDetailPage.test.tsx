@@ -52,6 +52,30 @@ const detail: StoryDetailResponse = {
     why_included: "rri_point_within_story_window",
     limitation: "Временное совпадение с сюжетом не доказывает причинность.",
   },
+  rri_shifts: [
+    {
+      country_code: "ES",
+      country_name: "Испания",
+      at: "2026-07-15T10:00:00+00:00",
+      score: -12,
+      delta_24h: -8,
+      version: "v1",
+      relation: "temporal_context",
+      why_included: "rri_point_within_story_window",
+      limitation: "Временное совпадение с сюжетом не доказывает причинность.",
+    },
+    {
+      country_code: "RU",
+      country_name: "Россия",
+      at: "2026-07-14T10:00:00+00:00",
+      score: 7,
+      delta_24h: 4,
+      version: "v1",
+      relation: "temporal_context",
+      why_included: "rri_point_within_story_window",
+      limitation: "Временное совпадение с сюжетом не доказывает причинность.",
+    },
+  ],
   countries: [
     {
       country_code: "ES",
@@ -126,7 +150,10 @@ describe("StoryDetailPage", () => {
     expect(screen.getByText("Сдвиг индекса Испании")).toBeVisible();
     expect(screen.queryByRole("link", { name: /Сдвиг индекса Испании/i })).not.toBeInTheDocument();
     expect(screen.getByText(/Временной контекст RRI/i)).toBeVisible();
-    expect(screen.getByText(/не доказывает причинность/i)).toBeVisible();
+    expect(screen.getByText((_, element) => (
+      element?.tagName === "P" && element.textContent?.startsWith("Россия · +4") === true
+    ))).toBeVisible();
+    expect(screen.getAllByText(/не доказывает причинность/i).length).toBeGreaterThanOrEqual(2);
     expect(screen.getByText(/достоверность группировки/i)).toHaveTextContent("84%");
     expect(screen.getByText(/алгоритмическая группировка/i)).toBeVisible();
     expect(screen.getByText(/межстрановое покрытие/i)).toBeVisible();

@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StoriesListResponse, StoryListItem } from "@/lib/types";
@@ -130,6 +130,66 @@ describe("StoriesPage durable filters", () => {
     ).toHaveAttribute("href", "/stories/42");
     expect(screen.getByRole("combobox", { name: /сущность/i })).toHaveValue(
       "Владимир Путин",
+    );
+  });
+
+  it("supports active-descendant keyboard selection for entity suggestions", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    navigation.params = "period=all";
+    apiMocks.entitySuggestions.mockResolvedValue({
+      items: [{
+        id: "person-putin",
+        node_id: "entity:person-putin",
+        kind: "person",
+        label: "Владимир Путин",
+        aliases: ["Путин"],
+        match_explanation: "alias",
+      }],
+      limit: 8,
+      offset: 0,
+      has_more: false,
+      next_cursor: null,
+    });
+
+    render(<StoriesPage />);
+    const combobox = screen.getByRole("combobox", { name: /сущность/i });
+    expect(combobox).toHaveAttribute("aria-autocomplete", "list");
+    await user.type(combobox, "Путин");
+    await act(async () => vi.advanceTimersByTime(300));
+    const option = await screen.findByRole("option", { name: /Владимир Путин/i });
+    expect(option).toHaveAttribute("tabindex", "-1");
+
+    await user.keyboard("{ArrowDown}");
+    expect(combobox).toHaveAttribute("aria-activedescendant", option.id);
+    await user.keyboard("{Enter}");
+    expect(combobox).toHaveValue("Владимир Путин");
+    expect(combobox).toHaveAttribute("aria-expanded", "false");
+
+    combobox.focus();
+    await user.keyboard("{Escape}");
+    expect(combobox).not.toHaveAttribute("aria-activedescendant");
+    fireEvent.blur(combobox);
+    expect(combobox).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("shows the selected and actually indexed coverage in an empty result", async () => {
+    navigation.params = "period=7d";
+    apiMocks.stories.mockResolvedValue({
+      ...response(),
+      coverage: {
+        selected_from: "2026-07-08T00:00:00+00:00",
+        selected_to: "2026-07-15T23:59:59.999000+00:00",
+        available_from: "2026-01-10T08:00:00+00:00",
+        available_to: "2026-07-15T11:30:00+00:00",
+      },
+    });
+
+    render(<StoriesPage />);
+
+    expect(await screen.findByText(/выбранный период: последние 7 дней/i)).toBeVisible();
+    expect(screen.getByText(/проиндексированное покрытие:/i)).toHaveTextContent(
+      "10.01.2026–15.07.2026",
     );
   });
 

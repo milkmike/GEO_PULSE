@@ -63,6 +63,14 @@ const dossier: Dossier = {
   index_history: [], temperature_history: [], gdelt: [], signals: [],
 };
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
 describe("story placements", () => {
   beforeEach(() => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
@@ -123,6 +131,45 @@ describe("story placements", () => {
 
     expect(await screen.findByRole("region", { name: /сюжеты с участием страны: Испания/i })).toBeVisible();
     expect(screen.getByText(/пока нет межстрановых сюжетов/i)).toBeVisible();
-    await waitFor(() => expect(apiMocks.countryStories).toHaveBeenCalledWith("ES", { limit: 6 }));
+    await waitFor(() => expect(apiMocks.countryStories).toHaveBeenCalledWith(
+      "ES",
+      { limit: 6 },
+      null,
+      expect.any(AbortSignal),
+    ));
+  });
+
+  it("aborts and ignores an ES story response after navigation to FR", async () => {
+    const es = deferred<{ country: string; name: string; stories: StoryListItem[]; next_cursor: null }>();
+    const fr = deferred<{ country: string; name: string; stories: StoryListItem[]; next_cursor: null }>();
+    apiMocks.countryStories.mockImplementation((code: string) => (
+      code === "ES" ? es.promise : fr.promise
+    ));
+    const flags = { searchNavigation: false, storiesNavigation: true, investigation: false, signalDetail: false };
+    let view!: ReturnType<typeof render>;
+    await act(async () => {
+      view = render(
+        <FeatureFlagsProvider flags={flags}>
+          <CountryPage params={Promise.resolve({ code: "es" })} />
+        </FeatureFlagsProvider>,
+      );
+    });
+    await waitFor(() => expect(apiMocks.countryStories).toHaveBeenCalledTimes(1));
+    const esSignal = apiMocks.countryStories.mock.calls[0][3] as AbortSignal;
+
+    await act(async () => {
+      view.rerender(
+        <FeatureFlagsProvider flags={flags}>
+          <CountryPage params={Promise.resolve({ code: "fr" })} />
+        </FeatureFlagsProvider>,
+      );
+    });
+    await waitFor(() => expect(apiMocks.countryStories).toHaveBeenCalledTimes(2));
+    expect(esSignal.aborted).toBe(true);
+
+    await act(async () => fr.resolve({ country: "FR", name: "Франция", stories: [story(50)], next_cursor: null }));
+    expect(await screen.findByRole("link", { name: "Сюжет 50" })).toBeVisible();
+    await act(async () => es.resolve({ country: "ES", name: "Испания", stories: [story(42)], next_cursor: null }));
+    expect(screen.queryByRole("link", { name: "Сюжет 42" })).not.toBeInTheDocument();
   });
 });
