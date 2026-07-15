@@ -7,13 +7,20 @@ query-plan gate has passed.
 
 ## Feature-flag contract
 
-This runbook defines the required integration contract. The four flags become
-operational only when the frontend release from Tasks 8/9 includes a tested
-Next.js server-side reader and Docker Compose runtime pass-through. This backend
-worktree intentionally does not implement that frontend wiring; the final
-release gate remains blocked until the integrated branch proves it. The flags
-must not use a `NEXT_PUBLIC_` prefix and must default to `false` when missing or
-malformed.
+The integrated frontend has one tested Next.js server-only reader for all four
+flags and passes an immutable boolean snapshot to client components. Search and
+stories navigation/panels are wired in Task 8; investigation and signal-detail
+entry points remain off until Task 9 wires them. The flags do not use a
+`NEXT_PUBLIC_` prefix and default to `false` when missing or malformed.
+
+Flags are Docker build arguments because Next.js may prerender the root layout.
+Changing a value therefore requires an explicit web image rebuild; restarting
+an existing container is not sufficient:
+
+```bash
+docker compose build web
+docker compose up -d web
+```
 
 | Variable | Enables | Initial value |
 |---|---|---|
@@ -163,10 +170,10 @@ latency budget from the pre-rollout baseline; do not enable navigation if p95 or
 
 ## Activation order and observation
 
-Before step 1, verify on the integrated image that each flag independently
+Before step 1, verify on the integrated image that each wired flag independently
 hides/shows its entry point, missing/malformed values behave as `false`, and the
-four variables are present in the running web container. Do not proceed using
-this backend-only worktree.
+four variables are present in the running web container. Do not enable
+`FEATURE_INVESTIGATION` or `FEATURE_SIGNAL_DETAIL` before Task 9 lands.
 
 1. Enable `FEATURE_SIGNAL_DETAIL`; observe 404/5xx and evidence completeness.
 2. Enable `FEATURE_INVESTIGATION`; observe explanation latency, cache hit ratio,
@@ -183,8 +190,9 @@ errors, and product-level empty/error rates against the captured baseline.
 
 ## Rollback
 
-1. Set all four flags to `false` and restart the web server. This removes new
-   navigation and panels without affecting existing pages or API v1.
+1. Set all four flags to `false`, rebuild the web image, and recreate the web
+   container. This removes new navigation and panels without affecting existing
+   pages or API v1.
 2. Stop the manual backfill process. If a future scheduled embedding or story
    enrichment worker was enabled separately, stop it as well.
 3. Roll back the API/web image only if read endpoints themselves are unhealthy.
