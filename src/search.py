@@ -163,7 +163,13 @@ full_text_candidate_ids AS MATERIALIZED (
 ),
 full_text_candidates AS MATERIALIZED (
     SELECT a.id,
-           ts_rank_cd(a.search_vector, sq.tsq, 32) AS lexical_score,
+           CASE
+               WHEN to_tsvector('simple', COALESCE(a.title, '')) @@ sq.tsq
+               THEN 1.0
+               WHEN to_tsvector('simple', COALESCE(a.summary, '')) @@ sq.tsq
+               THEN 0.7
+               ELSE 0.35
+           END::REAL AS lexical_score,
            'full_text'::TEXT AS match_kind
     FROM full_text_candidate_ids candidate
     JOIN articles a ON a.id = candidate.id

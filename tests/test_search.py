@@ -499,7 +499,21 @@ def test_full_text_search_bounds_ids_before_expensive_rank_calculation():
     assert "LIMIT :candidate_limit" in candidate_ids_sql
     assert "ts_rank_cd" not in candidate_ids_sql
     assert "FROM full_text_candidate_ids candidate" in ranked_candidates_sql
-    assert "ts_rank_cd" in ranked_candidates_sql
+
+
+def test_full_text_ranking_avoids_loading_stored_body_vectors():
+    ranked_candidates_sql = ARTICLE_SEARCH_SQL[
+        ARTICLE_SEARCH_SQL.index("full_text_candidates AS"):
+        ARTICLE_SEARCH_SQL.index("trigram_candidates AS")
+    ]
+
+    assert "ts_rank_cd" not in ranked_candidates_sql
+    assert "to_tsvector('simple', COALESCE(a.title, ''))" in ranked_candidates_sql
+    assert "to_tsvector('simple', COALESCE(a.summary, ''))" in ranked_candidates_sql
+    assert "THEN 1.0" in ranked_candidates_sql
+    assert "THEN 0.7" in ranked_candidates_sql
+    assert "ELSE 0.35" in ranked_candidates_sql
+    assert "a.body" not in ranked_candidates_sql
 
 
 def test_search_service_uses_parameterized_hybrid_candidates_and_deterministic_ranking():
