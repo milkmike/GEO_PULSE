@@ -1,4 +1,5 @@
 import type { Level } from "./types";
+import { safeHttpUrl as validateHttpUrl } from "./urls";
 
 export const LEVEL_RU: Record<Level, string> = {
   ally: "союзник",
@@ -40,15 +41,10 @@ export const fmtDate = (iso: string): string =>
 export const fmtDay = (iso: string): string =>
   new Date(iso).toLocaleDateString("ru-RU", { day: "numeric", month: "short" });
 
-/** Returns the URL if it parses as http/https, otherwise null.
+/** Returns a backend-compatible, absolute public HTTP(S) URL, otherwise null.
  *  Use for third-party URLs (RSS headlines, citations) before putting them in href. */
 export function safeHttpUrl(u: string): string | null {
-  try {
-    const parsed = new URL(u);
-    return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.href : null;
-  } catch {
-    return null;
-  }
+  return validateHttpUrl(u);
 }
 
 /** Plotly colorscale for scores −100..+100 (red → gray → green). */

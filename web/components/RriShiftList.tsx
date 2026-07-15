@@ -5,7 +5,6 @@ import type { RriShiftMarker } from "@/lib/rri-shifts";
 interface RriShiftListProps {
   markers: RriShiftMarker[];
   onSelect: (marker: RriShiftMarker, trigger: HTMLButtonElement) => void;
-  compact?: boolean;
 }
 
 const fmt = (value: number) =>
@@ -19,14 +18,14 @@ const fmtDay = (day: string) => new Date(`${day}T12:00:00Z`).toLocaleDateString(
   month: "short",
 });
 
-export default function RriShiftList({ markers, onSelect, compact = false }: RriShiftListProps) {
+export default function RriShiftList({ markers, onSelect }: RriShiftListProps) {
   if (!markers.length) {
-    return <p className={`${compact ? "px-2" : "px-4"} pb-3 text-xs text-dim`}>Заметных сдвигов в выбранном периоде нет.</p>;
+    return <p className="px-4 pb-3 text-xs text-dim">Заметных сдвигов в выбранном периоде нет.</p>;
   }
   return (
     <ul
       aria-label="Заметные сдвиги RRI"
-      className={`flex flex-wrap gap-2 ${compact ? "px-2 pb-2" : "px-4 pb-4"}`}
+      className="flex flex-wrap gap-2 px-4 pb-4"
     >
       {markers.map((marker) => {
         const label = `${fmtDay(marker.day)}: ${fmt(marker.fromScore)} → ${fmt(marker.score)}, изменение между дневными точками RRI ${fmt(marker.dailyDelta)}`;
