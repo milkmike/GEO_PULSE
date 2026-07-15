@@ -18,7 +18,7 @@ VALUES (TRUE, 0)
 ON CONFLICT (singleton) DO NOTHING;
 
 ALTER TABLE public.story_articles
-  ADD COLUMN IF NOT EXISTS membership_generation BIGINT NOT NULL DEFAULT 0;
+  ADD COLUMN IF NOT EXISTS membership_generation BIGINT;
 
 -- Normalize only values outside the documented six-level scale. Level 6 is a
 -- valid value and must never be reduced to the previous five-level ceiling.
@@ -32,7 +32,12 @@ WHERE action_level NOT BETWEEN 1 AND 6;
 
 UPDATE public.story_articles
 SET membership_generation = 0
-WHERE membership_generation < 0;
+WHERE membership_generation IS NULL OR membership_generation < 0;
+
+ALTER TABLE public.story_articles
+  ALTER COLUMN membership_generation SET DEFAULT 0;
+ALTER TABLE public.story_articles
+  ALTER COLUMN membership_generation SET NOT NULL;
 
 DO $$
 BEGIN

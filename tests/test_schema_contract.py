@@ -132,6 +132,10 @@ def test_signal_evidence_array_indexes_are_present_for_new_and_existing_installs
     assert "CALL public.backfill_story_action_snapshots()" in migration_sql
     assert "CREATE TABLE IF NOT EXISTS public.story_membership_clock" in migration_sql
     assert "ADD COLUMN IF NOT EXISTS membership_generation BIGINT" in migration_sql
+    assert "ADD COLUMN IF NOT EXISTS membership_generation BIGINT;" in migration_sql
+    assert "WHERE membership_generation IS NULL OR membership_generation < 0" in migration_sql
+    assert "ALTER COLUMN membership_generation SET DEFAULT 0" in migration_sql
+    assert "ALTER COLUMN membership_generation SET NOT NULL" in migration_sql
     assert "membership_generation BIGINT NOT NULL DEFAULT 0" in init_sql
     assert "CHECK (membership_generation >= 0)" in init_sql
     assert "story_articles_membership_generation_nonnegative" in migration_sql
