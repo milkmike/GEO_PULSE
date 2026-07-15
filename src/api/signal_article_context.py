@@ -36,7 +36,7 @@ def load_signal_article_previews(
     rows = session.execute(
         text(
             """
-            WITH requested AS (
+            WITH requested_base AS (
                 SELECT signal.id AS signal_id,
                        signal.country_code,
                        signal.created_at,
@@ -58,119 +58,150 @@ def load_signal_article_previews(
                     FROM gdelt_daily gdelt
                     WHERE signal.signal_type IN ('tone_shift', 'volume_surge')
                       AND gdelt.country_code = signal.country_code
-                      AND gdelt.day <= signal.created_at::date
+                      AND gdelt.day <= (signal.created_at AT TIME ZONE 'UTC')::date
                     ORDER BY gdelt.day DESC
                     LIMIT 1
                 ) gdelt_anchor ON TRUE
                 WHERE signal.id = ANY(CAST(:signal_ids AS integer[]))
+            ), requested AS (
+                SELECT requested_base.*,
+                       context_end - INTERVAL '72 hours' AS context_start
+                FROM requested_base
             ), exact_candidates AS (
                 SELECT requested.signal_id,
-                       'evidence'::text AS kind,
                        ar.id AS article_id,
                        ar.title,
                        ar.url,
                        ar.published_at,
                        source.name AS source_name,
                        source.country_code,
-                       persisted.ordinality AS evidence_ordinality,
-                       NULL::integer AS analysis_action_level,
-                       NULL::numeric AS absolute_sentiment,
-                       NULL::integer AS reprint_count
+                       persisted.ordinality AS evidence_ordinality
                 FROM requested
                 CROSS JOIN LATERAL unnest(requested.article_ids)
                   WITH ORDINALITY AS persisted(article_id, ordinality)
                 JOIN articles ar ON ar.id = persisted.article_id
                 JOIN sources source ON source.id = ar.source_id
+            ), exact_ranked AS (
+                SELECT exact_candidates.*,
+                       COUNT(*) OVER (PARTITION BY signal_id) AS total,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY signal_id
+                           ORDER BY evidence_ordinality ASC NULLS LAST,
+                                    article_id
+                       ) AS candidate_rank
+                FROM exact_candidates
+            ), exact_previews AS (
+                SELECT signal_id, total, candidate_rank, article_id,
+                       title, url, published_at, source_name, country_code
+                FROM exact_ranked
+                WHERE candidate_rank <= :lim
+            ), context_windows AS (
+                SELECT DISTINCT country_code, context_start, context_end
+                FROM requested
+                WHERE cardinality(requested.article_ids) = 0
+                  AND country_code IS NOT NULL
             ), context_candidates AS (
-                SELECT requested.signal_id,
-                       'context'::text AS kind,
+                SELECT context_windows.country_code AS window_country_code,
+                       context_windows.context_start,
+                       context_windows.context_end,
                        ar.id AS article_id,
                        ar.title,
                        ar.url,
                        ar.published_at,
                        source.name AS source_name,
                        source.country_code,
-                       NULL::bigint AS evidence_ordinality,
                        analysis.action_level AS analysis_action_level,
                        ABS(analysis.sentiment) AS absolute_sentiment,
                        ar.reprint_count
-                FROM requested
+                FROM context_windows
                 JOIN sources source
-                  ON source.country_code = requested.country_code
+                  ON source.country_code = context_windows.country_code
                 JOIN articles ar ON ar.source_id = source.id
                 JOIN analysis analysis ON analysis.article_id = ar.id
-                WHERE cardinality(requested.article_ids) = 0
-                  AND ar.published_at > requested.context_end - INTERVAL '72 hours'
-                  AND ar.published_at <= requested.context_end
+                WHERE ar.published_at >= context_windows.context_start
+                  AND ar.published_at < context_windows.context_end
                   AND ar.is_duplicate = FALSE
                   AND analysis.is_relevant = TRUE
-                  AND source.country_code = requested.country_code
-            ), candidates AS (
-                SELECT * FROM exact_candidates
-                UNION ALL
-                SELECT * FROM context_candidates
-            ), ranked AS (
-                SELECT candidates.*,
+            ), context_ranked AS (
+                SELECT context_candidates.*,
+                       COUNT(*) OVER (
+                           PARTITION BY window_country_code,
+                                        context_start,
+                                        context_end
+                       ) AS total,
                        ROW_NUMBER() OVER (
-                           PARTITION BY signal_id
-                           ORDER BY evidence_ordinality ASC NULLS LAST,
-                                    analysis_action_level DESC NULLS LAST,
+                           PARTITION BY window_country_code,
+                                        context_start,
+                                        context_end
+                           ORDER BY analysis_action_level DESC NULLS LAST,
                                     absolute_sentiment DESC NULLS LAST,
                                     reprint_count DESC NULLS LAST,
                                     published_at DESC NULLS LAST,
                                     article_id ASC
                        ) AS candidate_rank
-                FROM candidates
-            ), summary AS (
+                FROM context_candidates
+            ), context_top AS (
+                SELECT *
+                FROM context_ranked
+                WHERE candidate_rank <= :lim
+            ), context_previews AS (
                 SELECT requested.signal_id,
-                       CASE
-                           WHEN cardinality(requested.article_ids) > 0
-                               THEN 'evidence'
-                           WHEN requested.country_code IS NOT NULL
-                               THEN 'context'
-                           ELSE 'unavailable'
-                       END AS kind,
-                       COUNT(candidates.article_id)::integer AS total,
-                       CASE
-                           WHEN cardinality(requested.article_ids) = 0
-                                AND requested.country_code IS NOT NULL
-                               THEN 72
-                           ELSE NULL
-                       END AS window_hours,
-                       CASE
-                           WHEN cardinality(requested.article_ids) > 0
-                               THEN requested.evidence_window_start
-                           WHEN requested.country_code IS NOT NULL
-                               THEN requested.context_end - INTERVAL '72 hours'
-                           ELSE NULL
-                       END AS window_start,
-                       CASE
-                           WHEN cardinality(requested.article_ids) > 0
-                               THEN requested.evidence_window_end
-                           WHEN requested.country_code IS NOT NULL
-                               THEN requested.context_end
-                           ELSE NULL
-                       END AS window_end
+                       context_top.total,
+                       context_top.candidate_rank,
+                       context_top.article_id,
+                       context_top.title,
+                       context_top.url,
+                       context_top.published_at,
+                       context_top.source_name,
+                       context_top.country_code
                 FROM requested
-                LEFT JOIN candidates
-                  ON candidates.signal_id = requested.signal_id
-                GROUP BY requested.signal_id,
-                         requested.country_code,
-                         requested.article_ids,
-                         requested.evidence_window_start,
-                         requested.evidence_window_end,
-                         requested.context_end
+                JOIN context_top
+                  ON context_top.window_country_code = requested.country_code
+                 AND context_top.context_start = requested.context_start
+                 AND context_top.context_end = requested.context_end
+                WHERE cardinality(requested.article_ids) = 0
+            ), preview_rows AS (
+                SELECT * FROM exact_previews
+                UNION ALL
+                SELECT * FROM context_previews
             )
-            SELECT summary.signal_id, summary.kind, summary.total,
-                   summary.window_hours, summary.window_start,
-                   summary.window_end, ranked.article_id, ranked.title,
-                   ranked.url, ranked.published_at,
-                   ranked.source_name, ranked.country_code
-            FROM summary
-            LEFT JOIN ranked
-              ON ranked.signal_id = summary.signal_id
-             AND ranked.candidate_rank <= :lim
-            ORDER BY summary.signal_id, ranked.candidate_rank NULLS LAST
+            SELECT requested.signal_id,
+                   CASE
+                       WHEN cardinality(requested.article_ids) > 0
+                           THEN 'evidence'
+                       WHEN requested.country_code IS NOT NULL
+                           THEN 'context'
+                       ELSE 'unavailable'
+                   END AS kind,
+                   COALESCE(preview_rows.total, 0) AS total,
+                   CASE
+                       WHEN cardinality(requested.article_ids) = 0
+                            AND requested.country_code IS NOT NULL
+                           THEN 72
+                       ELSE NULL
+                   END AS window_hours,
+                   CASE
+                       WHEN cardinality(requested.article_ids) > 0
+                           THEN requested.evidence_window_start
+                       WHEN requested.country_code IS NOT NULL
+                           THEN requested.context_start
+                       ELSE NULL
+                   END AS window_start,
+                   CASE
+                       WHEN cardinality(requested.article_ids) > 0
+                           THEN requested.evidence_window_end
+                       WHEN requested.country_code IS NOT NULL
+                           THEN requested.context_end
+                       ELSE NULL
+                   END AS window_end,
+                   preview_rows.article_id, preview_rows.title,
+                   preview_rows.url, preview_rows.published_at,
+                   preview_rows.source_name, preview_rows.country_code
+            FROM requested
+            LEFT JOIN preview_rows
+              ON preview_rows.signal_id = requested.signal_id
+            ORDER BY requested.signal_id,
+                     preview_rows.candidate_rank NULLS LAST
             """
         ),
         {"signal_ids": signal_ids, "lim": limit},

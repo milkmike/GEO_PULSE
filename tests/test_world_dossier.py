@@ -193,15 +193,30 @@ def test_signal_list_includes_context_article_preview_in_one_batch(monkeypatch):
     assert "LEFT JOIN signal_evidence" in preview_sql
     assert "WITH ORDINALITY" in preview_sql
     assert "cardinality(requested.article_ids) = 0" in preview_sql
-    assert "ar.published_at > requested.context_end - INTERVAL '72 hours'" in preview_sql
-    assert "ar.published_at <= requested.context_end" in preview_sql
+    assert "context_windows AS" in preview_sql
+    assert (
+        "SELECT DISTINCT country_code, context_start, context_end FROM requested"
+        in preview_sql
+    )
+    assert "ar.published_at >= context_windows.context_start" in preview_sql
+    assert "ar.published_at < context_windows.context_end" in preview_sql
+    assert "ar.published_at > context_windows.context_start" not in preview_sql
+    assert "ar.published_at <= context_windows.context_end" not in preview_sql
     assert "ar.is_duplicate = FALSE" in preview_sql
     assert "analysis.is_relevant = TRUE" in preview_sql
-    assert "source.country_code = requested.country_code" in preview_sql
+    assert "source.country_code = context_windows.country_code" in preview_sql
     assert "ROW_NUMBER() OVER" in preview_sql
-    assert "summary AS" in preview_sql
-    assert "COUNT(candidates.article_id)" in preview_sql
-    assert "LEFT JOIN ranked" in preview_sql
+    assert "context_ranked AS" in preview_sql
+    assert (
+        "PARTITION BY window_country_code, context_start, context_end"
+        in preview_sql
+    )
+    assert "context_top AS" in preview_sql
+    assert "context_previews AS" in preview_sql
+    assert "JOIN context_top" in preview_sql
+    assert "FROM requested LEFT JOIN LATERAL ( WITH exact_candidates AS" not in preview_sql
+    assert "JOIN articles ar ON ar.source_id = source.id" in preview_sql
+    assert "LEFT JOIN candidates" not in preview_sql
     assert "evidence_ordinality ASC NULLS LAST" in preview_sql
     assert "analysis_action_level DESC NULLS LAST" in preview_sql
     assert "absolute_sentiment DESC NULLS LAST" in preview_sql
@@ -402,7 +417,8 @@ def test_legacy_gdelt_signal_context_uses_latest_aggregate_day(monkeypatch):
     preview_sql = " ".join(session.calls[1][0].split())
     assert "gdelt_daily" in preview_sql
     assert "signal.signal_type IN ('tone_shift', 'volume_surge')" in preview_sql
-    assert "gdelt.day <= signal.created_at::date" in preview_sql
+    assert "gdelt.day <= (signal.created_at AT TIME ZONE 'UTC')::date" in preview_sql
+    assert "gdelt.day <= signal.created_at::date" not in preview_sql
     assert "ORDER BY gdelt.day DESC" in preview_sql
     assert "gdelt_anchor.day::timestamp AT TIME ZONE 'UTC'" in preview_sql
     assert "+ INTERVAL '1 day'" in preview_sql
