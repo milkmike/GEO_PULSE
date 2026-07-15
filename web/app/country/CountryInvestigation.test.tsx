@@ -13,7 +13,8 @@ const navigation = vi.hoisted(() => ({
 }));
 const panelState = vi.hoisted(() => ({ last: null as null | {
   open: boolean;
-  at: string | null;
+  fromTime: string | null;
+  toTime: string | null;
   triggerRef: { current: HTMLElement | null };
   fallbackFocusRef: { current: HTMLElement | null };
 } }));
@@ -43,12 +44,13 @@ vi.mock("@/components/Plot", () => ({
 vi.mock("@/components/InvestigationPanel", () => ({
   default: (props: {
     open: boolean;
-    at: string | null;
+    fromTime: string | null;
+    toTime: string | null;
     triggerRef: { current: HTMLElement | null };
     fallbackFocusRef: { current: HTMLElement | null };
   }) => {
     panelState.last = props;
-    return props.open ? <div data-testid="investigation-panel">{props.at}</div> : null;
+    return props.open ? <div data-testid="investigation-panel">{props.fromTime} → {props.toTime}</div> : null;
   },
 }));
 vi.mock("@/components/AgreementsPanel", () => ({ default: () => null }));
@@ -78,6 +80,15 @@ const dossier: Dossier = {
     { day: "2026-07-15", time: "2026-07-15T20:00:00Z", score: -2, structural: -3, media: -1, boost: 0, version: "v1", delta_24h: 8, aggregation: "daily_last" },
   ],
   temperature_history: [], gdelt: [], signals: [],
+};
+
+const shortIntervalDossier: Dossier = {
+  ...dossier,
+  index_history: [
+    { ...dossier.index_history[0], day: "2026-07-13", time: "2026-07-13T18:00:00Z", score: -18 },
+    { ...dossier.index_history[0], day: "2026-07-14", time: "2026-07-14T22:30:00Z", score: -10 },
+    { ...dossier.index_history[1], day: "2026-07-15", time: "2026-07-15T20:00:00Z", score: -2 },
+  ],
 };
 
 function renderCountry(investigation: boolean) {
@@ -123,19 +134,40 @@ describe("country investigation flow", () => {
     expect(navigation.push).toHaveBeenLastCalledWith(
       "/country/es?foo=bar&at=2026-07-15T20%3A00%3A00Z",
     );
-  });
 
-  it("opens a durable valid at timestamp and removes only an invalid at value", async () => {
     navigation.query = "foo=bar&at=2026-07-15T20%3A00%3A00Z";
     await renderCountry(true);
-    expect(await screen.findByTestId("investigation-panel")).toHaveTextContent("2026-07-15T20:00:00Z");
+    expect(panelState.last).toMatchObject({
+      open: true,
+      fromTime: "2026-07-14T18:00:00Z",
+      toTime: "2026-07-15T20:00:00Z",
+    });
+  });
+
+  it("restores the exact adjacent points for a durable shift shorter than 24 hours", async () => {
+    apiMocks.dossier.mockResolvedValue(shortIntervalDossier);
+    navigation.query = "foo=bar&at=2026-07-15T20%3A00%3A00Z";
+    await renderCountry(true);
+    expect(await screen.findByTestId("investigation-panel")).toHaveTextContent(
+      "2026-07-14T22:30:00Z → 2026-07-15T20:00:00Z",
+    );
+    expect(panelState.last).toMatchObject({
+      fromTime: "2026-07-14T22:30:00Z",
+      toTime: "2026-07-15T20:00:00Z",
+    });
     expect(panelState.last?.triggerRef.current).toBeNull();
     expect(panelState.last?.fallbackFocusRef.current).toHaveTextContent(/индекс и термометр/i);
+  });
 
-    navigation.query = "foo=bar&at=2026-07-15T20%3A00%3A00";
+  it.each([
+    "2026-07-15T20:00:00",
+    "2026-07-14T18:00:00Z",
+  ])("removes an invalid or non-marker at value while preserving other query state: %s", async (at) => {
+    navigation.query = `foo=bar&at=${encodeURIComponent(at)}`;
     await renderCountry(true);
     await waitFor(() => expect(navigation.replace).toHaveBeenCalledWith("/country/es?foo=bar"));
     expect(navigation.replace).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId("investigation-panel")).not.toBeInTheDocument();
   });
 
   it("does not expose controls or react to at while the server flag is off", async () => {

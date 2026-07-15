@@ -59,13 +59,16 @@ export function deriveRriShiftMarkers(history: MarkerInput[]): RriShiftMarker[] 
     .sort((a, b) => a.day.localeCompare(b.day));
 }
 
-export function validateInvestigationAt(value: string | null, history: MarkerInput[]): boolean {
-  if (!value || !/(?:Z|[+-]\d{2}:\d{2})$/u.test(value)) return false;
+export function resolveInvestigationMarker(
+  value: string | null,
+  history: MarkerInput[],
+): RriShiftMarker | null {
+  if (!value || !/(?:Z|[+-]\d{2}:\d{2})$/u.test(value)) return null;
   const timestamp = Date.parse(value);
-  if (!Number.isFinite(timestamp)) return false;
-  const times = history
-    .map((point) => Date.parse(point.time))
-    .filter(Number.isFinite);
-  if (times.length < 2) return false;
-  return timestamp >= Math.min(...times) && timestamp <= Math.max(...times);
+  if (!Number.isFinite(timestamp)) return null;
+  return deriveRriShiftMarkers(history).find((marker) => Date.parse(marker.at) === timestamp) ?? null;
+}
+
+export function validateInvestigationAt(value: string | null, history: MarkerInput[]): boolean {
+  return resolveInvestigationMarker(value, history) != null;
 }

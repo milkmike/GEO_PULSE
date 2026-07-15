@@ -59,8 +59,7 @@ export const api = {
     request: IndexExplanationRequest,
     signal?: AbortSignal,
   ) => {
-    const params = new URLSearchParams({ at: request.at });
-    if (request.windowHours != null) params.set("window_hours", String(request.windowHours));
+    const params = new URLSearchParams({ from: request.from, to: request.to });
     if (request.rriVersion) params.set("rri_version", request.rriVersion);
     return get<IndexExplanation>(
       `/api/v2/countries/${encodeURIComponent(code.trim().toUpperCase())}/index-explanation?${params.toString()}`,

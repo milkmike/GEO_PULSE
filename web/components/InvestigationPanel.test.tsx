@@ -9,7 +9,7 @@ vi.mock("@/lib/api", () => ({ api: apiMocks }));
 
 const explanation: IndexExplanation = {
   country_code: "ES",
-  from_time: "2026-07-14T20:00:00Z",
+  from_time: "2026-07-14T22:30:00Z",
   to_time: "2026-07-15T20:00:00Z",
   rri_version: "v1",
   exact_changes: {
@@ -57,7 +57,7 @@ describe("InvestigationPanel", () => {
   beforeEach(() => apiMocks.indexExplanation.mockReset().mockResolvedValue(explanation));
 
   it("keeps exact, estimated and contextual evidence in separately labelled regions", async () => {
-    render(<InvestigationPanel open countryCode="ES" countryName="Испания" at="2026-07-15T20:00:00Z" onClose={() => {}} />);
+    render(<InvestigationPanel open countryCode="ES" countryName="Испания" fromTime="2026-07-14T22:30:00Z" toTime="2026-07-15T20:00:00Z" onClose={() => {}} />);
 
     const exact = await screen.findByRole("region", { name: /что изменило расчёт · точно/i });
     const estimated = screen.getByRole("region", { name: /модельная оценка/i });
@@ -72,11 +72,15 @@ describe("InvestigationPanel", () => {
     expect(screen.getByText(/частичные доказательства/i)).toBeVisible();
 
     const requestedWindow = screen.getByRole("region", { name: /запрошенное окно/i });
-    expect(requestedWindow.querySelector('time[datetime="2026-07-14T20:00:00Z"]')).not.toBeNull();
+    expect(requestedWindow.querySelector('time[datetime="2026-07-14T22:30:00Z"]')).not.toBeNull();
     expect(requestedWindow.querySelector('time[datetime="2026-07-15T20:00:00Z"]')).not.toBeNull();
     expect(exact.querySelector('time[datetime="2026-07-14T18:13:00Z"]')).not.toBeNull();
     expect(exact.querySelector('time[datetime="2026-07-15T19:41:00Z"]')).not.toBeNull();
     expect(exact).not.toHaveTextContent(/ровно 24|за 24 часа/i);
+    expect(apiMocks.indexExplanation).toHaveBeenCalledWith("ES", {
+      from: "2026-07-14T22:30:00Z",
+      to: "2026-07-15T20:00:00Z",
+    }, expect.any(AbortSignal));
 
     expect(screen.getByRole("link", { name: /El País: переговоры/i })).toHaveAttribute(
       "href", "https://elpais.com/mundo/talks",
@@ -117,7 +121,7 @@ describe("InvestigationPanel", () => {
       ],
     };
     apiMocks.indexExplanation.mockResolvedValue(liveCodes);
-    render(<InvestigationPanel open countryCode="ES" countryName="Испания" at="2026-07-15T20:00:00Z" onClose={() => {}} />);
+    render(<InvestigationPanel open countryCode="ES" countryName="Испания" fromTime="2026-07-14T22:30:00Z" toTime="2026-07-15T20:00:00Z" onClose={() => {}} />);
 
     expect(await screen.findByText(/медиаслой этой точки RRI рассчитан не по публикациям/i)).toBeVisible();
     expect(screen.getByText(/для реконструкции нет сохранённых входных публикаций/i)).toBeVisible();
@@ -135,11 +139,11 @@ describe("InvestigationPanel", () => {
       exact_changes: { ...explanation.exact_changes, total_delta: -4 },
     });
     const { rerender } = render(
-      <InvestigationPanel open countryCode="ES" countryName="Испания" at="2026-07-15T20:00:00Z" onClose={() => {}} />,
+      <InvestigationPanel open countryCode="ES" countryName="Испания" fromTime="2026-07-14T22:30:00Z" toTime="2026-07-15T20:00:00Z" onClose={() => {}} />,
     );
     const firstSignal = apiMocks.indexExplanation.mock.calls[0][2] as AbortSignal;
 
-    rerender(<InvestigationPanel open countryCode="ES" countryName="Испания" at="2026-07-16T20:00:00Z" onClose={() => {}} />);
+    rerender(<InvestigationPanel open countryCode="ES" countryName="Испания" fromTime="2026-07-15T17:00:00Z" toTime="2026-07-16T20:00:00Z" onClose={() => {}} />);
     await screen.findByText("−4,0");
     expect(firstSignal.aborted).toBe(true);
     resolveFirst(explanation);
@@ -155,14 +159,14 @@ describe("InvestigationPanel", () => {
     const triggerRef = { current: trigger };
     const onClose = vi.fn();
     const { rerender } = render(
-      <InvestigationPanel open countryCode="ES" countryName="Испания" at="2026-07-15T20:00:00Z" triggerRef={triggerRef} onClose={onClose} />,
+      <InvestigationPanel open countryCode="ES" countryName="Испания" fromTime="2026-07-14T22:30:00Z" toTime="2026-07-15T20:00:00Z" triggerRef={triggerRef} onClose={onClose} />,
     );
 
     const dialog = screen.getByRole("dialog", { name: /единое расследование/i });
     await waitFor(() => expect(within(dialog).getByRole("button", { name: /закрыть/i })).toHaveFocus());
     await user.keyboard("{Escape}");
     expect(onClose).toHaveBeenCalledOnce();
-    rerender(<InvestigationPanel open={false} countryCode="ES" countryName="Испания" at={null} triggerRef={triggerRef} onClose={onClose} />);
+    rerender(<InvestigationPanel open={false} countryCode="ES" countryName="Испания" fromTime={null} toTime={null} triggerRef={triggerRef} onClose={onClose} />);
     await waitFor(() => expect(trigger).toHaveFocus());
     trigger.remove();
   });
@@ -177,12 +181,12 @@ describe("InvestigationPanel", () => {
     const restoreSpy = vi.spyOn(trigger, "focus");
     const triggerRef = { current: trigger };
     const { rerender } = render(
-      <InvestigationPanel open countryCode="ES" countryName="Испания" at="2026-07-15T20:00:00Z" triggerRef={triggerRef} onClose={firstClose} />,
+      <InvestigationPanel open countryCode="ES" countryName="Испания" fromTime="2026-07-14T22:30:00Z" toTime="2026-07-15T20:00:00Z" triggerRef={triggerRef} onClose={firstClose} />,
     );
     const closeButton = screen.getAllByRole("button", { name: /закрыть единое расследование/i }).at(-1)!;
     await waitFor(() => expect(closeButton).toHaveFocus());
 
-    rerender(<InvestigationPanel open countryCode="ES" countryName="Испания" at="2026-07-15T20:00:00Z" triggerRef={triggerRef} onClose={latestClose} />);
+    rerender(<InvestigationPanel open countryCode="ES" countryName="Испания" fromTime="2026-07-14T22:30:00Z" toTime="2026-07-15T20:00:00Z" triggerRef={triggerRef} onClose={latestClose} />);
     await waitFor(() => expect(closeButton).toHaveFocus());
     expect(restoreSpy).not.toHaveBeenCalled();
     await user.keyboard("{Escape}");
@@ -202,11 +206,11 @@ describe("InvestigationPanel", () => {
     nonInteractive.focus();
     const fallbackRef = { current: fallback };
     const { rerender } = render(
-      <InvestigationPanel open countryCode="ES" countryName="Испания" at="2026-07-15T20:00:00Z" fallbackFocusRef={fallbackRef} onClose={() => {}} />,
+      <InvestigationPanel open countryCode="ES" countryName="Испания" fromTime="2026-07-14T22:30:00Z" toTime="2026-07-15T20:00:00Z" fallbackFocusRef={fallbackRef} onClose={() => {}} />,
     );
     await waitFor(() => expect(within(screen.getByRole("dialog")).getByRole("button", { name: /закрыть единое расследование/i })).toHaveFocus());
 
-    rerender(<InvestigationPanel open={false} countryCode="ES" countryName="Испания" at={null} fallbackFocusRef={fallbackRef} onClose={() => {}} />);
+    rerender(<InvestigationPanel open={false} countryCode="ES" countryName="Испания" fromTime={null} toTime={null} fallbackFocusRef={fallbackRef} onClose={() => {}} />);
     await waitFor(() => expect(fallback).toHaveFocus());
     fallback.remove();
     nonInteractive.remove();
@@ -221,12 +225,12 @@ describe("InvestigationPanel", () => {
     const triggerRef = { current: trigger };
     const fallbackRef = { current: fallback };
     const { rerender } = render(
-      <InvestigationPanel open countryCode="ES" countryName="Испания" at="2026-07-15T20:00:00Z" triggerRef={triggerRef} fallbackFocusRef={fallbackRef} onClose={() => {}} />,
+      <InvestigationPanel open countryCode="ES" countryName="Испания" fromTime="2026-07-14T22:30:00Z" toTime="2026-07-15T20:00:00Z" triggerRef={triggerRef} fallbackFocusRef={fallbackRef} onClose={() => {}} />,
     );
     await waitFor(() => expect(within(screen.getByRole("dialog")).getByRole("button", { name: /закрыть единое расследование/i })).toHaveFocus());
     trigger.remove();
 
-    rerender(<InvestigationPanel open={false} countryCode="ES" countryName="Испания" at={null} triggerRef={triggerRef} fallbackFocusRef={fallbackRef} onClose={() => {}} />);
+    rerender(<InvestigationPanel open={false} countryCode="ES" countryName="Испания" fromTime={null} toTime={null} triggerRef={triggerRef} fallbackFocusRef={fallbackRef} onClose={() => {}} />);
     await waitFor(() => expect(fallback).toHaveFocus());
     fallback.remove();
   });

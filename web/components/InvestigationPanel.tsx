@@ -13,7 +13,8 @@ interface InvestigationPanelProps {
   open: boolean;
   countryCode: string;
   countryName: string;
-  at: string | null;
+  fromTime: string | null;
+  toTime: string | null;
   triggerRef?: RefObject<HTMLElement | null>;
   fallbackFocusRef?: RefObject<HTMLElement | null>;
   onClose: () => void;
@@ -113,7 +114,8 @@ export default function InvestigationPanel({
   open,
   countryCode,
   countryName,
-  at,
+  fromTime,
+  toTime,
   triggerRef,
   fallbackFocusRef,
   onClose,
@@ -130,7 +132,7 @@ export default function InvestigationPanel({
   const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
-    if (!open || !at) {
+    if (!open || !fromTime || !toTime) {
       setState("idle");
       setExplanation(null);
       return;
@@ -139,7 +141,7 @@ export default function InvestigationPanel({
     let current = true;
     setState("loading");
     setExplanation(null);
-    api.indexExplanation(countryCode, { at, windowHours: 24 }, controller.signal)
+    api.indexExplanation(countryCode, { from: fromTime, to: toTime }, controller.signal)
       .then((payload) => {
         if (!current || controller.signal.aborted) return;
         setExplanation(payload);
@@ -154,7 +156,7 @@ export default function InvestigationPanel({
       current = false;
       controller.abort();
     };
-  }, [open, at, countryCode, attempt]);
+  }, [open, fromTime, toTime, countryCode, attempt]);
 
   useEffect(() => {
     if (!open) return;
@@ -205,7 +207,7 @@ export default function InvestigationPanel({
     };
   }, [open]);
 
-  if (!open || !at) return null;
+  if (!open || !fromTime || !toTime) return null;
 
   const exact = explanation?.exact_changes;
   return (

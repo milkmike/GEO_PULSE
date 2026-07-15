@@ -24,7 +24,7 @@ import VoxPanel from "@/components/VoxPanel";
 import { api, apiBase } from "@/lib/api";
 import { COUNTRY_TIPS } from "@/lib/explain";
 import { fmt, fmtDate, LEVEL_COLOR, LEVEL_RU } from "@/lib/format";
-import { deriveRriShiftMarkers, validateInvestigationAt } from "@/lib/rri-shifts";
+import { deriveRriShiftMarkers, resolveInvestigationMarker } from "@/lib/rri-shifts";
 import type { RriShiftMarker } from "@/lib/rri-shifts";
 import type {
   AgreementGroup, Brief, Dossier, EntityStat, FxSeries, Headline, TopicStat,
@@ -133,9 +133,10 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
     [dossier, investigation],
   );
   const rawAt = investigation ? new URLSearchParams(queryString).get("at") : null;
-  const selectedAt = rawAt && dossier && validateInvestigationAt(rawAt, dossier.index_history)
-    ? rawAt
-    : null;
+  const selectedMarker = useMemo(
+    () => rawAt && dossier ? resolveInvestigationMarker(rawAt, dossier.index_history) : null,
+    [dossier, rawAt],
+  );
 
   const hrefFor = useCallback((paramsValue: URLSearchParams) => {
     const query = paramsValue.toString();
@@ -161,7 +162,7 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
 
   useEffect(() => {
     if (!investigation || !dossier || !rawAt) return;
-    if (validateInvestigationAt(rawAt, dossier.index_history)) {
+    if (selectedMarker) {
       setInvalidAtMessage(null);
       return;
     }
@@ -169,7 +170,7 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
     next.delete("at");
     setInvalidAtMessage("Некорректная или устаревшая ссылка на сдвиг RRI удалена.");
     routerReplace(hrefFor(next));
-  }, [dossier, hrefFor, investigation, queryString, rawAt, routerReplace]);
+  }, [dossier, hrefFor, investigation, queryString, rawAt, routerReplace, selectedMarker]);
 
   const indexChart = useMemo(() => {
     if (!dossier || dossier.index_history.length < 2) return null;
@@ -548,10 +549,11 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
 
       {investigation && (
         <InvestigationPanel
-          open={Boolean(selectedAt)}
+          open={Boolean(selectedMarker)}
           countryCode={cc}
           countryName={country.name}
-          at={selectedAt}
+          fromTime={selectedMarker?.fromTime ?? null}
+          toTime={selectedMarker?.time ?? null}
           triggerRef={markerTriggerRef}
           fallbackFocusRef={rriHeadingRef}
           onClose={closeInvestigation}

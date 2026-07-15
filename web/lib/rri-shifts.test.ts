@@ -42,12 +42,14 @@ describe("deriveRriShiftMarkers", () => {
     expect(markers[0]?.at).toBe("2026-07-15T19:45:11.123Z");
   });
 
-  it("accepts only timezone-bearing timestamps inside the loaded exact history", () => {
+  it("accepts only timezone-bearing timestamps that resolve to an eligible adjacent shift", () => {
     const history = [
       { day: "2026-07-14", time: "2026-07-14T18:00:00Z", score: -10 },
       { day: "2026-07-15", time: "2026-07-15T20:00:00+00:00", score: -2 },
     ];
-    expect(validateInvestigationAt("2026-07-15T19:45:11.123Z", history)).toBe(true);
+    expect(validateInvestigationAt("2026-07-15T20:00:00Z", history)).toBe(true);
+    expect(validateInvestigationAt("2026-07-15T19:45:11.123Z", history)).toBe(false);
+    expect(validateInvestigationAt("2026-07-14T18:00:00Z", history)).toBe(false);
     expect(validateInvestigationAt("2026-07-15T19:45:11", history)).toBe(false);
     expect(validateInvestigationAt("2026-06-15T19:45:11Z", history)).toBe(false);
     expect(validateInvestigationAt("not-a-date", history)).toBe(false);

@@ -9,11 +9,11 @@ describe("investigation API client", () => {
     }));
   });
 
-  it("builds the exact RRI explanation query with URLSearchParams", async () => {
+  it("builds an explicit adjacent RRI interval without synthesizing 24 hours", async () => {
     const signal = new AbortController().signal;
     await api.indexExplanation(" es ", {
-      at: "2026-07-15T23:59:59.999Z",
-      windowHours: 24,
+      from: "2026-07-14T21:12:03.456Z",
+      to: "2026-07-15T19:45:11.123Z",
       rriVersion: "v1",
     }, signal);
 
@@ -21,8 +21,8 @@ describe("investigation API client", () => {
     const parsed = new URL(String(url));
     expect(parsed.pathname).toBe("/api/v2/countries/ES/index-explanation");
     expect(Object.fromEntries(parsed.searchParams)).toEqual({
-      at: "2026-07-15T23:59:59.999Z",
-      window_hours: "24",
+      from: "2026-07-14T21:12:03.456Z",
+      to: "2026-07-15T19:45:11.123Z",
       rri_version: "v1",
     });
     expect(init).toMatchObject({ signal });

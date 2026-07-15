@@ -491,8 +491,8 @@ export interface StoriesRequest {
 }
 
 export interface IndexExplanationRequest {
-  at: string;
-  windowHours?: number;
+  from: string;
+  to: string;
   rriVersion?: string;
 }
 
