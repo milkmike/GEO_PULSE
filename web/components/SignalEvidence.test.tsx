@@ -129,7 +129,7 @@ describe("SignalEvidence", () => {
 
     render(<SignalEvidence detail={contextual} storiesEnabled />);
 
-    expect(screen.getByRole("heading", { name: "Публикации в окне сигнала" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Новостной контекст" })).toBeVisible();
     expect(screen.getByRole("link", { name: "Контекст сдвига" })).toHaveAttribute(
       "href",
       "https://example.es/context",

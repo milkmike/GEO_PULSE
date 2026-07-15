@@ -345,7 +345,7 @@ export default function SignalEvidence({ detail, storiesEnabled }: { detail: Sig
 
       {detail.context_preview && (
         <section aria-labelledby="signal-context-heading" className="card border-cooling/50 bg-cooling/5 p-5">
-          <h2 id="signal-context-heading" className="card-title">Публикации в окне сигнала</h2>
+          <h2 id="signal-context-heading" className="card-title">Новостной контекст</h2>
           {detail.context_preview.window_start && detail.context_preview.window_end && (
             <p className="mt-2 text-xs text-dim">
               Окно контекста: {fmtTime(detail.context_preview.window_start)} — {fmtTime(detail.context_preview.window_end)}
