@@ -1,5 +1,5 @@
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -134,10 +134,11 @@ def test_explanation_names_strongest_observed_match_without_semantic_claims():
 
 def test_cursor_serialization_is_stable_and_round_trips():
     published_at = datetime(2026, 7, 14, 12, 30, tzinfo=timezone.utc)
-    first = encode_cursor(.712345, published_at, 321)
-    second = encode_cursor(.712345, published_at, 321)
+    ranking_at = datetime(2026, 7, 15, 9, 0, tzinfo=timezone.utc)
+    first = encode_cursor(.712345, published_at, 321, ranking_at)
+    second = encode_cursor(.712345, published_at, 321, ranking_at)
     assert first == second
-    assert decode_cursor(first) == (.712345, published_at, 321)
+    assert decode_cursor(first) == (.712345, published_at, 321, ranking_at)
 
 
 class FakeSearchService:
@@ -205,6 +206,7 @@ class FakeSearchService:
                 "relevance_score": .712345,
                 "published_at": "2026-07-14T12:30:00+00:00",
                 "article_id": 123,
+                "ranking_at": "2026-07-15T09:00:00+00:00",
             },
         }
 
@@ -337,14 +339,32 @@ def test_search_service_uses_parameterized_hybrid_candidates_and_deterministic_r
             topics=["diplomacy"],
             sentiment=1.0,
             action_level=2,
-            matched_entities=[{
-                "id": "93dbeaec-c20b-44ad-aaed-46b18ea86a47",
-                "name": "Владимир Путин",
-                "kind": "person",
-                "mention_text": "Путин",
-                "confidence": 1.0,
-                "exact_match": True,
-            }],
+            matched_entities=[
+                {
+                    "id": "f100d4ce-b728-47c6-b109-7ee9f1408870",
+                    "name": "Яндекс",
+                    "kind": "organization",
+                    "mention_text": "Яндекс",
+                    "confidence": .8,
+                    "exact_match": False,
+                },
+                {
+                    "id": "87e18b65-e3e8-42a7-b38d-273366f6bd89",
+                    "name": "Альфа",
+                    "kind": "organization",
+                    "mention_text": "Альфа",
+                    "confidence": .7,
+                    "exact_match": False,
+                },
+                {
+                    "id": "93dbeaec-c20b-44ad-aaed-46b18ea86a47",
+                    "name": "Владимир Путин",
+                    "kind": "person",
+                    "mention_text": "Путин",
+                    "confidence": 1.0,
+                    "exact_match": True,
+                },
+            ],
             exact_entity_match=True,
             story_id=None,
             story_slug=None,
@@ -408,6 +428,9 @@ def test_search_service_uses_parameterized_hybrid_candidates_and_deterministic_r
     assert page["items"][0]["scores"]["entity"] == 1
     assert page["items"][0]["scores"]["vector"] is None
     assert page["items"][1]["scores"]["trust"] == 0
+    assert [
+        entity["name"] for entity in page["items"][0]["matched_entities"]
+    ] == ["Владимир Путин", "Альфа", "Яндекс"]
     assert page["items"][0]["why_included"] == (
         "Точное упоминание сущности «Владимир Путин»"
     )
@@ -415,15 +438,72 @@ def test_search_service_uses_parameterized_hybrid_candidates_and_deterministic_r
     assert page["next_cursor"] is None
 
     sql, params = fake_session.calls[-1]
+    compact_sql = " ".join(sql.split())
     assert "websearch_to_tsquery('simple', :q)" in sql
     assert "article_entity_mentions" in sql
     assert "canonical_entities" in sql
     assert "@> ARRAY[CAST(:topic AS TEXT)]" in sql
     assert "full_text_count" in sql
     assert "< 10" in sql
+    for candidate_source in (
+        "entity_candidates AS",
+        "topic_candidates AS",
+        "story_candidates AS",
+    ):
+        assert candidate_source in sql
+        assert sql.index(candidate_source) < sql.index("limited_candidates AS")
+    assert "candidate_hybrid_score" in sql
+    assert "THEN candidate_hybrid_score END DESC" in sql
+    assert (
+        "GREATEST(0.0, LEAST(1.0, COALESCE(s.weight, 0.5)"
+        in compact_sql
+    )
+    assert (
+        "GREATEST(0.0, LEAST(1.0, COALESCE(story_rank.story_score, 0.0)"
+        in compact_sql
+    )
     assert "WHEN :sort = 'newest' THEN published_at" in sql
     assert "FROM articles" in sql
     assert params["q"] == "путин"
     assert params["country"] == "ES"
+    assert params["date_from"] is None
     assert params["sort"] == "relevance"
+    assert params["ranking_at"] == published_at
     assert params["candidate_limit"] == 500
+
+    first_page = search_articles(
+        SearchQuery(q="путин", country="ES", limit=1),
+        session_factory=fake_session_factory,
+        now=published_at,
+    )
+    next_cursor = first_page["next_cursor"]
+    cursor = encode_cursor(
+        next_cursor["relevance_score"],
+        datetime.fromisoformat(next_cursor["published_at"]),
+        next_cursor["article_id"],
+        datetime.fromisoformat(next_cursor["ranking_at"]),
+    )
+    later_page = search_articles(
+        SearchQuery(q="путин", country="ES", cursor=cursor),
+        session_factory=fake_session_factory,
+        now=published_at + timedelta(days=30),
+    )
+    _, later_params = fake_session.calls[-1]
+    assert later_params["ranking_at"] == published_at
+    assert [item["article_id"] for item in later_page["items"]] == [11]
+    assert all(item["scores"]["freshness"] == 1 for item in later_page["items"])
+
+    topic_page = search_articles(
+        SearchQuery(q="diplomacy"),
+        session_factory=fake_session_factory,
+        now=published_at,
+    )
+    topic_item = next(
+        item for item in topic_page["items"] if item["article_id"] == 10
+    )
+    assert topic_item["scores"]["topic"] == 1
+    assert {
+        "type": "topic",
+        "article_id": 10,
+        "topic": "diplomacy",
+    } in topic_item["evidence"]

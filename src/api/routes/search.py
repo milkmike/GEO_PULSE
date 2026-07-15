@@ -56,6 +56,7 @@ def _serialize_cursor(value: object) -> str | None:
         float(value["relevance_score"]),
         published_at,
         int(value["article_id"]),
+        datetime.fromisoformat(str(value["ranking_at"])),
     )
 
 

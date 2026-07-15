@@ -42,7 +42,11 @@ WITH search_query AS (
     END AS tsq
 ),
 base_articles AS (
-    SELECT a.id, a.search_vector, a.title_normalized, a.published_at
+    SELECT a.id, a.search_vector, a.title_normalized, a.published_at,
+           GREATEST(0.0, LEAST(1.0,
+               COALESCE(s.weight, 0.5)::DOUBLE PRECISION
+           )) AS trust_score,
+           COALESCE(an.topics, ARRAY[]::TEXT[]) AS topics
     FROM articles a
     JOIN sources s ON s.id = a.source_id
     LEFT JOIN analysis an ON an.article_id = a.id
@@ -86,24 +90,134 @@ trigram_candidates AS (
     ORDER BY lexical_score DESC, b.id DESC
     LIMIT :candidate_limit
 ),
+entity_candidates AS (
+    SELECT DISTINCT b.id, b.published_at, 0.0::REAL AS lexical_score,
+           'entity'::TEXT AS match_kind
+    FROM base_articles b
+    JOIN article_entity_mentions aem ON aem.article_id = b.id
+    JOIN canonical_entities ce ON ce.id = aem.entity_id
+    WHERE :q <> ''
+      AND (
+          ce.normalized_name = :q
+          OR EXISTS (
+              SELECT 1 FROM entity_aliases ea
+              WHERE ea.entity_id = ce.id
+                AND ea.ambiguous = FALSE
+                AND ea.normalized_alias = :q
+          )
+      )
+),
+topic_candidates AS (
+    SELECT b.id, b.published_at, 0.0::REAL AS lexical_score,
+           'topic'::TEXT AS match_kind
+    FROM base_articles b
+    WHERE :q <> '' AND b.topics @> ARRAY[CAST(:q AS TEXT)]
+),
+story_candidates AS (
+    SELECT DISTINCT b.id, b.published_at, 0.0::REAL AS lexical_score,
+           'story'::TEXT AS match_kind
+    FROM base_articles b
+    JOIN story_articles sa_match ON sa_match.article_id = b.id
+    JOIN stories st_match ON st_match.id = sa_match.story_id
+    CROSS JOIN search_query sq
+    WHERE :q <> ''
+      AND to_tsvector(
+          'simple', COALESCE(st_match.title_ru, '') || ' ' ||
+                    COALESCE(st_match.summary, '')
+      ) @@ sq.tsq
+),
 structured_candidates AS (
     SELECT b.id, b.published_at, 0.0::REAL AS lexical_score,
            'structured'::TEXT AS match_kind
     FROM base_articles b
     WHERE :q = ''
 ),
-candidate_ids AS (
+candidate_sources AS (
     SELECT id, published_at, lexical_score, match_kind FROM full_text_candidates
     UNION ALL
     SELECT id, published_at, lexical_score, match_kind FROM trigram_candidates
     UNION ALL
+    SELECT id, published_at, lexical_score, match_kind FROM entity_candidates
+    UNION ALL
+    SELECT id, published_at, lexical_score, match_kind FROM topic_candidates
+    UNION ALL
+    SELECT id, published_at, lexical_score, match_kind FROM story_candidates
+    UNION ALL
     SELECT id, published_at, lexical_score, match_kind FROM structured_candidates
 ),
-limited_candidates AS (
-    SELECT id, published_at, lexical_score, match_kind
+candidate_ids AS (
+    SELECT id, published_at, MAX(lexical_score) AS lexical_score,
+           CASE
+               WHEN BOOL_OR(match_kind = 'full_text') THEN 'full_text'
+               WHEN BOOL_OR(match_kind = 'trigram') THEN 'trigram'
+               WHEN BOOL_OR(match_kind = 'entity') THEN 'entity'
+               WHEN BOOL_OR(match_kind = 'topic') THEN 'topic'
+               WHEN BOOL_OR(match_kind = 'story') THEN 'story'
+               ELSE 'structured'
+           END AS match_kind
+    FROM candidate_sources
+    GROUP BY id, published_at
+),
+raw_candidate_features AS (
+    SELECT candidate_ids.id, candidate_ids.published_at,
+           candidate_ids.lexical_score, candidate_ids.match_kind,
+           CASE WHEN EXISTS (
+               SELECT 1
+               FROM article_entity_mentions aem_rank
+               JOIN canonical_entities ce_rank ON ce_rank.id = aem_rank.entity_id
+               WHERE aem_rank.article_id = candidate_ids.id
+                 AND (
+                     (:entity_id IS NOT NULL AND
+                      ce_rank.id = CAST(:entity_id AS UUID))
+                     OR (:q <> '' AND (
+                         ce_rank.normalized_name = :q
+                         OR EXISTS (
+                             SELECT 1 FROM entity_aliases ea_rank
+                             WHERE ea_rank.entity_id = ce_rank.id
+                               AND ea_rank.ambiguous = FALSE
+                               AND ea_rank.normalized_alias = :q
+                         )
+                     ))
+                 )
+           ) THEN 1.0 ELSE 0.0 END AS entity_score,
+           CASE WHEN
+               (:topic IS NOT NULL AND
+                b.topics @> ARRAY[CAST(:topic AS TEXT)])
+               OR (:q <> '' AND b.topics @> ARRAY[CAST(:q AS TEXT)])
+           THEN 1.0 ELSE 0.0 END AS topic_score,
+           GREATEST(0.0, LEAST(
+               1.0,
+               1.0 - EXTRACT(EPOCH FROM (
+                   CAST(:ranking_at AS TIMESTAMPTZ) - b.published_at
+               )) / 7776000.0
+           )) AS freshness_score,
+           b.trust_score,
+           GREATEST(0.0, LEAST(1.0,
+               COALESCE(story_rank.story_score, 0.0)
+           )) AS story_score
     FROM candidate_ids
+    JOIN base_articles b ON b.id = candidate_ids.id
+    LEFT JOIN LATERAL (
+        SELECT MAX(sa_rank.membership_confidence)::DOUBLE PRECISION AS story_score
+        FROM story_articles sa_rank
+        WHERE sa_rank.article_id = candidate_ids.id
+    ) story_rank ON TRUE
+),
+candidate_features AS (
+    SELECT raw_candidate_features.*,
+           lexical_score * 0.35 + entity_score * 0.25 +
+           topic_score * 0.15 + freshness_score * 0.10 +
+           trust_score * 0.10 + story_score * 0.05
+               AS candidate_hybrid_score
+    FROM raw_candidate_features
+),
+limited_candidates AS (
+    SELECT id, published_at, lexical_score, match_kind,
+           candidate_hybrid_score
+    FROM candidate_features
     ORDER BY CASE WHEN :sort = 'newest' THEN published_at END DESC,
-             CASE WHEN :sort = 'relevance' THEN lexical_score END DESC,
+             CASE WHEN :sort = 'relevance'
+                  THEN candidate_hybrid_score END DESC,
              published_at DESC, id DESC
     LIMIT :candidate_limit
 )
@@ -120,16 +234,19 @@ SELECT a.id, a.title, a.summary, a.url, a.published_at, a.language,
        CASE
            WHEN :q = '' THEN NULL
            WHEN candidates.match_kind = 'trigram' THEN 'title'
+           WHEN candidates.match_kind IN ('entity', 'topic', 'story') THEN NULL
            WHEN to_tsvector('simple', COALESCE(a.title, '')) @@ sq.tsq THEN 'title'
            WHEN to_tsvector('simple', COALESCE(a.summary, '')) @@ sq.tsq THEN 'summary'
            ELSE 'body'
        END AS lexical_field,
        CASE
-           WHEN :q <> '' THEN ts_headline(
+           WHEN candidates.match_kind = 'full_text' THEN ts_headline(
                'simple', COALESCE(a.title, a.summary, a.body, ''), sq.tsq,
                'StartSel=«, StopSel=», MaxWords=35, MinWords=12'
            )
-           ELSE LEFT(COALESCE(a.summary, a.body, a.title, ''), 320)
+           WHEN candidates.match_kind = 'trigram' THEN a.title
+           WHEN :q = '' THEN LEFT(COALESCE(a.summary, a.body, a.title, ''), 320)
+           ELSE NULL
        END AS match_snippet
 FROM limited_candidates candidates
 JOIN articles a ON a.id = candidates.id
@@ -322,34 +439,51 @@ def explain_match(
     return max(observed, key=lambda item: item[0])[1]
 
 
-def encode_cursor(relevance_score: float, published_at: datetime, article_id: int) -> str:
-    """Serialize the stable rank/time/id pagination tuple as an opaque cursor."""
+def encode_cursor(
+    relevance_score: float,
+    published_at: datetime,
+    article_id: int,
+    ranking_at: datetime,
+) -> str:
+    """Serialize stable page ordering plus its ranking-time snapshot."""
 
     payload = {
         "article_id": int(article_id),
         "published_at": published_at.isoformat(),
+        "ranking_at": ranking_at.isoformat(),
         "relevance_score": round(_unit_interval(relevance_score), 6),
     }
     raw = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
     return base64.urlsafe_b64encode(raw.encode("ascii")).decode("ascii").rstrip("=")
 
 
-def decode_cursor(cursor: str) -> tuple[float, datetime, int]:
+def decode_cursor(cursor: str) -> tuple[float, datetime, int, datetime]:
     """Decode and validate an opaque search cursor."""
 
     try:
         padded = cursor + "=" * (-len(cursor) % 4)
         payload = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")))
-        if set(payload) != {"article_id", "published_at", "relevance_score"}:
+        if set(payload) != {
+            "article_id",
+            "published_at",
+            "ranking_at",
+            "relevance_score",
+        }:
             raise ValueError
         relevance_score = float(payload["relevance_score"])
         published_at = datetime.fromisoformat(payload["published_at"])
         article_id = int(payload["article_id"])
-        if not 0 <= relevance_score <= 1 or published_at.tzinfo is None or article_id < 1:
+        ranking_at = datetime.fromisoformat(payload["ranking_at"])
+        if (
+            not 0 <= relevance_score <= 1
+            or published_at.tzinfo is None
+            or ranking_at.tzinfo is None
+            or article_id < 1
+        ):
             raise ValueError
     except (binascii.Error, TypeError, ValueError, UnicodeError, json.JSONDecodeError) as exc:
         raise ValueError("invalid search cursor") from exc
-    return relevance_score, published_at, article_id
+    return relevance_score, published_at, article_id, ranking_at
 
 
 def _row_value(row: object, name: str, default=None):
@@ -372,18 +506,31 @@ def _freshness_score(published_at: datetime, now: datetime) -> float:
 def _serialize_candidate(row: object, query: SearchQuery, now: datetime) -> tuple[dict, datetime]:
     article_id = int(_row_value(row, "id"))
     published_at = _aware_datetime(_row_value(row, "published_at"))
-    entities = list(_row_value(row, "matched_entities", []) or [])
+    entities = sorted(
+        list(_row_value(row, "matched_entities", []) or []),
+        key=lambda entity: (
+            not bool(entity.get("exact_match")),
+            normalize_query(entity.get("name") or ""),
+            str(entity.get("id") or ""),
+            entity.get("mention_text") or "",
+        ),
+    )
     exact_entity = next((entity for entity in entities if entity.get("exact_match")), None)
     topics = list(_row_value(row, "topics", []) or [])
     story_id = _row_value(row, "story_id")
     story_confidence = float(_row_value(row, "story_confidence", 0) or 0)
     lexical_field = _row_value(row, "lexical_field")
     source_weight = _row_value(row, "source_weight")
+    matched_topic = (
+        query.topic
+        if query.topic and query.topic in topics
+        else query.q if query.q and query.q in topics else None
+    )
 
     score = combine_scores(
         lexical=float(_row_value(row, "lexical_score", 0) or 0),
         entity=1.0 if _row_value(row, "exact_entity_match", False) else 0.0,
-        topic=1.0 if query.topic and query.topic in topics else 0.0,
+        topic=1.0 if matched_topic else 0.0,
         freshness=_freshness_score(published_at, now),
         trust=0.5 if source_weight is None else float(source_weight),
         story=story_confidence if story_id is not None else 0.0,
@@ -392,7 +539,7 @@ def _serialize_candidate(row: object, query: SearchQuery, now: datetime) -> tupl
     why_included = explain_match(
         score,
         matched_entity=matched_entity_name,
-        matched_topic=query.topic if score.topic else None,
+        matched_topic=matched_topic,
         lexical_field=lexical_field,
         story_title=_row_value(row, "story_title"),
     )
@@ -409,8 +556,12 @@ def _serialize_candidate(row: object, query: SearchQuery, now: datetime) -> tupl
             "text": exact_entity.get("mention_text") or exact_entity.get("name"),
             "confidence": float(exact_entity.get("confidence") or 0),
         })
-    if score.topic and query.topic:
-        evidence.append({"type": "topic", "article_id": article_id, "topic": query.topic})
+    if matched_topic:
+        evidence.append({
+            "type": "topic",
+            "article_id": article_id,
+            "topic": matched_topic,
+        })
     if story_id is not None:
         evidence.append({
             "type": "story_membership",
@@ -497,17 +648,23 @@ def search_articles(
         from src.db import get_session
 
         session_factory = get_session
-    now = _aware_datetime(now or datetime.now(timezone.utc))
+    cursor_values = decode_cursor(query.cursor) if query.cursor else None
+    ranking_at = (
+        _aware_datetime(cursor_values[3])
+        if cursor_values
+        else _aware_datetime(now or datetime.now(timezone.utc))
+    )
     params = {
         "q": query.q,
         "country": query.country,
         "topic": query.topic,
         "entity_id": query.entity_id,
-        "date_from": query.date_from or (now.date() - timedelta(days=90)),
+        "date_from": query.date_from,
         "date_to": query.date_to,
         "tier": query.tier,
         "language": query.language,
         "sort": query.sort,
+        "ranking_at": ranking_at,
         "candidate_limit": 500,
     }
     try:
@@ -520,7 +677,7 @@ def search_articles(
             raise SearchTimeoutError("article search timed out") from exc
         raise
 
-    ranked = [_serialize_candidate(row, query, now) for row in rows]
+    ranked = [_serialize_candidate(row, query, ranking_at) for row in rows]
     if query.sort == "newest":
         ranked.sort(
             key=lambda pair: (
@@ -540,8 +697,8 @@ def search_articles(
             reverse=True,
         )
 
-    if query.cursor:
-        cursor_score, cursor_published_at, cursor_id = decode_cursor(query.cursor)
+    if cursor_values:
+        cursor_score, cursor_published_at, cursor_id, _ = cursor_values
         cursor_published_at = _aware_datetime(cursor_published_at)
         if query.sort == "newest":
             ranked = [
@@ -564,6 +721,7 @@ def search_articles(
             "relevance_score": last_item["relevance_score"],
             "published_at": last_published_at.isoformat(),
             "article_id": last_item["article_id"],
+            "ranking_at": ranking_at.isoformat(),
         }
     return {
         "items": [item for item, _ in page_rows],
