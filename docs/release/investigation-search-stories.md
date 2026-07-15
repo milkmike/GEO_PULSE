@@ -34,6 +34,23 @@ country threads remain available. The new read APIs are safe to smoke-test while
 navigation is disabled. A public GET must only read persisted state; it must not
 invoke an LLM, embedding provider, or cache-warming write.
 
+## Story pagination consistency
+
+`GET /api/v2/stories` returns an additive `consistency` object. Its mode is
+`rank_snapshot_live_filters`: `ranking_at` freezes story memberships and the
+derived ranking features (first/last activity, counts, action level, and
+lifecycle priority) across cursor pages. Lifecycle, confidence, topic, entity,
+and merge-state filters still read current rows. This is deliberately **not** a
+full point-in-time snapshot; the filtered result set can change while the rank
+clock stays fixed. Clients must surface or log that limitation instead of
+describing the cursor as PIT-consistent.
+
+Story-detail article cursors carry the same kind of `ranking_at` boundary.
+Memberships added later are excluded, and ordering uses the immutable
+`membership_confidence_snapshot` saved in membership evidence. Migration 023
+backfills missing or corrupt action/confidence snapshots in bounded, retry-safe
+batches before navigation is enabled.
+
 ## Before rollout
 
 1. Take a PostgreSQL backup and record current API/web image IDs.

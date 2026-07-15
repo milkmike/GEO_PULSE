@@ -589,9 +589,15 @@ class FakeStorySession:
         sql = str(statement)
         params = params or {}
         self.calls.append((sql, params))
+        if "WITH RECURSIVE forward_chain AS" in sql:
+            if params["story_id"] not in {6, 7}:
+                return FakeResult(rows=[])
+            return FakeResult(rows=[SimpleNamespace(
+                id=params["story_id"], meta={}, path=[params["story_id"]], depth=0,
+            )])
         if "WHERE st.id = :story_id" in sql:
             return FakeResult(row=story_row(7) if params["story_id"] == 7 else None)
-        if "FROM story_countries sc" in sql and "json" not in sql.lower():
+        if "FROM story_countries sc" in sql and "SELECT TRIM(sc.country_code)" in sql:
             return FakeResult(rows=[SimpleNamespace(
                 country_code="AZ", article_count=2, source_count=2, media_tone=-0.2,
                 first_seen=NOW - timedelta(days=2), last_seen=NOW,
@@ -749,15 +755,26 @@ class UnsafeUrlStorySession(FakeStorySession):
         sql = str(statement)
         params = params or {}
         self.calls.append((sql, params))
+        if "WITH RECURSIVE forward_chain AS" in sql:
+            return super().execute(statement, params)
         unsafe_story = story_row(7)
         unsafe_story.primary_url = "data:text/html,boom"
+        unsafe_story.primary_url_candidates = [
+            "data:text/html,boom",
+            "javascript:alert(1)",
+            "https://safe.example/story-primary",
+        ]
         if "WHERE st.id = :story_id" in sql:
             return FakeResult(row=unsafe_story)
-        if "FROM story_countries sc" in sql and "json" not in sql.lower():
+        if "FROM story_countries sc" in sql and "SELECT TRIM(sc.country_code)" in sql:
             return FakeResult(rows=[SimpleNamespace(
                 country_code="AZ", article_count=4, source_count=2, media_tone=-0.2,
                 first_seen=NOW - timedelta(days=2), last_seen=NOW,
                 primary_url="javascript:alert(1)",
+                primary_url_candidates=[
+                    "javascript:alert(1)",
+                    "https://safe.example/country-primary",
+                ],
             )])
         if "FROM story_entities se" in sql:
             return super().execute(statement, params)
@@ -815,6 +832,16 @@ class SupersededStorySession(FakeStorySession):
         self.calls.append((sql, params))
         if "WHERE st.slug = :story_slug" in sql:
             return FakeResult(row=SimpleNamespace(id=11))
+        if "WITH RECURSIVE forward_chain AS" in sql:
+            return FakeResult(rows=[
+                SimpleNamespace(
+                    id=11,
+                    meta={"merged_into_story_id": 10},
+                    path=[11],
+                    depth=0,
+                ),
+                SimpleNamespace(id=10, meta={}, path=[11, 10], depth=1),
+            ])
         if "WHERE st.id = :story_id" in sql:
             if params["story_id"] == 11:
                 old = story_row(11)
@@ -825,6 +852,112 @@ class SupersededStorySession(FakeStorySession):
                 canonical.slug = "story-primary"
                 return FakeResult(row=canonical)
             return FakeResult(row=None)
+        return super().execute(statement, params)
+
+
+class MergeChainStorySession(FakeStorySession):
+    def __init__(self, chain):
+        super().__init__()
+        self.chain = chain
+
+    def execute(self, statement, params=None):
+        sql = str(statement)
+        params = params or {}
+        if "WITH RECURSIVE forward_chain AS" in sql:
+            self.calls.append((sql, params))
+            rows = []
+            path = []
+            current = params["story_id"]
+            while current in self.chain and current not in path:
+                path.append(current)
+                meta = self.chain[current] or {}
+                rows.append(SimpleNamespace(
+                    id=current,
+                    meta=meta,
+                    path=list(path),
+                    depth=len(path) - 1,
+                ))
+                target = meta.get("merged_into_story_id")
+                if not isinstance(target, int) or isinstance(target, bool):
+                    break
+                if target in path or target not in self.chain:
+                    break
+                current = target
+            return FakeResult(rows=rows)
+        if "WHERE st.id = :story_id" in sql:
+            self.calls.append((sql, params))
+            story_id = params["story_id"]
+            meta = self.chain.get(story_id)
+            if meta is None and story_id not in self.chain:
+                return FakeResult(row=None)
+            row = story_row(story_id)
+            row.meta = meta or {}
+            if not row.meta.get("merged_into_story_id"):
+                row.slug = f"story-canonical-{story_id}"
+            return FakeResult(row=row)
+        return super().execute(statement, params)
+
+
+class SnapshotArticleSession(FakeStorySession):
+    def __init__(self):
+        super().__init__()
+        self.mutated = False
+
+    def execute(self, statement, params=None):
+        sql = str(statement)
+        params = params or {}
+        if "WITH ranked_articles" in sql:
+            self.calls.append((sql, params))
+            stable_query = (
+                "sa.added_at <= :ranking_at" in sql
+                and "membership_confidence_snapshot" in sql
+                and "JOIN analysis" not in sql
+            )
+            if "article_cursor_relevance" not in params:
+                return FakeResult(rows=[
+                    SimpleNamespace(
+                        article_id=1, title="First", url="https://example.test/1",
+                        published_at=NOW, source="Source", country_code="AZ",
+                        membership_confidence=0.9,
+                        relevance_score=0.9,
+                        evidence={"membership_confidence_snapshot": 0.9},
+                        is_primary=True,
+                    ),
+                    SimpleNamespace(
+                        article_id=2, title="Second", url="https://example.test/2",
+                        published_at=NOW - timedelta(minutes=1), source="Source",
+                        country_code="KZ", membership_confidence=0.8,
+                        relevance_score=0.8,
+                        evidence={"membership_confidence_snapshot": 0.8},
+                        is_primary=True,
+                    ),
+                ])
+            if stable_query and self.mutated:
+                return FakeResult(rows=[SimpleNamespace(
+                    article_id=2, title="Second", url="https://example.test/2",
+                    published_at=NOW - timedelta(minutes=1), source="Source",
+                    country_code="KZ", membership_confidence=0.05,
+                    relevance_score=0.8,
+                    evidence={"membership_confidence_snapshot": 0.8},
+                    is_primary=True,
+                )])
+            return FakeResult(rows=[
+                SimpleNamespace(
+                    article_id=1, title="First", url="https://example.test/1",
+                    published_at=NOW, source="Source", country_code="AZ",
+                    membership_confidence=0.05, relevance_score=0.05,
+                    evidence={"membership_confidence_snapshot": 0.9},
+                    is_primary=True,
+                ),
+                SimpleNamespace(
+                    article_id=3, title="Added later", url="https://example.test/3",
+                    published_at=NOW + timedelta(minutes=1), source="Source",
+                    country_code="ES", membership_confidence=1.0,
+                    relevance_score=1.0,
+                    evidence={"membership_confidence_snapshot": 1.0},
+                    is_primary=True,
+                ),
+            ])
         return super().execute(statement, params)
 
 
@@ -859,6 +992,11 @@ def test_story_list_filters_cursor_and_primary_url(monkeypatch):
     assert [story["id"] for story in payload["stories"]] == [7]
     assert payload["stories"][0]["primary_url"] == "https://example.test/latest"
     assert payload["next_cursor"]
+    assert payload["consistency"]["mode"] == "rank_snapshot_live_filters"
+    assert payload["consistency"]["ranking_at"]
+    assert "membership" in payload["consistency"]["frozen_features"]
+    assert "lifecycle" in payload["consistency"]["live_filters"]
+    assert "not a full point-in-time snapshot" in payload["consistency"]["limitation"]
     _, params = session.calls[0]
     assert params["country"] == "AZ"
     assert params["lifecycle"] == "developing"
@@ -1133,6 +1271,40 @@ def test_story_cursor_ignores_mutated_current_aggregates_after_first_page(monkey
     assert "COALESCE(st.article_count" not in list_sql
 
 
+def test_merge_after_first_page_is_excluded_from_the_rank_snapshot(monkeypatch):
+    client, list_session = story_client(monkeypatch)
+    first = client.get("/api/v2/stories?limit=1")
+    cursor = first.json()["next_cursor"]
+    ranking_at = next(
+        params["ranking_at"]
+        for sql, params in list_session.calls
+        if "ORDER BY lifecycle_rank ASC" in sql
+    )
+    merge_at = ranking_at + timedelta(seconds=1)
+    merge_session = DuplicatePersistenceSession()
+
+    persist_story_cluster(
+        merge_session,
+        [candidate("AZ"), candidate("KZ")],
+        now=merge_at,
+    )
+    second = client.get("/api/v2/stories", params={"limit": 1, "cursor": cursor})
+
+    assert second.status_code == 200
+    reconcile_sql, reconcile_params = next(
+        call for call in merge_session.calls
+        if "SELECT :primary_story_id" in call[0] and "FROM story_articles" in call[0]
+    )
+    assert reconcile_params["now"] == merge_at
+    assert ":now AS added_at" in reconcile_sql
+    second_list_sql, second_list_params = next(
+        call for call in list_session.calls
+        if "cursor_lifecycle_rank" in call[1]
+    )
+    assert second_list_params["ranking_at"] == ranking_at
+    assert "sa.added_at <= :ranking_at" in second_list_sql
+
+
 def test_story_detail_articles_use_bounded_cursor_pagination(monkeypatch):
     client, session = story_client(monkeypatch, PaginatedArticleSession())
 
@@ -1148,6 +1320,58 @@ def test_story_detail_articles_use_bounded_cursor_pagination(monkeypatch):
         call for call in session.calls if "WITH ranked_articles" in call[0]
     )
     assert article_call[1]["article_limit"] == 2
+    cursor_payload = json.loads(base64.urlsafe_b64decode(
+        payload["articles_next_cursor"]
+        + "=" * (-len(payload["articles_next_cursor"]) % 4)
+    ).decode("utf-8"))
+    assert cursor_payload[0] == stories_routes.ARTICLE_CURSOR_VERSION
+    assert len(cursor_payload) == 6
+    assert datetime.fromisoformat(cursor_payload[2].replace("Z", "+00:00")).tzinfo
+
+
+def test_article_cursor_freezes_membership_set_and_rank_across_mutations(monkeypatch):
+    session = SnapshotArticleSession()
+    client, _ = story_client(monkeypatch, session)
+
+    first = client.get("/api/v2/stories/7?article_limit=1")
+    session.mutated = True
+    second = client.get(
+        "/api/v2/stories/7",
+        params={
+            "article_limit": 1,
+            "article_cursor": first.json()["articles_next_cursor"],
+        },
+    )
+
+    assert first.status_code == second.status_code == 200
+    assert [item["article_id"] for item in first.json()["articles"]] == [1]
+    assert [item["article_id"] for item in second.json()["articles"]] == [2]
+    article_calls = [call for call in session.calls if "WITH ranked_articles" in call[0]]
+    assert article_calls[1][1]["ranking_at"] == article_calls[0][1]["ranking_at"]
+    assert "sa.added_at <= :ranking_at" in article_calls[1][0]
+    assert "membership_confidence_snapshot" in article_calls[1][0]
+    assert "JOIN analysis" not in article_calls[1][0]
+
+
+def test_article_cursor_rejects_invalid_ranking_context(monkeypatch):
+    client, _ = story_client(monkeypatch, PaginatedArticleSession())
+    first = client.get("/api/v2/stories/7?article_limit=1")
+    cursor = first.json()["articles_next_cursor"]
+    payload = json.loads(base64.urlsafe_b64decode(
+        cursor + "=" * (-len(cursor) % 4)
+    ).decode("utf-8"))
+    payload[2] = 123
+    invalid = base64.urlsafe_b64encode(
+        json.dumps(payload).encode("utf-8")
+    ).decode("ascii")
+
+    response = client.get(
+        "/api/v2/stories/7",
+        params={"article_limit": 1, "article_cursor": invalid},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Invalid article cursor"
 
 
 @pytest.mark.parametrize("changed_params", [
@@ -1277,23 +1501,32 @@ def test_typed_invalid_story_and_article_cursors_return_400(monkeypatch):
 
 
 def test_story_api_serializes_only_http_urls_with_hostnames(monkeypatch):
-    client, _ = story_client(monkeypatch, UnsafeUrlStorySession())
+    client, session = story_client(monkeypatch, UnsafeUrlStorySession())
 
     listing = client.get("/api/v2/stories?limit=1")
     detail = client.get("/api/v2/stories/7")
 
     assert listing.status_code == 200
-    assert listing.json()["stories"][0]["primary_url"] is None
+    assert listing.json()["stories"][0]["primary_url"] == (
+        "https://safe.example/story-primary"
+    )
     assert detail.status_code == 200
     payload = detail.json()
-    assert payload["primary_url"] is None
-    assert payload["countries"][0]["primary_url"] is None
+    assert payload["primary_url"] == "https://safe.example/story-primary"
+    assert payload["countries"][0]["primary_url"] == (
+        "https://safe.example/country-primary"
+    )
     assert [article["url"] for article in payload["articles"]] == [
         None,
         None,
         None,
         "https://safe.example/story",
     ]
+    candidate_queries = [
+        sql for sql, _ in session.calls if "primary_url_candidates" in sql
+    ]
+    assert candidate_queries
+    assert all("LIMIT 5" in sql for sql in candidate_queries)
 
 
 @pytest.mark.parametrize("url", [
@@ -1379,6 +1612,15 @@ def test_membership_evidence_reproduces_score_and_names_peer():
         assert evidence["effective_components"]
         assert evidence["weights"]
         assert evidence["action_level_snapshot"] == 3
+        assert evidence["membership_confidence_snapshot"] == pytest.approx(
+            next(
+                params["confidence"]
+                for sql, params in session.calls
+                if "INSERT INTO story_articles" in sql
+                and "VALUES" in sql
+                and json.loads(params["evidence"]) == evidence
+            )
+        )
         reproduced = sum(
             evidence["effective_components"][name] * weight
             for name, weight in evidence["weights"].items()
@@ -1389,6 +1631,8 @@ def test_membership_evidence_reproduces_score_and_names_peer():
         if "INSERT INTO story_articles" in sql and "VALUES" in sql
     )
     assert "story_articles.evidence->'action_level_snapshot'" in membership_sql
+    assert "membership_confidence_snapshot" in membership_sql
+    assert "jsonb_typeof" in membership_sql
 
 
 def test_persistence_checks_stable_thread_identity_before_summary_generation():
@@ -1413,7 +1657,17 @@ def test_overlapping_story_ids_are_reconciled_into_one_primary():
         call for call in session.calls
         if "merged_into_story_id" in call[0] and "UPDATE stories" in call[0]
     )
-    assert reconcile_call[1] == {"primary_story_id": 10, "duplicate_story_ids": [11]}
+    assert reconcile_call[1] == {
+        "primary_story_id": 10,
+        "duplicate_story_ids": [11],
+        "now": NOW,
+    }
+    assert ":now AS added_at" in reconcile_call[0]
+    conflict_clause = reconcile_call[0].split(
+        "ON CONFLICT (story_id, article_id) DO UPDATE SET", 1
+    )[1]
+    assert "added_at" not in conflict_clause
+    assert "membership_confidence_snapshot" in reconcile_call[0]
     assert supersede_call[1]["primary_story_id"] == 10
     assert supersede_call[1]["duplicate_story_ids"] == [11]
     assert not any("DELETE FROM stories" in sql for sql in session.statements)
@@ -1446,6 +1700,56 @@ def test_old_story_slug_resolves_to_canonical_story(monkeypatch):
     assert payload["id"] == 10
     assert payload["slug"] == "story-primary"
     assert payload["redirected_from_story_id"] == 11
+
+
+def test_story_merge_chain_resolves_only_final_canonical_story(monkeypatch):
+    session = MergeChainStorySession({
+        7: {"merged_into_story_id": 8},
+        8: {"merged_into_story_id": 9},
+        9: {},
+    })
+    client, _ = story_client(monkeypatch, session)
+
+    response = client.get("/api/v2/stories/7")
+
+    assert response.status_code == 200
+    assert response.json()["id"] == 9
+    assert response.json()["redirected_from_story_id"] == 7
+    resolver_sql = next(
+        sql for sql, _ in session.calls if "forward_chain" in sql
+    )
+    assert "WITH RECURSIVE" in resolver_sql
+    assert "~ '^[1-9][0-9]*$'" in resolver_sql
+    assert "ANY(chain.path)" in resolver_sql
+    assert "max_merge_depth" in resolver_sql
+
+
+def test_story_merge_chain_missing_target_returns_404(monkeypatch):
+    client, _ = story_client(
+        monkeypatch,
+        MergeChainStorySession({7: {"merged_into_story_id": 999}}),
+    )
+
+    response = client.get("/api/v2/stories/7")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Canonical story not found"
+
+
+@pytest.mark.parametrize("chain", [
+    {7: {"merged_into_story_id": "not-an-id"}},
+    {
+        7: {"merged_into_story_id": 8},
+        8: {"merged_into_story_id": 7},
+    },
+])
+def test_story_merge_chain_rejects_invalid_target_and_cycles(monkeypatch, chain):
+    client, _ = story_client(monkeypatch, MergeChainStorySession(chain))
+
+    response = client.get("/api/v2/stories/7")
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Invalid story merge chain"
 
 
 def test_explicit_reactivation_is_persisted_in_audit_history():

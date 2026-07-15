@@ -1253,12 +1253,32 @@ def persist_story_cluster(
         reconciliation_params = {
             "primary_story_id": story_id,
             "duplicate_story_ids": duplicate_story_ids,
+            "now": now,
         }
         session.execute(text("""
             INSERT INTO story_articles (
                 story_id, article_id, membership_confidence, evidence, added_at
             )
-            SELECT :primary_story_id, article_id, membership_confidence, evidence, added_at
+            SELECT :primary_story_id, article_id, membership_confidence,
+                   (CASE
+                       WHEN jsonb_typeof(evidence) = 'object' THEN evidence
+                       ELSE '{}'::jsonb
+                    END) || jsonb_build_object(
+                       'membership_confidence_snapshot',
+                       CASE
+                           WHEN jsonb_typeof(
+                               evidence->'membership_confidence_snapshot'
+                           ) = 'number'
+                           AND evidence->>'membership_confidence_snapshot'
+                               ~ '^(0([.][0-9]+)?|1([.]0+)?)$'
+                           THEN evidence->'membership_confidence_snapshot'
+                           ELSE to_jsonb(LEAST(
+                               1.0,
+                               GREATEST(0.0, membership_confidence)
+                           ))
+                       END
+                   ),
+                   :now AS added_at
             FROM story_articles
             WHERE story_id = ANY(:duplicate_story_ids)
             ON CONFLICT (story_id, article_id) DO UPDATE SET
@@ -1269,10 +1289,30 @@ def persist_story_cluster(
                 evidence = story_articles.evidence || EXCLUDED.evidence
                     || jsonb_build_object(
                         'action_level_snapshot',
-                        COALESCE(
-                            story_articles.evidence->'action_level_snapshot',
-                            EXCLUDED.evidence->'action_level_snapshot'
-                        )
+                        CASE
+                            WHEN jsonb_typeof(
+                                story_articles.evidence->'action_level_snapshot'
+                            ) = 'number'
+                            AND story_articles.evidence->>'action_level_snapshot'
+                                ~ '^[1-5]$'
+                            THEN story_articles.evidence->'action_level_snapshot'
+                            ELSE EXCLUDED.evidence->'action_level_snapshot'
+                        END
+                    ) || jsonb_build_object(
+                        'membership_confidence_snapshot',
+                        CASE
+                            WHEN jsonb_typeof(
+                                story_articles.evidence
+                                    ->'membership_confidence_snapshot'
+                            ) = 'number'
+                            AND story_articles.evidence
+                                    ->>'membership_confidence_snapshot'
+                                ~ '^(0([.][0-9]+)?|1([.]0+)?)$'
+                            THEN story_articles.evidence
+                                ->'membership_confidence_snapshot'
+                            ELSE EXCLUDED.evidence
+                                ->'membership_confidence_snapshot'
+                        END
                     )
         """), reconciliation_params)
         session.execute(text("""
@@ -1298,6 +1338,8 @@ def persist_story_cluster(
             reactivation_pairs,
             story_reactivation=story_reactivation,
         )
+        membership_confidence = round(membership_confidence, 3)
+        evidence["membership_confidence_snapshot"] = membership_confidence
         for article_id in candidate.article_ids:
             session.execute(text("""
                 INSERT INTO story_articles (
@@ -1307,15 +1349,35 @@ def persist_story_cluster(
                     membership_confidence = EXCLUDED.membership_confidence,
                     evidence = EXCLUDED.evidence || jsonb_build_object(
                         'action_level_snapshot',
-                        COALESCE(
-                            story_articles.evidence->'action_level_snapshot',
-                            EXCLUDED.evidence->'action_level_snapshot'
-                        )
+                        CASE
+                            WHEN jsonb_typeof(
+                                story_articles.evidence->'action_level_snapshot'
+                            ) = 'number'
+                            AND story_articles.evidence->>'action_level_snapshot'
+                                ~ '^[1-5]$'
+                            THEN story_articles.evidence->'action_level_snapshot'
+                            ELSE EXCLUDED.evidence->'action_level_snapshot'
+                        END
+                    ) || jsonb_build_object(
+                        'membership_confidence_snapshot',
+                        CASE
+                            WHEN jsonb_typeof(
+                                story_articles.evidence
+                                    ->'membership_confidence_snapshot'
+                            ) = 'number'
+                            AND story_articles.evidence
+                                    ->>'membership_confidence_snapshot'
+                                ~ '^(0([.][0-9]+)?|1([.]0+)?)$'
+                            THEN story_articles.evidence
+                                ->'membership_confidence_snapshot'
+                            ELSE EXCLUDED.evidence
+                                ->'membership_confidence_snapshot'
+                        END
                     )
             """), {
                 "story_id": story_id,
                 "article_id": article_id,
-                "confidence": round(membership_confidence, 3),
+                "confidence": membership_confidence,
                 "evidence": json.dumps(evidence, ensure_ascii=False),
             })
 

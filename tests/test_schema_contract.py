@@ -124,9 +124,24 @@ def test_signal_evidence_array_indexes_are_present_for_new_and_existing_installs
     assert "CREATE OR REPLACE PROCEDURE public.backfill_story_action_snapshots" in migration_sql
     assert "LIMIT 5000" in migration_sql
     assert "jsonb_typeof(sa.evidence) = 'object'" in migration_sql
-    assert migration_sql.count("ELSE '{}'::jsonb") >= 3
+    assert "ELSE '{}'::jsonb" in migration_sql
     assert "jsonb_set" in migration_sql
+    assert "membership_confidence_snapshot" in migration_sql
+    assert "LEAST(1.0, GREATEST(" in migration_sql
+    assert "0.0," in migration_sql
     assert "CALL public.backfill_story_action_snapshots()" in migration_sql
+
+
+def test_story_snapshot_backfill_replaces_corrupt_json_values_safely():
+    sql = migration("023_signal_evidence_array_indexes.sql")
+
+    assert "jsonb_typeof(sa.evidence->'action_level_snapshot') = 'number'" in sql
+    assert "sa.evidence->>'action_level_snapshot' ~ '^[1-5]$'" in sql
+    assert "sa.evidence->'membership_confidence_snapshot'" in sql
+    assert ") = 'number'" in sql
+    assert "BETWEEN 0.0 AND 1.0" in sql
+    assert "ELSE to_jsonb(batch.action_level)" in sql
+    assert "ELSE to_jsonb(batch.membership_confidence)" in sql
 
 
 def test_init_schema_mirrors_new_tables():

@@ -385,6 +385,15 @@ export interface StoriesListResponse {
   stories: StoryListItem[];
   next_cursor: string | null;
   coverage?: StoryCoverage;
+  consistency?: StoryConsistency;
+}
+
+export interface StoryConsistency {
+  ranking_at: string;
+  mode: "rank_snapshot_live_filters";
+  frozen_features: string[];
+  live_filters: string[];
+  limitation: string;
 }
 
 export interface StoryCoverage {

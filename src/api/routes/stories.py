@@ -23,9 +23,10 @@ from src.stories import MERGE_THRESHOLD
 
 router = APIRouter(prefix="/api/v2", tags=["stories"])
 STORY_CURSOR_VERSION = "stories-v3-activity-relevance"
-ARTICLE_CURSOR_VERSION = "story-articles-v2-relevance"
+ARTICLE_CURSOR_VERSION = "story-articles-v3-rank-snapshot"
 MAX_LINKED_SIGNALS = 5
 MAX_STORY_ALIAS_DEPTH = 32
+MAX_PRIMARY_URL_CANDIDATES = 5
 MAX_RRI_SHIFTS = 8
 MIN_MEANINGFUL_RRI_DELTA = 3.0
 
@@ -102,11 +103,19 @@ STORY_FIELDS = """
     """ + STORY_RELEVANCE_SQL + """ AS relevance_score,
     (SELECT COALESCE(jsonb_agg(TRIM(c.country_code) ORDER BY c.country_code), '[]'::jsonb)
      FROM story_countries c WHERE c.story_id = st.id) AS countries,
-    (SELECT ar.url
-     FROM story_articles primary_membership
-     JOIN articles ar ON ar.id = primary_membership.article_id
-     WHERE primary_membership.story_id = st.id AND ar.url IS NOT NULL
-     ORDER BY ar.published_at DESC NULLS LAST, ar.id DESC LIMIT 1) AS primary_url
+    (SELECT COALESCE(
+         jsonb_agg(candidate.url ORDER BY candidate.published_at DESC NULLS LAST,
+                   candidate.id DESC),
+         '[]'::jsonb
+     )
+     FROM (
+         SELECT ar.url, ar.published_at, ar.id
+         FROM story_articles primary_membership
+         JOIN articles ar ON ar.id = primary_membership.article_id
+         WHERE primary_membership.story_id = st.id AND ar.url IS NOT NULL
+         ORDER BY ar.published_at DESC NULLS LAST, ar.id DESC
+         LIMIT 5
+     ) candidate) AS primary_url_candidates
 """
 
 
@@ -180,10 +189,19 @@ class StoryCoverage(BaseModel):
     available_to: str | None = None
 
 
+class StoryConsistency(BaseModel):
+    ranking_at: str
+    mode: Literal["rank_snapshot_live_filters"] = "rank_snapshot_live_filters"
+    frozen_features: list[str] = Field(default_factory=list)
+    live_filters: list[str] = Field(default_factory=list)
+    limitation: str
+
+
 class StoriesListResponse(BaseModel):
     stories: list[StoryListItem]
     next_cursor: str | None = None
     coverage: StoryCoverage
+    consistency: StoryConsistency
 
 
 class StoryCountrySlice(StoryCountryContext):
@@ -369,6 +387,17 @@ def safe_public_url(value: Any) -> str | None:
     return value
 
 
+def _first_safe_public_url(values: Any, *, fallback: Any = None) -> str | None:
+    candidates = _json_list(values)
+    if not candidates and fallback is not None:
+        candidates = [fallback]
+    for candidate in candidates[:MAX_PRIMARY_URL_CANDIDATES]:
+        safe_url = safe_public_url(candidate)
+        if safe_url:
+            return safe_url
+    return None
+
+
 def story_to_dict(row: Any) -> dict[str, Any]:
     confidence = float(_value(row, "clustering_confidence", 0) or 0)
     relevance_score = _value(row, "relevance_score")
@@ -404,7 +433,10 @@ def story_to_dict(row: Any) -> dict[str, Any]:
         "clustering_confidence": confidence,
         "generated_at": _iso(_value(row, "generated_at")),
         "countries": [str(code).strip() for code in _json_list(_value(row, "countries"))],
-        "primary_url": safe_public_url(_value(row, "primary_url")),
+        "primary_url": _first_safe_public_url(
+            _value(row, "primary_url_candidates"),
+            fallback=_value(row, "primary_url"),
+        ),
         "why_included": why_included,
         "relevance_score": round(float(relevance_score), 3),
         "confidence": confidence,
@@ -830,10 +862,15 @@ def _decode_cursor(
         raise HTTPException(status_code=400, detail="Invalid story cursor") from exc
 
 
-def _encode_article_cursor(row: Any, story_id: int) -> str:
+def _encode_article_cursor(
+    row: Any,
+    story_id: int,
+    ranking_at: datetime,
+) -> str:
     payload = json.dumps([
         ARTICLE_CURSOR_VERSION,
         story_id,
+        _iso(ranking_at),
         float(_value(row, "relevance_score", 0) or 0),
         _iso(_value(row, "published_at")),
         int(_value(row, "article_id")),
@@ -845,14 +882,21 @@ def _decode_article_cursor(
     cursor: str,
     *,
     expected_story_id: int,
-) -> tuple[float, datetime, int]:
+) -> tuple[datetime, float, datetime, int]:
     try:
         padding = "=" * (-len(cursor) % 4)
         decoded = base64.urlsafe_b64decode((cursor + padding).encode("ascii"))
         payload = json.loads(decoded.decode("utf-8"))
-        if not isinstance(payload, list) or len(payload) != 5:
+        if not isinstance(payload, list) or len(payload) != 6:
             raise ValueError("wrong article cursor shape")
-        version, story_id, relevance_score, published_at, article_id = payload
+        (
+            version,
+            story_id,
+            ranking_at,
+            relevance_score,
+            published_at,
+            article_id,
+        ) = payload
         if version != ARTICLE_CURSOR_VERSION or story_id != expected_story_id:
             raise HTTPException(
                 status_code=400, detail="Article cursor does not match story"
@@ -861,9 +905,17 @@ def _decode_article_cursor(
             raise ValueError("invalid relevance score")
         if not math.isfinite(float(relevance_score)):
             raise ValueError("invalid relevance score")
-        if not isinstance(published_at, str) or not isinstance(article_id, int) or isinstance(article_id, bool):
+        if (
+            not isinstance(ranking_at, str)
+            or not isinstance(published_at, str)
+            or not isinstance(article_id, int)
+            or isinstance(article_id, bool)
+        ):
             raise ValueError("invalid article cursor types")
         return (
+            _as_utc_query_datetime(
+                datetime.fromisoformat(ranking_at.replace("Z", "+00:00"))
+            ),
             float(relevance_score),
             datetime.fromisoformat(published_at.replace("Z", "+00:00")),
             article_id,
@@ -1025,6 +1077,31 @@ def _list_stories(
             if has_more and page else None
         ),
         "coverage": coverage,
+        "consistency": {
+            "ranking_at": _iso(params["ranking_at"]),
+            "mode": "rank_snapshot_live_filters",
+            "frozen_features": [
+                "membership",
+                "first_seen",
+                "last_seen",
+                "article_count",
+                "source_count",
+                "country_count",
+                "action_level",
+                "lifecycle_priority",
+            ],
+            "live_filters": [
+                "lifecycle",
+                "min_confidence",
+                "topic",
+                "entity_id",
+                "merge_state",
+            ],
+            "limitation": (
+                "Ranking is frozen at ranking_at, but filters use live state; "
+                "this is not a full point-in-time snapshot."
+            ),
+        },
     }
 
 
@@ -1086,6 +1163,59 @@ def get_story_by_slug(
     )
 
 
+def _resolve_canonical_story_id(session: Any, story_id: int) -> int:
+    rows = session.execute(text("""
+        WITH RECURSIVE forward_chain AS (
+            SELECT origin.id, origin.meta,
+                   ARRAY[origin.id]::bigint[] AS path,
+                   0 AS depth
+            FROM stories origin
+            WHERE origin.id = :story_id
+
+            UNION ALL
+
+            SELECT target.id, target.meta,
+                   chain.path || target.id,
+                   chain.depth + 1
+            FROM forward_chain chain
+            JOIN stories target
+              ON target.id::text = chain.meta->>'merged_into_story_id'
+            WHERE COALESCE(
+                      chain.meta->>'merged_into_story_id', ''
+                  ) ~ '^[1-9][0-9]*$'
+              AND NOT target.id = ANY(chain.path)
+              AND chain.depth < :max_merge_depth
+        )
+        SELECT id, meta, path, depth
+        FROM forward_chain
+        ORDER BY depth
+    """), {
+        "story_id": story_id,
+        "max_merge_depth": MAX_STORY_ALIAS_DEPTH,
+    }).fetchall()
+    if not rows:
+        raise HTTPException(status_code=404, detail="Story not found")
+
+    final_row = rows[-1]
+    final_id = int(_value(final_row, "id"))
+    final_meta = _json_object(_value(final_row, "meta"))
+    raw_target = final_meta.get("merged_into_story_id")
+    if raw_target is None:
+        return final_id
+    if isinstance(raw_target, bool) or not re.fullmatch(
+        r"[1-9][0-9]*", str(raw_target)
+    ):
+        raise HTTPException(status_code=409, detail="Invalid story merge chain")
+
+    target_id = int(raw_target)
+    path = [int(item) for item in (_value(final_row, "path") or [])]
+    if not path:
+        path = [int(_value(row, "id")) for row in rows]
+    if target_id in path or int(_value(final_row, "depth", 0)) >= MAX_STORY_ALIAS_DEPTH:
+        raise HTTPException(status_code=409, detail="Invalid story merge chain")
+    raise HTTPException(status_code=404, detail="Canonical story not found")
+
+
 @router.get("/stories/{story_id}", response_model=StoryDetailResponse)
 def get_story(
     story_id: int,
@@ -1094,56 +1224,28 @@ def get_story(
 ):
     """Return a story with membership, entity, event, and country evidence."""
 
-    article_params: dict[str, Any] = {
-        "story_id": story_id,
-        "article_limit": article_limit + 1,
-    }
-    request_ranking_at = datetime.now(timezone.utc)
-
+    requested_story_id = story_id
     redirected_from_story_id: int | None = None
     with get_session() as session:
-        story = session.execute(text(f"""
-            {STORY_RANK_FEATURES_CTE}
-            SELECT {STORY_FIELDS}
-            FROM stories st
-            JOIN story_rank_features rf ON rf.story_id = st.id
-            WHERE st.id = :story_id
-        """), {
+        story_id = _resolve_canonical_story_id(session, story_id)
+        if story_id != requested_story_id:
+            redirected_from_story_id = requested_story_id
+
+        request_ranking_at = datetime.now(timezone.utc)
+        article_params: dict[str, Any] = {
             "story_id": story_id,
-            "ranking_at": request_ranking_at,
-        }).fetchone()
-        if not story:
-            raise HTTPException(status_code=404, detail="Story not found")
-
-        story_meta = _json_object(_value(story, "meta"))
-        canonical_story_id = story_meta.get("merged_into_story_id")
-        if (
-            isinstance(canonical_story_id, int)
-            and not isinstance(canonical_story_id, bool)
-            and canonical_story_id != story_id
-        ):
-            redirected_from_story_id = story_id
-            story_id = canonical_story_id
-            story = session.execute(text(f"""
-                {STORY_RANK_FEATURES_CTE}
-                SELECT {STORY_FIELDS}
-                FROM stories st
-                JOIN story_rank_features rf ON rf.story_id = st.id
-                WHERE st.id = :story_id
-            """), {
-                "story_id": story_id,
-                "ranking_at": request_ranking_at,
-            }).fetchone()
-            if not story:
-                raise HTTPException(status_code=404, detail="Canonical story not found")
-            article_params["story_id"] = story_id
-
+            "article_limit": article_limit + 1,
+        }
         article_conditions = []
         if article_cursor:
-            cursor_relevance, cursor_published_at, cursor_article_id = (
-                _decode_article_cursor(
-                    article_cursor, expected_story_id=story_id
-                )
+            (
+                request_ranking_at,
+                cursor_relevance,
+                cursor_published_at,
+                cursor_article_id,
+            ) = _decode_article_cursor(
+                article_cursor,
+                expected_story_id=story_id,
             )
             article_conditions.append(
                 "(ranked.relevance_score < :article_cursor_relevance OR "
@@ -1157,23 +1259,46 @@ def get_story(
                 "article_cursor_published_at": cursor_published_at,
                 "article_cursor_article_id": cursor_article_id,
             })
+        article_params["ranking_at"] = request_ranking_at
         article_where = (
             "WHERE " + " AND ".join(article_conditions)
             if article_conditions else ""
         )
 
+        story = session.execute(text(f"""
+            {STORY_RANK_FEATURES_CTE}
+            SELECT {STORY_FIELDS}
+            FROM stories st
+            JOIN story_rank_features rf ON rf.story_id = st.id
+            WHERE st.id = :story_id
+        """), {
+            "story_id": story_id,
+            "ranking_at": request_ranking_at,
+        }).fetchone()
+        if not story:
+            raise HTTPException(status_code=404, detail="Story not found")
+
         country_rows = session.execute(text("""
             SELECT TRIM(sc.country_code) AS country_code, sc.article_count,
                    sc.source_count, sc.media_tone, sc.first_seen, sc.last_seen,
-                   (SELECT ar.url
-                    FROM story_articles sa
-                    JOIN articles ar ON ar.id = sa.article_id
-                    JOIN sources s ON s.id = ar.source_id
-                    WHERE sa.story_id = sc.story_id
-                      AND s.country_code = sc.country_code
-                      AND ar.url IS NOT NULL
-                    ORDER BY ar.published_at DESC NULLS LAST, ar.id DESC LIMIT 1
-                   ) AS primary_url
+                   (SELECT COALESCE(
+                        jsonb_agg(candidate.url ORDER BY
+                                  candidate.published_at DESC NULLS LAST,
+                                  candidate.id DESC),
+                        '[]'::jsonb
+                    )
+                    FROM (
+                        SELECT ar.url, ar.published_at, ar.id
+                        FROM story_articles sa
+                        JOIN articles ar ON ar.id = sa.article_id
+                        JOIN sources s ON s.id = ar.source_id
+                        WHERE sa.story_id = sc.story_id
+                          AND s.country_code = sc.country_code
+                          AND ar.url IS NOT NULL
+                        ORDER BY ar.published_at DESC NULLS LAST, ar.id DESC
+                        LIMIT 5
+                    ) candidate
+                   ) AS primary_url_candidates
             FROM story_countries sc
             WHERE sc.story_id = :story_id
             ORDER BY sc.article_count DESC, sc.country_code
@@ -1212,10 +1337,15 @@ def get_story(
                 SELECT ar.id AS article_id, ar.title, ar.url, ar.published_at,
                        s.name AS source, TRIM(s.country_code) AS country_code,
                        sa.membership_confidence, sa.evidence,
-                       ROUND((
-                           COALESCE(sa.membership_confidence, 0) * 0.60
-                           + COALESCE(an.relevance_score, 0) * 0.40
-                       )::numeric, 3) AS relevance_score,
+                       CASE
+                           WHEN jsonb_typeof(sa.evidence) = 'object'
+                                AND sa.evidence->>'membership_confidence_snapshot'
+                                    ~ '^(0([.][0-9]+)?|1([.]0+)?)$'
+                           THEN (
+                               sa.evidence->>'membership_confidence_snapshot'
+                           )::numeric
+                           ELSE 0::numeric
+                       END AS relevance_score,
                        ROW_NUMBER() OVER (
                            PARTITION BY s.country_code
                            ORDER BY ar.published_at DESC NULLS LAST, ar.id DESC
@@ -1223,8 +1353,8 @@ def get_story(
                 FROM story_articles sa
                 JOIN articles ar ON ar.id = sa.article_id
                 JOIN sources s ON s.id = ar.source_id
-                LEFT JOIN analysis an ON an.article_id = ar.id
                 WHERE sa.story_id = :story_id
+                  AND sa.added_at <= :ranking_at
             )
             SELECT * FROM ranked_articles ranked
             {article_where}
@@ -1248,7 +1378,10 @@ def get_story(
         "media_tone": float(_value(row, "media_tone")) if _value(row, "media_tone") is not None else None,
         "first_seen": _iso(_value(row, "first_seen")),
         "last_seen": _iso(_value(row, "last_seen")),
-        "primary_url": safe_public_url(_value(row, "primary_url")),
+        "primary_url": _first_safe_public_url(
+            _value(row, "primary_url_candidates"),
+            fallback=_value(row, "primary_url"),
+        ),
     } for row in country_rows]
     result["entities"] = [{
         "entity_id": str(_value(row, "entity_id")),
@@ -1297,7 +1430,7 @@ def get_story(
         })
     result["articles"] = articles
     result["articles_next_cursor"] = (
-        _encode_article_cursor(article_page[-1], story_id)
+        _encode_article_cursor(article_page[-1], story_id, request_ranking_at)
         if has_more_articles and article_page else None
     )
     result["redirected_from_story_id"] = redirected_from_story_id

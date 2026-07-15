@@ -4,9 +4,9 @@
 
 \set ON_ERROR_STOP on
 
--- Existing memberships predate the immutable action snapshot used by stable
--- story ranking. Backfill in committed batches so retries remain bounded and
--- rows already snapshotted are never rewritten.
+-- Existing memberships predate the immutable action and confidence snapshots
+-- used by stable story/article ranking. Backfill in committed batches so
+-- retries remain bounded and rows already snapshotted are never rewritten.
 CREATE OR REPLACE PROCEDURE public.backfill_story_action_snapshots()
 LANGUAGE plpgsql
 AS $backfill$
@@ -17,37 +17,97 @@ BEGIN
     WITH batch AS MATERIALIZED (
       SELECT sa.story_id,
              sa.article_id,
-             LEAST(5, GREATEST(1, COALESCE(an.action_level, 1))) AS action_level
+             LEAST(5, GREATEST(1, COALESCE(an.action_level, 1))) AS action_level,
+             LEAST(1.0, GREATEST(
+               0.0,
+               COALESCE(sa.membership_confidence, 0.0)
+             )) AS membership_confidence
       FROM public.story_articles sa
       LEFT JOIN public.analysis an ON an.article_id = sa.article_id
-      WHERE NOT ((
-        CASE
-          WHEN jsonb_typeof(sa.evidence) = 'object' THEN sa.evidence
-          ELSE '{}'::jsonb
-        END
-      ) ? 'action_level_snapshot')
+      WHERE NOT CASE
+        WHEN jsonb_typeof(sa.evidence) = 'object'
+             AND jsonb_typeof(sa.evidence->'action_level_snapshot') = 'number'
+             AND sa.evidence->>'action_level_snapshot' ~ '^[1-5]$'
+        THEN true
+        ELSE false
+      END
+         OR NOT CASE
+           WHEN jsonb_typeof(sa.evidence) = 'object'
+                AND CASE
+                  WHEN jsonb_typeof(
+                    sa.evidence->'membership_confidence_snapshot'
+                  ) = 'number'
+                  THEN (sa.evidence
+                          ->>'membership_confidence_snapshot')::numeric
+                       BETWEEN 0.0 AND 1.0
+                  ELSE false
+                END
+           THEN true
+           ELSE false
+         END
       ORDER BY sa.story_id, sa.article_id
       LIMIT 5000
     )
     UPDATE public.story_articles sa
     SET evidence = jsonb_set(
+      jsonb_set(
+        CASE
+          WHEN jsonb_typeof(sa.evidence) = 'object' THEN sa.evidence
+          ELSE '{}'::jsonb
+        END,
+        '{action_level_snapshot}',
+        CASE
+          WHEN jsonb_typeof(sa.evidence) = 'object'
+               AND jsonb_typeof(sa.evidence->'action_level_snapshot') = 'number'
+               AND sa.evidence->>'action_level_snapshot' ~ '^[1-5]$'
+          THEN sa.evidence->'action_level_snapshot'
+          ELSE to_jsonb(batch.action_level)
+        END,
+        true
+      ),
+      '{membership_confidence_snapshot}',
       CASE
-        WHEN jsonb_typeof(sa.evidence) = 'object' THEN sa.evidence
-        ELSE '{}'::jsonb
+        WHEN jsonb_typeof(sa.evidence) = 'object'
+             AND CASE
+               WHEN jsonb_typeof(
+                 sa.evidence->'membership_confidence_snapshot'
+               ) = 'number'
+               THEN (sa.evidence
+                       ->>'membership_confidence_snapshot')::numeric
+                    BETWEEN 0.0 AND 1.0
+               ELSE false
+             END
+        THEN sa.evidence->'membership_confidence_snapshot'
+        ELSE to_jsonb(batch.membership_confidence)
       END,
-      '{action_level_snapshot}',
-      to_jsonb(batch.action_level),
       true
     )
     FROM batch
     WHERE sa.story_id = batch.story_id
       AND sa.article_id = batch.article_id
-      AND NOT ((
-        CASE
-          WHEN jsonb_typeof(sa.evidence) = 'object' THEN sa.evidence
-          ELSE '{}'::jsonb
+      AND (
+        NOT CASE
+          WHEN jsonb_typeof(sa.evidence) = 'object'
+               AND jsonb_typeof(sa.evidence->'action_level_snapshot') = 'number'
+               AND sa.evidence->>'action_level_snapshot' ~ '^[1-5]$'
+          THEN true
+          ELSE false
         END
-      ) ? 'action_level_snapshot');
+        OR NOT CASE
+          WHEN jsonb_typeof(sa.evidence) = 'object'
+               AND CASE
+                 WHEN jsonb_typeof(
+                   sa.evidence->'membership_confidence_snapshot'
+                 ) = 'number'
+                 THEN (sa.evidence
+                         ->>'membership_confidence_snapshot')::numeric
+                      BETWEEN 0.0 AND 1.0
+                 ELSE false
+               END
+          THEN true
+          ELSE false
+        END
+      );
 
     GET DIAGNOSTICS updated_rows = ROW_COUNT;
     COMMIT;
