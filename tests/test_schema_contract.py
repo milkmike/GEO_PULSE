@@ -106,6 +106,29 @@ def test_evidence_schema_contract():
     assert "CREATE TABLE IF NOT EXISTS index_change_explanations" in sql
 
 
+def test_signal_evidence_array_indexes_are_present_for_new_and_existing_installs():
+    migration_sql = migration("023_signal_evidence_array_indexes.sql")
+    init_sql = (ROOT / "data" / "init.sql").read_text()
+
+    for index_name, column in (
+        ("idx_signal_evidence_story_ids_gin", "story_ids"),
+        ("idx_signal_evidence_article_ids_gin", "article_ids"),
+    ):
+        assert index_name in migration_sql
+        assert "DROP INDEX CONCURRENTLY" in migration_sql
+        assert "CREATE INDEX CONCURRENTLY IF NOT EXISTS" in migration_sql
+        assert f"{index_name}\n  ON signal_evidence USING GIN ({column})" in init_sql
+    assert "namespace.nspname = 'public'" in migration_sql
+    assert "index_state.indrelid = 'public.signal_evidence'::regclass" in migration_sql
+    assert migration_sql.count("ON public.signal_evidence USING GIN") == 2
+    assert "CREATE OR REPLACE PROCEDURE public.backfill_story_action_snapshots" in migration_sql
+    assert "LIMIT 5000" in migration_sql
+    assert "jsonb_typeof(sa.evidence) = 'object'" in migration_sql
+    assert migration_sql.count("ELSE '{}'::jsonb") >= 3
+    assert "jsonb_set" in migration_sql
+    assert "CALL public.backfill_story_action_snapshots()" in migration_sql
+
+
 def test_init_schema_mirrors_new_tables():
     init = (ROOT / "data" / "init.sql").read_text()
     for table in (

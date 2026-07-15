@@ -542,6 +542,10 @@ CREATE TABLE IF NOT EXISTS signal_evidence (
 );
 CREATE INDEX IF NOT EXISTS idx_signal_evidence_created
   ON signal_evidence(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_signal_evidence_story_ids_gin
+  ON signal_evidence USING GIN (story_ids);
+CREATE INDEX IF NOT EXISTS idx_signal_evidence_article_ids_gin
+  ON signal_evidence USING GIN (article_ids);
 
 CREATE TABLE IF NOT EXISTS index_change_explanations (
   id BIGSERIAL PRIMARY KEY,

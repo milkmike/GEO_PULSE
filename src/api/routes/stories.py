@@ -8,7 +8,7 @@ import hashlib
 import json
 import math
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Literal, Optional
 from urllib.parse import urlparse
 
@@ -22,14 +22,74 @@ from src.stories import MERGE_THRESHOLD
 
 
 router = APIRouter(prefix="/api/v2", tags=["stories"])
-STORY_CURSOR_VERSION = "stories-v2-active-relevance"
+STORY_CURSOR_VERSION = "stories-v3-activity-relevance"
 ARTICLE_CURSOR_VERSION = "story-articles-v2-relevance"
 MAX_LINKED_SIGNALS = 5
+MAX_STORY_ALIAS_DEPTH = 32
+MAX_RRI_SHIFTS = 8
+MIN_MEANINGFUL_RRI_DELTA = 3.0
+
+STORY_RANK_FEATURES_CTE = """
+WITH story_rank_raw AS (
+    SELECT st_snapshot.id AS story_id,
+           MIN(ar.published_at) AS first_seen,
+           MAX(ar.published_at) AS last_seen,
+           COUNT(DISTINCT sa.article_id)::integer AS article_count,
+           COUNT(DISTINCT ar.source_id)::integer AS source_count,
+           COUNT(DISTINCT TRIM(src.country_code))::integer AS country_count,
+           COALESCE(MAX(
+               CASE
+                   WHEN sa.evidence->>'action_level_snapshot' ~ '^[1-5]$'
+                   THEN (sa.evidence->>'action_level_snapshot')::integer
+                   ELSE 1
+               END
+           ), 1)::integer AS highest_action_level,
+           array_agg(DISTINCT TRIM(src.country_code)) AS country_codes
+    FROM stories st_snapshot
+    JOIN story_articles sa
+      ON sa.story_id = st_snapshot.id
+     AND sa.added_at <= :ranking_at
+    JOIN articles ar ON ar.id = sa.article_id
+    JOIN sources src ON src.id = ar.source_id
+    WHERE st_snapshot.created_at <= :ranking_at
+    GROUP BY st_snapshot.id
+), story_rank_features AS (
+    SELECT raw.*,
+           CASE
+               WHEN raw.last_seen >= :ranking_at - INTERVAL '2 days'
+                    AND raw.highest_action_level >= 4 THEN 0
+               WHEN raw.first_seen < :ranking_at - INTERVAL '2 days'
+                    AND raw.last_seen >= :ranking_at - INTERVAL '3 days' THEN 1
+               WHEN raw.first_seen >= :ranking_at - INTERVAL '2 days' THEN 2
+               WHEN raw.last_seen >= :ranking_at - INTERVAL '14 days' THEN 3
+               ELSE 4
+           END AS lifecycle_rank
+    FROM story_rank_raw raw
+)
+"""
+
+STORY_LIFECYCLE_RANK_SQL = "rf.lifecycle_rank"
 
 STORY_RELEVANCE_SQL = """(
-    COALESCE(st.clustering_confidence, 0) * 0.70
-    + (LEAST(COALESCE(st.highest_action_level, 1), 5)::numeric / 5) * 0.20
-    + (LEAST(COALESCE(st.article_count, 0), 10)::numeric / 10) * 0.10
+    GREATEST(
+        0,
+        1 - LEAST(
+            GREATEST(EXTRACT(EPOCH FROM (:ranking_at - rf.last_seen)) / 86400, 0),
+            30
+        ) / 30
+    ) * 0.35
+    + LEAST(
+        rf.article_count::numeric
+        / GREATEST(EXTRACT(EPOCH FROM (rf.last_seen - rf.first_seen)) / 86400, 1),
+        20
+    ) / 20 * 0.25
+    + LEAST(rf.highest_action_level, 5)::numeric / 5 * 0.18
+    + LEAST(
+        rf.source_count::numeric
+        / GREATEST(rf.article_count, 1),
+        1
+    ) * 0.12
+    + LEAST(rf.country_count, 6)::numeric / 6 * 0.10
 )"""
 
 STORY_FIELDS = """
@@ -37,6 +97,8 @@ STORY_FIELDS = """
     st.first_seen, st.last_seen, st.article_count, st.source_count,
     st.country_count, st.highest_action_level, st.clustering_confidence,
     st.generated_at, st.meta,
+    """ + STORY_LIFECYCLE_RANK_SQL + """ AS lifecycle_rank,
+    rf.last_seen AS ranking_last_seen,
     """ + STORY_RELEVANCE_SQL + """ AS relevance_score,
     (SELECT COALESCE(jsonb_agg(TRIM(c.country_code) ORDER BY c.country_code), '[]'::jsonb)
      FROM story_countries c WHERE c.story_id = st.id) AS countries,
@@ -111,9 +173,17 @@ class StoryRriShift(BaseModel):
     )
 
 
+class StoryCoverage(BaseModel):
+    selected_from: str | None = None
+    selected_to: str | None = None
+    available_from: str | None = None
+    available_to: str | None = None
+
+
 class StoriesListResponse(BaseModel):
     stories: list[StoryListItem]
     next_cursor: str | None = None
+    coverage: StoryCoverage
 
 
 class StoryCountrySlice(StoryCountryContext):
@@ -159,6 +229,7 @@ class StoryDetailResponse(StoryListItem):
     countries: list[StoryCountrySlice]
     entities: list[StoryEntityEvidence]
     events: list[StoryEventEvidence]
+    rri_shifts: list[StoryRriShift] = Field(default_factory=list)
     articles: list[StoryArticleEvidence]
     articles_next_cursor: str | None = None
     redirected_from_story_id: int | None = None
@@ -178,6 +249,71 @@ def _value(row: Any, name: str, default: Any = None) -> Any:
 
 def _iso(value: datetime | str | None) -> str | None:
     return value.isoformat() if isinstance(value, datetime) else value
+
+
+def _lifecycle_rank(lifecycle: str) -> int:
+    return {
+        "escalating": 0,
+        "developing": 1,
+        "emerging": 2,
+        "cooling": 3,
+        "resolved": 4,
+    }.get(lifecycle, 5)
+
+
+def _snapshot_lifecycle_rank(
+    *,
+    first_seen: datetime,
+    last_seen: datetime,
+    action_level: int,
+    ranking_at: datetime,
+) -> int:
+    if last_seen >= ranking_at - timedelta(days=2) and action_level >= 4:
+        return 0
+    if (
+        first_seen < ranking_at - timedelta(days=2)
+        and last_seen >= ranking_at - timedelta(days=3)
+    ):
+        return 1
+    if first_seen >= ranking_at - timedelta(days=2):
+        return 2
+    if last_seen >= ranking_at - timedelta(days=14):
+        return 3
+    return 4
+
+
+def _story_activity_score(
+    *,
+    action_level: int,
+    article_count: int,
+    source_count: int,
+    country_count: int,
+    first_seen: datetime,
+    last_seen: datetime,
+    ranking_at: datetime,
+) -> tuple[int, float]:
+    """Mirror the SQL ordering contract for diagnostics and regression tests."""
+
+    duration_days = max((last_seen - first_seen).total_seconds() / 86400, 1)
+    age_days = min(max((ranking_at - last_seen).total_seconds() / 86400, 0), 30)
+    recency = max(0.0, 1 - age_days / 30)
+    velocity = min(max(article_count, 0) / duration_days, 20) / 20
+    action = min(max(action_level, 0), 5) / 5
+    diversity = min(max(source_count, 0) / max(article_count, 1), 1)
+    breadth = min(max(country_count, 0), 6) / 6
+    relevance = (
+        recency * 0.35
+        + velocity * 0.25
+        + action * 0.18
+        + diversity * 0.12
+        + breadth * 0.10
+    )
+    return _snapshot_lifecycle_rank(
+        first_seen=first_seen,
+        last_seen=last_seen,
+        action_level=action_level,
+        ranking_at=ranking_at,
+    ), relevance
 
 
 def _json_object(value: Any) -> dict[str, Any]:
@@ -289,20 +425,57 @@ def _load_linked_signals(
     if not story_ids:
         return {}
     rows = session.execute(text("""
-        WITH candidate_links AS (
-            SELECT linked.story_id,
+        WITH RECURSIVE story_aliases AS (
+            SELECT requested.story_id AS canonical_story_id,
+                   requested.story_id AS alias_story_id,
+                   ARRAY[requested.story_id]::bigint[] AS path
+            FROM unnest(CAST(:story_ids AS bigint[])) AS requested(story_id)
+
+            UNION ALL
+
+            SELECT aliases.canonical_story_id,
+                   candidate.id AS alias_story_id,
+                   aliases.path || candidate.id
+            FROM story_aliases aliases
+            JOIN stories candidate
+              ON candidate.meta->>'merged_into_story_id' = aliases.alias_story_id::text
+            WHERE NOT candidate.id = ANY(aliases.path)
+              AND cardinality(aliases.path) < :max_alias_depth
+        ), alias_scope AS (
+            SELECT COALESCE(
+                       array_agg(DISTINCT alias_story_id),
+                       '{}'::bigint[]
+                   ) AS story_ids
+            FROM story_aliases
+        ), story_article_scope AS (
+            SELECT COALESCE(
+                       array_agg(DISTINCT sa.article_id),
+                       '{}'::integer[]
+                   ) AS article_ids
+            FROM story_articles sa
+            WHERE sa.story_id = ANY(CAST(:story_ids AS bigint[]))
+        ), candidate_links AS (
+            SELECT aliases.canonical_story_id AS story_id,
                    s.id AS signal_id, s.signal_type, s.severity, s.title,
                    s.created_at, se.confidence, se.completeness,
                    'explicit_story_evidence'::text AS link_relation,
                    0 AS relation_priority,
                    jsonb_build_object(
                        'source', 'signal_evidence.story_ids',
-                       'story_id', linked.story_id
-                   ) AS link_evidence
+                       'story_id', aliases.canonical_story_id
+                   ) || CASE
+                       WHEN aliases.alias_story_id <> aliases.canonical_story_id
+                       THEN jsonb_build_object(
+                           'matched_story_id', aliases.alias_story_id
+                       )
+                       ELSE '{}'::jsonb
+                   END AS link_evidence
             FROM signal_evidence se
             JOIN signals s ON s.id = se.signal_id
-            JOIN LATERAL unnest(se.story_ids) AS linked(story_id)
-              ON linked.story_id = ANY(CAST(:story_ids AS bigint[]))
+            JOIN alias_scope scope ON se.story_ids && scope.story_ids
+            JOIN LATERAL unnest(se.story_ids) AS linked(story_id) ON TRUE
+            JOIN story_aliases aliases
+              ON aliases.alias_story_id = linked.story_id
 
             UNION ALL
 
@@ -325,7 +498,11 @@ def _load_linked_signals(
                    ) AS link_evidence
             FROM signal_evidence se
             JOIN signals s ON s.id = se.signal_id
-            JOIN story_articles sa ON sa.article_id = ANY(se.article_ids)
+            JOIN story_article_scope scope
+              ON se.article_ids && scope.article_ids
+            JOIN story_articles sa
+              ON sa.story_id = ANY(CAST(:story_ids AS bigint[]))
+             AND sa.article_id = ANY(se.article_ids)
             WHERE sa.story_id = ANY(CAST(:story_ids AS bigint[]))
         ), deduplicated AS (
             SELECT DISTINCT ON (story_id, signal_id)
@@ -365,6 +542,7 @@ def _load_linked_signals(
     """), {
         "story_ids": story_ids,
         "linked_signal_limit": MAX_LINKED_SIGNALS,
+        "max_alias_depth": MAX_STORY_ALIAS_DEPTH,
     }).fetchall()
     return {
         int(_value(row, "story_id")): {
@@ -378,13 +556,13 @@ def _load_linked_signals(
     }
 
 
-def _load_latest_rri_shifts(
+def _load_rri_shifts(
     session: Any,
     story_ids: list[int],
     *,
     preferred_country: str | None = None,
-) -> dict[int, dict[str, Any]]:
-    """Load temporal RRI context; proximity is never presented as causation."""
+) -> dict[int, list[dict[str, Any]]]:
+    """Load bounded meaningful temporal context, never presented as causation."""
 
     if not story_ids:
         return {}
@@ -410,6 +588,7 @@ def _load_latest_rri_shifts(
             WHERE ri.time >= windows.first_seen
               AND ri.time <= windows.last_seen
               AND ri.delta_24h IS NOT NULL
+              AND ABS(ri.delta_24h) >= :min_meaningful_delta
               AND (
                   CAST(:preferred_country AS text) IS NULL
                   OR TRIM(sc.country_code) = :preferred_country
@@ -417,19 +596,22 @@ def _load_latest_rri_shifts(
         )
         SELECT story_id, country_code, point_time, score, delta_24h, version
         FROM participating_rri
-        WHERE point_rank = 1
+        WHERE point_rank <= :rri_shift_limit
+        ORDER BY story_id, point_rank
     """), {
         "story_ids": story_ids,
         "preferred_country": preferred_country,
+        "min_meaningful_delta": MIN_MEANINGFUL_RRI_DELTA,
+        "rri_shift_limit": MAX_RRI_SHIFTS,
     }).fetchall()
-    result: dict[int, dict[str, Any]] = {}
+    result: dict[int, list[dict[str, Any]]] = {}
     for row in rows:
         story_id = _value(row, "story_id")
         point_time = _iso(_value(row, "point_time"))
         if story_id is None or point_time is None:
             continue
         country_code = str(_value(row, "country_code", "")).strip().upper()
-        result[int(story_id)] = {
+        result.setdefault(int(story_id), []).append({
             "country_code": country_code,
             "country_name": country_name_ru(country_code),
             "at": point_time,
@@ -441,7 +623,7 @@ def _load_latest_rri_shifts(
             "limitation": (
                 "Временное совпадение с сюжетом не доказывает причинность."
             ),
-        }
+        })
     return result
 
 
@@ -482,15 +664,74 @@ def _load_country_contexts(
     }
 
 
+def _load_story_coverage(
+    session: Any,
+    *,
+    country_code: str | None,
+    selected_from: datetime | None,
+    selected_to: datetime | None,
+) -> dict[str, str | None]:
+    """Return first/last relevant indexed publication via two bounded probes."""
+
+    query_result = session.execute(text("""
+        SELECT (
+            SELECT ar.published_at
+            FROM articles ar
+            JOIN sources source_from ON source_from.id = ar.source_id
+            WHERE EXISTS (
+                SELECT 1
+                FROM analysis analyzed_from
+                WHERE analyzed_from.article_id = ar.id
+                  AND analyzed_from.is_relevant IS TRUE
+            )
+              AND (
+                  CAST(:coverage_country AS text) IS NULL
+                  OR TRIM(source_from.country_code) = :coverage_country
+              )
+            ORDER BY ar.published_at ASC, ar.id ASC
+            LIMIT 1
+        ) AS available_from,
+        (
+            SELECT ar.published_at
+            FROM articles ar
+            JOIN sources source_to ON source_to.id = ar.source_id
+            WHERE EXISTS (
+                SELECT 1
+                FROM analysis analyzed_to
+                WHERE analyzed_to.article_id = ar.id
+                  AND analyzed_to.is_relevant IS TRUE
+            )
+              AND (
+                  CAST(:coverage_country AS text) IS NULL
+                  OR TRIM(source_to.country_code) = :coverage_country
+              )
+            ORDER BY ar.published_at DESC, ar.id DESC
+            LIMIT 1
+        ) AS available_to
+    """), {"coverage_country": country_code})
+    if hasattr(query_result, "fetchone"):
+        row = query_result.fetchone()
+    else:
+        rows = query_result.fetchall()
+        row = rows[0] if rows else None
+    return {
+        "selected_from": _iso(selected_from),
+        "selected_to": _iso(selected_to),
+        "available_from": _iso(_value(row, "available_from")) if row else None,
+        "available_to": _iso(_value(row, "available_to")) if row else None,
+    }
+
+
 def _attach_story_context(
     session: Any,
     stories: list[dict[str, Any]],
     *,
     preferred_country: str | None = None,
+    include_rri_shifts: bool = False,
 ) -> None:
     story_ids = [int(story["id"]) for story in stories]
     signals = _load_linked_signals(session, story_ids)
-    rri_shifts = _load_latest_rri_shifts(
+    rri_shifts = _load_rri_shifts(
         session,
         story_ids,
         preferred_country=preferred_country,
@@ -506,17 +747,24 @@ def _attach_story_context(
     for story in stories:
         story_id = int(story["id"])
         story.update(signals.get(story_id, {}))
-        story["latest_rri_shift"] = rri_shifts.get(story_id)
+        story_rri_shifts = rri_shifts.get(story_id, [])[:MAX_RRI_SHIFTS]
+        story["latest_rri_shift"] = (
+            story_rri_shifts[0] if story_rri_shifts else None
+        )
+        if include_rri_shifts:
+            story["rri_shifts"] = story_rri_shifts
         story["country_context"] = country_contexts.get(story_id)
 
 
-def _encode_cursor(row: Any, context_hash: str) -> str:
+def _encode_cursor(row: Any, context_hash: str, ranking_at: datetime) -> str:
+    lifecycle = str(_value(row, "lifecycle", ""))
     payload = json.dumps([
         STORY_CURSOR_VERSION,
         context_hash,
-        1 if _value(row, "lifecycle") == "resolved" else 0,
+        _iso(ranking_at),
+        int(_value(row, "lifecycle_rank", _lifecycle_rank(lifecycle))),
         float(_value(row, "relevance_score", 0) or 0),
-        _iso(_value(row, "last_seen")),
+        _iso(_value(row, "ranking_last_seen", _value(row, "last_seen"))),
         int(_value(row, "id")),
     ], separators=(",", ":")).encode("utf-8")
     return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
@@ -526,28 +774,49 @@ def _decode_cursor(
     cursor: str,
     *,
     expected_context_hash: str,
-) -> tuple[int, float, datetime, int]:
+) -> tuple[datetime, int, float, datetime, int]:
     try:
         padding = "=" * (-len(cursor) % 4)
         decoded = base64.urlsafe_b64decode((cursor + padding).encode("ascii"))
         payload = json.loads(decoded.decode("utf-8"))
-        if not isinstance(payload, list) or len(payload) != 6:
+        if not isinstance(payload, list) or len(payload) != 7:
             raise ValueError("wrong cursor shape")
-        version, context_hash, resolved_rank, relevance_score, last_seen, story_id = payload
+        (
+            version,
+            context_hash,
+            ranking_at,
+            lifecycle_rank,
+            relevance_score,
+            last_seen,
+            story_id,
+        ) = payload
         if version != STORY_CURSOR_VERSION or context_hash != expected_context_hash:
             raise HTTPException(
                 status_code=400, detail="Story cursor does not match query"
             )
-        if resolved_rank not in (0, 1) or isinstance(resolved_rank, bool):
+        if (
+            not isinstance(lifecycle_rank, int)
+            or isinstance(lifecycle_rank, bool)
+            or lifecycle_rank < 0
+            or lifecycle_rank > 5
+        ):
             raise ValueError("invalid lifecycle rank")
         if not isinstance(relevance_score, (int, float)) or isinstance(relevance_score, bool):
             raise ValueError("invalid relevance score")
         if not math.isfinite(float(relevance_score)):
             raise ValueError("invalid relevance score")
-        if not isinstance(last_seen, str) or not isinstance(story_id, int) or isinstance(story_id, bool):
+        if (
+            not isinstance(ranking_at, str)
+            or not isinstance(last_seen, str)
+            or not isinstance(story_id, int)
+            or isinstance(story_id, bool)
+        ):
             raise ValueError("invalid cursor types")
         return (
-            resolved_rank,
+            _as_utc_query_datetime(
+                datetime.fromisoformat(ranking_at.replace("Z", "+00:00"))
+            ),
+            lifecycle_rank,
             float(relevance_score),
             datetime.fromisoformat(last_seen.replace("Z", "+00:00")),
             story_id,
@@ -662,7 +931,7 @@ def _list_stories(
         context_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     ).encode("utf-8")).hexdigest()
     conditions = [
-        "st.country_count >= 2",
+        "rf.country_count >= 2",
         "st.clustering_confidence >= :min_confidence",
         "NOT (COALESCE(st.meta, '{}'::jsonb) ? 'merged_into_story_id')",
     ]
@@ -670,16 +939,17 @@ def _list_stories(
         "min_confidence": min_confidence,
         "min_action_level": min_action_level,
         "limit": limit + 1,
+        "ranking_at": datetime.now(timezone.utc),
     }
-    conditions.append("st.highest_action_level >= :min_action_level")
+    conditions.append("rf.highest_action_level >= :min_action_level")
     if country:
-        conditions.append("EXISTS (SELECT 1 FROM story_countries sc WHERE sc.story_id = st.id AND sc.country_code = :country)")
+        conditions.append(":country = ANY(rf.country_codes)")
         params["country"] = country
     if lifecycle:
         conditions.append("st.lifecycle = :lifecycle")
         params["lifecycle"] = lifecycle
     if since:
-        conditions.append("st.last_seen >= :since")
+        conditions.append("rf.last_seen >= :since")
         params["since"] = since
     if topic:
         conditions.append("COALESCE(st.meta->'topics', '[]'::jsonb) ? :topic")
@@ -692,25 +962,30 @@ def _list_stories(
         )
         params["entity_id"] = entity_id
     if date_from:
-        conditions.append("st.last_seen >= :date_from")
+        conditions.append("rf.last_seen >= :date_from")
         params["date_from"] = date_from
     if date_to:
-        conditions.append("st.first_seen <= :date_to")
+        conditions.append("rf.first_seen <= :date_to")
         params["date_to"] = date_to
     if cursor:
-        cursor_resolved, cursor_relevance, cursor_last_seen, cursor_id = _decode_cursor(
-            cursor, expected_context_hash=context_hash
-        )
+        (
+            cursor_ranking_at,
+            cursor_lifecycle_rank,
+            cursor_relevance,
+            cursor_last_seen,
+            cursor_id,
+        ) = _decode_cursor(cursor, expected_context_hash=context_hash)
+        params["ranking_at"] = cursor_ranking_at
         conditions.append(
-            "((CASE WHEN st.lifecycle = 'resolved' THEN 1 ELSE 0 END) > :cursor_resolved "
-            "OR ((CASE WHEN st.lifecycle = 'resolved' THEN 1 ELSE 0 END) = :cursor_resolved "
+            f"(({STORY_LIFECYCLE_RANK_SQL}) > :cursor_lifecycle_rank "
+            f"OR (({STORY_LIFECYCLE_RANK_SQL}) = :cursor_lifecycle_rank "
             f"AND ({STORY_RELEVANCE_SQL} < :cursor_relevance "
             f"OR ({STORY_RELEVANCE_SQL} = :cursor_relevance "
-            "AND (st.last_seen < :cursor_last_seen OR "
-            "(st.last_seen = :cursor_last_seen AND st.id < :cursor_id))))))"
+            "AND (rf.last_seen < :cursor_last_seen OR "
+            "(rf.last_seen = :cursor_last_seen AND st.id < :cursor_id))))))"
         )
         params.update({
-            "cursor_resolved": cursor_resolved,
+            "cursor_lifecycle_rank": cursor_lifecycle_rank,
             "cursor_relevance": cursor_relevance,
             "cursor_last_seen": cursor_last_seen,
             "cursor_id": cursor_id,
@@ -719,11 +994,13 @@ def _list_stories(
     where = " AND ".join(conditions)
     with get_session() as session:
         rows = session.execute(text(f"""
+            {STORY_RANK_FEATURES_CTE}
             SELECT {STORY_FIELDS}
             FROM stories st
+            JOIN story_rank_features rf ON rf.story_id = st.id
             WHERE {where}
-            ORDER BY CASE WHEN st.lifecycle = 'resolved' THEN 1 ELSE 0 END ASC,
-                     relevance_score DESC, st.last_seen DESC, st.id DESC
+            ORDER BY lifecycle_rank ASC,
+                     relevance_score DESC, ranking_last_seen DESC, st.id DESC
             LIMIT :limit
         """), params).fetchall()
         has_more = len(rows) > limit
@@ -734,10 +1011,20 @@ def _list_stories(
             stories,
             preferred_country=country,
         )
+        coverage = _load_story_coverage(
+            session,
+            country_code=country,
+            selected_from=date_from,
+            selected_to=date_to,
+        )
 
     return {
         "stories": stories,
-        "next_cursor": _encode_cursor(page[-1], context_hash) if has_more and page else None,
+        "next_cursor": (
+            _encode_cursor(page[-1], context_hash, params["ranking_at"])
+            if has_more and page else None
+        ),
+        "coverage": coverage,
     }
 
 
@@ -811,14 +1098,20 @@ def get_story(
         "story_id": story_id,
         "article_limit": article_limit + 1,
     }
+    request_ranking_at = datetime.now(timezone.utc)
 
     redirected_from_story_id: int | None = None
     with get_session() as session:
         story = session.execute(text(f"""
+            {STORY_RANK_FEATURES_CTE}
             SELECT {STORY_FIELDS}
             FROM stories st
+            JOIN story_rank_features rf ON rf.story_id = st.id
             WHERE st.id = :story_id
-        """), {"story_id": story_id}).fetchone()
+        """), {
+            "story_id": story_id,
+            "ranking_at": request_ranking_at,
+        }).fetchone()
         if not story:
             raise HTTPException(status_code=404, detail="Story not found")
 
@@ -832,10 +1125,15 @@ def get_story(
             redirected_from_story_id = story_id
             story_id = canonical_story_id
             story = session.execute(text(f"""
+                {STORY_RANK_FEATURES_CTE}
                 SELECT {STORY_FIELDS}
                 FROM stories st
+                JOIN story_rank_features rf ON rf.story_id = st.id
                 WHERE st.id = :story_id
-            """), {"story_id": story_id}).fetchone()
+            """), {
+                "story_id": story_id,
+                "ranking_at": request_ranking_at,
+            }).fetchone()
             if not story:
                 raise HTTPException(status_code=404, detail="Canonical story not found")
             article_params["story_id"] = story_id
@@ -935,7 +1233,11 @@ def get_story(
             LIMIT :article_limit
         """), article_params).fetchall()
         story_context = story_to_dict(story)
-        _attach_story_context(session, [story_context])
+        _attach_story_context(
+            session,
+            [story_context],
+            include_rri_shifts=True,
+        )
 
     result = story_context
     result["countries"] = [{

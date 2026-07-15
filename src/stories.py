@@ -815,6 +815,7 @@ def _membership_evidence(
         return 1.0, {
             "thread_id": candidate.thread_id,
             "country": candidate.country_code,
+            "action_level_snapshot": candidate.highest_action_level,
             "explicit_reactivation": False,
         }
     best_other, best = max(
@@ -828,6 +829,7 @@ def _membership_evidence(
     return max(MERGE_THRESHOLD, best.total), {
         "thread_id": candidate.thread_id,
         "country": candidate.country_code,
+        "action_level_snapshot": candidate.highest_action_level,
         "peer_thread_id": best_other.thread_id,
         "score": best.total,
         "components": best.components,
@@ -1265,6 +1267,13 @@ def persist_story_cluster(
                     EXCLUDED.membership_confidence
                 ),
                 evidence = story_articles.evidence || EXCLUDED.evidence
+                    || jsonb_build_object(
+                        'action_level_snapshot',
+                        COALESCE(
+                            story_articles.evidence->'action_level_snapshot',
+                            EXCLUDED.evidence->'action_level_snapshot'
+                        )
+                    )
         """), reconciliation_params)
         session.execute(text("""
             UPDATE stories SET
@@ -1296,7 +1305,13 @@ def persist_story_cluster(
                 ) VALUES (:story_id, :article_id, :confidence, CAST(:evidence AS jsonb))
                 ON CONFLICT (story_id, article_id) DO UPDATE SET
                     membership_confidence = EXCLUDED.membership_confidence,
-                    evidence = EXCLUDED.evidence
+                    evidence = EXCLUDED.evidence || jsonb_build_object(
+                        'action_level_snapshot',
+                        COALESCE(
+                            story_articles.evidence->'action_level_snapshot',
+                            EXCLUDED.evidence->'action_level_snapshot'
+                        )
+                    )
             """), {
                 "story_id": story_id,
                 "article_id": article_id,

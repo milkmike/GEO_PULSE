@@ -616,7 +616,7 @@ class FakeStorySession:
                 membership_confidence=0.81, evidence={"event_key": 1.0},
                 relevance_score=0.79, is_primary=True,
             )])
-        if "WITH candidate_links AS" in sql or "WITH story_windows AS" in sql:
+        if "candidate_links AS" in sql or "WITH story_windows AS" in sql:
             return FakeResult(rows=[])
         return FakeResult(rows=[story_row(7), story_row(6, last_seen=NOW - timedelta(hours=1))])
 
@@ -625,7 +625,7 @@ class LinkedStoryContextSession(FakeStorySession):
     def execute(self, statement, params=None):
         sql = str(statement)
         params = params or {}
-        if "WITH candidate_links AS" in sql:
+        if "candidate_links AS" in sql:
             self.calls.append((sql, params))
             return FakeResult(rows=[SimpleNamespace(
                 story_id=7,
@@ -647,13 +647,53 @@ class LinkedStoryContextSession(FakeStorySession):
             )])
         if "WITH story_windows AS" in sql:
             self.calls.append((sql, params))
+            return FakeResult(rows=[
+                SimpleNamespace(
+                    story_id=7,
+                    country_code="AZ",
+                    point_time=NOW,
+                    score=-12.0,
+                    delta_24h=-8.0,
+                    version="v1",
+                ),
+                SimpleNamespace(
+                    story_id=7,
+                    country_code="KZ",
+                    point_time=NOW - timedelta(hours=2),
+                    score=7.0,
+                    delta_24h=4.5,
+                    version="v1",
+                ),
+            ])
+        return super().execute(statement, params)
+
+
+class SupersededSignalStoryContextSession(FakeStorySession):
+    """Signal evidence points only at old story 11; page 7 is canonical."""
+
+    def execute(self, statement, params=None):
+        sql = str(statement)
+        params = params or {}
+        if "WITH RECURSIVE story_aliases AS" in sql:
+            self.calls.append((sql, params))
             return FakeResult(rows=[SimpleNamespace(
                 story_id=7,
-                country_code="AZ",
-                point_time=NOW,
-                score=-12.0,
-                delta_24h=-8.0,
-                version="v1",
+                linked_signal_count=1,
+                linked_signals=[{
+                    "id": 92,
+                    "type": "index_shift",
+                    "severity": "warning",
+                    "title": "Сигнал старого сюжета",
+                    "created_at": NOW.isoformat(),
+                    "confidence": 0.79,
+                    "completeness": "complete",
+                    "relation": "explicit_story_evidence",
+                    "evidence": {
+                        "source": "signal_evidence.story_ids",
+                        "story_id": 7,
+                        "matched_story_id": 11,
+                    },
+                }],
             )])
         return super().execute(statement, params)
 
@@ -671,6 +711,36 @@ class CountryStoryContextSession(FakeStorySession):
                 source_count=2,
                 media_tone=-1.25,
             )])
+        return super().execute(statement, params)
+
+
+class StoryCoverageSession(FakeStorySession):
+    def execute(self, statement, params=None):
+        sql = str(statement)
+        params = params or {}
+        if "AS available_from" in sql:
+            self.calls.append((sql, params))
+            return FakeResult(row=SimpleNamespace(
+                available_from=NOW - timedelta(days=120),
+                available_to=NOW - timedelta(minutes=5),
+            ))
+        return super().execute(statement, params)
+
+
+class MutableStoryAggregateSession(FakeStorySession):
+    def __init__(self):
+        super().__init__()
+        self.first = story_row(7)
+        self.second = story_row(6, last_seen=NOW - timedelta(hours=1))
+
+    def execute(self, statement, params=None):
+        sql = str(statement)
+        params = params or {}
+        if "ORDER BY lifecycle_rank ASC" in sql:
+            self.calls.append((sql, params))
+            if "cursor_lifecycle_rank" in params:
+                return FakeResult(rows=[self.second])
+            return FakeResult(rows=[self.first, self.second])
         return super().execute(statement, params)
 
 
@@ -796,7 +866,7 @@ def test_story_list_filters_cursor_and_primary_url(monkeypatch):
 
 
 def test_story_detail_includes_evidence_and_country_primary_urls(monkeypatch):
-    client, _ = story_client(monkeypatch)
+    client, session = story_client(monkeypatch)
 
     response = client.get("/api/v2/stories/7")
 
@@ -806,6 +876,11 @@ def test_story_detail_includes_evidence_and_country_primary_urls(monkeypatch):
     assert payload["entities"][0]["evidence"] == {"article_ids": [1, 2]}
     assert payload["events"][0]["evidence"] == {"articles": [1, 2]}
     assert payload["articles"][0]["is_primary"] is True
+    detail_sql, detail_params = next(
+        call for call in session.calls if "WHERE st.id = :story_id" in call[0]
+    )
+    assert ":ranking_at" in detail_sql
+    assert detail_params["ranking_at"].tzinfo is not None
 
 
 def test_story_cards_and_detail_expose_bounded_proven_signal_context(monkeypatch):
@@ -838,20 +913,54 @@ def test_story_cards_and_detail_expose_bounded_proven_signal_context(monkeypatch
     assert detail.json()["id"] == card["id"] == 7
     assert detail.json()["linked_signal_count"] == 2
     assert detail.json()["latest_rri_shift"]["relation"] == "temporal_context"
+    assert [shift["country_code"] for shift in detail.json()["rri_shifts"]] == [
+        "AZ", "KZ",
+    ]
 
     signal_sql, signal_params = next(
-        call for call in session.calls if "WITH candidate_links AS" in call[0]
+        call for call in session.calls if "candidate_links AS" in call[0]
     )
     assert "signal_evidence" in signal_sql
     assert "story_ids" in signal_sql
     assert "story_articles" in signal_sql
     assert "linked_signal_count" in signal_sql
+    assert "WITH RECURSIVE story_aliases AS" in signal_sql
+    assert "merged_into_story_id' = aliases.alias_story_id::text" in signal_sql
+    assert "NOT candidate.id = ANY(aliases.path)" in signal_sql
+    assert "se.story_ids &&" in signal_sql
+    assert "se.article_ids &&" in signal_sql
     assert signal_params["linked_signal_limit"] == 5
-    rri_sql, _ = next(
+    assert signal_params["max_alias_depth"] == 32
+    rri_sql, rri_params = next(
         call for call in session.calls if "WITH story_windows AS" in call[0]
     )
     assert "JOIN ru_index" in rri_sql
+    assert "ABS(ri.delta_24h) >= :min_meaningful_delta" in rri_sql
+    assert "point_rank <= :rri_shift_limit" in rri_sql
+    assert rri_params["min_meaningful_delta"] == 3.0
+    assert rri_params["rri_shift_limit"] == 8
     assert "relation" not in rri_sql.lower()
+
+
+def test_signal_on_superseded_story_id_reverse_resolves_to_canonical_story(monkeypatch):
+    client, session = story_client(monkeypatch, SupersededSignalStoryContextSession())
+
+    response = client.get("/api/v2/stories?limit=1")
+
+    assert response.status_code == 200
+    story = response.json()["stories"][0]
+    assert story["id"] == 7
+    assert story["linked_signal_count"] == 1
+    assert story["linked_signals"][0]["evidence"] == {
+        "source": "signal_evidence.story_ids",
+        "story_id": 7,
+        "matched_story_id": 11,
+    }
+    signal_sql, _ = next(
+        call for call in session.calls if "WITH RECURSIVE story_aliases AS" in call[0]
+    )
+    assert "candidate.meta->>'merged_into_story_id'" in signal_sql
+    assert "candidate.meta->>'merged_into_story_id')::bigint" not in signal_sql
 
 
 def test_story_context_is_empty_without_persisted_evidence(monkeypatch):
@@ -881,6 +990,32 @@ def test_country_story_card_includes_its_country_specific_slice(monkeypatch):
     sql, params = next(call for call in session.calls if "SELECT sc.story_id," in call[0])
     assert "story_countries" in sql
     assert params == {"story_ids": [7], "country_code": "AZ"}
+
+
+def test_story_list_reports_bounded_actual_indexed_coverage(monkeypatch):
+    client, session = story_client(monkeypatch, StoryCoverageSession())
+
+    response = client.get(
+        "/api/v2/stories",
+        params={
+            "country": "AZ",
+            "date_from": "2026-07-01T00:00:00+00:00",
+            "date_to": "2026-07-15T23:59:59+00:00",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["coverage"] == {
+        "selected_from": "2026-07-01T00:00:00+00:00",
+        "selected_to": "2026-07-15T23:59:59+00:00",
+        "available_from": (NOW - timedelta(days=120)).isoformat(),
+        "available_to": (NOW - timedelta(minutes=5)).isoformat(),
+    }
+    sql, params = next(call for call in session.calls if "AS available_from" in call[0])
+    assert sql.count("LIMIT 1") == 2
+    assert "ORDER BY ar.published_at ASC" in sql
+    assert "ORDER BY ar.published_at DESC" in sql
+    assert params == {"coverage_country": "AZ"}
 
 
 def test_story_list_supports_topic_entity_date_filters_and_active_ranking(monkeypatch):
@@ -918,9 +1053,84 @@ def test_story_list_supports_topic_entity_date_filters_and_active_ranking(monkey
     assert params["date_to"].isoformat().startswith("2026-07-20")
     assert "story_entities" in sql
     assert "meta->'topics'" in sql
-    assert "CASE WHEN st.lifecycle = 'resolved'" in sql
+    assert "sa.added_at <= :ranking_at" in sql
+    assert "action_level_snapshot" in sql
+    assert "JOIN analysis" not in sql
+    assert "EXTRACT(EPOCH FROM (:ranking_at - rf.last_seen))" in sql
+    assert "rf.article_count::numeric" in sql
+    assert "rf.source_count::numeric" in sql
+    assert "rf.country_count" in sql
+    assert "rf.highest_action_level" in sql
+    assert params["ranking_at"].tzinfo is not None
     assert invalid_range.status_code == 422
     assert mixed_timezone_invalid_range.status_code == 422
+
+
+def test_story_activity_ranking_favors_recent_broad_active_story_over_stale_confidence():
+    active = stories_routes._story_activity_score(
+        action_level=4,
+        article_count=12,
+        source_count=7,
+        country_count=4,
+        first_seen=NOW - timedelta(days=2),
+        last_seen=NOW - timedelta(hours=2),
+        ranking_at=NOW,
+    )
+    stale = stories_routes._story_activity_score(
+        action_level=2,
+        article_count=30,
+        source_count=2,
+        country_count=2,
+        first_seen=NOW - timedelta(days=90),
+        last_seen=NOW - timedelta(days=60),
+        ranking_at=NOW,
+    )
+
+    assert active < stale  # lifecycle rank is the primary ascending key
+    assert active[1] > stale[1]
+
+
+def test_story_cursor_pins_ranking_clock_for_stable_followup_page(monkeypatch):
+    client, session = story_client(monkeypatch)
+
+    first = client.get("/api/v2/stories?limit=1")
+    cursor = first.json()["next_cursor"]
+    second = client.get("/api/v2/stories", params={"limit": 1, "cursor": cursor})
+
+    assert first.status_code == second.status_code == 200
+    list_calls = [
+        call for call in session.calls
+        if "ORDER BY lifecycle_rank ASC" in call[0]
+    ]
+    assert len(list_calls) >= 2
+    first_ranking_at = list_calls[0][1]["ranking_at"]
+    second_ranking_at = list_calls[1][1]["ranking_at"]
+    assert second_ranking_at == first_ranking_at
+    assert "cursor_lifecycle_rank" in list_calls[1][1]
+
+
+def test_story_cursor_ignores_mutated_current_aggregates_after_first_page(monkeypatch):
+    session = MutableStoryAggregateSession()
+    client, _ = story_client(monkeypatch, session)
+
+    first = client.get("/api/v2/stories?limit=1")
+    cursor = first.json()["next_cursor"]
+    session.second.article_count = 10000
+    session.second.source_count = 9000
+    session.second.country_count = 99
+    session.second.highest_action_level = 5
+    second = client.get("/api/v2/stories", params={"limit": 1, "cursor": cursor})
+
+    assert [item["id"] for item in first.json()["stories"]] == [7]
+    assert [item["id"] for item in second.json()["stories"]] == [6]
+    list_sql = next(
+        sql for sql, params in session.calls
+        if "cursor_lifecycle_rank" in params and "ORDER BY lifecycle_rank ASC" in sql
+    )
+    assert "sa.added_at <= :ranking_at" in list_sql
+    assert "action_level_snapshot" in list_sql
+    assert "JOIN analysis" not in list_sql
+    assert "COALESCE(st.article_count" not in list_sql
 
 
 def test_story_detail_articles_use_bounded_cursor_pagination(monkeypatch):
@@ -1168,11 +1378,17 @@ def test_membership_evidence_reproduces_score_and_names_peer():
         assert evidence["peer_thread_id"] != evidence["thread_id"]
         assert evidence["effective_components"]
         assert evidence["weights"]
+        assert evidence["action_level_snapshot"] == 3
         reproduced = sum(
             evidence["effective_components"][name] * weight
             for name, weight in evidence["weights"].items()
         )
         assert round(reproduced, 6) == evidence["score"]
+    membership_sql = next(
+        sql for sql, _ in session.calls
+        if "INSERT INTO story_articles" in sql and "VALUES" in sql
+    )
+    assert "story_articles.evidence->'action_level_snapshot'" in membership_sql
 
 
 def test_persistence_checks_stable_thread_identity_before_summary_generation():
