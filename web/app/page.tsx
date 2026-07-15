@@ -11,17 +11,20 @@ import RadarPanel from "@/components/RadarPanel";
 import SignalFeed from "@/components/SignalFeed";
 import SiteHeader from "@/components/SiteHeader";
 import SortableGrid, { type SortableItem } from "@/components/SortableGrid";
+import StoriesPanel from "@/components/StoriesPanel";
+import { useFeatureFlags } from "@/components/FeatureFlagsProvider";
 import WorldMap from "@/components/WorldMap";
 import { api } from "@/lib/api";
 import { HOME_TIPS } from "@/lib/explain";
 import { fmtDate } from "@/lib/format";
-import type { Brief, CountrySummary, Headline, Meta, Signal } from "@/lib/types";
+import type { Brief, CountrySummary, Headline, Meta, Signal, StoryListItem } from "@/lib/types";
 
 // Default order of the home dashboard cards; visitors can drag to reorder
 // (persisted per browser in localStorage under "home-panel-order").
-const HOME_ORDER = ["map", "ranking", "headlines", "signals", "brief", "radar"];
+const HOME_ORDER = ["map", "ranking", "stories", "headlines", "signals", "brief", "radar"];
 
 export default function HomePage() {
+  const { storiesNavigation } = useFeatureFlags();
   const [countries, setCountries] = useState<CountrySummary[]>([]);
   const [signals, setSignals] = useState<Signal[]>([]);
   const [headlines, setHeadlines] = useState<Headline[]>([]);
@@ -32,6 +35,9 @@ export default function HomePage() {
     useState<Record<string, { articles: number; avg_sentiment: number | null }> | null>(null);
   const [topicBrief, setTopicBrief] = useState<(Brief & { label?: string }) | null>(null);
   const [topicBriefLoading, setTopicBriefLoading] = useState(false);
+  const [stories, setStories] = useState<StoryListItem[]>([]);
+  const [storiesState, setStoriesState] = useState<"loading" | "ready" | "error">("loading");
+  const [storiesReload, setStoriesReload] = useState(0);
 
   useEffect(() => {
     const load = () => {
@@ -44,6 +50,17 @@ export default function HomePage() {
     const t = setInterval(load, 120_000);
     return () => clearInterval(t);
   }, []);
+
+  useEffect(() => {
+    if (!storiesNavigation) return;
+    setStoriesState("loading");
+    api.stories({ limit: 6 })
+      .then((payload) => {
+        setStories(payload.stories.slice(0, 6));
+        setStoriesState("ready");
+      })
+      .catch(() => setStoriesState("error"));
+  }, [storiesNavigation, storiesReload]);
 
   useEffect(() => {
     const loadHeadlines = () => {
@@ -131,6 +148,16 @@ export default function HomePage() {
           <CountryRanking countries={filtered} topicCounts={topicCounts ?? undefined} />
         </section>
       ),
+    },
+    {
+      id: "stories", cellClassName: "col-span-12 lg:col-span-8",
+      node: storiesNavigation ? (
+        <StoriesPanel
+          stories={stories}
+          state={storiesState}
+          onRetry={() => setStoriesReload((value) => value + 1)}
+        />
+      ) : null,
     },
     {
       id: "headlines", cellClassName: "col-span-12 lg:col-span-4", tip: HOME_TIPS.headlines,

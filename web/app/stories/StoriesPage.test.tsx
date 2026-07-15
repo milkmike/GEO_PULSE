@@ -1,0 +1,185 @@
+import { act, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { StoriesListResponse, StoryListItem } from "@/lib/types";
+
+const navigation = vi.hoisted(() => ({
+  params: "",
+  push: vi.fn<(href: string) => void>(),
+  replace: vi.fn<(href: string) => void>(),
+}));
+
+const apiMocks = vi.hoisted(() => ({
+  stories: vi.fn(),
+  entitySuggestions: vi.fn(),
+  meta: vi.fn(),
+}));
+
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: navigation.push, replace: navigation.replace }),
+  useSearchParams: () => new URLSearchParams(navigation.params),
+}));
+
+vi.mock("@/lib/api", () => ({ api: apiMocks }));
+
+import StoriesPage from "./page";
+
+function story(id: number, title: string): StoryListItem {
+  return {
+    id,
+    slug: `story-${id}`,
+    title_ru: title,
+    title_en: null,
+    summary: "Межстрановой сюжет",
+    lifecycle: "developing",
+    first_seen: "2026-07-13T09:00:00+00:00",
+    last_seen: "2026-07-15T12:00:00+00:00",
+    article_count: 4,
+    source_count: 3,
+    country_count: 2,
+    highest_action_level: 3,
+    clustering_confidence: 0.82,
+    generated_at: null,
+    countries: ["ES", "FR"],
+    primary_url: `https://example.com/${id}`,
+    why_included: ["cross_country"],
+    relevance_score: 0.8,
+    confidence: 0.82,
+    evidence: { topics: ["diplomacy"] },
+    linked_signal_count: 0,
+    linked_signals: [],
+    latest_rri_shift: null,
+  };
+}
+
+function response(
+  stories: StoryListItem[] = [],
+  nextCursor: string | null = null,
+): StoriesListResponse {
+  return { stories, next_cursor: nextCursor };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+beforeEach(() => {
+  navigation.params = "";
+  navigation.push.mockReset();
+  navigation.replace.mockReset();
+  apiMocks.stories.mockReset().mockResolvedValue(response());
+  apiMocks.entitySuggestions.mockReset().mockResolvedValue({ items: [] });
+  apiMocks.meta.mockReset().mockResolvedValue({
+    countries: [{ code: "ES", name: "Испания" }],
+    topics: { diplomacy: "Дипломатия" },
+  });
+});
+
+afterEach(() => vi.useRealTimers());
+
+describe("StoriesPage durable filters", () => {
+  it("canonicalizes the default period before loading stories", async () => {
+    navigation.params = "country=ES";
+
+    render(<StoriesPage />);
+
+    await waitFor(() =>
+      expect(navigation.replace).toHaveBeenCalledWith("/stories?country=ES&period=30d"),
+    );
+    expect(apiMocks.stories).not.toHaveBeenCalled();
+  });
+
+  it("maps country, topic, lifecycle, entity, and period from the URL to the API", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-07-15T12:00:00Z"));
+    navigation.params = [
+      "country=ES",
+      "topic=diplomacy",
+      "lifecycle=resolved",
+      "entity_id=entity-putin",
+      "entity_label=%D0%92%D0%BB%D0%B0%D0%B4%D0%B8%D0%BC%D0%B8%D1%80+%D0%9F%D1%83%D1%82%D0%B8%D0%BD",
+      "period=30d",
+    ].join("&");
+    apiMocks.stories.mockResolvedValue(response([story(42, "Испания и Россия: портовые переговоры")]));
+
+    render(<StoriesPage />);
+
+    await waitFor(() =>
+      expect(apiMocks.stories).toHaveBeenCalledWith(
+        expect.objectContaining({
+          country: "ES",
+          topic: "diplomacy",
+          lifecycle: "resolved",
+          entity_id: "entity-putin",
+          date_from: "2026-06-15T00:00:00.000Z",
+          date_to: "2026-07-15T23:59:59.999Z",
+          limit: 20,
+        }),
+        null,
+        expect.any(AbortSignal),
+      ),
+    );
+    expect(
+      screen.getByRole("link", { name: "Испания и Россия: портовые переговоры" }),
+    ).toHaveAttribute("href", "/stories/42");
+    expect(screen.getByRole("combobox", { name: /сущность/i })).toHaveValue(
+      "Владимир Путин",
+    );
+  });
+
+  it("appends a cursor page without reordering existing stories", async () => {
+    const user = userEvent.setup();
+    navigation.params = "period=all";
+    apiMocks.stories
+      .mockResolvedValueOnce(response([story(42, "Первый сюжет")], "next-page"))
+      .mockResolvedValueOnce(response([story(43, "Второй сюжет")], null));
+
+    render(<StoriesPage />);
+    await screen.findByRole("link", { name: "Первый сюжет" });
+    await user.click(screen.getByRole("button", { name: /следующую страницу/i }));
+    await screen.findByRole("link", { name: "Второй сюжет" });
+
+    const headings = screen.getAllByRole("heading", { level: 2 });
+    expect(headings.map((heading) => heading.textContent)).toEqual([
+      "Первый сюжет",
+      "Второй сюжет",
+    ]);
+    expect(apiMocks.stories).toHaveBeenLastCalledWith(
+      expect.objectContaining({ limit: 20 }),
+      "next-page",
+      expect.any(AbortSignal),
+    );
+  });
+
+  it("aborts and ignores stale cursor results when browser history changes", async () => {
+    const user = userEvent.setup();
+    const stalePage = deferred<StoriesListResponse>();
+    navigation.params = "country=ES&period=all";
+    apiMocks.stories.mockImplementation(
+      (request: { country?: string }, cursor?: string | null) => {
+        if (cursor) return stalePage.promise;
+        if (request.country === "FR") return Promise.resolve(response([story(50, "Французский сюжет")]));
+        return Promise.resolve(response([story(42, "Испанский сюжет")], "stale-cursor"));
+      },
+    );
+
+    const view = render(<StoriesPage />);
+    await screen.findByRole("link", { name: "Испанский сюжет" });
+    await user.click(screen.getByRole("button", { name: /следующую страницу/i }));
+    const staleSignal = apiMocks.stories.mock.calls.at(-1)?.[2] as AbortSignal;
+
+    navigation.params = "country=FR&period=all";
+    view.rerender(<StoriesPage />);
+    await screen.findByRole("link", { name: "Французский сюжет" });
+    expect(staleSignal.aborted).toBe(true);
+
+    await act(async () => stalePage.resolve(response([story(51, "Устаревший сюжет")])));
+    expect(screen.queryByRole("link", { name: "Устаревший сюжет" })).not.toBeInTheDocument();
+  });
+});

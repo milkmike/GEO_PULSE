@@ -1,12 +1,15 @@
+"use client";
+
 import Link from "next/link";
 import { Search } from "lucide-react";
 import type { ReactNode } from "react";
 import TowerLogo from "./TowerLogo";
+import { useFeatureFlags } from "./FeatureFlagsProvider";
 
 const NAV = [
   { href: "/", label: "карта" },
-  { href: "/search", label: "поиск новостей", search: true },
-  { href: "/stories", label: "сюжеты" },
+  { href: "/search", label: "поиск новостей", search: true, feature: "searchNavigation" as const },
+  { href: "/stories", label: "сюжеты", feature: "storiesNavigation" as const },
   { href: "/analytics", label: "аналитика" },
   { href: "/sources", label: "источники" },
   { href: "/signals", label: "сигналы" },
@@ -21,6 +24,8 @@ export default function SiteHeader({
   active?: string;
   right?: ReactNode;
 }) {
+  const flags = useFeatureFlags();
+  const navigation = NAV.filter((item) => !item.feature || flags[item.feature]);
   return (
     <header className="reveal sticky top-0 z-40 bg-bg/85 pb-2 pt-4 backdrop-blur-sm">
       <div className="flex flex-wrap items-baseline gap-x-4 gap-y-2">
@@ -37,7 +42,7 @@ export default function SiteHeader({
           aria-label="Основная навигация"
           className="ml-auto flex flex-wrap items-center gap-x-4 gap-y-2 text-[12px]"
         >
-          {NAV.map((n) => (
+          {navigation.map((n) => (
             <Link
               key={n.href}
               href={n.href}

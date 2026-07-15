@@ -3,6 +3,8 @@ import { Golos_Text, JetBrains_Mono, Piazzolla } from "next/font/google";
 import "./globals.css";
 import DisclaimerBanner from "@/components/DisclaimerBanner";
 import Pixel from "@/components/Pixel";
+import { FeatureFlagsProvider } from "@/components/FeatureFlagsProvider";
+import { readFeatureFlags } from "@/lib/features.server";
 
 const piazzolla = Piazzolla({
   subsets: ["cyrillic", "latin"],
@@ -26,12 +28,15 @@ export const metadata: Metadata = {
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
+  const featureFlags = readFeatureFlags();
   return (
     <html lang="ru" className={`${piazzolla.variable} ${golos.variable} ${jbMono.variable}`}>
       <body className="min-h-screen antialiased">
-        <DisclaimerBanner />
-        {children}
-        <Pixel />
+        <FeatureFlagsProvider flags={featureFlags}>
+          <DisclaimerBanner />
+          {children}
+          <Pixel />
+        </FeatureFlagsProvider>
       </body>
     </html>
   );

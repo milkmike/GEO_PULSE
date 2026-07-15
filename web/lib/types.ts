@@ -314,3 +314,136 @@ export interface EntitySuggestionsResponse {
   has_more: boolean;
   next_cursor: string | null;
 }
+
+export type StoryLifecycle =
+  | "emerging"
+  | "developing"
+  | "escalating"
+  | "cooling"
+  | "resolved";
+
+export interface StorySignalLink {
+  id: number;
+  type: string;
+  severity: string;
+  title: string;
+  created_at: string;
+  confidence: number;
+  completeness: "complete" | "partial" | string;
+  relation: "explicit_story_evidence" | "shared_article_membership";
+  evidence: Record<string, unknown>;
+}
+
+export interface StoryRriShift {
+  country_code: string;
+  country_name: string;
+  at: string;
+  score: number;
+  delta_24h: number;
+  version: string;
+  relation: "temporal_context";
+  why_included: "rri_point_within_story_window";
+  limitation: string;
+}
+
+export interface StoryListItem {
+  id: number;
+  slug: string;
+  title_ru: string;
+  title_en: string | null;
+  summary: string | null;
+  lifecycle: StoryLifecycle;
+  first_seen: string;
+  last_seen: string;
+  article_count: number;
+  source_count: number;
+  country_count: number;
+  highest_action_level: number;
+  clustering_confidence: number;
+  generated_at: string | null;
+  countries: string[];
+  primary_url: string | null;
+  why_included: string[];
+  relevance_score: number;
+  confidence: number;
+  evidence: Record<string, unknown>;
+  linked_signal_count: number;
+  linked_signals: StorySignalLink[];
+  latest_rri_shift: StoryRriShift | null;
+}
+
+export interface StoriesListResponse {
+  stories: StoryListItem[];
+  next_cursor: string | null;
+}
+
+export interface CountryStoriesResponse extends StoriesListResponse {
+  country: string;
+  name: string;
+}
+
+export interface StoryCountrySlice {
+  country_code: string;
+  country_name: string;
+  article_count: number;
+  source_count: number;
+  media_tone: number | null;
+  first_seen: string | null;
+  last_seen: string | null;
+  primary_url: string | null;
+}
+
+export interface StoryEntityEvidence {
+  entity_id: string;
+  canonical_name: string;
+  kind: string;
+  mentions: number;
+  confidence: number;
+  evidence: Record<string, unknown>;
+}
+
+export interface StoryEventEvidence {
+  entity_id: string;
+  event_key: string;
+  event_at: string | null;
+  action_level: number;
+  confidence: number;
+  evidence: Record<string, unknown>;
+}
+
+export interface StoryArticleEvidence {
+  article_id: number;
+  title: string | null;
+  url: string | null;
+  published_at: string | null;
+  source: string;
+  country_code: string;
+  membership_confidence: number;
+  evidence: Record<string, unknown>;
+  is_primary: boolean;
+  why_included: string[];
+  relevance_score: number;
+  confidence: number;
+}
+
+export interface StoryDetailResponse extends Omit<StoryListItem, "countries"> {
+  countries: StoryCountrySlice[];
+  entities: StoryEntityEvidence[];
+  events: StoryEventEvidence[];
+  articles: StoryArticleEvidence[];
+  articles_next_cursor: string | null;
+  redirected_from_story_id: number | null;
+}
+
+export interface StoriesRequest {
+  country?: string;
+  lifecycle?: StoryLifecycle;
+  topic?: string;
+  entity_id?: string;
+  date_from?: string;
+  date_to?: string;
+  since?: string;
+  min_confidence?: number;
+  min_action_level?: number;
+  limit?: number;
+}

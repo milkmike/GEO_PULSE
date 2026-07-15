@@ -16,7 +16,8 @@
     "next": "^15.3.3",
     "plotly.js-dist-min": "^2.35.2",
     "react": "^19.1.0",
-    "react-dom": "^19.1.0"
+    "react-dom": "^19.1.0",
+    "server-only": "0.0.1"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.1.0",

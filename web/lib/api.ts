@@ -1,7 +1,8 @@
 import type {
   AgreementGroup, ArticleSearchRequest, ArticleSearchResponse, Brief, CountrySummary,
   Dossier, EntityStat, EntitySuggestionsResponse, FxSeries, Headline, Health, MapEntry,
-  Meta, Signal, SourceHealthRow, SourceRow, Thread, TopicStat, TradeYear, UNVoteYear,
+  Meta, Signal, SourceHealthRow, SourceRow, StoriesListResponse, StoriesRequest,
+  StoryDetailResponse, Thread, TopicStat, TradeYear, UNVoteYear,
 } from "./types";
 
 /** API base: build-time env wins; otherwise same host on :8100 (compose default). */
@@ -33,7 +34,55 @@ export async function adminGet<T>(path: string, key: string): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+function storyParams(request: StoriesRequest, cursor?: string | null): URLSearchParams {
+  const params = new URLSearchParams();
+  for (const key of [
+    "country", "lifecycle", "topic", "entity_id", "date_from", "date_to", "since",
+  ] as const) {
+    const value = request[key];
+    if (typeof value === "string" && value.trim()) params.set(key, value.trim());
+  }
+  for (const key of ["min_confidence", "min_action_level", "limit"] as const) {
+    const value = request[key];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      params.set(key, String(value));
+    }
+  }
+  if (cursor) params.set("cursor", cursor);
+  return params;
+}
+
 export const api = {
+  stories: (
+    request: StoriesRequest = {},
+    cursor?: string | null,
+    signal?: AbortSignal,
+  ) => get<StoriesListResponse>(
+    `/api/v2/stories?${storyParams(request, cursor).toString()}`,
+    signal,
+  ),
+  countryStories: (
+    code: string,
+    request: Omit<StoriesRequest, "country"> = {},
+    cursor?: string | null,
+    signal?: AbortSignal,
+  ) => get<StoriesListResponse & { country: string; name: string }>(
+    `/api/v2/countries/${encodeURIComponent(code.trim().toUpperCase())}/stories?${storyParams(request, cursor).toString()}`,
+    signal,
+  ),
+  story: (
+    storyId: number,
+    articleCursor?: string | null,
+    articleLimit = 25,
+    signal?: AbortSignal,
+  ) => {
+    const params = new URLSearchParams({ article_limit: String(articleLimit) });
+    if (articleCursor) params.set("article_cursor", articleCursor);
+    return get<StoryDetailResponse>(
+      `/api/v2/stories/${storyId}?${params.toString()}`,
+      signal,
+    );
+  },
   searchArticles: (
     request: ArticleSearchRequest,
     cursor?: string | null,

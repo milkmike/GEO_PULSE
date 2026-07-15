@@ -12,6 +12,8 @@ import UNVotesPanel from "@/components/UNVotesPanel";
 import SparklineStrip from "@/components/SparklineStrip";
 import DynamicsPanel from "@/components/DynamicsPanel";
 import SortableGrid, { type SortableItem } from "@/components/SortableGrid";
+import StoriesPanel from "@/components/StoriesPanel";
+import { useFeatureFlags } from "@/components/FeatureFlagsProvider";
 import TierDivergencePanel from "@/components/TierDivergencePanel";
 import SanctionsPanel from "@/components/SanctionsPanel";
 import EnergyPanel from "@/components/EnergyPanel";
@@ -21,13 +23,13 @@ import { COUNTRY_TIPS } from "@/lib/explain";
 import { fmt, fmtDate, LEVEL_COLOR, LEVEL_RU } from "@/lib/format";
 import type {
   AgreementGroup, Brief, Dossier, EntityStat, FxSeries, Headline, Signal, TopicStat,
-  TradeYear, UNVoteYear,
+  StoryListItem, TradeYear, UNVoteYear,
 } from "@/lib/types";
 
 // Default panel order on country pages. AI-dossier + news sources sit near the
 // top; visitors can drag any card to reorder (saved per browser in localStorage).
 const PANEL_ORDER = [
-  "sparklines", "dynamics", "brief", "headlines", "index", "gdelt",
+  "sparklines", "dynamics", "stories", "brief", "headlines", "index", "gdelt",
   "tier", "sanctions", "energy", "vox", "topics", "entities",
   "agreements", "unvotes", "trade", "fx", "signals",
 ];
@@ -43,6 +45,7 @@ const CHART_BASE = {
 };
 
 export default function CountryPage({ params }: { params: Promise<{ code: string }> }) {
+  const { storiesNavigation } = useFeatureFlags();
   const { code } = use(params);
   const cc = code.toUpperCase();
 
@@ -58,6 +61,9 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
   const [error, setError] = useState(false);
   const [showEmbed, setShowEmbed] = useState(false);
   const [briefState, setBriefState] = useState<"idle" | "generating" | "empty" | "error">("idle");
+  const [countryStories, setCountryStories] = useState<StoryListItem[]>([]);
+  const [storiesState, setStoriesState] = useState<"loading" | "ready" | "error">("loading");
+  const [storiesReload, setStoriesReload] = useState(0);
 
   useEffect(() => {
     setBrief(null);
@@ -72,6 +78,17 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
     api.trade(cc).then((d) => setTrade(d.data)).catch(() => {});
     api.agreements(cc).then((d) => setAgreements(d.agreements)).catch(() => {});
   }, [cc]);
+
+  useEffect(() => {
+    if (!storiesNavigation) return;
+    setStoriesState("loading");
+    api.countryStories(cc, { limit: 6 })
+      .then((payload) => {
+        setCountryStories(payload.stories.slice(0, 6));
+        setStoriesState("ready");
+      })
+      .catch(() => setStoriesState("error"));
+  }, [cc, storiesNavigation, storiesReload]);
 
   const generateBrief = () => {
     setBriefState("generating");
@@ -180,6 +197,18 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
     {
       id: "dynamics", cellClassName: "md:col-span-2", tip: COUNTRY_TIPS.dynamics,
       node: <DynamicsPanel code={cc} dossier={dossier} headlines={headlines} topics={topics} />,
+    },
+    {
+      id: "stories", cellClassName: "md:col-span-2",
+      node: storiesNavigation ? (
+        <StoriesPanel
+          stories={countryStories}
+          title={`Сюжеты с участием страны: ${country.name}`}
+          countryCode={cc}
+          state={storiesState}
+          onRetry={() => setStoriesReload((value) => value + 1)}
+        />
+      ) : null,
     },
     {
       id: "brief", cellClassName: "md:col-span-2", tip: COUNTRY_TIPS.brief,

@@ -288,6 +288,10 @@ services:
       context: ./web
       args:
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-}
+        FEATURE_SEARCH_NAVIGATION: ${FEATURE_SEARCH_NAVIGATION:-false}
+        FEATURE_STORIES_NAVIGATION: ${FEATURE_STORIES_NAVIGATION:-false}
+        FEATURE_INVESTIGATION: ${FEATURE_INVESTIGATION:-false}
+        FEATURE_SIGNAL_DETAIL: ${FEATURE_SIGNAL_DETAIL:-false}
     ports:
       - "3334:3334"
     depends_on:
