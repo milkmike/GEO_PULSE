@@ -75,7 +75,10 @@ describe("SearchResults", () => {
     expect(screen.getByText(/достоверность 91%/i)).toBeVisible();
   });
 
-  it("does not turn an unsafe source URL into a link", () => {
+  it.each([
+    "javascript:alert(1)",
+    "https://reader:secret@example.com/private",
+  ])("does not turn unsafe source URL %s into a link", (unsafeUrl) => {
     render(
       <SearchResults
         items={[
@@ -83,7 +86,7 @@ describe("SearchResults", () => {
             ...result,
             article_id: 124,
             title: "Непроверенная ссылка",
-            url: "javascript:alert(1)",
+            url: unsafeUrl,
             story: null,
           },
         ]}

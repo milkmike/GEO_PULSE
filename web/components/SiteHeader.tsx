@@ -24,7 +24,7 @@ export default function SiteHeader({
   return (
     <header className="reveal sticky top-0 z-40 bg-bg/85 pb-2 pt-4 backdrop-blur-sm">
       <div className="flex flex-wrap items-baseline gap-x-4 gap-y-2">
-        <Link href="/" className="group flex items-end gap-2">
+        <Link href="/" className="group flex min-h-11 items-end gap-2 sm:min-h-0">
           <TowerLogo />
           <span className="display text-[22px] leading-none tracking-tight">
             МАССАРАКШ
@@ -41,7 +41,7 @@ export default function SiteHeader({
             <Link
               key={n.href}
               href={n.href}
-              className={`inline-flex items-center gap-1 focus-visible:rounded-sm focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent ${
+              className={`inline-flex min-h-11 items-center gap-1 focus-visible:rounded-sm focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent sm:min-h-0 ${
                 active === n.href
                   ? "text-ru-white underline decoration-ru-red decoration-2 underline-offset-4"
                   : "text-dim transition-colors hover:text-ru-white"

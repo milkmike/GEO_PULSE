@@ -137,7 +137,7 @@ function ResultCard({ item, index }: { item: SearchArticle; index: number }) {
               href={sourceUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 text-[12px] font-medium text-accent underline decoration-accent/30 underline-offset-4 transition-colors hover:text-ru-white focus-visible:rounded-sm focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
+              className="inline-flex min-h-11 items-center gap-1 text-[12px] font-medium text-accent underline decoration-accent/30 underline-offset-4 transition-colors hover:text-ru-white focus-visible:rounded-sm focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent sm:min-h-0"
             >
               Открыть источник <ArrowUpRight aria-hidden="true" size={13} />
             </a>
@@ -147,7 +147,7 @@ function ResultCard({ item, index }: { item: SearchArticle; index: number }) {
           {item.story && (
             <Link
               href={`/stories/${item.story.id}`}
-              className="inline-flex items-center gap-1 text-[12px] text-[#c4c9d1] transition-colors hover:text-ru-white focus-visible:rounded-sm focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
+              className="inline-flex min-h-11 items-center gap-1 text-[12px] text-[#c4c9d1] transition-colors hover:text-ru-white focus-visible:rounded-sm focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent sm:min-h-0"
             >
               <BookOpenText aria-hidden="true" size={13} />
               {item.story.title || `Сюжет № ${item.story.id}`}
@@ -160,7 +160,7 @@ function ResultCard({ item, index }: { item: SearchArticle; index: number }) {
           aria-expanded={explanationOpen}
           aria-controls={explanationId}
           onClick={() => setExplanationOpen((open) => !open)}
-          className="mt-5 inline-flex items-center gap-1.5 text-[11px] uppercase tracking-[0.08em] text-dim transition-colors hover:text-ru-white focus-visible:rounded-sm focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
+          className="mt-5 inline-flex min-h-11 items-center gap-1.5 text-[11px] uppercase tracking-[0.08em] text-dim transition-colors hover:text-ru-white focus-visible:rounded-sm focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent sm:min-h-0"
         >
           Почему найдено
           <ChevronDown

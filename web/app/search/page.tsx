@@ -19,7 +19,7 @@ import type {
   SearchSort,
 } from "@/lib/types";
 
-const URL_FILTERS = [
+const API_FILTERS = [
   "q",
   "country",
   "topic",
@@ -28,38 +28,54 @@ const URL_FILTERS = [
   "to",
   "tier",
   "language",
-  "sort",
 ] as const;
 
-type Draft = Record<(typeof URL_FILTERS)[number], string>;
+const URL_STATE_KEYS = [
+  ...API_FILTERS,
+  "sort",
+  "range",
+] as const;
+
+type Draft = Record<(typeof URL_STATE_KEYS)[number], string>;
+
+function defaultRangeStart(): string {
+  const date = new Date();
+  date.setUTCDate(date.getUTCDate() - 90);
+  return date.toISOString().slice(0, 10);
+}
 
 function draftFromParams(params: URLSearchParams): Draft {
+  const allHistory = params.get("range") === "all";
   return {
     q: params.get("q") ?? "",
     country: params.get("country") ?? "",
     topic: params.get("topic") ?? "",
     entity_id: params.get("entity_id") ?? "",
-    from: params.get("from") ?? "",
-    to: params.get("to") ?? "",
+    from: allHistory ? "" : params.get("from") ?? "",
+    to: allHistory ? "" : params.get("to") ?? "",
     tier: params.get("tier") ?? "",
     language: params.get("language") ?? "",
     sort: params.get("sort") === "newest" ? "newest" : "relevance",
+    range: allHistory ? "all" : "",
   };
 }
 
 function requestFromParams(params: URLSearchParams): ArticleSearchRequest {
   const request: ArticleSearchRequest = {};
-  for (const key of URL_FILTERS) {
+  const allHistory = params.get("range") === "all";
+  for (const key of API_FILTERS) {
     const value = params.get(key)?.trim();
     if (!value) continue;
-    if (key === "sort") request.sort = value === "newest" ? "newest" : "relevance";
-    else request[key] = value;
+    if (allHistory && (key === "from" || key === "to")) continue;
+    request[key] = value;
   }
+  request.sort = params.get("sort") === "newest" ? "newest" : "relevance";
   return request;
 }
 
 function hasSearchIntent(params: URLSearchParams): boolean {
-  return URL_FILTERS.some((key) => key !== "sort" && Boolean(params.get(key)?.trim()));
+  const request = requestFromParams(params);
+  return API_FILTERS.some((key) => Boolean(request[key]?.trim()));
 }
 
 function SearchPageContent() {
@@ -67,6 +83,7 @@ function SearchPageContent() {
   const searchParams = useSearchParams();
   const paramsKey = searchParams.toString();
   const inputRef = useRef<HTMLInputElement>(null);
+  const loadMoreControllerRef = useRef<AbortController | null>(null);
   const [draft, setDraft] = useState<Draft>(() =>
     draftFromParams(new URLSearchParams(paramsKey)),
   );
@@ -86,14 +103,50 @@ function SearchPageContent() {
 
   const currentParams = useMemo(() => new URLSearchParams(paramsKey), [paramsKey]);
   const currentRequest = useMemo(() => requestFromParams(currentParams), [currentParams]);
-  const shouldSearch = useMemo(() => hasSearchIntent(currentParams), [currentParams]);
+  const needsDefaultRange = useMemo(
+    () =>
+      !currentParams.has("from") &&
+      !currentParams.has("to") &&
+      currentParams.get("range") !== "all",
+    [currentParams],
+  );
+  const shouldSearch = useMemo(
+    () => hasSearchIntent(currentParams) && !needsDefaultRange,
+    [currentParams, needsDefaultRange],
+  );
+  const activeParamsKeyRef = useRef(paramsKey);
+  activeParamsKeyRef.current = paramsKey;
 
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
 
   useEffect(() => {
-    setDraft(draftFromParams(new URLSearchParams(paramsKey)));
+    const nextParams = new URLSearchParams(paramsKey);
+    setDraft(draftFromParams(nextParams));
+    setEntityQuery("");
+    setSelectedEntityLabel("");
+    setSuggestions([]);
+    setSuggestionsOpen(false);
+    setActiveSuggestion(-1);
+  }, [paramsKey]);
+
+  useEffect(() => {
+    if (!needsDefaultRange) return;
+    const canonical = new URLSearchParams(paramsKey);
+    canonical.delete("range");
+    canonical.set("from", defaultRangeStart());
+    router.replace(`/search?${canonical.toString()}`);
+  }, [needsDefaultRange, paramsKey, router]);
+
+  useEffect(() => {
+    loadMoreControllerRef.current?.abort();
+    loadMoreControllerRef.current = null;
+    setLoadingMore(false);
+    return () => {
+      loadMoreControllerRef.current?.abort();
+      loadMoreControllerRef.current = null;
+    };
   }, [paramsKey]);
 
   useEffect(() => {
@@ -111,7 +164,7 @@ function SearchPageContent() {
         .then((response) => {
           setSuggestions(response.items);
           setSuggestionsOpen(response.items.length > 0);
-          setActiveSuggestion(response.items.length ? 0 : -1);
+          setActiveSuggestion(-1);
         })
         .catch((reason: unknown) => {
           if (!(reason instanceof DOMException && reason.name === "AbortError")) {
@@ -146,6 +199,7 @@ function SearchPageContent() {
     setNextCursor(null);
     api.searchArticles(currentRequest, null, controller.signal)
       .then((response) => {
+        if (controller.signal.aborted || activeParamsKeyRef.current !== paramsKey) return;
         setItems(response.items);
         setCandidateCount(response.candidate_count);
         setNextCursor(response.next_cursor);
@@ -177,7 +231,7 @@ function SearchPageContent() {
       return;
     }
     const params = new URLSearchParams();
-    for (const key of URL_FILTERS) {
+    for (const key of URL_STATE_KEYS) {
       const value = draft[key].trim();
       if (value) params.set(key, key === "country" ? value.toUpperCase() : value);
     }
@@ -193,29 +247,49 @@ function SearchPageContent() {
   }
 
   function entityKeyDown(event: KeyboardEvent<HTMLInputElement>) {
-    if (!suggestionsOpen || !suggestions.length) return;
+    if (event.key === "Escape") {
+      setSuggestionsOpen(false);
+      setActiveSuggestion(-1);
+      return;
+    }
+    if (!suggestions.length) return;
     if (event.key === "ArrowDown") {
       event.preventDefault();
-      setActiveSuggestion((current) => (current + 1) % suggestions.length);
+      setSuggestionsOpen(true);
+      setActiveSuggestion((current) =>
+        !suggestionsOpen || current < 0 ? 0 : (current + 1) % suggestions.length,
+      );
     } else if (event.key === "ArrowUp") {
       event.preventDefault();
+      setSuggestionsOpen(true);
       setActiveSuggestion((current) =>
-        current <= 0 ? suggestions.length - 1 : current - 1,
+        !suggestionsOpen || current < 0
+          ? suggestions.length - 1
+          : current === 0
+            ? suggestions.length - 1
+            : current - 1,
       );
-    } else if (event.key === "Enter" && activeSuggestion >= 0) {
+    } else if (event.key === "Enter" && suggestionsOpen && activeSuggestion >= 0) {
       event.preventDefault();
       chooseEntity(suggestions[activeSuggestion]);
-    } else if (event.key === "Escape") {
-      setSuggestionsOpen(false);
     }
   }
 
   async function loadMore() {
     if (!nextCursor || loadingMore) return;
+    loadMoreControllerRef.current?.abort();
+    const controller = new AbortController();
+    const requestKey = paramsKey;
+    loadMoreControllerRef.current = controller;
     setLoadingMore(true);
     setError(null);
     try {
-      const response = await api.searchArticles(currentRequest, nextCursor);
+      const response = await api.searchArticles(
+        currentRequest,
+        nextCursor,
+        controller.signal,
+      );
+      if (controller.signal.aborted || activeParamsKeyRef.current !== requestKey) return;
       setItems((previous) => {
         const known = new Set(previous.map((item) => item.article_id));
         return [
@@ -225,10 +299,17 @@ function SearchPageContent() {
       });
       setCandidateCount(response.candidate_count);
       setNextCursor(response.next_cursor);
-    } catch {
+    } catch (reason: unknown) {
+      if (controller.signal.aborted || activeParamsKeyRef.current !== requestKey) return;
       setError("Следующую страницу не удалось загрузить. Уже найденные материалы сохранены.");
     } finally {
-      setLoadingMore(false);
+      if (
+        loadMoreControllerRef.current === controller &&
+        activeParamsKeyRef.current === requestKey
+      ) {
+        loadMoreControllerRef.current = null;
+        setLoadingMore(false);
+      }
     }
   }
 
@@ -273,13 +354,13 @@ function SearchPageContent() {
                 maxLength={200}
                 onChange={(event) => updateDraft("q", event.target.value)}
                 placeholder="например, Путин"
-                className="w-full border-b border-line bg-transparent py-2 pl-7 pr-2 text-[18px] text-ru-white outline-none transition-colors placeholder:text-dim/70 focus:border-accent"
+                className="min-h-11 w-full border-b border-line bg-transparent py-2 pl-7 pr-2 text-[18px] text-ru-white outline-none transition-colors placeholder:text-dim/70 focus:border-accent"
               />
             </span>
           </label>
           <button
             type="submit"
-            className="inline-flex min-h-10 items-center justify-center gap-2 rounded-md bg-ru-white px-5 py-2 text-[12px] font-semibold uppercase tracking-[0.08em] text-bg transition-colors hover:bg-white focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
+            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md bg-ru-white px-5 py-2 text-[12px] font-semibold uppercase tracking-[0.08em] text-bg transition-colors hover:bg-white focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
           >
             Найти материалы
           </button>
@@ -297,7 +378,7 @@ function SearchPageContent() {
                 maxLength={2}
                 onChange={(event) => updateDraft("country", event.target.value)}
                 placeholder="ES"
-                className="w-full rounded-md border border-line bg-panel2 px-2.5 py-2 text-xs uppercase text-fg outline-none focus:border-accent"
+                className="min-h-11 w-full rounded-md border border-line bg-panel2 px-2.5 py-2 text-base uppercase text-fg outline-none focus:border-accent sm:min-h-0 sm:text-xs"
               />
             </label>
             <label>
@@ -306,7 +387,7 @@ function SearchPageContent() {
                 value={draft.topic}
                 onChange={(event) => updateDraft("topic", event.target.value)}
                 placeholder="diplomacy"
-                className="w-full rounded-md border border-line bg-panel2 px-2.5 py-2 text-xs text-fg outline-none focus:border-accent"
+                className="min-h-11 w-full rounded-md border border-line bg-panel2 px-2.5 py-2 text-base text-fg outline-none focus:border-accent sm:min-h-0 sm:text-xs"
               />
             </label>
             <div className="relative sm:col-span-2">
@@ -328,9 +409,13 @@ function SearchPageContent() {
                     updateDraft("entity_id", "");
                   }}
                   onFocus={() => setSuggestionsOpen(suggestions.length > 0)}
+                  onBlur={() => {
+                    setSuggestionsOpen(false);
+                    setActiveSuggestion(-1);
+                  }}
                   onKeyDown={entityKeyDown}
                   placeholder="начните вводить: Владимир Путин"
-                  className="w-full rounded-md border border-line bg-panel2 px-2.5 py-2 pr-9 text-xs text-fg outline-none focus:border-accent"
+                  className="min-h-11 w-full rounded-md border border-line bg-panel2 px-2.5 py-2 pr-9 text-base text-fg outline-none focus:border-accent sm:min-h-0 sm:text-xs"
                 />
                 {suggestionsLoading && (
                   <LoaderCircle
@@ -353,10 +438,11 @@ function SearchPageContent() {
                       id={`entity-option-${index}`}
                       type="button"
                       role="option"
+                      tabIndex={-1}
                       aria-selected={index === activeSuggestion}
-                      onMouseDown={(event) => event.preventDefault()}
+                      onPointerDown={(event) => event.preventDefault()}
                       onClick={() => chooseEntity(entity)}
-                      className={`flex w-full items-center justify-between gap-4 border-b border-line px-3 py-2 text-left text-xs last:border-b-0 ${
+                      className={`flex min-h-11 w-full items-center justify-between gap-4 border-b border-line px-3 py-2 text-left text-base last:border-b-0 sm:text-xs ${
                         index === activeSuggestion ? "bg-ru-blue/15 text-ru-white" : "text-fg hover:bg-white/5"
                       }`}
                     >
@@ -374,7 +460,7 @@ function SearchPageContent() {
                     setSelectedEntityLabel("");
                     setEntityQuery("");
                   }}
-                  className="mt-1 inline-flex items-center gap-1 text-[10px] text-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+                  className="mt-1 inline-flex min-h-11 items-center gap-1 text-[10px] text-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent sm:min-h-0"
                 >
                   {selectedEntityLabel || `сущность ${draft.entity_id.slice(0, 8)}…`}
                   <X aria-hidden="true" size={11} />
@@ -386,8 +472,11 @@ function SearchPageContent() {
               <input
                 type="date"
                 value={draft.from}
-                onChange={(event) => updateDraft("from", event.target.value)}
-                className="w-full rounded-md border border-line bg-panel2 px-2.5 py-2 text-xs text-fg outline-none focus:border-accent"
+                onChange={(event) => {
+                  updateDraft("from", event.target.value);
+                  updateDraft("range", "");
+                }}
+                className="min-h-11 w-full rounded-md border border-line bg-panel2 px-2.5 py-2 text-base text-fg outline-none focus:border-accent sm:min-h-0 sm:text-xs"
               />
             </label>
             <label>
@@ -395,8 +484,11 @@ function SearchPageContent() {
               <input
                 type="date"
                 value={draft.to}
-                onChange={(event) => updateDraft("to", event.target.value)}
-                className="w-full rounded-md border border-line bg-panel2 px-2.5 py-2 text-xs text-fg outline-none focus:border-accent"
+                onChange={(event) => {
+                  updateDraft("to", event.target.value);
+                  updateDraft("range", "");
+                }}
+                className="min-h-11 w-full rounded-md border border-line bg-panel2 px-2.5 py-2 text-base text-fg outline-none focus:border-accent sm:min-h-0 sm:text-xs"
               />
             </label>
             <label>
@@ -404,13 +496,15 @@ function SearchPageContent() {
               <select
                 value={draft.tier}
                 onChange={(event) => updateDraft("tier", event.target.value)}
-                className="w-full rounded-md border border-line bg-panel2 px-2.5 py-2 text-xs text-fg outline-none focus:border-accent"
+                className="min-h-11 w-full rounded-md border border-line bg-panel2 px-2.5 py-2 text-base text-fg outline-none focus:border-accent sm:min-h-0 sm:text-xs"
               >
                 <option value="">Все типы</option>
                 <option value="official">Официальный</option>
-                <option value="state">Государственный</option>
                 <option value="mainstream">Мейнстрим</option>
                 <option value="independent">Независимый</option>
+                <option value="social">Социальные медиа</option>
+                <option value="domestic_opposition">Внутренняя оппозиция</option>
+                <option value="western_proxy">Западный прокси</option>
                 <option value="analytics">Аналитика</option>
               </select>
             </label>
@@ -422,7 +516,7 @@ function SearchPageContent() {
                   maxLength={8}
                   onChange={(event) => updateDraft("language", event.target.value)}
                   placeholder="es"
-                  className="w-full rounded-md border border-line bg-panel2 px-2.5 py-2 text-xs text-fg outline-none focus:border-accent"
+                  className="min-h-11 w-full rounded-md border border-line bg-panel2 px-2.5 py-2 text-base text-fg outline-none focus:border-accent sm:min-h-0 sm:text-xs"
                 />
               </label>
               <label>
@@ -430,7 +524,7 @@ function SearchPageContent() {
                 <select
                   value={draft.sort}
                   onChange={(event) => updateDraft("sort", event.target.value as SearchSort)}
-                  className="w-full rounded-md border border-line bg-panel2 px-2 py-2 text-xs text-fg outline-none focus:border-accent"
+                  className="min-h-11 w-full rounded-md border border-line bg-panel2 px-2 py-2 text-base text-fg outline-none focus:border-accent sm:min-h-0 sm:text-xs"
                 >
                   <option value="relevance">точность</option>
                   <option value="newest">сначала новые</option>
@@ -451,11 +545,13 @@ function SearchPageContent() {
                 tier: "",
                 language: "",
                 sort: "relevance",
+                range: "all",
               }));
               setEntityQuery("");
               setSelectedEntityLabel("");
             }}
-            className="mt-4 text-[10px] uppercase tracking-[0.08em] text-dim underline decoration-line underline-offset-4 hover:text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+            aria-pressed={draft.range === "all"}
+            className="mt-2 inline-flex min-h-11 items-center text-[10px] uppercase tracking-[0.08em] text-dim underline decoration-line underline-offset-4 hover:text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent sm:min-h-0"
           >
             Искать по всей истории без фильтров
           </button>
@@ -491,7 +587,7 @@ function SearchPageContent() {
               <button
                 type="button"
                 onClick={() => setReload((value) => value + 1)}
-                className="mt-2 text-[11px] text-ru-white underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+                className="mt-2 inline-flex min-h-11 items-center text-[11px] text-ru-white underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent sm:min-h-0"
               >
                 Повторить запрос
               </button>
@@ -524,7 +620,7 @@ function SearchPageContent() {
                   type="button"
                   onClick={loadMore}
                   disabled={loadingMore}
-                  className="inline-flex items-center gap-2 text-[11px] uppercase tracking-[0.09em] text-accent disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
+                  className="inline-flex min-h-11 items-center gap-2 text-[11px] uppercase tracking-[0.09em] text-accent disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
                 >
                   {loadingMore ? (
                     <LoaderCircle aria-hidden="true" size={14} className="animate-spin motion-reduce:animate-none" />
