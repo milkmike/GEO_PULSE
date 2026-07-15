@@ -158,6 +158,29 @@ Smoke-test the exact product flows:
 - repeat the above with embedding configuration removed: lexical results must
   remain available and `semantic_search` must be `unavailable`.
 
+### Search candidate-window contract
+
+Search returns and paginates a deterministic snapshot of at most 500 final
+candidates. Source-driven branches first bound their upstream windows to the
+newest 500 eligible non-duplicate articles per matching source, then merge and
+rank those candidates into the final global window.
+Full-text candidates enter through the article GIN index; the typo-tolerant
+title branch runs only when fewer than ten eligible full-text candidates exist.
+Topic, entity, and story branches apply the request's snapshot, country, topic,
+entity, date, tier, and language predicates before their IDs reach the shared
+deduplication and ranking stage.
+
+For a country or tier filter, entity/topic/story and structured branches read
+the newest 500 non-duplicate articles per matching source through
+`idx_articles_source_candidates`, then calculate the unchanged hybrid score
+inside that source-scoped snapshot window. A text-empty, language-only request
+reads the newest 500 non-duplicate articles for that language through
+`idx_articles_language_published_id`, then applies the same exact score inside
+that window. Thus `sort=relevance` means relevance within the documented recent
+candidate window; `sort=newest` uses the same window directly. Cursors preserve
+the original ranking timestamp and ingestion high-water marks, so later pages
+cannot admit articles collected after page one.
+
 ## Query-plan gate
 
 Run plans with production-like parameters after `ANALYZE`. Save total time,
@@ -165,12 +188,29 @@ shared buffer hits/reads, returned rows, and the chosen index. Low-cardinality
 development tables may legitimately use a sequential scan; production-sized
 relations must not scan all articles per request.
 
+Do not use a direct `SELECT ... FROM articles WHERE search_vector @@ ...` as the
+search gate: that only proves the standalone GIN index works and cannot expose
+materialization or full scans introduced by the real multi-branch ranking
+query. Run the opt-in regression against a disposable PostgreSQL 16 database:
+
+```bash
+GEO_PULSE_SEARCH_PERF_TEST_DATABASE_URL="$DISPOSABLE_DATABASE_URL" \
+  pytest -q tests/test_search_postgres.py -vv
+```
+
+The test creates 100,001 synthetic articles and runs `EXPLAIN (ANALYZE,
+BUFFERS, FORMAT JSON)` over the exact `ARTICLE_SEARCH_SQL` for four cases:
+5,000 lexical hits, a sparse topic match, language-only structured search, and
+a high-fanout entity mentioned by the whole corpus but filtered to Spain. The
+gate requires the expected GIN/language/source indexes, forbids every executed
+`Seq Scan` of `articles`, caps language and source-driven aggregate/sort work at
+500 rows, and enforces the hard two-second statement budget per query. Preserve
+the JSON plans with the release evidence; nodes under an unexecuted fallback
+branch have `Actual Loops = 0` and do not fail the gate.
+
+Run the remaining lookup plans separately:
+
 ```sql
-EXPLAIN (ANALYZE, BUFFERS)
-SELECT id FROM articles
-WHERE search_vector @@ websearch_to_tsquery('simple', 'путин')
-ORDER BY COALESCE(collected_at, published_at) DESC, id DESC
-LIMIT 101;
 
 EXPLAIN (ANALYZE, BUFFERS)
 SELECT st.id FROM stories st
@@ -188,11 +228,12 @@ WHERE country_code = 'ES' AND rri_version = 'v1'
 ORDER BY to_time DESC LIMIT 1;
 ```
 
-Investigate any search plan that ignores the GIN search index or snapshot-order
-index at production scale. Investigate story, signal, or explanation lookups
-that read materially more rows than they return. The release owner sets the
-latency budget from the pre-rollout baseline; do not enable navigation if p95 or
-5xx materially regresses.
+Investigate any real search plan that ignores the GIN search index, executes a
+full article scan, or misses the snapshot-order index at production scale.
+Investigate story, signal, or explanation lookups that read materially more
+rows than they return. The release owner sets the latency budget from the
+pre-rollout baseline; do not enable navigation if p95 or 5xx materially
+regresses.
 
 ## Activation order and observation
 

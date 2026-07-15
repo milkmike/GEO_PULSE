@@ -1,0 +1,305 @@
+"""Opt-in PostgreSQL execution-plan regression tests for indexed article search."""
+
+from __future__ import annotations
+
+import os
+from datetime import datetime, timezone
+
+import pytest
+from sqlalchemy import create_engine, text
+
+from src.search import ARTICLE_SEARCH_SQL
+
+
+DATABASE_URL = os.getenv("GEO_PULSE_SEARCH_PERF_TEST_DATABASE_URL")
+
+
+def _walk_plan(node):
+    yield node
+    for child in node.get("Plans", []):
+        yield from _walk_plan(child)
+
+
+@pytest.mark.skipif(
+    not DATABASE_URL,
+    reason="GEO_PULSE_SEARCH_PERF_TEST_DATABASE_URL is not configured",
+)
+def test_actual_search_plans_use_selective_indexes_and_bounded_candidates():
+    """Exact search SQL must use selective indexes for representative branches."""
+
+    engine = create_engine(DATABASE_URL)
+    try:
+        with engine.begin() as connection:
+            connection.execute(text("""
+                CREATE TEMP TABLE sources (
+                    id INTEGER PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    country_code CHAR(2) NOT NULL,
+                    tier TEXT,
+                    weight NUMERIC(3,2)
+                );
+                CREATE TEMP TABLE articles (
+                    id INTEGER PRIMARY KEY,
+                    source_id INTEGER NOT NULL,
+                    title TEXT,
+                    summary TEXT,
+                    body TEXT,
+                    url TEXT,
+                    published_at TIMESTAMPTZ NOT NULL,
+                    collected_at TIMESTAMPTZ,
+                    language TEXT,
+                    title_normalized TEXT,
+                    is_duplicate BOOLEAN NOT NULL,
+                    search_vector TSVECTOR
+                );
+                CREATE TEMP TABLE analysis (
+                    article_id INTEGER PRIMARY KEY,
+                    topics TEXT[],
+                    sentiment NUMERIC(3,1),
+                    action_level INTEGER
+                );
+                CREATE TEMP TABLE canonical_entities (
+                    id UUID PRIMARY KEY,
+                    kind TEXT NOT NULL,
+                    canonical_name TEXT NOT NULL,
+                    normalized_name TEXT NOT NULL
+                );
+                CREATE TEMP TABLE entity_aliases (
+                    entity_id UUID NOT NULL,
+                    normalized_alias TEXT NOT NULL,
+                    ambiguous BOOLEAN NOT NULL
+                );
+                CREATE TEMP TABLE article_entity_mentions (
+                    article_id INTEGER NOT NULL,
+                    entity_id UUID NOT NULL,
+                    mention_text TEXT,
+                    confidence NUMERIC(4,3)
+                );
+                CREATE TEMP TABLE stories (
+                    id BIGINT PRIMARY KEY,
+                    slug TEXT NOT NULL,
+                    title_ru TEXT NOT NULL,
+                    summary TEXT,
+                    last_seen TIMESTAMPTZ
+                );
+                CREATE TEMP TABLE story_articles (
+                    story_id BIGINT NOT NULL,
+                    article_id INTEGER NOT NULL,
+                    membership_confidence NUMERIC(4,3) NOT NULL
+                );
+
+                CREATE INDEX idx_articles_search_vector
+                    ON articles USING GIN(search_vector);
+                CREATE INDEX idx_articles_search_snapshot_v2
+                    ON articles ((COALESCE(collected_at, published_at)) DESC, id DESC);
+                CREATE INDEX idx_articles_source_published
+                    ON articles(source_id, published_at DESC);
+                CREATE INDEX idx_articles_source_candidates
+                    ON articles(source_id, published_at DESC, id DESC)
+                    WHERE is_duplicate = FALSE;
+                CREATE INDEX idx_articles_title_trgm
+                    ON articles USING GIN(title_normalized gin_trgm_ops);
+                CREATE INDEX idx_articles_language_published_id
+                    ON articles(language, published_at DESC, id DESC)
+                    WHERE is_duplicate = FALSE;
+                CREATE INDEX idx_analysis_topics
+                    ON analysis USING GIN(topics);
+                CREATE INDEX idx_entity_aliases_normalized
+                    ON entity_aliases(normalized_alias);
+                CREATE UNIQUE INDEX idx_canonical_entities_kind_normalized
+                    ON canonical_entities(kind, normalized_name);
+                CREATE INDEX idx_article_entity_mentions_entity
+                    ON article_entity_mentions(entity_id, article_id);
+                CREATE INDEX idx_article_entity_mentions_article
+                    ON article_entity_mentions(article_id);
+                CREATE INDEX idx_story_articles_membership
+                    ON story_articles(article_id, story_id);
+            """))
+            connection.execute(text("""
+                INSERT INTO sources(id, name, country_code, tier, weight)
+                VALUES (1, 'Spanish source', 'ES', 'mainstream', 0.8),
+                       (2, 'Global source', 'US', 'mainstream', 0.8);
+
+                INSERT INTO articles(
+                    id, source_id, title, summary, body, url,
+                    published_at, collected_at, language, title_normalized,
+                    is_duplicate, search_vector
+                )
+                SELECT sequence_id,
+                       CASE WHEN sequence_id % 20 = 0 THEN 1 ELSE 2 END,
+                       CASE WHEN sequence_id % 20 = 0
+                            THEN 'Путин: тестовая новость ' || sequence_id
+                            ELSE 'Обычная тестовая новость ' || sequence_id
+                       END,
+                       'Краткая аннотация',
+                       'Текст материала',
+                       'https://example.test/' || sequence_id,
+                       TIMESTAMPTZ '2026-07-15 12:00:00+00'
+                           - make_interval(secs => sequence_id),
+                       TIMESTAMPTZ '2026-07-15 12:00:00+00'
+                           - make_interval(secs => sequence_id),
+                       CASE WHEN sequence_id % 20 = 0 THEN 'es' ELSE 'ru' END,
+                       CASE WHEN sequence_id % 20 = 0
+                            THEN 'путин тестовая новость ' || sequence_id
+                            ELSE 'обычная тестовая новость ' || sequence_id
+                       END,
+                       FALSE,
+                       setweight(to_tsvector(
+                           'simple',
+                           CASE WHEN sequence_id % 20 = 0
+                                THEN 'Путин тестовая новость ' || sequence_id
+                                ELSE 'Обычная тестовая новость ' || sequence_id
+                           END
+                       ), 'A')
+                FROM generate_series(1, 100001) AS generated(sequence_id);
+
+                INSERT INTO analysis(article_id, topics)
+                SELECT sequence_id,
+                       CASE WHEN sequence_id % 1000 = 0
+                            THEN ARRAY['diplomacy']::TEXT[]
+                            ELSE ARRAY['other-topic']::TEXT[]
+                       END
+                FROM generate_series(1, 100001) AS generated(sequence_id);
+
+                INSERT INTO canonical_entities(
+                    id, kind, canonical_name, normalized_name
+                ) VALUES (
+                    '00000000-0000-0000-0000-000000000001',
+                    'person', 'Vladimir Putin', 'vladimir putin'
+                );
+                INSERT INTO article_entity_mentions(
+                    article_id, entity_id, mention_text, confidence
+                )
+                SELECT sequence_id,
+                       '00000000-0000-0000-0000-000000000001'::UUID,
+                       'Putin', 1.0
+                FROM generate_series(1, 100001) AS generated(sequence_id);
+
+                ANALYZE sources;
+                ANALYZE articles;
+                ANALYZE analysis;
+                ANALYZE canonical_entities;
+                ANALYZE entity_aliases;
+                ANALYZE article_entity_mentions;
+                ANALYZE stories;
+                ANALYZE story_articles;
+            """))
+
+            params = {
+                "q": "путин",
+                "country": None,
+                "topic": None,
+                "entity_id": None,
+                "date_from": None,
+                "date_to": None,
+                "tier": None,
+                "language": None,
+                "sort": "relevance",
+                "ranking_at": datetime(2026, 7, 15, 12, tzinfo=timezone.utc),
+                "snapshot_collected_at": None,
+                "snapshot_collected_article_id": None,
+                "snapshot_max_article_id": None,
+                "candidate_limit": 500,
+            }
+            connection.execute(text(
+                "SET LOCAL pg_trgm.similarity_threshold = 0.1"
+            ))
+            lexical_plan_document = connection.execute(
+                text("EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " + ARTICLE_SEARCH_SQL),
+                params,
+            ).scalar_one()
+            topic_plan_document = connection.execute(
+                text("EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " + ARTICLE_SEARCH_SQL),
+                {**params, "q": "diplomacy"},
+            ).scalar_one()
+            language_plan_document = connection.execute(
+                text("EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " + ARTICLE_SEARCH_SQL),
+                {**params, "q": "", "language": "es"},
+            ).scalar_one()
+            entity_country_plan_document = connection.execute(
+                text("EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " + ARTICLE_SEARCH_SQL),
+                {**params, "q": "vladimir putin", "country": "ES"},
+            ).scalar_one()
+
+        lexical_root = lexical_plan_document[0]
+        lexical_nodes = [
+            node for node in _walk_plan(lexical_root["Plan"])
+            if node.get("Actual Loops", 0) > 0
+        ]
+        assert any(
+            node.get("Node Type") == "Bitmap Index Scan"
+            and node.get("Index Name") == "idx_articles_search_vector"
+            for node in lexical_nodes
+        ), lexical_plan_document
+        assert not any(
+            node.get("Node Type") == "Seq Scan"
+            and node.get("Relation Name") == "articles"
+            for node in lexical_nodes
+        ), lexical_plan_document
+        assert lexical_root["Execution Time"] < 2000, lexical_plan_document
+
+        topic_root = topic_plan_document[0]
+        topic_nodes = [
+            node for node in _walk_plan(topic_root["Plan"])
+            if node.get("Actual Loops", 0) > 0
+        ]
+        assert any(
+            node.get("Node Type") == "Bitmap Index Scan"
+            and node.get("Index Name") == "idx_analysis_topics"
+            for node in topic_nodes
+        ), topic_plan_document
+        assert not any(
+            node.get("Node Type") == "Seq Scan"
+            and node.get("Relation Name") == "articles"
+            for node in topic_nodes
+        ), topic_plan_document
+        assert topic_root["Execution Time"] < 2000, topic_plan_document
+
+        language_root = language_plan_document[0]
+        language_nodes = [
+            node for node in _walk_plan(language_root["Plan"])
+            if node.get("Actual Loops", 0) > 0
+        ]
+        assert any(
+            node.get("Node Type") in {
+                "Bitmap Index Scan", "Index Scan", "Index Only Scan"
+            }
+            and node.get("Index Name") == "idx_articles_language_published_id"
+            for node in language_nodes
+        ), language_plan_document
+        assert not any(
+            node.get("Node Type") == "Seq Scan"
+            and node.get("Relation Name") == "articles"
+            for node in language_nodes
+        ), language_plan_document
+        assert not any(
+            node.get("Node Type") in {"Aggregate", "Sort", "Unique"}
+            and node.get("Actual Rows", 0) > 500
+            for node in language_nodes
+        ), language_plan_document
+        assert language_root["Execution Time"] < 2000, language_plan_document
+
+        entity_country_root = entity_country_plan_document[0]
+        entity_country_nodes = [
+            node for node in _walk_plan(entity_country_root["Plan"])
+            if node.get("Actual Loops", 0) > 0
+        ]
+        assert not any(
+            node.get("Node Type") == "Seq Scan"
+            and node.get("Relation Name") == "articles"
+            for node in entity_country_nodes
+        ), entity_country_plan_document
+        assert any(
+            node.get("Node Type") in {"Index Scan", "Index Only Scan"}
+            and node.get("Index Name") == "idx_articles_source_candidates"
+            and node.get("Actual Rows", 0) <= 500
+            for node in entity_country_nodes
+        ), entity_country_plan_document
+        assert not any(
+            node.get("Node Type") in {"Aggregate", "Sort", "Unique"}
+            and node.get("Actual Rows", 0) > 500
+            for node in entity_country_nodes
+        ), entity_country_plan_document
+        assert entity_country_root["Execution Time"] < 2000, entity_country_plan_document
+    finally:
+        engine.dispose()

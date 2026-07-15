@@ -71,17 +71,113 @@ snapshot AS (
                (SELECT MAX(id) FROM articles)
            ) AS snapshot_max_article_id
 ),
-base_articles AS (
-    SELECT a.id, a.search_vector, a.title_normalized, a.published_at,
-           GREATEST(0.0, LEAST(1.0,
-               COALESCE(s.weight, 0.5)::DOUBLE PRECISION
-           )) AS trust_score,
-           COALESCE(an.topics, ARRAY[]::TEXT[]) AS topics
+matching_sources AS MATERIALIZED (
+    SELECT s.id, s.country_code, s.tier, s.weight
+    FROM sources s
+    WHERE (:country IS NULL OR s.country_code = :country)
+      AND (:tier IS NULL OR s.tier = :tier)
+),
+source_filtered_articles AS MATERIALIZED (
+    SELECT a.id
+    FROM matching_sources s
+    JOIN LATERAL (
+        SELECT candidate.id, candidate.collected_at, candidate.published_at,
+               candidate.language
+        FROM articles candidate
+        WHERE candidate.source_id = s.id
+          AND candidate.is_duplicate = FALSE
+        ORDER BY candidate.published_at DESC, candidate.id DESC
+        LIMIT :candidate_limit
+        OFFSET 0
+    ) a ON TRUE
+    LEFT JOIN analysis an ON an.article_id = a.id
+    CROSS JOIN snapshot snapshot_state
+    WHERE (:country IS NOT NULL OR :tier IS NOT NULL)
+      AND (
+          snapshot_state.snapshot_collected_at IS NULL
+          OR (COALESCE(a.collected_at, a.published_at), a.id) <=
+             (snapshot_state.snapshot_collected_at,
+              snapshot_state.snapshot_collected_article_id)
+      )
+      AND (
+          snapshot_state.snapshot_max_article_id IS NULL
+          OR a.id <= snapshot_state.snapshot_max_article_id
+      )
+      AND (:topic IS NULL OR an.topics @> ARRAY[CAST(:topic AS TEXT)])
+      AND (:entity_id IS NULL OR EXISTS (
+          SELECT 1
+          FROM article_entity_mentions aem_filter
+          WHERE aem_filter.article_id = a.id
+            AND aem_filter.entity_id = CAST(:entity_id AS UUID)
+      ))
+      AND (:date_from IS NULL OR a.published_at >= CAST(:date_from AS DATE))
+      AND (:date_to IS NULL OR a.published_at < CAST(:date_to AS DATE) + INTERVAL '1 day')
+      AND (:language IS NULL OR a.language = :language)
+),
+matching_entity_ids AS MATERIALIZED (
+    SELECT ce.id
+    FROM unnest(ARRAY['person', 'organization', 'location', 'event']) AS kinds(kind)
+    JOIN canonical_entities ce
+      ON ce.kind = kinds.kind AND ce.normalized_name = :q
+    WHERE :q <> ''
+    UNION
+    SELECT ea.entity_id
+    FROM entity_aliases ea
+    WHERE :q <> ''
+      AND ea.ambiguous = FALSE
+      AND ea.normalized_alias = :q
+),
+full_text_candidates AS MATERIALIZED (
+    SELECT a.id,
+           ts_rank_cd(a.search_vector, sq.tsq, 32) AS lexical_score,
+           'full_text'::TEXT AS match_kind
+    FROM articles a
+    JOIN matching_sources s ON s.id = a.source_id
+    LEFT JOIN analysis an ON an.article_id = a.id
+    CROSS JOIN search_query sq
+    CROSS JOIN snapshot snapshot_state
+    WHERE :q <> ''
+      AND a.search_vector @@ sq.tsq
+      AND a.is_duplicate = FALSE
+      AND (
+          snapshot_state.snapshot_collected_at IS NULL
+          OR (COALESCE(a.collected_at, a.published_at), a.id) <=
+             (snapshot_state.snapshot_collected_at,
+              snapshot_state.snapshot_collected_article_id)
+      )
+      AND (
+          snapshot_state.snapshot_max_article_id IS NULL
+          OR a.id <= snapshot_state.snapshot_max_article_id
+      )
+      AND (:topic IS NULL OR an.topics @> ARRAY[CAST(:topic AS TEXT)])
+      AND (:entity_id IS NULL OR EXISTS (
+          SELECT 1
+          FROM article_entity_mentions aem_filter
+          WHERE aem_filter.article_id = a.id
+            AND aem_filter.entity_id = CAST(:entity_id AS UUID)
+      ))
+      AND (:date_from IS NULL OR a.published_at >= CAST(:date_from AS DATE))
+      AND (:date_to IS NULL OR a.published_at < CAST(:date_to AS DATE) + INTERVAL '1 day')
+      AND (:language IS NULL OR a.language = :language)
+),
+trigram_candidates AS (
+    SELECT a.id,
+           similarity(COALESCE(a.title_normalized, ''), :q) AS lexical_score,
+           'trigram'::TEXT AS match_kind
     FROM articles a
     JOIN sources s ON s.id = a.source_id
     LEFT JOIN analysis an ON an.article_id = a.id
     CROSS JOIN snapshot snapshot_state
-    WHERE a.is_duplicate = FALSE
+    WHERE :q <> ''
+      AND NOT EXISTS (
+          SELECT 1 FROM full_text_candidates OFFSET 9 LIMIT 1
+      )
+      AND a.title_normalized % :q
+      AND similarity(COALESCE(a.title_normalized, ''), :q) > 0.1
+      AND NOT EXISTS (
+          SELECT 1 FROM full_text_candidates ft WHERE ft.id = a.id
+      )
+      AND a.is_duplicate = FALSE
       AND (
           snapshot_state.snapshot_collected_at IS NULL
           OR (COALESCE(a.collected_at, a.published_at), a.id) <=
@@ -97,97 +193,298 @@ base_articles AS (
       AND (:entity_id IS NULL OR EXISTS (
           SELECT 1
           FROM article_entity_mentions aem_filter
-          JOIN canonical_entities ce_filter ON ce_filter.id = aem_filter.entity_id
           WHERE aem_filter.article_id = a.id
-            AND ce_filter.id = CAST(:entity_id AS UUID)
+            AND aem_filter.entity_id = CAST(:entity_id AS UUID)
+      ))
+      AND (:date_from IS NULL OR a.published_at >= CAST(:date_from AS DATE))
+      AND (:date_to IS NULL OR a.published_at < CAST(:date_to AS DATE) + INTERVAL '1 day')
+      AND (:tier IS NULL OR s.tier = :tier)
+      AND (:language IS NULL OR a.language = :language)
+    ORDER BY lexical_score DESC, a.id DESC
+    LIMIT :candidate_limit
+),
+entity_candidates AS (
+    SELECT DISTINCT aem.article_id AS id, 0.0::REAL AS lexical_score,
+           'entity'::TEXT AS match_kind
+    FROM matching_entity_ids matched_entity
+    JOIN article_entity_mentions aem ON aem.entity_id = matched_entity.id
+    JOIN source_filtered_articles source_article
+      ON source_article.id = aem.article_id
+    WHERE (:country IS NOT NULL OR :tier IS NOT NULL)
+    UNION ALL
+    SELECT DISTINCT aem.article_id AS id, 0.0::REAL AS lexical_score,
+           'entity'::TEXT AS match_kind
+    FROM matching_entity_ids matched_entity
+    JOIN article_entity_mentions aem ON aem.entity_id = matched_entity.id
+    JOIN articles a ON a.id = aem.article_id
+    JOIN matching_sources s ON s.id = a.source_id
+    LEFT JOIN analysis an ON an.article_id = a.id
+    CROSS JOIN snapshot snapshot_state
+    WHERE :country IS NULL
+      AND :tier IS NULL
+      AND a.is_duplicate = FALSE
+      AND (
+          snapshot_state.snapshot_collected_at IS NULL
+          OR (COALESCE(a.collected_at, a.published_at), a.id) <=
+             (snapshot_state.snapshot_collected_at,
+              snapshot_state.snapshot_collected_article_id)
+      )
+      AND (
+          snapshot_state.snapshot_max_article_id IS NULL
+          OR a.id <= snapshot_state.snapshot_max_article_id
+      )
+      AND (:topic IS NULL OR an.topics @> ARRAY[CAST(:topic AS TEXT)])
+      AND (:entity_id IS NULL OR EXISTS (
+          SELECT 1
+          FROM article_entity_mentions aem_filter
+          WHERE aem_filter.article_id = a.id
+            AND aem_filter.entity_id = CAST(:entity_id AS UUID)
+      ))
+      AND (:date_from IS NULL OR a.published_at >= CAST(:date_from AS DATE))
+      AND (:date_to IS NULL OR a.published_at < CAST(:date_to AS DATE) + INTERVAL '1 day')
+      AND (:language IS NULL OR a.language = :language)
+),
+topic_candidates AS (
+    SELECT an.article_id AS id, 0.0::REAL AS lexical_score,
+           'topic'::TEXT AS match_kind
+    FROM source_filtered_articles source_article
+    JOIN analysis an ON an.article_id = source_article.id
+    WHERE (:country IS NOT NULL OR :tier IS NOT NULL)
+      AND :q <> ''
+      AND an.topics @> ARRAY[CAST(:q AS TEXT)]
+    UNION ALL
+    SELECT an.article_id AS id, 0.0::REAL AS lexical_score,
+           'topic'::TEXT AS match_kind
+    FROM analysis an
+    JOIN articles a ON a.id = an.article_id
+    JOIN sources s ON s.id = a.source_id
+    CROSS JOIN snapshot snapshot_state
+    WHERE :country IS NULL
+      AND :tier IS NULL
+      AND :q <> ''
+      AND an.topics @> ARRAY[CAST(:q AS TEXT)]
+      AND a.is_duplicate = FALSE
+      AND (
+          snapshot_state.snapshot_collected_at IS NULL
+          OR (COALESCE(a.collected_at, a.published_at), a.id) <=
+             (snapshot_state.snapshot_collected_at,
+              snapshot_state.snapshot_collected_article_id)
+      )
+      AND (
+          snapshot_state.snapshot_max_article_id IS NULL
+          OR a.id <= snapshot_state.snapshot_max_article_id
+      )
+      AND (:country IS NULL OR s.country_code = :country)
+      AND (:topic IS NULL OR an.topics @> ARRAY[CAST(:topic AS TEXT)])
+      AND (:entity_id IS NULL OR EXISTS (
+          SELECT 1
+          FROM article_entity_mentions aem_filter
+          WHERE aem_filter.article_id = a.id
+            AND aem_filter.entity_id = CAST(:entity_id AS UUID)
       ))
       AND (:date_from IS NULL OR a.published_at >= CAST(:date_from AS DATE))
       AND (:date_to IS NULL OR a.published_at < CAST(:date_to AS DATE) + INTERVAL '1 day')
       AND (:tier IS NULL OR s.tier = :tier)
       AND (:language IS NULL OR a.language = :language)
 ),
-full_text_candidates AS (
-    SELECT b.id, b.published_at,
-           ts_rank_cd(b.search_vector, sq.tsq, 32) AS lexical_score,
-           'full_text'::TEXT AS match_kind
-    FROM base_articles b
-    CROSS JOIN search_query sq
-    WHERE :q <> '' AND b.search_vector @@ sq.tsq
-),
-full_text_count AS (
-    SELECT COUNT(*) AS candidate_count FROM full_text_candidates
-),
-trigram_candidates AS (
-    SELECT b.id, b.published_at,
-           similarity(COALESCE(b.title_normalized, ''), :q) AS lexical_score,
-           'trigram'::TEXT AS match_kind
-    FROM base_articles b
-    WHERE :q <> ''
-      AND (SELECT candidate_count FROM full_text_count) < 10
-      AND similarity(COALESCE(b.title_normalized, ''), :q) > 0.1
-      AND NOT EXISTS (
-          SELECT 1 FROM full_text_candidates ft WHERE ft.id = b.id
-      )
-    ORDER BY lexical_score DESC, b.id DESC
-    LIMIT :candidate_limit
-),
-entity_candidates AS (
-    SELECT DISTINCT b.id, b.published_at, 0.0::REAL AS lexical_score,
-           'entity'::TEXT AS match_kind
-    FROM base_articles b
-    JOIN article_entity_mentions aem ON aem.article_id = b.id
-    JOIN canonical_entities ce ON ce.id = aem.entity_id
-    WHERE :q <> ''
-      AND (
-          ce.normalized_name = :q
-          OR EXISTS (
-              SELECT 1 FROM entity_aliases ea
-              WHERE ea.entity_id = ce.id
-                AND ea.ambiguous = FALSE
-                AND ea.normalized_alias = :q
-          )
-      )
-),
-topic_candidates AS (
-    SELECT b.id, b.published_at, 0.0::REAL AS lexical_score,
-           'topic'::TEXT AS match_kind
-    FROM base_articles b
-    WHERE :q <> '' AND b.topics @> ARRAY[CAST(:q AS TEXT)]
-),
-story_candidates AS (
-    SELECT DISTINCT b.id, b.published_at, 0.0::REAL AS lexical_score,
-           'story'::TEXT AS match_kind
-    FROM base_articles b
-    JOIN story_articles sa_match ON sa_match.article_id = b.id
-    JOIN stories st_match ON st_match.id = sa_match.story_id
+matching_story_ids AS MATERIALIZED (
+    SELECT st.id
+    FROM stories st
     CROSS JOIN search_query sq
     WHERE :q <> ''
       AND to_tsvector(
-          'simple', COALESCE(st_match.title_ru, '') || ' ' ||
-                    COALESCE(st_match.summary, '')
+          'simple', COALESCE(st.title_ru, '') || ' ' ||
+                    COALESCE(st.summary, '')
       ) @@ sq.tsq
 ),
-structured_candidates AS (
-    SELECT b.id, b.published_at, 0.0::REAL AS lexical_score,
+story_candidates AS (
+    SELECT DISTINCT sa_match.article_id AS id, 0.0::REAL AS lexical_score,
+           'story'::TEXT AS match_kind
+    FROM matching_story_ids matched_story
+    JOIN story_articles sa_match ON sa_match.story_id = matched_story.id
+    JOIN source_filtered_articles source_article
+      ON source_article.id = sa_match.article_id
+    WHERE (:country IS NOT NULL OR :tier IS NOT NULL)
+    UNION ALL
+    SELECT DISTINCT sa_match.article_id AS id, 0.0::REAL AS lexical_score,
+           'story'::TEXT AS match_kind
+    FROM matching_story_ids matched_story
+    JOIN story_articles sa_match ON sa_match.story_id = matched_story.id
+    JOIN articles a ON a.id = sa_match.article_id
+    JOIN sources s ON s.id = a.source_id
+    LEFT JOIN analysis an ON an.article_id = a.id
+    CROSS JOIN snapshot snapshot_state
+    WHERE :country IS NULL
+      AND :tier IS NULL
+      AND a.is_duplicate = FALSE
+      AND (
+          snapshot_state.snapshot_collected_at IS NULL
+          OR (COALESCE(a.collected_at, a.published_at), a.id) <=
+             (snapshot_state.snapshot_collected_at,
+              snapshot_state.snapshot_collected_article_id)
+      )
+      AND (
+          snapshot_state.snapshot_max_article_id IS NULL
+          OR a.id <= snapshot_state.snapshot_max_article_id
+      )
+      AND (:country IS NULL OR s.country_code = :country)
+      AND (:topic IS NULL OR an.topics @> ARRAY[CAST(:topic AS TEXT)])
+      AND (:entity_id IS NULL OR EXISTS (
+          SELECT 1
+          FROM article_entity_mentions aem_filter
+          WHERE aem_filter.article_id = a.id
+            AND aem_filter.entity_id = CAST(:entity_id AS UUID)
+      ))
+      AND (:date_from IS NULL OR a.published_at >= CAST(:date_from AS DATE))
+      AND (:date_to IS NULL OR a.published_at < CAST(:date_to AS DATE) + INTERVAL '1 day')
+      AND (:tier IS NULL OR s.tier = :tier)
+      AND (:language IS NULL OR a.language = :language)
+),
+structured_entity_candidates AS (
+    SELECT aem.article_id AS id, 0.0::REAL AS lexical_score,
            'structured'::TEXT AS match_kind
-    FROM base_articles b
+    FROM article_entity_mentions aem
+    JOIN articles a ON a.id = aem.article_id
+    JOIN sources s ON s.id = a.source_id
+    LEFT JOIN analysis an ON an.article_id = a.id
+    CROSS JOIN snapshot snapshot_state
     WHERE :q = ''
+      AND :entity_id IS NOT NULL
+      AND aem.entity_id = CAST(:entity_id AS UUID)
+      AND a.is_duplicate = FALSE
+      AND (
+          snapshot_state.snapshot_collected_at IS NULL
+          OR (COALESCE(a.collected_at, a.published_at), a.id) <=
+             (snapshot_state.snapshot_collected_at,
+              snapshot_state.snapshot_collected_article_id)
+      )
+      AND (
+          snapshot_state.snapshot_max_article_id IS NULL
+          OR a.id <= snapshot_state.snapshot_max_article_id
+      )
+      AND (:country IS NULL OR s.country_code = :country)
+      AND (:topic IS NULL OR an.topics @> ARRAY[CAST(:topic AS TEXT)])
+      AND (:date_from IS NULL OR a.published_at >= CAST(:date_from AS DATE))
+      AND (:date_to IS NULL OR a.published_at < CAST(:date_to AS DATE) + INTERVAL '1 day')
+      AND (:tier IS NULL OR s.tier = :tier)
+      AND (:language IS NULL OR a.language = :language)
+),
+structured_topic_candidates AS (
+    SELECT an.article_id AS id, 0.0::REAL AS lexical_score,
+           'structured'::TEXT AS match_kind
+    FROM analysis an
+    JOIN articles a ON a.id = an.article_id
+    JOIN sources s ON s.id = a.source_id
+    CROSS JOIN snapshot snapshot_state
+    WHERE :q = ''
+      AND :entity_id IS NULL
+      AND :topic IS NOT NULL
+      AND an.topics @> ARRAY[CAST(:topic AS TEXT)]
+      AND a.is_duplicate = FALSE
+      AND (
+          snapshot_state.snapshot_collected_at IS NULL
+          OR (COALESCE(a.collected_at, a.published_at), a.id) <=
+             (snapshot_state.snapshot_collected_at,
+              snapshot_state.snapshot_collected_article_id)
+      )
+      AND (
+          snapshot_state.snapshot_max_article_id IS NULL
+          OR a.id <= snapshot_state.snapshot_max_article_id
+      )
+      AND (:country IS NULL OR s.country_code = :country)
+      AND (:date_from IS NULL OR a.published_at >= CAST(:date_from AS DATE))
+      AND (:date_to IS NULL OR a.published_at < CAST(:date_to AS DATE) + INTERVAL '1 day')
+      AND (:tier IS NULL OR s.tier = :tier)
+      AND (:language IS NULL OR a.language = :language)
+),
+structured_source_candidates AS (
+    SELECT source_article.id, 0.0::REAL AS lexical_score,
+           'structured'::TEXT AS match_kind
+    FROM source_filtered_articles source_article
+    WHERE :q = ''
+      AND :entity_id IS NULL
+      AND :topic IS NULL
+      AND (:country IS NOT NULL OR :tier IS NOT NULL)
+),
+structured_date_candidates AS (
+    SELECT a.id, 0.0::REAL AS lexical_score,
+           'structured'::TEXT AS match_kind
+    FROM articles a
+    JOIN sources s ON s.id = a.source_id
+    CROSS JOIN snapshot snapshot_state
+    WHERE :q = ''
+      AND :entity_id IS NULL
+      AND :topic IS NULL
+      AND :country IS NULL
+      AND :tier IS NULL
+      AND (:date_from IS NOT NULL OR :date_to IS NOT NULL)
+      AND (:date_from IS NULL OR a.published_at >= CAST(:date_from AS DATE))
+      AND (:date_to IS NULL OR a.published_at < CAST(:date_to AS DATE) + INTERVAL '1 day')
+      AND a.is_duplicate = FALSE
+      AND (
+          snapshot_state.snapshot_collected_at IS NULL
+          OR (COALESCE(a.collected_at, a.published_at), a.id) <=
+             (snapshot_state.snapshot_collected_at,
+              snapshot_state.snapshot_collected_article_id)
+      )
+      AND (
+          snapshot_state.snapshot_max_article_id IS NULL
+          OR a.id <= snapshot_state.snapshot_max_article_id
+      )
+      AND (:language IS NULL OR a.language = :language)
+),
+structured_language_candidates AS (
+    SELECT a.id, 0.0::REAL AS lexical_score,
+           'structured'::TEXT AS match_kind
+    FROM articles a
+    JOIN sources s ON s.id = a.source_id
+    CROSS JOIN snapshot snapshot_state
+    WHERE :q = ''
+      AND :entity_id IS NULL
+      AND :topic IS NULL
+      AND :country IS NULL
+      AND :tier IS NULL
+      AND :date_from IS NULL
+      AND :date_to IS NULL
+      AND :language IS NOT NULL
+      AND a.language = :language
+      AND a.is_duplicate = FALSE
+      AND (
+          snapshot_state.snapshot_collected_at IS NULL
+          OR (COALESCE(a.collected_at, a.published_at), a.id) <=
+             (snapshot_state.snapshot_collected_at,
+              snapshot_state.snapshot_collected_article_id)
+      )
+      AND (
+          snapshot_state.snapshot_max_article_id IS NULL
+          OR a.id <= snapshot_state.snapshot_max_article_id
+      )
+    ORDER BY a.published_at DESC, a.id DESC
+    LIMIT :candidate_limit
 ),
 candidate_sources AS (
-    SELECT id, published_at, lexical_score, match_kind FROM full_text_candidates
+    SELECT id, lexical_score, match_kind FROM full_text_candidates
     UNION ALL
-    SELECT id, published_at, lexical_score, match_kind FROM trigram_candidates
+    SELECT id, lexical_score, match_kind FROM trigram_candidates
     UNION ALL
-    SELECT id, published_at, lexical_score, match_kind FROM entity_candidates
+    SELECT id, lexical_score, match_kind FROM entity_candidates
     UNION ALL
-    SELECT id, published_at, lexical_score, match_kind FROM topic_candidates
+    SELECT id, lexical_score, match_kind FROM topic_candidates
     UNION ALL
-    SELECT id, published_at, lexical_score, match_kind FROM story_candidates
+    SELECT id, lexical_score, match_kind FROM story_candidates
     UNION ALL
-    SELECT id, published_at, lexical_score, match_kind FROM structured_candidates
+    SELECT id, lexical_score, match_kind FROM structured_entity_candidates
+    UNION ALL
+    SELECT id, lexical_score, match_kind FROM structured_topic_candidates
+    UNION ALL
+    SELECT id, lexical_score, match_kind FROM structured_source_candidates
+    UNION ALL
+    SELECT id, lexical_score, match_kind FROM structured_date_candidates
+    UNION ALL
+    SELECT id, lexical_score, match_kind FROM structured_language_candidates
 ),
 candidate_ids AS (
-    SELECT id, published_at, MAX(lexical_score) AS lexical_score,
+    SELECT id, MAX(lexical_score) AS lexical_score,
            CASE
                WHEN BOOL_OR(match_kind = 'full_text') THEN 'full_text'
                WHEN BOOL_OR(match_kind = 'trigram') THEN 'trigram'
@@ -197,10 +494,10 @@ candidate_ids AS (
                ELSE 'structured'
            END AS match_kind
     FROM candidate_sources
-    GROUP BY id, published_at
+    GROUP BY id
 ),
 raw_candidate_features AS (
-    SELECT candidate_ids.id, candidate_ids.published_at,
+    SELECT candidate_ids.id, a.published_at,
            candidate_ids.lexical_score, candidate_ids.match_kind,
            CASE WHEN EXISTS (
                SELECT 1
@@ -223,26 +520,54 @@ raw_candidate_features AS (
            ) THEN 1.0 ELSE 0.0 END AS entity_score,
            CASE WHEN
                (:topic IS NOT NULL AND
-                b.topics @> ARRAY[CAST(:topic AS TEXT)])
-               OR (:q <> '' AND b.topics @> ARRAY[CAST(:q AS TEXT)])
+                an.topics @> ARRAY[CAST(:topic AS TEXT)])
+               OR (:q <> '' AND an.topics @> ARRAY[CAST(:q AS TEXT)])
            THEN 1.0 ELSE 0.0 END AS topic_score,
            GREATEST(0.0, LEAST(
                1.0,
                1.0 - EXTRACT(EPOCH FROM (
-                   CAST(:ranking_at AS TIMESTAMPTZ) - b.published_at
+                   CAST(:ranking_at AS TIMESTAMPTZ) - a.published_at
                )) / 7776000.0
            )) AS freshness_score,
-           b.trust_score,
+           GREATEST(0.0, LEAST(1.0,
+               COALESCE(s.weight, 0.5)::DOUBLE PRECISION
+           )) AS trust_score,
            GREATEST(0.0, LEAST(1.0,
                COALESCE(story_rank.story_score, 0.0)
            )) AS story_score
     FROM candidate_ids
-    JOIN base_articles b ON b.id = candidate_ids.id
+    JOIN articles a ON a.id = candidate_ids.id
+    JOIN sources s ON s.id = a.source_id
+    LEFT JOIN analysis an ON an.article_id = a.id
+    CROSS JOIN snapshot snapshot_state
     LEFT JOIN LATERAL (
         SELECT MAX(sa_rank.membership_confidence)::DOUBLE PRECISION AS story_score
         FROM story_articles sa_rank
         WHERE sa_rank.article_id = candidate_ids.id
     ) story_rank ON TRUE
+    WHERE a.is_duplicate = FALSE
+      AND (
+          snapshot_state.snapshot_collected_at IS NULL
+          OR (COALESCE(a.collected_at, a.published_at), a.id) <=
+             (snapshot_state.snapshot_collected_at,
+              snapshot_state.snapshot_collected_article_id)
+      )
+      AND (
+          snapshot_state.snapshot_max_article_id IS NULL
+          OR a.id <= snapshot_state.snapshot_max_article_id
+      )
+      AND (:country IS NULL OR s.country_code = :country)
+      AND (:topic IS NULL OR an.topics @> ARRAY[CAST(:topic AS TEXT)])
+      AND (:entity_id IS NULL OR EXISTS (
+          SELECT 1
+          FROM article_entity_mentions aem_filter
+          WHERE aem_filter.article_id = a.id
+            AND aem_filter.entity_id = CAST(:entity_id AS UUID)
+      ))
+      AND (:date_from IS NULL OR a.published_at >= CAST(:date_from AS DATE))
+      AND (:date_to IS NULL OR a.published_at < CAST(:date_to AS DATE) + INTERVAL '1 day')
+      AND (:tier IS NULL OR s.tier = :tier)
+      AND (:language IS NULL OR a.language = :language)
 ),
 candidate_features AS (
     SELECT raw_candidate_features.*,
@@ -830,6 +1155,9 @@ def search_articles(
     try:
         with session_factory() as session:
             session.execute(text("SET LOCAL statement_timeout = '2s'"))
+            session.execute(text(
+                "SET LOCAL pg_trgm.similarity_threshold = 0.1"
+            ))
             rows = session.execute(text(ARTICLE_SEARCH_SQL), params).fetchall()
     except DBAPIError as exc:
         pgcode = getattr(exc.orig, "pgcode", None) or getattr(exc.orig, "sqlstate", None)

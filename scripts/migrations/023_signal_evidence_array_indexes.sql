@@ -1,4 +1,4 @@
--- Fast overlap lookup for story/signal evidence on existing installations.
+-- Fast evidence lookup and bounded search-candidate indexes for existing installs.
 -- Must run in psql autocommit mode: CREATE/DROP INDEX CONCURRENTLY cannot run
 -- inside an explicit transaction. Invalid remnants are removed before retry.
 
@@ -214,6 +214,13 @@ WHERE namespace.nspname = 'public'
       index_class.relname = 'idx_story_articles_generation'
       AND index_state.indrelid = 'public.story_articles'::regclass
     )
+    OR (
+      index_class.relname IN (
+        'idx_articles_language_published_id',
+        'idx_articles_source_candidates'
+      )
+      AND index_state.indrelid = 'public.articles'::regclass
+    )
   )
   AND NOT index_state.indisvalid
 \gexec
@@ -226,3 +233,11 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_signal_evidence_story_ids_gin
 
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_signal_evidence_article_ids_gin
   ON public.signal_evidence USING GIN (article_ids);
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_articles_language_published_id
+  ON public.articles (language, published_at DESC, id DESC)
+  WHERE is_duplicate = FALSE;
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_articles_source_candidates
+  ON public.articles (source_id, published_at DESC, id DESC)
+  WHERE is_duplicate = FALSE;

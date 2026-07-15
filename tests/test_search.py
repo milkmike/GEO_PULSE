@@ -612,8 +612,14 @@ def test_search_service_uses_parameterized_hybrid_candidates_and_deterministic_r
     assert "article_entity_mentions" in sql
     assert "canonical_entities" in sql
     assert "@> ARRAY[CAST(:topic AS TEXT)]" in sql
-    assert "full_text_count" in sql
-    assert "< 10" in sql
+    assert "full_text_count" not in sql
+    assert "SELECT 1 FROM full_text_candidates OFFSET 9 LIMIT 1" in compact_sql
+    assert "a.search_vector @@ sq.tsq" in sql
+    assert "a.title_normalized % :q" in sql
+    assert fake_session.calls[-2][0] == (
+        "SET LOCAL pg_trgm.similarity_threshold = 0.1"
+    )
+    assert fake_session.calls[-3][0] == "SET LOCAL statement_timeout = '2s'"
     for candidate_source in (
         "entity_candidates AS",
         "topic_candidates AS",
@@ -621,6 +627,12 @@ def test_search_service_uses_parameterized_hybrid_candidates_and_deterministic_r
     ):
         assert candidate_source in sql
         assert sql.index(candidate_source) < sql.index("limited_candidates AS")
+    language_candidates_sql = sql[
+        sql.index("structured_language_candidates AS"):
+        sql.index("candidate_sources AS")
+    ]
+    assert "ORDER BY a.published_at DESC, a.id DESC" in language_candidates_sql
+    assert "LIMIT :candidate_limit" in language_candidates_sql
     assert "candidate_hybrid_score" in sql
     assert "THEN candidate_hybrid_score END DESC" in sql
     assert "ROUND((" in sql

@@ -157,6 +157,28 @@ def test_signal_evidence_array_indexes_are_present_for_new_and_existing_installs
     assert "story_events_action_level_range" in migration_sql
 
 
+def test_search_candidate_indexes_are_present_for_new_and_existing_installs():
+    migration_sql = migration("023_signal_evidence_array_indexes.sql")
+    init_sql = (ROOT / "data" / "init.sql").read_text()
+
+    assert "DROP INDEX CONCURRENTLY" in migration_sql
+    assert "CREATE INDEX CONCURRENTLY IF NOT EXISTS" in migration_sql
+    for index_definition in (
+        (
+            "idx_articles_language_published_id\n"
+            "  ON public.articles (language, published_at DESC, id DESC)\n"
+            "  WHERE is_duplicate = FALSE"
+        ),
+        (
+            "idx_articles_source_candidates\n"
+            "  ON public.articles (source_id, published_at DESC, id DESC)\n"
+            "  WHERE is_duplicate = FALSE"
+        ),
+    ):
+        assert index_definition in migration_sql
+        assert index_definition.replace("public.", "") in init_sql
+
+
 def test_story_snapshot_backfill_replaces_corrupt_json_values_safely():
     sql = migration("023_signal_evidence_array_indexes.sql")
 
