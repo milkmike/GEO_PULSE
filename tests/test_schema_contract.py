@@ -20,8 +20,58 @@ def test_search_and_knowledge_schema_contract():
         "CREATE TABLE IF NOT EXISTS content_embeddings",
         "CREATE TABLE IF NOT EXISTS embedding_jobs",
         "ALTER TABLE analysis ADD COLUMN IF NOT EXISTS embedding vector",
+        "CREATE INDEX IF NOT EXISTS idx_articles_search_snapshot",
+        "ON articles ((COALESCE(collected_at, published_at)) DESC, id DESC)",
+        "ON embedding_jobs(profile_id, available_at, id)",
+        "ON embedding_jobs(profile_id, updated_at, id)",
+        "WHERE status = 'processing'",
     ):
         assert fragment in sql
+
+
+def test_postgres_hardening_is_additive_for_databases_that_already_ran_019():
+    sql = migration("022_postgres_hardening.sql")
+    for fragment in (
+        "CREATE INDEX IF NOT EXISTS idx_articles_search_snapshot",
+        "DROP INDEX IF EXISTS idx_embedding_jobs_pending",
+        "ON embedding_jobs(profile_id, available_at, id)",
+        "CREATE INDEX IF NOT EXISTS idx_embedding_jobs_processing_lease",
+        "ON embedding_jobs(profile_id, updated_at, id)",
+        "WHERE status = 'processing'",
+        "DROP CONSTRAINT thread_articles_thread_id_fkey",
+    ):
+        assert fragment in sql
+
+
+def test_threads_schema_precedes_legacy_thread_migrations_and_is_bootstrapped():
+    migration_sql = migration("002_threads.sql")
+    init = (ROOT / "data" / "init.sql").read_text()
+    reference = (ROOT / "data" / "002_threads.sql").read_text()
+
+    for fragment in (
+        "CREATE TABLE IF NOT EXISTS threads",
+        "CREATE TABLE IF NOT EXISTS thread_articles",
+        "UNIQUE(country_code, thread_key)",
+        "PRIMARY KEY (thread_id, article_id)",
+        "CONSTRAINT thread_articles_thread_fk",
+        "CONSTRAINT thread_articles_article_fk",
+        "idx_threads_country",
+        "idx_threads_status",
+        "idx_threads_last_seen",
+    ):
+        assert fragment in reference
+        assert fragment in migration_sql
+        assert fragment in init
+
+
+def test_migration_runner_is_strict_and_records_only_success():
+    runner = (ROOT / "scripts" / "apply_migrations.sh").read_text()
+
+    assert "set -euo pipefail" in runner
+    assert "ON_ERROR_STOP=1" in runner
+    assert "ON_ERROR_STOP=0" not in runner
+    assert "some statements errored (tolerated)" not in runner
+    assert "Record as applied regardless" not in runner
 
 
 def test_story_schema_contract():
@@ -46,3 +96,12 @@ def test_init_schema_mirrors_new_tables():
         "index_change_explanations",
     ):
         assert f"CREATE TABLE IF NOT EXISTS {table}" in init
+
+    for fragment in (
+        "CREATE INDEX IF NOT EXISTS idx_articles_search_snapshot",
+        "ON articles ((COALESCE(collected_at, published_at)) DESC, id DESC)",
+        "ON embedding_jobs(profile_id, available_at, id)",
+        "ON embedding_jobs(profile_id, updated_at, id)",
+        "WHERE status = 'processing'",
+    ):
+        assert fragment in init

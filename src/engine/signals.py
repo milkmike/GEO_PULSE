@@ -220,16 +220,51 @@ def _emit(session, signal_type: str, country_code: str | None, dedup_key: str,
     ).fetchone()
     signal_id = int(inserted.id)
 
-    story_ids = set(evidence.story_ids)
-    if evidence.article_ids:
+    story_ids: set[int] = set()
+    if evidence.story_ids or evidence.article_ids:
         related_stories = session.execute(
             text("""
-                SELECT DISTINCT story_id
-                FROM story_articles
-                WHERE article_id = ANY(CAST(:article_ids AS integer[]))
+                WITH RECURSIVE story_seed(story_id) AS (
+                    SELECT explicit_story.value
+                    FROM unnest(CAST(:story_ids AS bigint[]))
+                         AS explicit_story(value)
+                    UNION
+                    SELECT sa.story_id
+                    FROM story_articles sa
+                    WHERE sa.article_id = ANY(CAST(:article_ids AS integer[]))
+                ), story_walk(original_id, current_id, path) AS (
+                    SELECT seed.story_id, seed.story_id,
+                           ARRAY[seed.story_id]::bigint[]
+                    FROM story_seed seed
+                    UNION ALL
+                    SELECT walk.original_id,
+                           (st.meta->>'merged_into_story_id')::bigint,
+                           walk.path || (st.meta->>'merged_into_story_id')::bigint
+                    FROM story_walk walk
+                    JOIN stories st ON st.id = walk.current_id
+                    WHERE COALESCE(st.meta, '{}'::jsonb) ? 'merged_into_story_id'
+                      AND (st.meta->>'merged_into_story_id') ~ '^[1-9][0-9]*$'
+                      AND NOT (
+                          (st.meta->>'merged_into_story_id')::bigint = ANY(walk.path)
+                      )
+                ), terminal AS (
+                    SELECT DISTINCT ON (original_id) original_id, current_id
+                    FROM story_walk
+                    ORDER BY original_id, cardinality(path) DESC
+                )
+                SELECT DISTINCT terminal.current_id AS story_id
+                FROM terminal
+                JOIN stories canonical_story ON canonical_story.id = terminal.current_id
+                WHERE NOT (
+                    COALESCE(canonical_story.meta, '{}'::jsonb)
+                    ? 'merged_into_story_id'
+                )
                 ORDER BY story_id
             """),
-            {"article_ids": list(evidence.article_ids)},
+            {
+                "story_ids": list(evidence.story_ids),
+                "article_ids": list(evidence.article_ids),
+            },
         ).fetchall()
         story_ids.update(int(row.story_id) for row in related_stories)
 

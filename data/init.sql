@@ -60,6 +60,41 @@ CREATE TABLE analysis (
     analyzed_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- === Narrative threads (see data/002_threads.sql and migration 002) ===
+
+CREATE TABLE IF NOT EXISTS threads (
+    id SERIAL PRIMARY KEY,
+    country_code CHAR(2) NOT NULL,
+    thread_key VARCHAR(200) NOT NULL,
+    title VARCHAR(500),
+    narrative TEXT,
+    status VARCHAR(20) DEFAULT 'developing',
+    arc_phase VARCHAR(20) DEFAULT 'emerging',
+    first_seen TIMESTAMPTZ,
+    last_seen TIMESTAMPTZ,
+    article_count INTEGER DEFAULT 0,
+    avg_sentiment DECIMAL(4,2),
+    max_action_level INTEGER DEFAULT 1,
+    importance_score DECIMAL(5,2) DEFAULT 0,
+    generated_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(country_code, thread_key)
+);
+
+CREATE TABLE IF NOT EXISTS thread_articles (
+    thread_id INTEGER NOT NULL,
+    article_id INTEGER NOT NULL,
+    CONSTRAINT thread_articles_thread_fk
+        FOREIGN KEY (thread_id) REFERENCES threads(id) ON DELETE CASCADE,
+    CONSTRAINT thread_articles_article_fk
+        FOREIGN KEY (article_id) REFERENCES articles(id) ON DELETE CASCADE,
+    PRIMARY KEY (thread_id, article_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_threads_country
+    ON threads(country_code, importance_score DESC);
+CREATE INDEX IF NOT EXISTS idx_threads_status ON threads(status);
+CREATE INDEX IF NOT EXISTS idx_threads_last_seen ON threads(last_seen DESC);
+
 CREATE TABLE temperature (
     time TIMESTAMPTZ NOT NULL,
     country_code CHAR(2) NOT NULL,
@@ -301,6 +336,8 @@ GENERATED ALWAYS AS (
   setweight(to_tsvector('simple', coalesce(body, '')), 'C')
 ) STORED;
 CREATE INDEX IF NOT EXISTS idx_articles_search_vector ON articles USING gin(search_vector);
+CREATE INDEX IF NOT EXISTS idx_articles_search_snapshot
+  ON articles ((COALESCE(collected_at, published_at)) DESC, id DESC);
 
 CREATE TABLE IF NOT EXISTS canonical_entities (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -408,8 +445,11 @@ CREATE TABLE IF NOT EXISTS embedding_jobs (
   UNIQUE(profile_id, object_type, object_id, content_hash)
 );
 CREATE INDEX IF NOT EXISTS idx_embedding_jobs_pending
-  ON embedding_jobs(available_at, id)
+  ON embedding_jobs(profile_id, available_at, id)
   WHERE status = 'pending';
+CREATE INDEX IF NOT EXISTS idx_embedding_jobs_processing_lease
+  ON embedding_jobs(profile_id, updated_at, id)
+  WHERE status = 'processing';
 
 -- === Global stories (see scripts/migrations/020_global_stories.sql) ===
 

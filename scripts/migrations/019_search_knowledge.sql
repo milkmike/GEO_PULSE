@@ -12,6 +12,8 @@ GENERATED ALWAYS AS (
   setweight(to_tsvector('simple', coalesce(body, '')), 'C')
 ) STORED;
 CREATE INDEX IF NOT EXISTS idx_articles_search_vector ON articles USING gin(search_vector);
+CREATE INDEX IF NOT EXISTS idx_articles_search_snapshot
+  ON articles ((COALESCE(collected_at, published_at)) DESC, id DESC);
 
 CREATE TABLE IF NOT EXISTS canonical_entities (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -124,5 +126,8 @@ CREATE TABLE IF NOT EXISTS embedding_jobs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_embedding_jobs_pending
-  ON embedding_jobs(available_at, id)
+  ON embedding_jobs(profile_id, available_at, id)
   WHERE status = 'pending';
+CREATE INDEX IF NOT EXISTS idx_embedding_jobs_processing_lease
+  ON embedding_jobs(profile_id, updated_at, id)
+  WHERE status = 'processing';

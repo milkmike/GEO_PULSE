@@ -119,10 +119,15 @@ def test_emit_persists_signal_and_immutable_evidence_in_one_session():
     assert emitted is True
     assert len(session.calls) == 5
     signal_sql, signal_params = session.calls[2]
+    story_sql, story_params = session.calls[3]
     evidence_sql, evidence_params = session.calls[4]
     assert "INSERT INTO signals" in signal_sql
     assert "RETURNING id" in signal_sql
     assert signal_params["confidence"] == 0.9
+    assert "WITH RECURSIVE story_seed" in story_sql
+    assert "merged_into_story_id" in story_sql
+    assert story_params["story_ids"] == []
+    assert story_params["article_ids"] == [11, 12]
     assert "INSERT INTO signal_evidence" in evidence_sql
     assert evidence_params["signal_id"] == 101
     assert evidence_params["article_ids"] == [11, 12]
@@ -131,6 +136,73 @@ def test_emit_persists_signal_and_immutable_evidence_in_one_session():
     assert evidence_params["detector_version"] == "1.0"
     assert evidence_params["completeness"] == "complete"
     assert '"evidence_ids": ["article:11", "article:12"]' in evidence_params["explanation"]
+
+
+def test_emit_canonicalizes_explicit_and_article_story_ids_before_persisting():
+    at = datetime(2026, 7, 15, 12, 0, tzinfo=timezone.utc)
+    evidence = SignalEvidence(
+        detector="tier_convergence",
+        detector_version="1.0",
+        threshold={"minimum_distinct_tiers": 3},
+        observed={"distinct_tiers": 4},
+        baseline={},
+        window_start=at,
+        window_end=at,
+        article_ids=(11,),
+        story_ids=(4, 9),
+        confidence=0.9,
+        completeness="complete",
+        explanation={"rule": "rule"},
+    )
+    session = SequentialSession([
+        (),
+        (),
+        (SimpleNamespace(id=101),),
+        (SimpleNamespace(story_id=3), SimpleNamespace(story_id=9)),
+        (),
+    ])
+
+    assert _emit(
+        session,
+        "tier_convergence",
+        "ES",
+        "tier_convergence:ES:canonical",
+        "Canonical story evidence",
+        "Description",
+        {},
+        evidence=evidence,
+    ) is True
+
+    story_sql, story_params = session.calls[3]
+    persisted_params = session.calls[4][1]
+    assert "WITH RECURSIVE story_seed" in story_sql
+    assert story_params == {"story_ids": [4, 9], "article_ids": [11]}
+    assert persisted_params["story_ids"] == [3, 9]
+
+
+def test_signal_detail_story_lookup_resolves_superseded_candidates():
+    canonical = SimpleNamespace(
+        id=3,
+        slug="canonical",
+        title_ru="Канонический сюжет",
+        summary="Summary",
+        lifecycle="developing",
+        last_seen=datetime(2026, 7, 15, tzinfo=timezone.utc),
+        clustering_confidence=0.9,
+    )
+    session = SequentialSession([(canonical,)])
+
+    story = SqlSignalDetailService._load_story(
+        session,
+        story_ids=(4,),
+        article_ids=(11,),
+    )
+
+    assert story.id == 3
+    sql, params = session.calls[0]
+    assert "WITH RECURSIVE candidates" in sql
+    assert "merged_into_story_id" in sql
+    assert params == {"story_ids": [4], "article_ids": [11]}
 
 
 def test_emit_dedup_keeps_original_trigger_evidence_unchanged():

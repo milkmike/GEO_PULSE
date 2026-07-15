@@ -171,22 +171,48 @@ class SqlSignalDetailService:
         return session.execute(
             text(
                 """
-                WITH candidates AS (
+                WITH RECURSIVE candidates AS (
                     SELECT value AS story_id, 0 AS priority
                     FROM unnest(CAST(:story_ids AS bigint[])) AS value
                     UNION ALL
                     SELECT sa.story_id, 1 AS priority
                     FROM story_articles sa
                     WHERE sa.article_id = ANY(CAST(:article_ids AS integer[]))
-                ), ranked AS (
+                ), seed AS (
                     SELECT story_id, MIN(priority) AS priority
                     FROM candidates
                     GROUP BY story_id
+                ), story_walk(original_id, current_id, priority, path) AS (
+                    SELECT seed.story_id, seed.story_id, seed.priority,
+                           ARRAY[seed.story_id]::bigint[]
+                    FROM seed
+                    UNION ALL
+                    SELECT walk.original_id,
+                           (st.meta->>'merged_into_story_id')::bigint,
+                           walk.priority,
+                           walk.path || (st.meta->>'merged_into_story_id')::bigint
+                    FROM story_walk walk
+                    JOIN stories st ON st.id = walk.current_id
+                    WHERE COALESCE(st.meta, '{}'::jsonb) ? 'merged_into_story_id'
+                      AND (st.meta->>'merged_into_story_id') ~ '^[1-9][0-9]*$'
+                      AND NOT (
+                          (st.meta->>'merged_into_story_id')::bigint = ANY(walk.path)
+                      )
+                ), terminal AS (
+                    SELECT DISTINCT ON (original_id)
+                           original_id, current_id, priority
+                    FROM story_walk
+                    ORDER BY original_id, cardinality(path) DESC
+                ), ranked AS (
+                    SELECT current_id AS story_id, MIN(priority) AS priority
+                    FROM terminal
+                    GROUP BY current_id
                 )
                 SELECT st.id, st.slug, st.title_ru, st.summary, st.lifecycle,
                        st.last_seen, st.clustering_confidence
                 FROM ranked r
                 JOIN stories st ON st.id = r.story_id
+                WHERE NOT (COALESCE(st.meta, '{}'::jsonb) ? 'merged_into_story_id')
                 ORDER BY r.priority, st.last_seen DESC, st.id
                 LIMIT 1
                 """
