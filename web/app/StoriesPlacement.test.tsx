@@ -152,6 +152,17 @@ describe("story placements", () => {
     apiMocks.countryStories.mockImplementation((code: string) => (
       code === "ES" ? es.promise : fr.promise
     ));
+    apiMocks.dossier.mockImplementation((code: string) => Promise.resolve({
+      ...dossier,
+      country: code === "ES" ? dossier.country : {
+        ...dossier.country,
+        code: "FR",
+        name: "Франция",
+        name_en: "France",
+        iso3: "FRA",
+        flag: "🇫🇷",
+      },
+    }));
     const flags = { searchNavigation: false, storiesNavigation: true, investigation: false, signalDetail: false };
     let view!: ReturnType<typeof render>;
     await act(async () => {

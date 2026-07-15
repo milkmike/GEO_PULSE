@@ -128,18 +128,19 @@ export const api = {
   countries: () =>
     get<{ countries: CountrySummary[]; total: number }>("/api/v2/countries"),
   map: () => get<{ map: MapEntry[] }>("/api/v2/map"),
-  dossier: (code: string, days = 90) =>
-    get<Dossier>(`/api/v2/countries/${code}?days=${days}`),
-  topics: (code: string, days = 30) =>
-    get<{ topics: TopicStat[] }>(`/api/v2/countries/${code}/topics?days=${days}`),
-  headlines: (code: string, days = 3, limit = 15) =>
+  dossier: (code: string, days = 90, signal?: AbortSignal) =>
+    get<Dossier>(`/api/v2/countries/${code}?days=${days}`, signal),
+  topics: (code: string, days = 30, signal?: AbortSignal) =>
+    get<{ topics: TopicStat[] }>(`/api/v2/countries/${code}/topics?days=${days}`, signal),
+  headlines: (code: string, days = 3, limit = 15, signal?: AbortSignal) =>
     get<{ source: string; headlines: Headline[] }>(
-      `/api/v2/countries/${code}/headlines?days=${days}&limit=${limit}`),
-  entities: (code: string, days = 30) =>
-    get<{ entities: EntityStat[] }>(`/api/v2/countries/${code}/entities?days=${days}`),
-  fx: (code: string, days = 90) =>
-    get<FxSeries>(`/api/v2/countries/${code}/fx?days=${days}`),
-  countryBrief: (code: string) => get<Brief>(`/api/v2/countries/${code}/brief`),
+      `/api/v2/countries/${code}/headlines?days=${days}&limit=${limit}`, signal),
+  entities: (code: string, days = 30, signal?: AbortSignal) =>
+    get<{ entities: EntityStat[] }>(`/api/v2/countries/${code}/entities?days=${days}`, signal),
+  fx: (code: string, days = 90, signal?: AbortSignal) =>
+    get<FxSeries>(`/api/v2/countries/${code}/fx?days=${days}`, signal),
+  countryBrief: (code: string, signal?: AbortSignal) =>
+    get<Brief>(`/api/v2/countries/${code}/brief`, signal),
   worldBrief: () => get<Brief>("/api/v2/brief"),
   worldHeadlines: (hours = 24, limit = 20, region?: string | null, topic?: string | null) =>
     get<{ headlines: Headline[]; total: number }>(
@@ -155,12 +156,12 @@ export const api = {
   topicCountries: (topic: string, days = 30) =>
     get<{ label: string; countries: { country_code: string; country_name: string; articles: number; avg_sentiment: number | null }[] }>(
       `/api/v2/topics/${topic}/countries?days=${days}`),
-  unVotes: (code: string) =>
-    get<{ data: UNVoteYear[] }>(`/api/v2/countries/${code}/un-votes`),
-  trade: (code: string) =>
-    get<{ data: TradeYear[] }>(`/api/v2/countries/${code}/trade`),
-  agreements: (code: string, days = 180) =>
-    get<{ agreements: AgreementGroup[] }>(`/api/v2/countries/${code}/agreements?days=${days}`),
+  unVotes: (code: string, signal?: AbortSignal) =>
+    get<{ data: UNVoteYear[] }>(`/api/v2/countries/${code}/un-votes`, signal),
+  trade: (code: string, signal?: AbortSignal) =>
+    get<{ data: TradeYear[] }>(`/api/v2/countries/${code}/trade`, signal),
+  agreements: (code: string, days = 180, signal?: AbortSignal) =>
+    get<{ agreements: AgreementGroup[] }>(`/api/v2/countries/${code}/agreements?days=${days}`, signal),
   // Generate the AI dossier on demand (slow; cached 6h server-side).
   generateCountryBrief: (code: string) =>
     get<Brief>(`/api/v2/countries/${code}/brief?generate=1`),

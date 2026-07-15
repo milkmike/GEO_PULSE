@@ -100,6 +100,17 @@ def test_story_schema_contract():
         assert f"CREATE TABLE IF NOT EXISTS {table}" in sql
 
 
+def test_story_article_orm_tracks_membership_generation_contract():
+    from src.db import StoryArticle
+
+    column = StoryArticle.__table__.c.membership_generation
+    assert column.nullable is False
+    assert column.default is not None
+    assert column.default.arg == 0
+    assert column.server_default is not None
+    assert str(column.server_default.arg) == "0"
+
+
 def test_evidence_schema_contract():
     sql = migration("021_signal_evidence_explanations.sql")
     assert "CREATE TABLE IF NOT EXISTS signal_evidence" in sql

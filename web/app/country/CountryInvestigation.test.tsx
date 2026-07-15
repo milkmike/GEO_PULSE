@@ -13,6 +13,8 @@ const navigation = vi.hoisted(() => ({
 }));
 const panelState = vi.hoisted(() => ({ last: null as null | {
   open: boolean;
+  countryCode: string;
+  countryName: string;
   fromTime: string | null;
   toTime: string | null;
   triggerRef: { current: HTMLElement | null };
@@ -44,13 +46,19 @@ vi.mock("@/components/Plot", () => ({
 vi.mock("@/components/InvestigationPanel", () => ({
   default: (props: {
     open: boolean;
+    countryCode: string;
+    countryName: string;
     fromTime: string | null;
     toTime: string | null;
     triggerRef: { current: HTMLElement | null };
     fallbackFocusRef: { current: HTMLElement | null };
   }) => {
     panelState.last = props;
-    return props.open ? <div data-testid="investigation-panel">{props.fromTime} → {props.toTime}</div> : null;
+    return props.open ? (
+      <div data-testid="investigation-panel">
+        {props.countryCode} · {props.countryName} · {props.fromTime} → {props.toTime}
+      </div>
+    ) : null;
   },
 }));
 vi.mock("@/components/AgreementsPanel", () => ({ default: () => null }));
@@ -90,6 +98,30 @@ const shortIntervalDossier: Dossier = {
     { ...dossier.index_history[1], day: "2026-07-15", time: "2026-07-15T20:00:00Z", score: -2 },
   ],
 };
+
+const germanDossier: Dossier = {
+  ...dossier,
+  country: {
+    ...dossier.country,
+    code: "DE",
+    name: "Германия",
+    name_en: "Germany",
+    iso3: "DEU",
+    flag: "🇩🇪",
+  },
+  index_history: [
+    { ...dossier.index_history[0], time: "2026-07-15T08:00:00Z", score: -22 },
+    { ...dossier.index_history[1], score: -2 },
+  ],
+};
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
 
 function renderCountry(investigation: boolean) {
   return act(async () => {
@@ -157,6 +189,65 @@ describe("country investigation flow", () => {
     });
     expect(panelState.last?.triggerRef.current).toBeNull();
     expect(panelState.last?.fallbackFocusRef.current).toHaveTextContent(/индекс и термометр/i);
+  });
+
+  it("never renders or investigates stale ES data after navigation to DE", async () => {
+    const es = deferred<Dossier>();
+    const de = deferred<Dossier>();
+    apiMocks.dossier.mockImplementation((countryCode: string) => (
+      countryCode === "ES" ? es.promise : de.promise
+    ));
+    navigation.query = "at=2026-07-15T20%3A00%3A00Z";
+    const flags = {
+      searchNavigation: false,
+      storiesNavigation: false,
+      investigation: true,
+      signalDetail: false,
+    };
+    let view!: ReturnType<typeof render>;
+    await act(async () => {
+      view = render(
+        <FeatureFlagsProvider flags={flags}>
+          <CountryPage params={Promise.resolve({ code: "es" })} />
+        </FeatureFlagsProvider>,
+      );
+    });
+    await waitFor(() => expect(apiMocks.dossier).toHaveBeenCalledWith(
+      "ES",
+      90,
+      expect.any(AbortSignal),
+    ));
+    const esSignal = apiMocks.dossier.mock.calls[0][2] as AbortSignal;
+
+    await act(async () => {
+      view.rerender(
+        <FeatureFlagsProvider flags={flags}>
+          <CountryPage params={Promise.resolve({ code: "de" })} />
+        </FeatureFlagsProvider>,
+      );
+    });
+    await waitFor(() => expect(apiMocks.dossier).toHaveBeenCalledWith(
+      "DE",
+      90,
+      expect.any(AbortSignal),
+    ));
+    expect(esSignal.aborted).toBe(true);
+
+    await act(async () => es.resolve(dossier));
+    expect(screen.queryByText(/Испания/)).not.toBeInTheDocument();
+    expect(screen.queryByTestId("investigation-panel")).not.toBeInTheDocument();
+
+    await act(async () => de.resolve(germanDossier));
+    expect(await screen.findByRole("heading", { name: /Германия/ })).toBeVisible();
+    expect(await screen.findByTestId("investigation-panel")).toHaveTextContent(
+      "DE · Германия · 2026-07-15T08:00:00Z → 2026-07-15T20:00:00Z",
+    );
+    expect(panelState.last).toMatchObject({
+      countryCode: "DE",
+      countryName: "Германия",
+      fromTime: "2026-07-15T08:00:00Z",
+      toTime: "2026-07-15T20:00:00Z",
+    });
   });
 
   it.each([

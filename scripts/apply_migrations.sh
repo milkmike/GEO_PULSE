@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
 # Idempotently apply pending SQL migrations, tracked in schema_migrations.
 #
-# The cron auto-deploy (deploy/auto-update.sh) does not apply migrations; the
-# `migrate` one-shot service runs this on every `docker compose up -d`. Each
-# scripts/migrations/*.sql is applied at most once (recorded by filename), in
-# order. Migrations are idempotent (IF NOT EXISTS); the only data-mutating ones
-# (006/007) are safe cleanups, so a retry after a failure is harmless. A file is
+# The cron auto-deploy invokes the `migrate` one-shot service before rebuilding;
+# compose also requires that service on `docker compose up -d`. Each migration
+# is applied at most once (recorded by filename), in order, and a file is
 # recorded only after every statement succeeds.
 #
 # Connection comes from PG* env (PGHOST/PGUSER/PGDATABASE/PGPASSWORD).

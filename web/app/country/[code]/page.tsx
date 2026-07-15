@@ -58,7 +58,7 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
   const { code } = use(params);
   const cc = code.toUpperCase();
 
-  const [dossier, setDossier] = useState<Dossier | null>(null);
+  const [dossierResponse, setDossier] = useState<Dossier | null>(null);
   const [topics, setTopics] = useState<TopicStat[]>([]);
   const [headlines, setHeadlines] = useState<{ source: string; headlines: Headline[] } | null>(null);
   const [entities, setEntities] = useState<EntityStat[]>([]);
@@ -67,7 +67,7 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
   const [un, setUn] = useState<UNVoteYear[]>([]);
   const [trade, setTrade] = useState<TradeYear[]>([]);
   const [agreements, setAgreements] = useState<AgreementGroup[]>([]);
-  const [error, setError] = useState(false);
+  const [errorCountry, setErrorCountry] = useState<string | null>(null);
   const [showEmbed, setShowEmbed] = useState(false);
   const [briefState, setBriefState] = useState<"idle" | "generating" | "empty" | "error">("idle");
   const [countryStories, setCountryStories] = useState<StoryListItem[]>([]);
@@ -77,19 +77,55 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
   const [invalidAtMessage, setInvalidAtMessage] = useState<string | null>(null);
   const markerTriggerRef = useRef<HTMLElement | null>(null);
   const rriHeadingRef = useRef<HTMLDivElement | null>(null);
+  const latestCountryRef = useRef(cc);
+  const briefRequestGeneration = useRef(0);
+  latestCountryRef.current = cc;
+  const dossier = dossierResponse?.country.code.toUpperCase() === cc ? dossierResponse : null;
 
   useEffect(() => {
+    const requestCountry = cc;
+    const controller = new AbortController();
+    const isCurrent = () => (
+      !controller.signal.aborted && latestCountryRef.current === requestCountry
+    );
+
+    setDossier(null);
+    setTopics([]);
+    setHeadlines(null);
+    setEntities([]);
+    setFx(null);
     setBrief(null);
     setBriefState("idle");
-    api.dossier(cc).then(setDossier).catch(() => setError(true));
-    api.topics(cc).then((d) => setTopics(d.topics)).catch(() => {});
-    api.headlines(cc).then(setHeadlines).catch(() => {});
-    api.entities(cc).then((d) => setEntities(d.entities)).catch(() => {});
-    api.fx(cc).then(setFx).catch(() => {});
-    api.countryBrief(cc).then(setBrief).catch(() => {}); // 404 = not generated yet → button
-    api.unVotes(cc).then((d) => setUn(d.data)).catch(() => {});
-    api.trade(cc).then((d) => setTrade(d.data)).catch(() => {});
-    api.agreements(cc).then((d) => setAgreements(d.agreements)).catch(() => {});
+    setUn([]);
+    setTrade([]);
+    setAgreements([]);
+    setErrorCountry(null);
+    setInvalidAtMessage(null);
+    briefRequestGeneration.current += 1;
+
+    api.dossier(cc, 90, controller.signal)
+      .then((value) => {
+        if (isCurrent() && value.country.code.toUpperCase() === requestCountry) setDossier(value);
+      })
+      .catch(() => { if (isCurrent()) setErrorCountry(requestCountry); });
+    api.topics(cc, 30, controller.signal)
+      .then((value) => { if (isCurrent()) setTopics(value.topics); }).catch(() => {});
+    api.headlines(cc, 3, 15, controller.signal)
+      .then((value) => { if (isCurrent()) setHeadlines(value); }).catch(() => {});
+    api.entities(cc, 30, controller.signal)
+      .then((value) => { if (isCurrent()) setEntities(value.entities); }).catch(() => {});
+    api.fx(cc, 90, controller.signal)
+      .then((value) => { if (isCurrent()) setFx(value); }).catch(() => {});
+    api.countryBrief(cc, controller.signal)
+      .then((value) => { if (isCurrent()) setBrief(value); }).catch(() => {}); // 404 = not generated yet → button
+    api.unVotes(cc, controller.signal)
+      .then((value) => { if (isCurrent()) setUn(value.data); }).catch(() => {});
+    api.trade(cc, controller.signal)
+      .then((value) => { if (isCurrent()) setTrade(value.data); }).catch(() => {});
+    api.agreements(cc, 180, controller.signal)
+      .then((value) => { if (isCurrent()) setAgreements(value.agreements); }).catch(() => {});
+
+    return () => controller.abort();
   }, [cc]);
 
   useEffect(() => {
@@ -122,10 +158,22 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
   }, [cc, storiesNavigation, storiesReload]);
 
   const generateBrief = () => {
+    const requestCountry = cc;
+    const requestGeneration = ++briefRequestGeneration.current;
+    const isCurrent = () => (
+      latestCountryRef.current === requestCountry
+      && briefRequestGeneration.current === requestGeneration
+    );
     setBriefState("generating");
     api.generateCountryBrief(cc)
-      .then((b) => { setBrief(b); setBriefState("idle"); })
-      .catch((e) => setBriefState(String(e).includes("404") ? "empty" : "error"));
+      .then((b) => {
+        if (!isCurrent()) return;
+        setBrief(b);
+        setBriefState("idle");
+      })
+      .catch((e) => {
+        if (isCurrent()) setBriefState(String(e).includes("404") ? "empty" : "error");
+      });
   };
 
   const markers = useMemo(
@@ -248,7 +296,7 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
     ];
   }, [fx]);
 
-  if (error) {
+  if (errorCountry === cc) {
     return (
       <main className="mx-auto max-w-[1100px] px-3 pb-10">
         <SiteHeader />

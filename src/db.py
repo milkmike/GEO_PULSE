@@ -369,6 +369,12 @@ class StoryArticle(Base):
         primary_key=True,
     )
     membership_confidence = Column(Numeric(4, 3), nullable=False)
+    membership_generation = Column(
+        BigInteger,
+        nullable=False,
+        default=0,
+        server_default=text("0"),
+    )
     evidence = Column(JSONB, nullable=False, default=dict)
     added_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
 
