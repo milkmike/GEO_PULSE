@@ -24,7 +24,9 @@ import json
 import logging
 import re
 import statistics
-from datetime import datetime, timedelta, timezone
+from dataclasses import dataclass
+from datetime import date, datetime, time, timedelta, timezone
+from typing import Any, Literal, Mapping
 
 from sqlalchemy import text
 
@@ -61,11 +63,127 @@ TTL_HOURS = {
     "sanctions_escalation": 72,
 }
 
+DETECTOR_VERSIONS = {
+    "tier_convergence": "1.0",
+    "official_silence": "1.0",
+    "velocity_spike": "1.0",
+    "tone_shift": "1.0",
+    "volume_surge": "1.0",
+    "index_shift": "1.0",
+    "fx_move": "1.0",
+    "notable_event": "1.0",
+    "sanctions_escalation": "1.0",
+}
+
+
+@dataclass(frozen=True)
+class SignalEvidence:
+    """Immutable detector inputs captured at signal creation time."""
+
+    detector: str
+    detector_version: str
+    threshold: Mapping[str, Any]
+    observed: Mapping[str, Any]
+    baseline: Mapping[str, Any]
+    window_start: datetime | None
+    window_end: datetime | None
+    confidence: float
+    completeness: Literal["complete", "partial"]
+    explanation: Mapping[str, Any]
+    article_ids: tuple[int, ...] = ()
+    story_ids: tuple[int, ...] = ()
+    rri_points: tuple[Mapping[str, Any], ...] = ()
+    evidence_ids: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not self.detector or not self.detector_version:
+            raise ValueError("detector and detector_version are required")
+        if self.completeness not in {"complete", "partial"}:
+            raise ValueError("completeness must be complete or partial")
+        if not 0 <= float(self.confidence) <= 1:
+            raise ValueError("confidence must be between 0 and 1")
+        object.__setattr__(
+            self,
+            "article_ids",
+            tuple(sorted({int(value) for value in self.article_ids})),
+        )
+        object.__setattr__(
+            self,
+            "story_ids",
+            tuple(sorted({int(value) for value in self.story_ids})),
+        )
+        object.__setattr__(
+            self,
+            "evidence_ids",
+            tuple(sorted({str(value) for value in self.evidence_ids if value})),
+        )
+
+
+def _evidence(
+    detector: str,
+    *,
+    threshold: Mapping[str, Any],
+    observed: Mapping[str, Any],
+    baseline: Mapping[str, Any],
+    window_start: datetime,
+    window_end: datetime,
+    confidence: float,
+    rule: str,
+    limitations: tuple[str, ...],
+    article_ids: tuple[int, ...] = (),
+    rri_points: tuple[Mapping[str, Any], ...] = (),
+    evidence_ids: tuple[str, ...] = (),
+) -> SignalEvidence:
+    return SignalEvidence(
+        detector=detector,
+        detector_version=DETECTOR_VERSIONS[detector],
+        threshold=threshold,
+        observed=observed,
+        baseline=baseline,
+        window_start=window_start,
+        window_end=window_end,
+        article_ids=article_ids,
+        rri_points=rri_points,
+        evidence_ids=evidence_ids,
+        confidence=confidence,
+        completeness="complete",
+        explanation={"rule": rule, "limitations": list(limitations)},
+    )
+
+
+def _row_article_ids(row: Any) -> tuple[int, ...]:
+    return tuple(int(value) for value in (getattr(row, "article_ids", None) or ()))
+
+
+def _article_evidence_ids(article_ids: tuple[int, ...]) -> tuple[str, ...]:
+    return tuple(f"article:{article_id}" for article_id in article_ids)
+
+
+def _day_start(value: date) -> datetime:
+    return datetime.combine(value, time.min, tzinfo=timezone.utc)
+
+
+def _json_default(value: Any) -> str:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
 
 def _emit(session, signal_type: str, country_code: str | None, dedup_key: str,
           title: str, description: str, payload: dict,
-          severity: str = "info", confidence: float = 0.7) -> bool:
+          *, evidence: SignalEvidence,
+          severity: str = "info") -> bool:
     """Insert a signal unless an unexpired one with the same dedup_key exists."""
+    if evidence.detector != signal_type:
+        raise ValueError(
+            f"evidence detector {evidence.detector!r} does not match {signal_type!r}"
+        )
+    expected_version = DETECTOR_VERSIONS.get(signal_type)
+    if expected_version and evidence.detector_version != expected_version:
+        raise ValueError(
+            f"evidence version {evidence.detector_version!r} does not match "
+            f"detector version {expected_version!r}"
+        )
     existing = session.execute(
         text("""
             SELECT id FROM signals
@@ -78,19 +196,78 @@ def _emit(session, signal_type: str, country_code: str | None, dedup_key: str,
         return False
 
     ttl = TTL_HOURS.get(signal_type, 24)
-    session.execute(
+    inserted = session.execute(
         text("""
             INSERT INTO signals (signal_type, country_code, severity, confidence,
                                  title, description, payload, dedup_key,
                                  created_at, expires_at)
             VALUES (:type, :cc, :severity, :confidence, :title, :description,
                     CAST(:payload AS jsonb), :dk, NOW(), NOW() + make_interval(hours => :ttl))
+            RETURNING id
         """),
         {
             "type": signal_type, "cc": country_code, "severity": severity,
-            "confidence": round(confidence, 2), "title": title[:500],
+            "confidence": round(float(evidence.confidence), 2), "title": title[:500],
             "description": description, "payload": json.dumps(payload, ensure_ascii=False),
             "dk": dedup_key[:200], "ttl": ttl,
+        },
+    ).fetchone()
+    signal_id = int(inserted.id)
+
+    story_ids = set(evidence.story_ids)
+    if evidence.article_ids:
+        related_stories = session.execute(
+            text("""
+                SELECT DISTINCT story_id
+                FROM story_articles
+                WHERE article_id = ANY(CAST(:article_ids AS integer[]))
+                ORDER BY story_id
+            """),
+            {"article_ids": list(evidence.article_ids)},
+        ).fetchall()
+        story_ids.update(int(row.story_id) for row in related_stories)
+
+    explanation = dict(evidence.explanation)
+    explanation["evidence_ids"] = list(evidence.evidence_ids)
+    session.execute(
+        text("""
+            INSERT INTO signal_evidence (
+                signal_id, detector, detector_version, threshold, observed,
+                baseline, window_start, window_end, article_ids, story_ids,
+                rri_points, confidence, completeness, explanation
+            ) VALUES (
+                :signal_id, :detector, :detector_version,
+                CAST(:threshold AS jsonb), CAST(:observed AS jsonb),
+                CAST(:baseline AS jsonb), :window_start, :window_end,
+                :article_ids, :story_ids, CAST(:rri_points AS jsonb),
+                :confidence, :completeness, CAST(:explanation AS jsonb)
+            )
+        """),
+        {
+            "signal_id": signal_id,
+            "detector": evidence.detector,
+            "detector_version": evidence.detector_version,
+            "threshold": json.dumps(
+                dict(evidence.threshold), ensure_ascii=False, default=_json_default
+            ),
+            "observed": json.dumps(
+                dict(evidence.observed), ensure_ascii=False, default=_json_default
+            ),
+            "baseline": json.dumps(
+                dict(evidence.baseline), ensure_ascii=False, default=_json_default
+            ),
+            "window_start": evidence.window_start,
+            "window_end": evidence.window_end,
+            "article_ids": list(evidence.article_ids),
+            "story_ids": sorted(story_ids),
+            "rri_points": json.dumps(
+                list(evidence.rri_points), ensure_ascii=False, default=_json_default
+            ),
+            "confidence": round(float(evidence.confidence), 3),
+            "completeness": evidence.completeness,
+            "explanation": json.dumps(
+                explanation, ensure_ascii=False, default=_json_default
+            ),
         },
     )
     logger.info(f"  SIGNAL {signal_type} [{country_code}] {title[:80]}")
@@ -106,7 +283,8 @@ def detect_tier_convergence(session) -> int:
                    COUNT(*) AS n,
                    AVG(a.sentiment) AS avg_sent,
                    MAX(a.action_level) AS max_al,
-                   ARRAY_AGG(DISTINCT s.tier) AS tier_list
+                   ARRAY_AGG(DISTINCT s.tier) AS tier_list,
+                   ARRAY_AGG(DISTINCT ar.id ORDER BY ar.id) AS article_ids
             FROM analysis a
             JOIN articles ar ON a.article_id = ar.id
             JOIN sources s ON ar.source_id = s.id
@@ -120,9 +298,11 @@ def detect_tier_convergence(session) -> int:
     ).fetchall()
 
     emitted = 0
+    detected_at = datetime.now(timezone.utc)
     for r in rows:
         confidence = min(0.95, 0.5 + 0.1 * int(r.tiers))
         severity = "warning" if (r.max_al or 1) >= 4 else "info"
+        article_ids = _row_article_ids(r)
         emitted += _emit(
             session, "tier_convergence", r.country_code,
             dedup_key=f"tier_convergence:{r.country_code}:{r.event_key}",
@@ -135,7 +315,29 @@ def detect_tier_convergence(session) -> int:
             payload={"event_key": r.event_key, "tiers": r.tier_list,
                      "articles": int(r.n), "avg_sentiment": float(r.avg_sent or 0),
                      "max_action_level": int(r.max_al or 1)},
-            severity=severity, confidence=confidence,
+            evidence=_evidence(
+                "tier_convergence",
+                threshold={"minimum_distinct_tiers": 3},
+                observed={
+                    "event_key": r.event_key,
+                    "distinct_tiers": int(r.tiers),
+                    "tiers": list(r.tier_list or ()),
+                    "article_count": int(r.n),
+                    "average_sentiment": float(r.avg_sent or 0),
+                    "maximum_action_level": int(r.max_al or 1),
+                },
+                baseline={},
+                window_start=detected_at - timedelta(hours=24),
+                window_end=detected_at,
+                confidence=confidence,
+                rule="Не менее трёх разных тиров освещают одно событие за 24 часа",
+                limitations=(
+                    "Учитываются только собранные и проиндексированные публикации за последние 24 часа.",
+                ),
+                article_ids=article_ids,
+                evidence_ids=_article_evidence_ids(article_ids),
+            ),
+            severity=severity,
         )
     return emitted
 
@@ -148,7 +350,9 @@ def detect_official_silence(session) -> int:
                    COUNT(*) FILTER (WHERE s.tier = ANY(:loud)) AS loud_n,
                    COUNT(*) FILTER (WHERE s.tier = ANY(:quiet)) AS quiet_n,
                    MIN(ar.published_at) AS first_seen,
-                   AVG(a.sentiment) AS avg_sent
+                   AVG(a.sentiment) AS avg_sent,
+                   ARRAY_AGG(DISTINCT ar.id ORDER BY ar.id)
+                       FILTER (WHERE s.tier = ANY(:loud)) AS article_ids
             FROM analysis a
             JOIN articles ar ON a.article_id = ar.id
             JOIN sources s ON ar.source_id = s.id
@@ -165,6 +369,7 @@ def detect_official_silence(session) -> int:
     ).fetchall()
 
     emitted = 0
+    detected_at = datetime.now(timezone.utc)
     for r in rows:
         # Only meaningful where official sources actually exist and are active
         has_official = session.execute(
@@ -179,6 +384,8 @@ def detect_official_silence(session) -> int:
             continue
 
         age_h = (datetime.now(timezone.utc) - r.first_seen).total_seconds() / 3600
+        confidence = min(0.9, 0.55 + 0.05 * int(r.loud_n))
+        article_ids = _row_article_ids(r)
         emitted += _emit(
             session, "official_silence", r.country_code,
             dedup_key=f"official_silence:{r.country_code}:{r.event_key}",
@@ -191,19 +398,49 @@ def detect_official_silence(session) -> int:
             payload={"event_key": r.event_key, "loud_articles": int(r.loud_n),
                      "hours_silent": round(age_h, 1),
                      "avg_sentiment": float(r.avg_sent or 0)},
-            severity="warning", confidence=min(0.9, 0.55 + 0.05 * int(r.loud_n)),
+            evidence=_evidence(
+                "official_silence",
+                threshold={
+                    "minimum_loud_articles": 3,
+                    "maximum_quiet_articles": 0,
+                    "minimum_silence_hours": 6,
+                },
+                observed={
+                    "event_key": r.event_key,
+                    "loud_articles": int(r.loud_n),
+                    "quiet_articles": int(r.quiet_n),
+                    "hours_silent": round(age_h, 1),
+                    "average_sentiment": float(r.avg_sent or 0),
+                },
+                baseline={"official_or_mainstream_sources_available": True},
+                window_start=detected_at - timedelta(hours=24),
+                window_end=detected_at,
+                confidence=confidence,
+                rule=(
+                    "Не менее трёх публикаций в громких тирах, ноль в официальных "
+                    "и мейнстримных источниках спустя не менее шести часов"
+                ),
+                limitations=(
+                    "Молчание означает отсутствие публикаций только среди активных проиндексированных источников.",
+                ),
+                article_ids=article_ids,
+                evidence_ids=_article_evidence_ids(article_ids),
+            ),
+            severity="warning",
         )
     return emitted
 
 
 def detect_velocity_spike(session) -> int:
-    """Relevant-article flow ≥2× the 30-day daily baseline (min 6 articles)."""
+    """Relevant-article flow ≥1.5× the 30-day daily baseline (min 5 articles)."""
     rows = session.execute(
         text("""
             WITH daily AS (
                 SELECT s.country_code,
                        COUNT(*) FILTER (WHERE ar.published_at > NOW() - INTERVAL '24 hours') AS last24,
-                       COUNT(*) FILTER (WHERE ar.published_at <= NOW() - INTERVAL '24 hours') / 29.0 AS base
+                       COUNT(*) FILTER (WHERE ar.published_at <= NOW() - INTERVAL '24 hours') / 29.0 AS base,
+                       ARRAY_AGG(DISTINCT ar.id ORDER BY ar.id)
+                           FILTER (WHERE ar.published_at > NOW() - INTERVAL '24 hours') AS article_ids
                 FROM analysis a
                 JOIN articles ar ON a.article_id = ar.id
                 JOIN sources s ON ar.source_id = s.id
@@ -218,9 +455,12 @@ def detect_velocity_spike(session) -> int:
     ).fetchall()
 
     emitted = 0
-    day_bucket = datetime.now(timezone.utc).strftime("%Y%m%d")
+    detected_at = datetime.now(timezone.utc)
+    day_bucket = detected_at.strftime("%Y%m%d")
     for r in rows:
         ratio = float(r.last24) / max(float(r.base), 1.0)
+        confidence = min(0.9, 0.5 + 0.1 * ratio)
+        article_ids = _row_article_ids(r)
         emitted += _emit(
             session, "velocity_spike", r.country_code,
             dedup_key=f"velocity_spike:{r.country_code}:{day_bucket}",
@@ -231,8 +471,34 @@ def detect_velocity_spike(session) -> int:
             ),
             payload={"articles_24h": int(r.last24), "baseline_daily": round(float(r.base), 1),
                      "ratio": round(ratio, 1)},
+            evidence=_evidence(
+                "velocity_spike",
+                threshold={
+                    "minimum_articles_24h": 5,
+                    "minimum_baseline_ratio": 1.5,
+                },
+                observed={
+                    "articles_24h": int(r.last24),
+                    "ratio": round(ratio, 2),
+                },
+                baseline={
+                    "daily_average": round(float(r.base), 2),
+                    "comparison_days": 29,
+                },
+                window_start=detected_at - timedelta(days=30),
+                window_end=detected_at,
+                confidence=confidence,
+                rule=(
+                    "Не менее пяти релевантных статей за 24 часа и поток не менее "
+                    "чем в 1,5 раза выше среднего за предыдущие 29 дней"
+                ),
+                limitations=(
+                    "Базовая линия отражает только релевантные статьи доступных проиндексированных источников.",
+                ),
+                article_ids=article_ids,
+                evidence_ids=_article_evidence_ids(article_ids),
+            ),
             severity="warning" if ratio >= 3 else "info",
-            confidence=min(0.9, 0.5 + 0.1 * ratio),
         )
     return emitted
 
@@ -242,6 +508,8 @@ def detect_gdelt_shifts(session) -> int:
     rows = session.execute(
         text("""
             SELECT country_code,
+                   MIN(day) AS earliest_day,
+                   MAX(day) AS latest_day,
                    ARRAY_AGG(tone_avg ORDER BY day DESC) AS tones,
                    ARRAY_AGG(volume_share ORDER BY day DESC) AS shares,
                    ARRAY_AGG(volume ORDER BY day DESC) AS volumes
@@ -253,8 +521,14 @@ def detect_gdelt_shifts(session) -> int:
     ).fetchall()
 
     emitted = 0
-    day_bucket = datetime.now(timezone.utc).strftime("%Y%m%d")
+    detected_at = datetime.now(timezone.utc)
+    day_bucket = detected_at.strftime("%Y%m%d")
     for r in rows:
+        latest_day = r.latest_day or detected_at.date()
+        earliest_day = r.earliest_day or latest_day
+        latest_day_start = _day_start(latest_day)
+        earliest_day_start = _day_start(earliest_day)
+        gdelt_evidence_id = f"gdelt_daily:{r.country_code}:{latest_day.isoformat()}"
         tones = [float(t) for t in r.tones if t is not None]
         if len(tones) < 14:
             continue
@@ -267,6 +541,7 @@ def detect_gdelt_shifts(session) -> int:
 
         if abs(z) >= 1.6:
             direction = "потеплел" if z > 0 else "похолодел"
+            confidence = min(0.9, 0.5 + 0.1 * abs(z))
             emitted += _emit(
                 session, "tone_shift", r.country_code,
                 dedup_key=f"tone_shift:{r.country_code}:{day_bucket}",
@@ -277,8 +552,32 @@ def detect_gdelt_shifts(session) -> int:
                 ),
                 payload={"tone": round(current, 2), "mean_90d": round(mean, 2),
                          "std": round(std, 2), "z_score": round(z, 2)},
+                evidence=_evidence(
+                    "tone_shift",
+                    threshold={
+                        "absolute_z_score_min": 1.6,
+                        "standard_deviation_floor": 0.3,
+                    },
+                    observed={
+                        "tone": round(current, 2),
+                        "z_score": round(z, 2),
+                    },
+                    baseline={
+                        "mean": round(mean, 2),
+                        "standard_deviation": round(std, 2),
+                        "sample_days": len(baseline),
+                        "excluded_recent_days": 2,
+                    },
+                    window_start=earliest_day_start,
+                    window_end=latest_day_start + timedelta(days=1),
+                    confidence=confidence,
+                    rule="Абсолютный z-score тона не меньше 1,6 к собственной 90-дневной норме",
+                    limitations=(
+                        "Агрегат GDELT описывает изменение тона и сам по себе не устанавливает причину.",
+                    ),
+                    evidence_ids=(gdelt_evidence_id,),
+                ),
                 severity="critical" if abs(z) >= 3 else "warning",
-                confidence=min(0.9, 0.5 + 0.1 * abs(z)),
             )
 
         shares = [float(s) for s in r.shares if s is not None]
@@ -298,19 +597,62 @@ def detect_gdelt_shifts(session) -> int:
                     ),
                     payload={"share": round(cur_share, 5), "baseline_share": round(base_share, 5),
                              "ratio": round(cur_share / base_share, 1), "volume": cur_vol},
-                    severity="warning", confidence=0.75,
+                    evidence=_evidence(
+                        "volume_surge",
+                        threshold={
+                            "minimum_share_ratio": 2.0,
+                            "minimum_daily_volume": 10,
+                        },
+                        observed={
+                            "share": round(cur_share, 5),
+                            "ratio": round(cur_share / base_share, 2),
+                            "daily_volume": cur_vol,
+                        },
+                        baseline={
+                            "share": round(base_share, 5),
+                            "sample_days": len(shares[2:32]),
+                            "excluded_recent_days": 2,
+                        },
+                        window_start=earliest_day_start,
+                        window_end=latest_day_start + timedelta(days=1),
+                        confidence=0.75,
+                        rule=(
+                            "Доля российской повестки не менее чем вдвое выше 30-дневной "
+                            "нормы при объёме не менее десяти статей"
+                        ),
+                        limitations=(
+                            "Агрегат GDELT показывает изменение доли повестки без доказательства причинности.",
+                        ),
+                        evidence_ids=(gdelt_evidence_id,),
+                    ),
+                    severity="warning",
                 )
     return emitted
 
 
 def detect_index_shifts(session) -> int:
-    """RRI 24h move ≥ 10 points, or level boundary crossed."""
+    """RRI 24h move from 7 through 18 points."""
     rows = session.execute(
         text("""
-            SELECT DISTINCT ON (country_code)
-                   country_code, score, level, delta_24h, time
-            FROM ru_index
-            ORDER BY country_code, time DESC
+            WITH latest AS (
+                SELECT DISTINCT ON (country_code)
+                       country_code, score, level, delta_24h, time
+                FROM ru_index
+                ORDER BY country_code, time DESC
+            )
+            SELECT l.country_code, l.score, l.level, l.delta_24h, l.time,
+                   previous.time AS baseline_time,
+                   previous.score AS baseline_score,
+                   previous.level AS baseline_level
+            FROM latest l
+            LEFT JOIN LATERAL (
+                SELECT r.time, r.score, r.level
+                FROM ru_index r
+                WHERE r.country_code = l.country_code
+                  AND r.time <= l.time - INTERVAL '18 hours'
+                ORDER BY r.time DESC
+                LIMIT 1
+            ) previous ON TRUE
         """)
     ).fetchall()
 
@@ -329,6 +671,31 @@ def detect_index_shifts(session) -> int:
         if abs(delta) > 18:
             continue
         direction = "вверх" if delta > 0 else "вниз"
+        confidence = 0.8
+        point_time = r.time
+        observed_point = {
+            "country_code": r.country_code,
+            "time": point_time.isoformat(),
+            "score": float(r.score),
+            "delta_24h": delta,
+            "level": r.level,
+            "role": "observed",
+        }
+        rri_points = []
+        evidence_ids = []
+        if r.baseline_time is not None and r.baseline_score is not None:
+            rri_points.append({
+                "country_code": r.country_code,
+                "time": r.baseline_time.isoformat(),
+                "score": float(r.baseline_score),
+                "level": r.baseline_level,
+                "role": "baseline",
+            })
+            evidence_ids.append(
+                f"rri:{r.country_code}:{r.baseline_time.isoformat()}"
+            )
+        rri_points.append(observed_point)
+        evidence_ids.append(f"rri:{r.country_code}:{point_time.isoformat()}")
         emitted += _emit(
             session, "index_shift", r.country_code,
             dedup_key=f"index_shift:{r.country_code}:{day_bucket}",
@@ -338,8 +705,45 @@ def detect_index_shifts(session) -> int:
                 f"пунктов за сутки: сейчас {float(r.score):+.1f} [{r.level}]."
             ),
             payload={"score": float(r.score), "delta_24h": delta, "level": r.level},
+            evidence=_evidence(
+                "index_shift",
+                threshold={
+                    "absolute_delta_min": 7.0,
+                    "absolute_delta_sanity_max": 18.0,
+                },
+                observed={
+                    "score": float(r.score),
+                    "delta_24h": delta,
+                    "level": r.level,
+                },
+                baseline={
+                    "comparison_hours": 24,
+                    "score": (
+                        float(r.baseline_score)
+                        if r.baseline_score is not None
+                        else None
+                    ),
+                    "time": (
+                        r.baseline_time.isoformat()
+                        if r.baseline_time is not None
+                        else None
+                    ),
+                    "level": r.baseline_level,
+                },
+                window_start=r.baseline_time or point_time - timedelta(hours=24),
+                window_end=point_time,
+                confidence=confidence,
+                rule=(
+                    "Абсолютный сдвиг RRI за 24 часа от 7 до 18 пунктов; "
+                    "большие значения считаются нестабильностью данных"
+                ),
+                limitations=(
+                    "Сигнал фиксирует изменение RRI, но сам по себе не устанавливает новостную причину.",
+                ),
+                rri_points=tuple(rri_points),
+                evidence_ids=tuple(evidence_ids),
+            ),
             severity="critical" if abs(delta) >= 14 else "warning",
-            confidence=0.8,
         )
     return emitted
 
@@ -355,6 +759,7 @@ def detect_notable_events(session) -> int:
     rows = session.execute(
         text("""
             SELECT DISTINCT ON (a.event_key)
+                   ar.id AS article_id,
                    a.event_key, a.event_type, a.action_level, a.sentiment,
                    ar.title, ar.reprint_count, ar.published_at, s.country_code
             FROM analysis a
@@ -370,7 +775,7 @@ def detect_notable_events(session) -> int:
               -- crime/court news; require an explicit Russia-orbit mention so the
               -- signal feed stays genuinely about Russia relations.
               AND (ar.title || ' ' || COALESCE(ar.body, '')) ~*
-                  'russia|росси|кремл|kreml|putin|путин|moscow|москв|лавров|lavrov|одкб|csto|еаэс|eaeu|\mснг\M|\mсоюз'
+                  'russia|росси|кремл|kreml|putin|путин|moscow|москв|лавров|lavrov|одкб|csto|еаэс|eaeu|\\mснг\\M|\\mсоюз'
             ORDER BY a.event_key, a.action_level DESC,
                      ar.reprint_count DESC NULLS LAST, ar.published_at DESC
         """)
@@ -400,6 +805,7 @@ def detect_notable_events(session) -> int:
             break
 
     emitted = 0
+    detected_at = datetime.now(timezone.utc)
     for r in kept:
         title = (r.title or "").strip() or r.event_key
         # Some source titles carry raw markdown link syntax [text](url) — unwrap to text.
@@ -411,6 +817,8 @@ def detect_notable_events(session) -> int:
             severity = "warning" if al >= 5 else "info"
         else:
             severity = "critical" if al >= 6 else "warning" if al == 5 else "info"
+        confidence = min(0.9, 0.55 + 0.07 * al)
+        article_ids = (int(r.article_id),)
         emitted += _emit(
             session, "notable_event", r.country_code,
             dedup_key=f"notable:{r.event_key}"[:200],
@@ -422,8 +830,33 @@ def detect_notable_events(session) -> int:
             payload={"event_key": r.event_key, "action_level": al,
                      "event_type": r.event_type,
                      "sentiment": float(r.sentiment) if r.sentiment is not None else None},
+            evidence=_evidence(
+                "notable_event",
+                threshold={"minimum_action_level": 4},
+                observed={
+                    "event_key": r.event_key,
+                    "action_level": al,
+                    "event_type": r.event_type,
+                    "sentiment": (
+                        float(r.sentiment) if r.sentiment is not None else None
+                    ),
+                    "reprint_count": int(r.reprint_count or 0),
+                },
+                baseline={},
+                window_start=detected_at - timedelta(hours=48),
+                window_end=detected_at,
+                confidence=confidence,
+                rule=(
+                    "Релевантное событие дипломатического, экономического, военного "
+                    "или безопасностного типа с action level не ниже 4 за 48 часов"
+                ),
+                limitations=(
+                    "Сохранена одна репрезентативная статья события, а не полный список перепечаток.",
+                ),
+                article_ids=article_ids,
+                evidence_ids=_article_evidence_ids(article_ids),
+            ),
             severity=severity,
-            confidence=min(0.9, 0.55 + 0.07 * al),
         )
     return emitted
 
@@ -462,6 +895,9 @@ def detect_fx_moves(session) -> int:
             {"codes": countries or ["--"]},
         ).fetchone()
         predicted = bool(media and media.n)
+        confidence = 0.8 if predicted else 0.65
+        rate_day = r.day
+        rate_day_start = _day_start(rate_day)
 
         direction = "укрепилась к рублю" if change > 0 else "ослабла к рублю"
         names = ", ".join(country_name_ru(c) for c in countries[:4]) or r.currency
@@ -480,8 +916,31 @@ def detect_fx_moves(session) -> int:
             payload={"currency": r.currency, "change_1d_pct": change,
                      "rate_to_rub": float(r.rate_to_rub), "countries": countries,
                      "media_preceded": predicted},
+            evidence=_evidence(
+                "fx_move",
+                threshold={"absolute_daily_change_percent_min": 2.0},
+                observed={
+                    "currency": r.currency,
+                    "change_1d_percent": change,
+                    "rate_to_rub": float(r.rate_to_rub),
+                    "media_preceded": predicted,
+                    "countries": list(countries),
+                },
+                baseline={
+                    "comparison_days": 1,
+                    "media_lookback_hours": 72,
+                    "preceding_media_signal_count": int(media.n if media else 0),
+                },
+                window_start=rate_day_start,
+                window_end=rate_day_start + timedelta(days=1),
+                confidence=confidence,
+                rule="Абсолютное дневное движение валюты к рублю не меньше 2%",
+                limitations=(
+                    "Предшествование медиа-сигналов валютному движению не доказывает причинность.",
+                ),
+                evidence_ids=(f"fx_rate:{r.currency}:{rate_day.isoformat()}",),
+            ),
             severity="warning" if abs(change) >= 4 else "info",
-            confidence=0.8 if predicted else 0.65,
         )
     return emitted
 
@@ -513,7 +972,8 @@ def detect_sanctions_escalation(session) -> int:
         return 0
 
     emitted = 0
-    month_bucket = datetime.now(timezone.utc).strftime("%Y%m")
+    detected_at = datetime.now(timezone.utc)
+    month_bucket = detected_at.strftime("%Y%m")
     for r in rows:
         if r.country_code not in COUNTRIES:
             continue
@@ -529,8 +989,33 @@ def detect_sanctions_escalation(session) -> int:
             payload={"delta": int(r.delta), "target_count": int(r.target_count),
                      "lists_count": int(r.lists_count),
                      "last_change": str(r.last_change) if r.last_change else None},
+            evidence=_evidence(
+                "sanctions_escalation",
+                threshold={"minimum_new_targets": MIN_DELTA},
+                observed={
+                    "new_targets": int(r.delta),
+                    "target_count": int(r.target_count),
+                    "lists_count": int(r.lists_count),
+                    "last_change": str(r.last_change) if r.last_change else None,
+                },
+                baseline={
+                    "previous_target_count": int(r.target_count) - int(r.delta),
+                },
+                window_start=detected_at - timedelta(days=2),
+                window_end=detected_at,
+                confidence=0.7,
+                rule=(
+                    "Не менее 25 новых целей с существующим предыдущим снимком "
+                    "санкционного реестра за последние два дня"
+                ),
+                limitations=(
+                    "Охват зависит от актуальности и состава внешнего санкционного реестра.",
+                ),
+                evidence_ids=(
+                    f"sanctions_pressure:{r.country_code}:{r.last_change}",
+                ),
+            ),
             severity="warning" if r.delta >= 100 else "info",
-            confidence=0.7,
         )
     return emitted
 
