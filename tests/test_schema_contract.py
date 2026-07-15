@@ -32,15 +32,29 @@ def test_search_and_knowledge_schema_contract():
 def test_postgres_hardening_is_additive_for_databases_that_already_ran_019():
     sql = migration("022_postgres_hardening.sql")
     for fragment in (
-        "CREATE INDEX IF NOT EXISTS idx_articles_search_snapshot",
-        "DROP INDEX IF EXISTS idx_embedding_jobs_pending",
+        "DROP INDEX CONCURRENTLY IF EXISTS idx_articles_search_snapshot_v2",
+        "CREATE INDEX CONCURRENTLY idx_articles_search_snapshot_v2",
+        "DROP INDEX CONCURRENTLY IF EXISTS idx_articles_search_snapshot",
+        "DROP INDEX CONCURRENTLY IF EXISTS idx_embedding_jobs_pending_v2",
+        "CREATE INDEX CONCURRENTLY idx_embedding_jobs_pending_v2",
+        "DROP INDEX CONCURRENTLY IF EXISTS idx_embedding_jobs_pending",
         "ON embedding_jobs(profile_id, available_at, id)",
-        "CREATE INDEX IF NOT EXISTS idx_embedding_jobs_processing_lease",
+        "DROP INDEX CONCURRENTLY IF EXISTS idx_embedding_jobs_processing_lease_v2",
+        "CREATE INDEX CONCURRENTLY idx_embedding_jobs_processing_lease_v2",
+        "DROP INDEX CONCURRENTLY IF EXISTS idx_embedding_jobs_processing_lease",
         "ON embedding_jobs(profile_id, updated_at, id)",
         "WHERE status = 'processing'",
+        "indisvalid AND idx.indisready",
         "DROP CONSTRAINT thread_articles_thread_id_fkey",
     ):
         assert fragment in sql
+
+    assert sql.index("CREATE INDEX CONCURRENTLY idx_articles_search_snapshot_v2") < sql.index(
+        "DROP INDEX CONCURRENTLY IF EXISTS idx_articles_search_snapshot;"
+    )
+    assert sql.index("CREATE INDEX CONCURRENTLY idx_embedding_jobs_pending_v2") < sql.index(
+        "DROP INDEX CONCURRENTLY IF EXISTS idx_embedding_jobs_pending;"
+    )
 
 
 def test_threads_schema_precedes_legacy_thread_migrations_and_is_bootstrapped():

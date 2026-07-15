@@ -8,6 +8,7 @@ backfill.log
 venv/
 .venv/
 backups/
+.deploy-state/
 
 # Telegram session files (secrets — never commit)
 sessions/

@@ -1,10 +1,15 @@
-"""Opt-in full-chain PostgreSQL regression test.
+"""Opt-in PostgreSQL migration and canonical-story integration tests.
 
 Set GEO_PULSE_TEST_DATABASE_URL to a disposable database and explicitly set
-GEO_PULSE_TEST_DATABASE_RESET=1. The test drops and recreates its public schema.
+GEO_PULSE_TEST_DATABASE_RESET=1. These tests drop and recreate public schema.
+The migration files are always applied through scripts/apply_migrations.sh and
+psql, including CREATE/DROP INDEX CONCURRENTLY.
 """
 
 import os
+import shlex
+import shutil
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -17,178 +22,188 @@ from src.engine.signals import SignalEvidence, _emit
 
 
 ROOT = Path(__file__).resolve().parents[1]
+MIGRATIONS = ROOT / "scripts" / "migrations"
+RETRY_MIGRATIONS = ROOT / "tests" / "fixtures" / "migrations_retry"
 
 
-def _execute_file(cursor, path: Path) -> None:
-    cursor.execute(path.read_text())
-
-
-def _apply_pending(cursor) -> list[str]:
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS schema_migrations (
-            filename TEXT PRIMARY KEY,
-            applied_at TIMESTAMPTZ DEFAULT now()
-        )
-    """)
-    applied = []
-    for path in sorted((ROOT / "scripts" / "migrations").glob("*.sql")):
-        cursor.execute(
-            "SELECT 1 FROM schema_migrations WHERE filename=%s",
-            (path.name,),
-        )
-        if cursor.fetchone():
-            continue
-        _execute_file(cursor, path)
-        cursor.execute(
-            "INSERT INTO schema_migrations(filename) VALUES (%s)",
-            (path.name,),
-        )
-        applied.append(path.name)
-    return applied
-
-
-def test_full_chain_bootstraps_and_second_run_is_a_noop():
+def _requirements():
     dsn = os.getenv("GEO_PULSE_TEST_DATABASE_URL")
     reset = os.getenv("GEO_PULSE_TEST_DATABASE_RESET")
     if not dsn or reset != "1":
         pytest.skip("requires an explicitly disposable PostgreSQL database")
-
     psycopg2 = pytest.importorskip("psycopg2")
+    if not os.getenv("GEO_PULSE_TEST_MIGRATION_RUNNER") and not shutil.which("psql"):
+        pytest.skip("requires psql or GEO_PULSE_TEST_MIGRATION_RUNNER")
+    return dsn, psycopg2
+
+
+def _runner_migration_dir(path: Path) -> str:
+    container_root = os.getenv("GEO_PULSE_TEST_CONTAINER_ROOT")
+    if not container_root:
+        return str(path)
+    relative = path.resolve().relative_to(ROOT.resolve())
+    return str(Path(container_root) / relative)
+
+
+def _run_migrations(dsn: str, migration_dir: Path = MIGRATIONS):
+    psycopg2 = pytest.importorskip("psycopg2")
+    template = os.getenv("GEO_PULSE_TEST_MIGRATION_RUNNER")
+    runner_dir = _runner_migration_dir(migration_dir)
+    if template:
+        command = shlex.split(template.format(mig_dir=runner_dir))
+    else:
+        command = ["bash", str(ROOT / "scripts" / "apply_migrations.sh")]
+
+    parsed = psycopg2.extensions.parse_dsn(dsn)
+    env = {**os.environ, "MIG_DIR": str(migration_dir)}
+    for dsn_key, pg_key in (
+        ("host", "PGHOST"),
+        ("port", "PGPORT"),
+        ("user", "PGUSER"),
+        ("password", "PGPASSWORD"),
+        ("dbname", "PGDATABASE"),
+        ("sslmode", "PGSSLMODE"),
+    ):
+        if parsed.get(dsn_key):
+            env[pg_key] = parsed[dsn_key]
+    return subprocess.run(
+        command,
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def _assert_success(result) -> None:
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def _reset(cursor, *, initialize: bool) -> None:
+    cursor.execute("DROP SCHEMA public CASCADE")
+    cursor.execute("CREATE SCHEMA public")
+    if initialize:
+        cursor.execute("""
+            CREATE FUNCTION create_hypertable(regclass, name)
+            RETURNS text LANGUAGE sql
+            AS $$ SELECT 'test-shim-no-timescaledb'::text $$
+        """)
+        cursor.execute((ROOT / "data" / "init.sql").read_text())
+
+
+def _index_rows(cursor):
+    cursor.execute("""
+        SELECT cls.relname, pg_get_indexdef(cls.oid),
+               idx.indisvalid, idx.indisready
+        FROM pg_class cls
+        JOIN pg_namespace ns ON ns.oid=cls.relnamespace
+        JOIN pg_index idx ON idx.indexrelid=cls.oid
+        WHERE ns.nspname='public'
+          AND cls.relname IN (
+            'idx_articles_search_snapshot_v2',
+            'idx_embedding_jobs_pending_v2',
+            'idx_embedding_jobs_processing_lease_v2'
+          )
+        ORDER BY cls.relname
+    """)
+    return cursor.fetchall()
+
+
+def test_actual_runner_bootstraps_twice_and_story_resolution_is_safe():
+    dsn, psycopg2 = _requirements()
     connection = psycopg2.connect(dsn)
     connection.autocommit = True
     try:
         with connection.cursor() as cursor:
-            cursor.execute("DROP SCHEMA public CASCADE")
-            cursor.execute("CREATE SCHEMA public")
-            cursor.execute("""
-                CREATE FUNCTION create_hypertable(regclass, name)
-                RETURNS text LANGUAGE sql
-                AS $$ SELECT 'test-shim-no-timescaledb'::text $$
-            """)
-            _execute_file(cursor, ROOT / "data" / "init.sql")
+            _reset(cursor, initialize=True)
 
-            first_run = _apply_pending(cursor)
-            second_run = _apply_pending(cursor)
+        first = _run_migrations(dsn)
+        _assert_success(first)
+        assert "applying 002_threads.sql" in first.stdout
+        assert "applying 022_postgres_hardening.sql" in first.stdout
+        second = _run_migrations(dsn)
+        _assert_success(second)
+        assert "skip 022_postgres_hardening.sql (already applied)" in second.stdout
 
-            assert "002_threads.sql" in first_run
-            assert "021_signal_evidence_explanations.sql" in first_run
-            assert second_run == []
-
-            cursor.execute("""
-                SELECT to_regclass('public.threads'),
-                       to_regclass('public.thread_articles')
-            """)
-            assert cursor.fetchone() == ("threads", "thread_articles")
-
-            cursor.execute("""
-                SELECT indexname, indexdef FROM pg_indexes
-                WHERE schemaname='public'
-                  AND indexname IN (
-                    'idx_articles_search_snapshot',
-                    'idx_embedding_jobs_pending',
-                    'idx_embedding_jobs_processing_lease'
-                  )
-                ORDER BY indexname
-            """)
-            index_rows = cursor.fetchall()
-            assert [row[0] for row in index_rows] == [
-                "idx_articles_search_snapshot",
-                "idx_embedding_jobs_pending",
-                "idx_embedding_jobs_processing_lease",
+        with connection.cursor() as cursor:
+            rows = _index_rows(cursor)
+            assert [row[0] for row in rows] == [
+                "idx_articles_search_snapshot_v2",
+                "idx_embedding_jobs_pending_v2",
+                "idx_embedding_jobs_processing_lease_v2",
             ]
-            index_definitions = {name: definition for name, definition in index_rows}
-            assert "COALESCE(collected_at, published_at) DESC, id DESC" in (
-                index_definitions["idx_articles_search_snapshot"]
-            )
-            assert "(profile_id, available_at, id)" in (
-                index_definitions["idx_embedding_jobs_pending"]
-            )
-            assert "(profile_id, updated_at, id)" in (
-                index_definitions["idx_embedding_jobs_processing_lease"]
-            )
+            assert all(row[2:] == (True, True) for row in rows)
+            definitions = {row[0]: row[1] for row in rows}
+            assert "COALESCE(collected_at, published_at) DESC, id DESC" in definitions[
+                "idx_articles_search_snapshot_v2"
+            ]
+            assert "(profile_id, available_at, id)" in definitions[
+                "idx_embedding_jobs_pending_v2"
+            ]
+            assert "(profile_id, updated_at, id)" in definitions[
+                "idx_embedding_jobs_processing_lease_v2"
+            ]
 
             cursor.execute("""
-                SELECT conname
-                FROM pg_constraint
-                WHERE conrelid='thread_articles'::regclass
-                  AND contype='f'
+                SELECT conname FROM pg_constraint
+                WHERE conrelid='thread_articles'::regclass AND contype='f'
                 ORDER BY conname
             """)
             assert [row[0] for row in cursor.fetchall()] == [
                 "thread_articles_article_fk",
                 "thread_articles_thread_fk",
             ]
+            cursor.execute("SELECT count(*) FROM schema_migrations")
+            assert cursor.fetchone()[0] == len(list(MIGRATIONS.glob("*.sql")))
 
-            # Old data/002_threads.sql created this FK without an explicit
-            # name, while migration 006 later added the canonical constraint.
-            cursor.execute("""
-                ALTER TABLE thread_articles
-                ADD CONSTRAINT thread_articles_thread_id_fkey
-                FOREIGN KEY (thread_id) REFERENCES threads(id) ON DELETE CASCADE
-            """)
-            _execute_file(cursor, ROOT / "scripts" / "migrations" / "022_postgres_hardening.sql")
-            cursor.execute("""
-                SELECT conname
-                FROM pg_constraint
-                WHERE conrelid='thread_articles'::regclass
-                  AND contype='f'
-                ORDER BY conname
-            """)
-            assert [row[0] for row in cursor.fetchall()] == [
-                "thread_articles_article_fk",
-                "thread_articles_thread_fk",
-            ]
-
-            cursor.execute("SELECT COUNT(*) FROM schema_migrations")
-            tracked_count = cursor.fetchone()[0]
-            expected_count = len(list(
-                (ROOT / "scripts" / "migrations").glob("*.sql")
-            ))
-            assert tracked_count == expected_count
-
-        app_engine = create_engine(dsn)
-        Session = sessionmaker(bind=app_engine, expire_on_commit=False)
+        engine = create_engine(dsn)
+        Session = sessionmaker(bind=engine, expire_on_commit=False)
         at = datetime.now(timezone.utc).replace(microsecond=0)
         with Session.begin() as session:
             session.execute(text("""
                 INSERT INTO sources(
                     id,name,url,country_code,source_type,weight,language,tier
-                ) VALUES (
-                    1,'Smoke','https://example.test','ES','rss',1,'es','mainstream'
-                )
+                ) VALUES (1,'Smoke','https://example.test','ES','rss',1,'es','mainstream')
             """))
             session.execute(text("""
                 INSERT INTO articles(
                     id,source_id,external_id,title,published_at,collected_at,
                     language,title_normalized,is_duplicate,is_backfill
-                ) VALUES (
-                    1,1,'smoke','Story evidence',:at,:at,'es',
-                    'story evidence',FALSE,FALSE
-                )
+                ) VALUES (1,1,'smoke','Story evidence',:at,:at,'es',
+                          'story evidence',FALSE,FALSE)
             """), {"at": at})
             session.execute(text("""
-                INSERT INTO stories(
-                    id,slug,title_ru,lifecycle,first_seen,last_seen,
-                    article_count,source_count,country_count,
-                    highest_action_level,clustering_confidence,meta
-                ) VALUES
-                  (10,'canonical','Canonical','developing',:at,:at,1,1,2,3,0.9,'{}'),
-                  (11,'superseded','Superseded','resolved',:at,:at,1,1,1,3,0.7,
-                   CAST(:superseded_meta AS jsonb))
+                INSERT INTO stories(id,slug,title_ru,lifecycle,first_seen,last_seen,meta)
+                VALUES
+                  (10,'canonical','Canonical','developing',:at,:at,'{}'),
+                  (11,'superseded','Superseded','resolved',:at,:at,CAST(:m11 AS jsonb)),
+                  (12,'overflow','Overflow','resolved',:at,:at,CAST(:m12 AS jsonb)),
+                  (13,'nonnumeric','Nonnumeric','resolved',:at,:at,CAST(:m13 AS jsonb)),
+                  (14,'missing','Missing','resolved',:at,:at,CAST(:m14 AS jsonb)),
+                  (15,'cycle-a','Cycle A','resolved',:at,:at,CAST(:m15 AS jsonb)),
+                  (16,'cycle-b','Cycle B','resolved',:at,:at,CAST(:m16 AS jsonb)),
+                  (17,'chain','Chain','resolved',:at,:at,CAST(:m17 AS jsonb))
             """), {
                 "at": at,
-                "superseded_meta": '{"merged_into_story_id":10}',
+                "m11": '{"merged_into_story_id":10}',
+                "m12": '{"merged_into_story_id":"999999999999999999999999999999999999"}',
+                "m13": '{"merged_into_story_id":"not-a-number"}',
+                "m14": '{"merged_into_story_id":999}',
+                "m15": '{"merged_into_story_id":16}',
+                "m16": '{"merged_into_story_id":15}',
+                "m17": '{"merged_into_story_id":11}',
             })
             session.execute(text("""
                 INSERT INTO story_articles(
                     story_id,article_id,membership_confidence,evidence
                 ) VALUES (10,1,0.9,'{}'),(11,1,0.7,'{}')
             """))
-            emitted = _emit(
+            assert _emit(
                 session,
                 "tier_convergence",
                 "ES",
-                "tier_convergence:ES:postgres-hardening",
+                "tier_convergence:ES:postgres-hardening-v2",
                 "Canonical evidence",
                 "Canonical evidence",
                 {},
@@ -201,29 +216,136 @@ def test_full_chain_bootstraps_and_second_run_is_a_noop():
                     window_start=at,
                     window_end=at,
                     article_ids=(1,),
-                    story_ids=(11,),
+                    story_ids=(11, 12, 13, 14, 15, 17),
                     confidence=0.9,
                     completeness="complete",
                     explanation={"rule": "rule"},
                 ),
-            )
-            assert emitted is True
+            ) is True
 
         with Session() as session:
-            persisted_story_ids = session.execute(text("""
+            persisted = session.execute(text("""
                 SELECT se.story_ids
                 FROM signal_evidence se
                 JOIN signals s ON s.id=se.signal_id
-                WHERE s.dedup_key='tier_convergence:ES:postgres-hardening'
+                WHERE s.dedup_key='tier_convergence:ES:postgres-hardening-v2'
             """)).scalar_one()
-            detail_story = SqlSignalDetailService._load_story(
-                session,
-                story_ids=(11,),
-                article_ids=(1,),
+            details = {
+                story_id: SqlSignalDetailService._load_story(
+                    session, story_ids=(story_id,), article_ids=()
+                )
+                for story_id in (11, 12, 13, 14, 15, 17)
+            }
+
+        assert persisted == [10, 12, 13, 14]
+        assert details[11].id == 10
+        assert details[12].id == 12
+        assert details[13].id == 13
+        assert details[14].id == 14
+        assert details[15] is None
+        assert details[17].id == 10
+        engine.dispose()
+    finally:
+        connection.close()
+
+
+def test_actual_runner_upgrades_old_019_and_recovers_invalid_shadows():
+    dsn, psycopg2 = _requirements()
+    connection = psycopg2.connect(dsn)
+    connection.autocommit = True
+    try:
+        with connection.cursor() as cursor:
+            _reset(cursor, initialize=True)
+            cursor.execute("DROP INDEX idx_articles_search_snapshot")
+            cursor.execute("DROP INDEX idx_embedding_jobs_pending")
+            cursor.execute("DROP INDEX idx_embedding_jobs_processing_lease")
+            cursor.execute("""
+                CREATE INDEX idx_embedding_jobs_pending
+                ON embedding_jobs(available_at, id) WHERE status='pending'
+            """)
+            cursor.execute("""
+                CREATE INDEX idx_articles_search_snapshot_v2
+                ON articles ((COALESCE(collected_at,published_at)) DESC, id DESC)
+            """)
+            cursor.execute("""
+                CREATE INDEX idx_embedding_jobs_pending_v2
+                ON embedding_jobs(profile_id,available_at,id) WHERE status='pending'
+            """)
+            cursor.execute("""
+                CREATE INDEX idx_embedding_jobs_processing_lease_v2
+                ON embedding_jobs(profile_id,updated_at,id) WHERE status='processing'
+            """)
+            cursor.execute("""
+                UPDATE pg_index SET indisvalid=FALSE
+                WHERE indexrelid IN (
+                    'idx_articles_search_snapshot_v2'::regclass,
+                    'idx_embedding_jobs_pending_v2'::regclass,
+                    'idx_embedding_jobs_processing_lease_v2'::regclass
+                )
+            """)
+            cursor.execute("""
+                CREATE TABLE schema_migrations(
+                    filename TEXT PRIMARY KEY, applied_at TIMESTAMPTZ DEFAULT now()
+                )
+            """)
+            cursor.executemany(
+                "INSERT INTO schema_migrations(filename) VALUES (%s)",
+                [(path.name,) for path in sorted(MIGRATIONS.glob("*.sql"))
+                 if path.name != "022_postgres_hardening.sql"],
             )
 
-        assert persisted_story_ids == [10]
-        assert detail_story.id == 10
-        app_engine.dispose()
+        first = _run_migrations(dsn)
+        _assert_success(first)
+        assert "applying 022_postgres_hardening.sql" in first.stdout
+        second = _run_migrations(dsn)
+        _assert_success(second)
+        assert "skip 022_postgres_hardening.sql (already applied)" in second.stdout
+
+        with connection.cursor() as cursor:
+            rows = _index_rows(cursor)
+            assert len(rows) == 3
+            assert all(row[2:] == (True, True) for row in rows)
+            cursor.execute("""
+                SELECT to_regclass('idx_articles_search_snapshot'),
+                       to_regclass('idx_embedding_jobs_pending'),
+                       to_regclass('idx_embedding_jobs_processing_lease')
+            """)
+            assert cursor.fetchone() == (None, None, None)
+            cursor.execute("""
+                SELECT count(*) FROM schema_migrations
+                WHERE filename='022_postgres_hardening.sql'
+            """)
+            assert cursor.fetchone()[0] == 1
+    finally:
+        connection.close()
+
+
+def test_actual_runner_does_not_record_failure_and_retries_same_file():
+    dsn, psycopg2 = _requirements()
+    connection = psycopg2.connect(dsn)
+    connection.autocommit = True
+    try:
+        with connection.cursor() as cursor:
+            _reset(cursor, initialize=False)
+
+        failed = _run_migrations(dsn, RETRY_MIGRATIONS)
+        assert failed.returncode != 0
+        assert "applying 002_retry_gate.sql" in failed.stdout
+        assert "003_after.sql" not in failed.stdout
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT filename FROM schema_migrations ORDER BY filename")
+            assert [row[0] for row in cursor.fetchall()] == ["001_ok.sql"]
+            cursor.execute("CREATE TABLE migration_retry_gate(id integer)")
+
+        retried = _run_migrations(dsn, RETRY_MIGRATIONS)
+        _assert_success(retried)
+        assert "skip 001_ok.sql (already applied)" in retried.stdout
+        assert "applying 002_retry_gate.sql" in retried.stdout
+        assert "applying 003_after.sql" in retried.stdout
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT step FROM migration_retry_log ORDER BY step")
+            assert [row[0] for row in cursor.fetchall()] == [1, 2, 3]
+            cursor.execute("SELECT count(*) FROM schema_migrations")
+            assert cursor.fetchone()[0] == 3
     finally:
         connection.close()

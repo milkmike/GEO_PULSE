@@ -16,6 +16,7 @@ set -euo pipefail
 
 APP_DIR="${APP_DIR:-/opt/geopulse}"
 LOG="${DEPLOY_LOG:-/var/log/geopulse-deploy.log}"
+STATE_FILE="${DEPLOY_STATE_FILE:-${APP_DIR}/.deploy-state/last-successful-commit}"
 cd "$APP_DIR"
 
 log() { echo "$(date -Is) $*" >> "$LOG"; }
@@ -27,26 +28,45 @@ if ! git diff --quiet || ! git diff --cached --quiet; then
     exit 0
 fi
 
-BEFORE="$(git rev-parse HEAD)"
+LOCAL_HEAD="$(git rev-parse HEAD)"
 git fetch -q origin main
 AFTER="$(git rev-parse origin/main)"
+LAST_DEPLOYED=""
+if [ -f "$STATE_FILE" ]; then
+    LAST_DEPLOYED="$(tr -d '[:space:]' < "$STATE_FILE")"
+fi
 
-[ "$BEFORE" = "$AFTER" ] && exit 0   # already up to date
-
-if ! git merge --ff-only origin/main >/dev/null 2>&1; then
-    log "SKIP: local main diverged from origin/main; manual intervention needed"
+# HEAD can already equal origin/main after a previous migration failure. Only
+# the durable success marker proves that this commit reached running services.
+if [ "$LOCAL_HEAD" = "$AFTER" ] && [ "$LAST_DEPLOYED" = "$AFTER" ]; then
     exit 0
 fi
+
+if [ "$LOCAL_HEAD" != "$AFTER" ]; then
+    if ! git merge --ff-only origin/main >/dev/null 2>&1; then
+        log "SKIP: local main diverged from origin/main; manual intervention needed"
+        exit 0
+    fi
+fi
+
+BEFORE="${LAST_DEPLOYED:-$LOCAL_HEAD}"
 
 # Apply pending DB migrations before swapping containers (idempotent, tracked in
 # schema_migrations). The migrate service also runs under `up -d`, but invoking
 # it explicitly guarantees the schema is current on every deploy regardless of
 # compose restart semantics.
-docker compose run --rm migrate >>"$LOG" 2>&1 || log "WARN: migrate step reported issues (continuing)"
+docker compose run --rm migrate >>"$LOG" 2>&1
 
 # Build first at low CPU/IO priority so a heavy image build (Next.js!) cannot
 # starve the running containers (the box OOM-froze once, 2026-06-12), then
 # swap containers — compose only recreates changed services.
 nice -n 19 ionice -c3 docker compose build >/dev/null 2>&1
 docker compose up -d >/dev/null 2>&1
+
+# Record success only after migrations, build, and container swap all succeed.
+# A same-directory rename makes the marker update atomic across cron retries.
+mkdir -p "$(dirname "$STATE_FILE")"
+STATE_TMP="${STATE_FILE}.tmp.$$"
+printf '%s\n' "$AFTER" > "$STATE_TMP"
+mv "$STATE_TMP" "$STATE_FILE"
 log "DEPLOYED ${BEFORE:0:8} -> ${AFTER:0:8}"

@@ -126,6 +126,10 @@ def test_emit_persists_signal_and_immutable_evidence_in_one_session():
     assert signal_params["confidence"] == 0.9
     assert "WITH RECURSIVE story_seed" in story_sql
     assert "merged_into_story_id" in story_sql
+    assert "{0,18}" in story_sql
+    assert "9223372036854775807" in story_sql
+    assert "LEFT JOIN stories terminal_target" in story_sql
+    assert "'^[1-9][0-9]*$'" not in story_sql
     assert story_params["story_ids"] == []
     assert story_params["article_ids"] == [11, 12]
     assert "INSERT INTO signal_evidence" in evidence_sql
@@ -202,6 +206,10 @@ def test_signal_detail_story_lookup_resolves_superseded_candidates():
     sql, params = session.calls[0]
     assert "WITH RECURSIVE candidates" in sql
     assert "merged_into_story_id" in sql
+    assert "{0,18}" in sql
+    assert "9223372036854775807" in sql
+    assert "LEFT JOIN stories terminal_target" in sql
+    assert "'^[1-9][0-9]*$'" not in sql
     assert params == {"story_ids": [4], "article_ids": [11]}
 
 

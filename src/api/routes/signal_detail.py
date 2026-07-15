@@ -188,21 +188,47 @@ class SqlSignalDetailService:
                     FROM seed
                     UNION ALL
                     SELECT walk.original_id,
-                           (st.meta->>'merged_into_story_id')::bigint,
+                           merged.story_id,
                            walk.priority,
-                           walk.path || (st.meta->>'merged_into_story_id')::bigint
+                           walk.path || merged.story_id
                     FROM story_walk walk
                     JOIN stories st ON st.id = walk.current_id
-                    WHERE COALESCE(st.meta, '{}'::jsonb) ? 'merged_into_story_id'
-                      AND (st.meta->>'merged_into_story_id') ~ '^[1-9][0-9]*$'
-                      AND NOT (
-                          (st.meta->>'merged_into_story_id')::bigint = ANY(walk.path)
-                      )
+                    CROSS JOIN LATERAL (
+                        SELECT CASE
+                            WHEN (st.meta->>'merged_into_story_id')
+                                     ~ '^[1-9][0-9]{0,18}$'
+                             AND (
+                                 length(st.meta->>'merged_into_story_id') < 19
+                                 OR (st.meta->>'merged_into_story_id')
+                                      <= '9223372036854775807'
+                             )
+                            THEN (st.meta->>'merged_into_story_id')::bigint
+                        END AS story_id
+                    ) merged
+                    JOIN stories merged_story ON merged_story.id = merged.story_id
+                    WHERE merged.story_id IS NOT NULL
+                      AND NOT (merged.story_id = ANY(walk.path))
                 ), terminal AS (
                     SELECT DISTINCT ON (original_id)
-                           original_id, current_id, priority
-                    FROM story_walk
-                    ORDER BY original_id, cardinality(path) DESC
+                           walk.original_id, walk.current_id, walk.priority
+                    FROM story_walk walk
+                    JOIN stories current_story ON current_story.id = walk.current_id
+                    LEFT JOIN LATERAL (
+                        SELECT CASE
+                            WHEN (current_story.meta->>'merged_into_story_id')
+                                     ~ '^[1-9][0-9]{0,18}$'
+                             AND (
+                                 length(current_story.meta->>'merged_into_story_id') < 19
+                                 OR (current_story.meta->>'merged_into_story_id')
+                                      <= '9223372036854775807'
+                             )
+                            THEN (current_story.meta->>'merged_into_story_id')::bigint
+                        END AS story_id
+                    ) terminal_merge ON TRUE
+                    LEFT JOIN stories terminal_target
+                      ON terminal_target.id = terminal_merge.story_id
+                    WHERE terminal_target.id IS NULL
+                    ORDER BY walk.original_id, cardinality(walk.path) DESC
                 ), ranked AS (
                     SELECT current_id AS story_id, MIN(priority) AS priority
                     FROM terminal
@@ -212,7 +238,6 @@ class SqlSignalDetailService:
                        st.last_seen, st.clustering_confidence
                 FROM ranked r
                 JOIN stories st ON st.id = r.story_id
-                WHERE NOT (COALESCE(st.meta, '{}'::jsonb) ? 'merged_into_story_id')
                 ORDER BY r.priority, st.last_seen DESC, st.id
                 LIMIT 1
                 """
