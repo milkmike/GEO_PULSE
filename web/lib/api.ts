@@ -1,7 +1,7 @@
 import type {
-  AgreementGroup, Brief, CountrySummary, Dossier, EntityStat, FxSeries, Headline, Health,
-  MapEntry, Meta, Signal, SourceHealthRow, SourceRow, Thread, TopicStat, TradeYear,
-  UNVoteYear,
+  AgreementGroup, ArticleSearchRequest, ArticleSearchResponse, Brief, CountrySummary,
+  Dossier, EntityStat, EntitySuggestionsResponse, FxSeries, Headline, Health, MapEntry,
+  Meta, Signal, SourceHealthRow, SourceRow, Thread, TopicStat, TradeYear, UNVoteYear,
 } from "./types";
 
 /** API base: build-time env wins; otherwise same host on :8100 (compose default). */
@@ -13,8 +13,8 @@ export function apiBase(): string {
   return "http://localhost:8100";
 }
 
-async function get<T>(path: string): Promise<T> {
-  const res = await fetch(`${apiBase()}${path}`, { cache: "no-store" });
+async function get<T>(path: string, signal?: AbortSignal): Promise<T> {
+  const res = await fetch(`${apiBase()}${path}`, { cache: "no-store", signal });
   if (!res.ok) throw new Error(`${res.status} ${path}`);
   return res.json() as Promise<T>;
 }
@@ -34,6 +34,31 @@ export async function adminGet<T>(path: string, key: string): Promise<T> {
 }
 
 export const api = {
+  searchArticles: (
+    request: ArticleSearchRequest,
+    cursor?: string | null,
+    signal?: AbortSignal,
+  ) => {
+    const params = new URLSearchParams();
+    for (const key of [
+      "q", "country", "topic", "entity_id", "from", "to", "tier", "language",
+    ] as const) {
+      const value = request[key];
+      if (typeof value === "string" && value.trim()) params.set(key, value.trim());
+    }
+    if (request.sort) params.set("sort", request.sort);
+    if (request.limit) params.set("limit", String(request.limit));
+    if (cursor) params.set("cursor", cursor);
+    return get<ArticleSearchResponse>(
+      `/api/v2/search/articles?${params.toString()}`,
+      signal,
+    );
+  },
+  entitySuggestions: (query: string, signal?: AbortSignal) =>
+    get<EntitySuggestionsResponse>(
+      `/api/v2/entities/suggest?q=${encodeURIComponent(query)}&limit=8`,
+      signal,
+    ),
   countries: () =>
     get<{ countries: CountrySummary[]; total: number }>("/api/v2/countries"),
   map: () => get<{ map: MapEntry[] }>("/api/v2/map"),

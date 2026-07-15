@@ -1,9 +1,12 @@
 import Link from "next/link";
+import { Search } from "lucide-react";
 import type { ReactNode } from "react";
 import TowerLogo from "./TowerLogo";
 
 const NAV = [
   { href: "/", label: "карта" },
+  { href: "/search", label: "поиск новостей", search: true },
+  { href: "/stories", label: "сюжеты" },
   { href: "/analytics", label: "аналитика" },
   { href: "/sources", label: "источники" },
   { href: "/signals", label: "сигналы" },
@@ -30,17 +33,21 @@ export default function SiteHeader({
             мир ↔ россия
           </span>
         </Link>
-        <nav className="ml-auto flex flex-wrap items-center gap-4 text-[12px]">
+        <nav
+          aria-label="Основная навигация"
+          className="ml-auto flex flex-wrap items-center gap-x-4 gap-y-2 text-[12px]"
+        >
           {NAV.map((n) => (
             <Link
               key={n.href}
               href={n.href}
-              className={
+              className={`inline-flex items-center gap-1 focus-visible:rounded-sm focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent ${
                 active === n.href
                   ? "text-ru-white underline decoration-ru-red decoration-2 underline-offset-4"
                   : "text-dim transition-colors hover:text-ru-white"
-              }
+              }`}
             >
+              {n.search && <Search aria-hidden="true" size={12} strokeWidth={1.8} />}
               {n.label}
             </Link>
           ))}

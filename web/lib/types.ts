@@ -205,3 +205,112 @@ export interface Thread {
   summary: ThreadSummary | null;
   articles: ThreadArticle[];
 }
+
+export type SearchSort = "relevance" | "newest";
+
+export interface ArticleSearchRequest {
+  q?: string;
+  country?: string;
+  topic?: string;
+  entity_id?: string;
+  from?: string;
+  to?: string;
+  tier?: string;
+  language?: string;
+  sort?: SearchSort;
+  limit?: number;
+}
+
+export interface ArticleSearchFilters {
+  country: string | null;
+  topic: string | null;
+  entity_id: string | null;
+  from: string | null;
+  to: string | null;
+  tier: string | null;
+  language: string | null;
+}
+
+export interface SearchMatchedEntity {
+  id: string;
+  name: string | null;
+  kind: "person" | "organization" | "location" | "event" | string | null;
+  mention_text: string | null;
+  confidence: number;
+}
+
+export interface SearchEvidence {
+  type: string;
+  article_id: number;
+  text?: string | null;
+  entity_id?: string;
+  topic?: string;
+  story_id?: number;
+  confidence?: number;
+}
+
+export interface SearchScoreComponents {
+  lexical: number;
+  entity: number;
+  topic: number;
+  freshness: number;
+  trust: number;
+  story: number;
+  vector: number | null;
+}
+
+export interface SearchArticle {
+  article_id: number;
+  title: string;
+  summary: string | null;
+  url: string | null;
+  published_at: string;
+  language: string | null;
+  source: {
+    name: string | null;
+    country: string;
+    tier: string | null;
+  };
+  topics: string[];
+  matched_entities: SearchMatchedEntity[];
+  sentiment: number | null;
+  action_level: number | null;
+  story: {
+    id: number;
+    slug: string | null;
+    title: string | null;
+  } | null;
+  why_included: string;
+  relevance_score: number;
+  confidence: number;
+  evidence: SearchEvidence[];
+  scores: SearchScoreComponents;
+}
+
+export interface ArticleSearchResponse {
+  query: string;
+  filters: ArticleSearchFilters;
+  sort: SearchSort;
+  limit: number;
+  semantic_search: "unavailable" | string;
+  items: SearchArticle[];
+  candidate_count: number;
+  next_cursor: string | null;
+}
+
+export interface EntitySuggestion {
+  id: string;
+  node_id: string;
+  kind: "person" | "organization" | "location" | "event";
+  label: string;
+  aliases: string[];
+  match_explanation: string;
+}
+
+export interface EntitySuggestionsResponse {
+  items: EntitySuggestion[];
+  limit: number;
+  offset: number;
+  has_more: boolean;
+  next_cursor: string | null;
+}
