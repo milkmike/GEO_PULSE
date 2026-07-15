@@ -4,6 +4,7 @@ import Link from "next/link";
 import { ArrowUpRight, BookOpenText, ChevronDown } from "lucide-react";
 import { Fragment, useState } from "react";
 import type { SearchArticle, SearchScoreComponents } from "@/lib/types";
+import { useFeatureFlags } from "./FeatureFlagsProvider";
 
 const SCORE_LABELS: [keyof SearchScoreComponents, string][] = [
   ["lexical", "текст"],
@@ -79,7 +80,15 @@ function HighlightedEvidence({ text }: { text: string }) {
   );
 }
 
-function ResultCard({ item, index }: { item: SearchArticle; index: number }) {
+function ResultCard({
+  item,
+  index,
+  storiesNavigation,
+}: {
+  item: SearchArticle;
+  index: number;
+  storiesNavigation: boolean;
+}) {
   const [explanationOpen, setExplanationOpen] = useState(false);
   const sourceUrl = safeArticleUrl(item.url);
   const textEvidence = item.evidence.find(
@@ -144,7 +153,7 @@ function ResultCard({ item, index }: { item: SearchArticle; index: number }) {
           ) : (
             <span className="text-[11px] text-dim">Ссылка на источник недоступна</span>
           )}
-          {item.story && (
+          {item.story && storiesNavigation && (
             <Link
               href={`/stories/${item.story.id}`}
               className="inline-flex min-h-11 items-center gap-1 text-[12px] text-[#c4c9d1] transition-colors hover:text-ru-white focus-visible:rounded-sm focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent sm:min-h-0"
@@ -152,6 +161,12 @@ function ResultCard({ item, index }: { item: SearchArticle; index: number }) {
               <BookOpenText aria-hidden="true" size={13} />
               {item.story.title || `Сюжет № ${item.story.id}`}
             </Link>
+          )}
+          {item.story && !storiesNavigation && (
+            <span className="inline-flex min-h-11 items-center gap-1 text-[12px] text-[#c4c9d1] sm:min-h-0">
+              <BookOpenText aria-hidden="true" size={13} />
+              {item.story.title || `Сюжет № ${item.story.id}`}
+            </span>
           )}
         </div>
 
@@ -220,10 +235,16 @@ function ResultCard({ item, index }: { item: SearchArticle; index: number }) {
 }
 
 export default function SearchResults({ items }: { items: SearchArticle[] }) {
+  const { storiesNavigation } = useFeatureFlags();
   return (
     <section aria-label="Результаты поиска" className="border-t border-line">
       {items.map((item, index) => (
-        <ResultCard key={item.article_id} item={item} index={index} />
+        <ResultCard
+          key={item.article_id}
+          item={item}
+          index={index}
+          storiesNavigation={storiesNavigation}
+        />
       ))}
     </section>
   );

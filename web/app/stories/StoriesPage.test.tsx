@@ -126,7 +126,9 @@ describe("StoriesPage durable filters", () => {
       ),
     );
     expect(
-      screen.getByRole("link", { name: "Испания и Россия: портовые переговоры" }),
+      await screen.findByRole("link", {
+        name: "Испания и Россия: портовые переговоры",
+      }),
     ).toHaveAttribute("href", "/stories/42");
     expect(screen.getByRole("combobox", { name: /сущность/i })).toHaveValue(
       "Владимир Путин",
@@ -153,7 +155,7 @@ describe("StoriesPage durable filters", () => {
     });
 
     render(<StoriesPage />);
-    const combobox = screen.getByRole("combobox", { name: /сущность/i });
+    const combobox = await screen.findByRole("combobox", { name: /сущность/i });
     expect(combobox).toHaveAttribute("aria-autocomplete", "list");
     await user.type(combobox, "Путин");
     await act(async () => vi.advanceTimersByTime(300));

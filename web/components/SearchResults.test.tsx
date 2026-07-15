@@ -2,6 +2,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import type { SearchArticle } from "@/lib/types";
+import { FeatureFlagsProvider } from "./FeatureFlagsProvider";
 import SearchResults from "./SearchResults";
 
 const result = {
@@ -66,13 +67,33 @@ describe("SearchResults", () => {
     expect(sourceLink).toHaveAttribute("href", result.url);
     expect(sourceLink).toHaveAttribute("rel", expect.stringContaining("noopener"));
 
+    expect(screen.getByText(result.story.title)).toBeVisible();
     expect(
-      screen.getByRole("link", { name: result.story.title }),
-    ).toHaveAttribute("href", "/stories/7");
+      screen.queryByRole("link", { name: result.story.title }),
+    ).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /почему найдено/i }));
     expect(screen.getByText(result.why_included)).toBeVisible();
     expect(screen.getByText(/достоверность 91%/i)).toBeVisible();
+  });
+
+  it("links story matches only when stories navigation is enabled", () => {
+    render(
+      <FeatureFlagsProvider
+        flags={{
+          searchNavigation: true,
+          storiesNavigation: true,
+          investigation: false,
+          signalDetail: false,
+        }}
+      >
+        <SearchResults items={[result]} />
+      </FeatureFlagsProvider>,
+    );
+
+    expect(
+      screen.getByRole("link", { name: result.story.title }),
+    ).toHaveAttribute("href", "/stories/7");
   });
 
   it.each([
