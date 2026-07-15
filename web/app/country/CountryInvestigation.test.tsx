@@ -1,4 +1,6 @@
 import type { ReactNode } from "react";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -149,6 +151,13 @@ describe("country investigation flow", () => {
     apiMocks.unVotes.mockResolvedValue({ data: [] });
     apiMocks.trade.mockResolvedValue({ data: [] });
     apiMocks.agreements.mockResolvedValue({ agreements: [] });
+  });
+
+  it("keeps country request identity out of the render phase", () => {
+    const source = readFileSync(join(process.cwd(), "app/country/[code]/page.tsx"), "utf8");
+    const componentStart = source.indexOf("export default function CountryPage");
+    const firstEffect = source.indexOf("\n  useEffect(", componentStart);
+    expect(source.slice(componentStart, firstEffect)).not.toMatch(/\.current\s*=/);
   });
 
   it("uses the same exact timestamp for plot and textual markers while preserving query state", async () => {

@@ -77,16 +77,20 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
   const [invalidAtMessage, setInvalidAtMessage] = useState<string | null>(null);
   const markerTriggerRef = useRef<HTMLElement | null>(null);
   const rriHeadingRef = useRef<HTMLDivElement | null>(null);
-  const latestCountryRef = useRef(cc);
+  const activeCountryRequest = useRef<{
+    country: string;
+    controller: AbortController;
+  } | null>(null);
   const briefRequestGeneration = useRef(0);
-  latestCountryRef.current = cc;
   const dossier = dossierResponse?.country.code.toUpperCase() === cc ? dossierResponse : null;
 
   useEffect(() => {
     const requestCountry = cc;
     const controller = new AbortController();
+    const requestToken = { country: requestCountry, controller };
+    activeCountryRequest.current = requestToken;
     const isCurrent = () => (
-      !controller.signal.aborted && latestCountryRef.current === requestCountry
+      !controller.signal.aborted && activeCountryRequest.current === requestToken
     );
 
     setDossier(null);
@@ -125,7 +129,10 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
     api.agreements(cc, 180, controller.signal)
       .then((value) => { if (isCurrent()) setAgreements(value.agreements); }).catch(() => {});
 
-    return () => controller.abort();
+    return () => {
+      controller.abort();
+      if (activeCountryRequest.current === requestToken) activeCountryRequest.current = null;
+    };
   }, [cc]);
 
   useEffect(() => {
@@ -159,9 +166,11 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
 
   const generateBrief = () => {
     const requestCountry = cc;
+    const countryRequest = activeCountryRequest.current;
+    if (!countryRequest || countryRequest.country !== requestCountry) return;
     const requestGeneration = ++briefRequestGeneration.current;
     const isCurrent = () => (
-      latestCountryRef.current === requestCountry
+      activeCountryRequest.current === countryRequest
       && briefRequestGeneration.current === requestGeneration
     );
     setBriefState("generating");
