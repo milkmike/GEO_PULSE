@@ -56,7 +56,18 @@ function response(
   stories: StoryListItem[] = [],
   nextCursor: string | null = null,
 ): StoriesListResponse {
-  return { stories, next_cursor: nextCursor };
+  return {
+    stories,
+    next_cursor: nextCursor,
+    consistency: {
+      ranking_at: "2026-07-15T12:00:00+00:00",
+      membership_generation: 12,
+      mode: "membership_generation_live_filters",
+      frozen_features: ["membership", "article_count", "countries", "primary_url"],
+      live_filters: ["lifecycle", "topic", "entity_id", "merge_state"],
+      limitation: "Состав зафиксирован, но фильтры используют текущее состояние.",
+    },
+  };
 }
 
 function deferred<T>() {
@@ -132,6 +143,12 @@ describe("StoriesPage durable filters", () => {
     ).toHaveAttribute("href", "/stories/42");
     expect(screen.getByRole("combobox", { name: /сущность/i })).toHaveValue(
       "Владимир Путин",
+    );
+    const consistency = screen.getByRole("status", { name: /режим выдачи/i });
+    expect(consistency).toHaveTextContent(/состав сюжетов зафиксирован/i);
+    expect(consistency).toHaveAttribute(
+      "title",
+      "Состав зафиксирован, но фильтры используют текущее состояние.",
     );
   });
 

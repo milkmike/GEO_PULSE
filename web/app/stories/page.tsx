@@ -18,6 +18,7 @@ import type {
   EntitySuggestion,
   Meta,
   StoryCoverage,
+  StoryConsistency,
   StoriesRequest,
   StoryLifecycle,
   StoryListItem,
@@ -140,6 +141,7 @@ function StoriesPageContent() {
   const [suggestionsLoading, setSuggestionsLoading] = useState(false);
   const [activeSuggestion, setActiveSuggestion] = useState(-1);
   const [coverage, setCoverage] = useState<StoryCoverage | null>(null);
+  const [consistency, setConsistency] = useState<StoryConsistency | null>(null);
   const loadMoreController = useRef<AbortController | null>(null);
   const activeParamsKey = useRef(paramsKey);
   activeParamsKey.current = paramsKey;
@@ -214,12 +216,14 @@ function StoriesPageContent() {
     setStories([]);
     setNextCursor(null);
     setCoverage(null);
+    setConsistency(null);
     api.stories(request, null, controller.signal)
       .then((payload) => {
         if (controller.signal.aborted || activeParamsKey.current !== paramsKey) return;
         setStories(payload.stories);
         setNextCursor(payload.next_cursor);
         setCoverage(payload.coverage ?? null);
+        setConsistency(payload.consistency);
       })
       .catch((reason: unknown) => {
         if (!isAbort(reason)) {
@@ -486,6 +490,18 @@ function StoriesPageContent() {
           </button>
         </div>
       </form>
+
+      {consistency && !loading && (
+        <p
+          role="status"
+          aria-label="Режим выдачи"
+          title={consistency.limitation}
+          className="tnum mt-3 flex items-center gap-2 text-[10px] uppercase tracking-[0.08em] text-dim"
+        >
+          <span className="inline-block size-1.5 rounded-full bg-ru-blue" aria-hidden="true" />
+          Состав сюжетов зафиксирован для этой выдачи · фильтры обновляются
+        </p>
+      )}
 
       <section className="reveal reveal-3 mt-8" aria-live="polite" aria-busy={loading || loadingMore}>
         {loading && (
