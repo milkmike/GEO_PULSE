@@ -245,6 +245,57 @@ def test_unknown_discovery_is_recorded_even_when_discovery_source_has_exact_arti
     engine.dispose()
 
 
+def test_broad_feed_skips_legacy_exact_article_before_publisher_dedup(monkeypatch):
+    engine, SessionLocal = _database()
+    source = _seed(SessionLocal)
+    with SessionLocal.begin() as session:
+        session.add(Article(
+            source_id=1,
+            external_id="legacy-elpais",
+            title="Legacy broad feed article with a long title",
+            body="Russia",
+            url="https://news.google.com/rss/articles/legacy-elpais",
+            published_at=PUBLISHED_AT,
+            publisher_source_id=None,
+            geo_status="source_verified",
+        ))
+
+    @contextmanager
+    def session_context():
+        with SessionLocal.begin() as session:
+            yield session
+
+    dedup_calls = []
+    queued = []
+    monkeypatch.setattr(collect, "get_session", session_context)
+    monkeypatch.setattr(
+        collect,
+        "find_duplicate",
+        lambda *args, **kwargs: dedup_calls.append((args, kwargs)),
+    )
+    monkeypatch.setattr(collect, "_enqueue_article", lambda *args: queued.append(args))
+
+    result = collect._save_source(
+        source,
+        [_article(
+            "legacy-elpais",
+            "EL PAÍS",
+            "https://elpais.com",
+            "elpais.com",
+        )],
+    )
+
+    with SessionLocal() as session:
+        saved = session.scalars(select(Article)).all()
+        assert len(saved) == 1
+        assert saved[0].publisher_source_id is None
+        assert saved[0].geo_status == "source_verified"
+    assert result == (0, 0, 1)
+    assert dedup_calls == []
+    assert queued == []
+    engine.dispose()
+
+
 def test_direct_source_behavior_remains_source_verified(monkeypatch):
     engine, SessionLocal = _database()
     _seed(SessionLocal)
