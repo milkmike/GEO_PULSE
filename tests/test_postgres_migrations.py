@@ -494,6 +494,116 @@ def test_actual_runner_upgrades_old_019_and_recovers_invalid_shadows():
         connection.close()
 
 
+def test_actual_runner_rebuilds_invalid_duplicate_family_index_and_retries():
+    dsn, psycopg2 = _requirements()
+    connection = psycopg2.connect(dsn)
+    connection.autocommit = True
+    try:
+        with connection.cursor() as cursor:
+            _reset(cursor, initialize=True)
+            cursor.execute("""
+                SELECT cls.oid
+                FROM pg_class cls
+                JOIN pg_namespace ns ON ns.oid = cls.relnamespace
+                WHERE ns.nspname = 'public'
+                  AND cls.relname = 'idx_articles_duplicate_of'
+            """)
+            invalid_oid = cursor.fetchone()[0]
+            cursor.execute("""
+                UPDATE pg_index
+                SET indisvalid = FALSE,
+                    indisready = FALSE
+                WHERE indexrelid =
+                      'public.idx_articles_duplicate_of'::regclass
+            """)
+            cursor.execute("CREATE SCHEMA role_schema")
+            cursor.execute("""
+                CREATE TABLE role_schema.articles(
+                    id INTEGER PRIMARY KEY,
+                    duplicate_of INTEGER
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX idx_articles_duplicate_of
+                ON role_schema.articles(duplicate_of)
+            """)
+            cursor.execute("""
+                CREATE TABLE schema_migrations(
+                    filename TEXT PRIMARY KEY,
+                    applied_at TIMESTAMPTZ DEFAULT now()
+                )
+            """)
+            cursor.executemany(
+                "INSERT INTO schema_migrations(filename) VALUES (%s)",
+                [
+                    (path.name,)
+                    for path in sorted(MIGRATIONS.glob("*.sql"))
+                    if path.name != "025_articles_duplicate_family_index.sql"
+                ],
+            )
+            _runner_search_path(cursor, reset=False)
+
+        first = _run_migrations(dsn)
+        _assert_success(first)
+        assert "applying 025_articles_duplicate_family_index.sql" in first.stdout
+        assert "applying 024_google_news_publisher_attribution.sql" not in first.stdout
+
+        with connection.cursor() as cursor:
+            cursor.execute("""
+                SELECT cls.oid,
+                       target.oid = 'public.articles'::regclass AS correct_table,
+                       ns.nspname,
+                       pg_get_indexdef(cls.oid),
+                       idx.indisvalid,
+                       idx.indisready
+                FROM pg_class cls
+                JOIN pg_namespace ns ON ns.oid = cls.relnamespace
+                JOIN pg_index idx ON idx.indexrelid = cls.oid
+                JOIN pg_class target ON target.oid = idx.indrelid
+                WHERE ns.nspname = 'public'
+                  AND cls.relname = 'idx_articles_duplicate_of'
+            """)
+            rebuilt = cursor.fetchone()
+            assert rebuilt[0] != invalid_oid
+            assert rebuilt[1:3] == (True, "public")
+            assert (
+                "ON public.articles USING btree (duplicate_of)"
+                in rebuilt[3]
+            )
+            assert "WHERE (duplicate_of IS NOT NULL)" in rebuilt[3]
+            assert rebuilt[4:] == (True, True)
+            cursor.execute("""
+                SELECT pg_get_indexdef(cls.oid),
+                       idx.indisvalid,
+                       idx.indisready
+                FROM pg_class cls
+                JOIN pg_namespace ns ON ns.oid = cls.relnamespace
+                JOIN pg_index idx ON idx.indexrelid = cls.oid
+                WHERE ns.nspname = 'role_schema'
+                  AND cls.relname = 'idx_articles_duplicate_of'
+            """)
+            shadow = cursor.fetchone()
+            assert "ON role_schema.articles" in shadow[0]
+            assert shadow[1:] == (True, True)
+            cursor.execute("""
+                SELECT count(*)
+                FROM public.schema_migrations
+                WHERE filename = '025_articles_duplicate_family_index.sql'
+            """)
+            assert cursor.fetchone()[0] == 1
+
+        second = _run_migrations(dsn)
+        _assert_success(second)
+        assert (
+            "skip 025_articles_duplicate_family_index.sql (already applied)"
+            in second.stdout
+        )
+    finally:
+        with connection.cursor() as cursor:
+            _runner_search_path(cursor, reset=True)
+        connection.close()
+
+
 def test_actual_runner_does_not_record_failure_and_retries_same_file():
     dsn, psycopg2 = _requirements()
     connection = psycopg2.connect(dsn)
