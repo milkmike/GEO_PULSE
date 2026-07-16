@@ -78,6 +78,33 @@ def test_legacy_adapter_keeps_document_and_query_methods_separate():
     ]
 
 
+def test_legacy_adapter_labels_openrouter_environment_profile(monkeypatch):
+    for name in (
+        "EMBEDDING_PROXY_URL",
+        "JINA_API_KEY",
+        "OPENAI_API_KEY",
+        "OPENROUTER_EMBEDDING_MODEL",
+        "OPENROUTER_EMBEDDING_DIMENSIONS",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-secret")
+
+    provider = LegacyEmbeddingProvider.from_environment()
+
+    assert provider is not None
+    assert provider.profile() == EmbeddingProfile(
+        profile_key=(
+            "openrouter:openai/text-embedding-3-small:1536:text-matching:v1"
+        ),
+        provider="openrouter",
+        model="openai/text-embedding-3-small",
+        dimensions=1536,
+        task="text-matching",
+        version="v1",
+        active=True,
+    )
+
+
 @pytest.mark.parametrize("invalid", [float("nan"), float("inf"), float("-inf")])
 def test_legacy_adapter_rejects_non_finite_document_and_query_vectors(invalid):
     profile = EmbeddingProfile(

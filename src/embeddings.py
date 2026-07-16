@@ -22,12 +22,35 @@ logger = logging.getLogger(__name__)
 
 # Embedding configuration — auto-detect best available backend
 EMBEDDING_DIM = None  # Set dynamically based on backend
+OPENROUTER_EMBEDDINGS_URL = "https://openrouter.ai/api/v1/embeddings"
+OPENROUTER_EMBEDDING_MODEL = "openai/text-embedding-3-small"
+OPENROUTER_EMBEDDING_DIMENSIONS = 1536
+
+
+def _openrouter_dimensions() -> int:
+    raw = os.environ.get(
+        "OPENROUTER_EMBEDDING_DIMENSIONS",
+        str(OPENROUTER_EMBEDDING_DIMENSIONS),
+    ) or str(OPENROUTER_EMBEDDING_DIMENSIONS)
+    dimensions = int(raw)
+    if dimensions < 1:
+        raise ValueError("OpenRouter embedding dimensions must be positive")
+    return dimensions
+
+
+def _provider_name(url: str, model: str) -> str:
+    """Return the tracking/profile provider for one resolved API config."""
+    if "openrouter.ai" in url.casefold():
+        return "openrouter"
+    if "jina" in model.casefold():
+        return "jina"
+    return "openai"
 
 
 def _get_api_config() -> tuple[str, dict, str, int]:
     """Return (url, headers, model, dimensions) for embedding API.
 
-    Priority: Jina AI → OpenAI → OpenRouter
+    Priority: explicit proxy → Jina AI → OpenAI → OpenRouter
     """
     # Option 0: Embedding proxy (bypasses geo restrictions)
     proxy_url = os.environ.get("EMBEDDING_PROXY_URL", "")
@@ -63,6 +86,22 @@ def _get_api_config() -> tuple[str, dict, str, int]:
             "Authorization": f"Bearer {openai_key}",
             "Content-Type": "application/json",
         }, "text-embedding-3-small", 1536
+
+    # Option 3: OpenRouter fallback. Standard HTTPS_PROXY handling is delegated
+    # to httpx, so the provider's public endpoint remains visible for tracking.
+    openrouter_key = os.environ.get("OPENROUTER_API_KEY", "")
+    if openrouter_key:
+        model = (
+            os.environ.get(
+                "OPENROUTER_EMBEDDING_MODEL",
+                OPENROUTER_EMBEDDING_MODEL,
+            )
+            or OPENROUTER_EMBEDDING_MODEL
+        )
+        return OPENROUTER_EMBEDDINGS_URL, {
+            "Authorization": f"Bearer {openrouter_key}",
+            "Content-Type": "application/json",
+        }, model, _openrouter_dimensions()
 
     return "", {}, "", 0
 
@@ -103,20 +142,25 @@ def generate_embedding(text: str) -> Optional[list[float]]:
     """
     url, headers, model, dim = _get_api_config()
     if not url:
-        logger.warning("No embedding API configured (set JINA_API_KEY or OPENAI_API_KEY)")
+        logger.warning(
+            "No embedding API configured "
+            "(set JINA_API_KEY, OPENAI_API_KEY, or OPENROUTER_API_KEY)"
+        )
         return None
 
     text = text[:8000].strip()
     if not text:
         return None
 
-    svc = "jina" if "jina" in model else "openai"
+    svc = _provider_name(url, model)
 
     for attempt in range(3):
         try:
             payload = {"model": model, "input": [text]}
             if "jina" in model:
                 payload["task"] = "text-matching"
+            if svc == "openrouter":
+                payload["dimensions"] = dim
 
             # Add proxy routing info if using proxy
             payload = _add_proxy_fields(payload, model)
@@ -142,6 +186,25 @@ def generate_embedding(text: str) -> Optional[list[float]]:
                 logger.warning(f"No embedding data in response: {str(data)[:200]}")
                 return None
 
+            embedding = data["data"][0]["embedding"]
+            if not isinstance(embedding, list) or len(embedding) != dim:
+                actual = len(embedding) if isinstance(embedding, list) else 0
+                error = (
+                    "embedding vector dimension mismatch: "
+                    f"expected {dim}, got {actual}"
+                )
+                logger.warning(error)
+                track_api_call(
+                    service=svc,
+                    endpoint="/v1/embeddings",
+                    model=model,
+                    script="embeddings.py",
+                    status="error",
+                    error=error,
+                    duration_ms=timer.ms,
+                )
+                return None
+
             usage = data.get("usage", {})
             track_api_call(
                 service=svc, endpoint="/v1/embeddings", model=model,
@@ -150,7 +213,6 @@ def generate_embedding(text: str) -> Optional[list[float]]:
                 tokens_out=0, status="ok", duration_ms=timer.ms,
             )
 
-            embedding = data["data"][0]["embedding"]
             return embedding
 
         except Exception as e:
@@ -189,7 +251,7 @@ def generate_embeddings_batch(texts: list[str]) -> list[Optional[list[float]]]:
 
     # Jina supports up to 2048 inputs, OpenAI up to 100
     chunk_size = 50 if "jina" in model else 100
-    svc = "jina" if "jina" in model else "openai"
+    svc = _provider_name(url, model)
 
     for chunk_start in range(0, len(valid_texts), chunk_size):
         chunk = valid_texts[chunk_start:chunk_start + chunk_size]
@@ -200,6 +262,8 @@ def generate_embeddings_batch(texts: list[str]) -> list[Optional[list[float]]]:
                 payload = {"model": model, "input": chunk}
                 if "jina" in model:
                     payload["task"] = "text-matching"
+                if svc == "openrouter":
+                    payload["dimensions"] = dim
 
                 payload = _add_proxy_fields(payload, model)
 
@@ -226,9 +290,14 @@ def generate_embeddings_batch(texts: list[str]) -> list[Optional[list[float]]]:
 
                 for item in data["data"]:
                     idx = item["index"]
-                    if idx < len(chunk_indices):
+                    embedding = item.get("embedding")
+                    if (
+                        idx < len(chunk_indices)
+                        and isinstance(embedding, list)
+                        and len(embedding) == dim
+                    ):
                         original_idx = chunk_indices[idx]
-                        results[original_idx] = item["embedding"]
+                        results[original_idx] = embedding
 
                 usage = data.get("usage", {})
                 track_api_call(

@@ -73,12 +73,12 @@ class LegacyEmbeddingProvider:
     @classmethod
     def from_environment(cls) -> LegacyEmbeddingProvider | None:
         """Build an adapter for the already-configured legacy backend."""
-        from src.embeddings import _get_api_config
+        from src.embeddings import _get_api_config, _provider_name
 
         url, _headers, model, dimensions = _get_api_config()
         if not url or not model or not dimensions:
             return None
-        provider = "jina" if "jina" in model.casefold() else "openai"
+        provider = _provider_name(url, model)
         profile = EmbeddingProfile(
             profile_key=f"{provider}:{model}:{dimensions}:text-matching:v1",
             provider=provider,
