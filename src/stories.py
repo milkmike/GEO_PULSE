@@ -614,10 +614,26 @@ def _value(row: Any, name: str, default: Any = None) -> Any:
     return mapping.get(name, default)
 
 
-def fetch_story_candidates(session: Any) -> list[StoryCandidate]:
-    """Project existing country threads and analyzed articles into candidates."""
+def fetch_story_candidates(
+    session: Any,
+    *,
+    thread_ids: frozenset[int] | None = None,
+    published_after: datetime | None = None,
+) -> list[StoryCandidate]:
+    """Project country threads into candidates, optionally bounded in SQL."""
 
-    rows = session.execute(text("""
+    if thread_ids is not None and not thread_ids:
+        return []
+    predicates = ["t.article_count > 0"]
+    params: dict[str, Any] = {}
+    if thread_ids is not None:
+        predicates.append("t.id = ANY(:thread_ids)")
+        params["thread_ids"] = sorted(thread_ids)
+    if published_after is not None:
+        predicates.append("ar.published_at >= :published_after")
+        params["published_after"] = published_after
+
+    statement = text(f"""
         SELECT t.id AS thread_id, TRIM(t.country_code) AS country_code,
                t.thread_key, t.title AS thread_title, t.first_seen, t.last_seen,
                ar.id AS article_id, ar.title AS article_title, ar.url,
@@ -633,9 +649,15 @@ def fetch_story_candidates(session: Any) -> list[StoryCandidate]:
           ON s.article_id = ar.id
          AND TRIM(s.country_code) = TRIM(t.country_code)
         LEFT JOIN analysis an ON an.article_id = ar.id
-        WHERE t.article_count > 0
+        WHERE {' AND '.join(predicates)}
         ORDER BY t.id, ar.published_at, ar.id
-    """)).fetchall()
+    """)
+    result = (
+        session.execute(statement, params)
+        if params
+        else session.execute(statement)
+    )
+    rows = result.fetchall()
     if not rows:
         return []
 
@@ -1684,7 +1706,14 @@ def build_stories(
     """Build stories globally by default, or within an explicit safe scope."""
 
     now = _as_utc(now or datetime.now(timezone.utc))
-    candidates = fetch_story_candidates(session)
+    if candidate_article_start is not None:
+        candidate_article_start = _as_utc(candidate_article_start)
+    fetch_options: dict[str, Any] = {}
+    if candidate_thread_ids is not None:
+        fetch_options["thread_ids"] = candidate_thread_ids
+    if candidate_article_start is not None:
+        fetch_options["published_after"] = candidate_article_start
+    candidates = fetch_story_candidates(session, **fetch_options)
     if candidate_thread_ids is not None:
         candidates = [
             candidate
@@ -1692,7 +1721,6 @@ def build_stories(
             if candidate.thread_id in candidate_thread_ids
         ]
     if candidate_article_start is not None:
-        candidate_article_start = _as_utc(candidate_article_start)
         candidates = [
             scoped
             for candidate in candidates

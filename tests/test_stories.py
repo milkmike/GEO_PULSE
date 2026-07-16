@@ -647,6 +647,64 @@ def test_mixed_legacy_thread_uses_one_canonical_thread_country_candidate():
     assert "TRIM(s.country_code) = TRIM(t.country_code)" in candidate_sql
 
 
+def test_candidate_thread_and_date_scope_reaches_sql_before_mention_materialization():
+    scope_start = NOW - timedelta(days=30)
+
+    class ScopedCandidateSession:
+        def __init__(self):
+            self.calls = []
+
+        def execute(self, statement, params=None):
+            sql = str(statement)
+            params = params or {}
+            self.calls.append((sql, params))
+            if "FROM threads t" in sql:
+                assert "t.id = ANY(:thread_ids)" in sql
+                assert "ar.published_at >= :published_after" in sql
+                assert params == {
+                    "thread_ids": [41, 42],
+                    "published_after": scope_start,
+                }
+                return FakeResult(rows=[SimpleNamespace(
+                    thread_id=41,
+                    country_code="AZ",
+                    thread_key="recent-event",
+                    thread_title="Recent event",
+                    first_seen=scope_start - timedelta(days=60),
+                    last_seen=NOW,
+                    article_id=141,
+                    article_title="Recent article",
+                    url="https://example.test/141",
+                    published_at=scope_start,
+                    publisher_source_id=11,
+                    source_name="AZ source",
+                    sentiment=0.2,
+                    action_level=3,
+                    article_event_key="recent-event",
+                    topics=["diplomacy"],
+                )])
+            if "FROM article_entity_mentions" in sql:
+                assert params == {"article_ids": [141]}
+                return FakeResult(rows=[SimpleNamespace(
+                    article_id=141,
+                    entity_id="entity-recent",
+                )])
+            raise AssertionError(f"Unexpected scoped candidate query: {sql}")
+
+    session = ScopedCandidateSession()
+
+    candidates = fetch_story_candidates(
+        session,
+        thread_ids=frozenset({42, 41}),
+        published_after=scope_start,
+    )
+
+    assert [(item.thread_id, item.article_ids) for item in candidates] == [
+        (41, (141,)),
+    ]
+    assert len(session.calls) == 2
+
+
 class PersistenceSession:
     def __init__(self):
         self.statements = []
@@ -759,11 +817,12 @@ def test_scoped_story_build_excludes_pre_window_article_memberships(monkeypatch)
         scoped_candidate("KZ", 42, 142),
     ]
     observed = {}
-    monkeypatch.setattr(
-        stories_module,
-        "fetch_story_candidates",
-        lambda session: candidates,
-    )
+
+    def fake_fetch(session, **kwargs):
+        observed["fetch_kwargs"] = kwargs
+        return candidates
+
+    monkeypatch.setattr(stories_module, "fetch_story_candidates", fake_fetch)
     monkeypatch.setattr(
         stories_module,
         "derive_reactivation_pairs",
@@ -807,6 +866,10 @@ def test_scoped_story_build_excludes_pre_window_article_memberships(monkeypatch)
     )
     assert observed["kwargs"]["minimum_existing_last_seen"] == scope_start
     assert observed["kwargs"]["non_destructive"] is True
+    assert observed["fetch_kwargs"] == {
+        "thread_ids": frozenset({41, 42}),
+        "published_after": scope_start,
+    }
 
 
 def test_build_threads_recent_days_routes_only_to_bounded_rebuild(monkeypatch):
@@ -889,7 +952,13 @@ def test_story_pipeline_audit_is_read_only_and_has_stable_json_keys(monkeypatch)
             raise AssertionError("read-only audit must not commit")
 
     session = ReadOnlyAuditSession()
-    monkeypatch.setattr(audit, "fetch_story_candidates", lambda active: candidates)
+    fetch_calls = []
+
+    def fake_fetch(active, **kwargs):
+        fetch_calls.append(kwargs)
+        return candidates
+
+    monkeypatch.setattr(audit, "fetch_story_candidates", fake_fetch)
 
     report = audit.run_audit(session, recent_days=30, now=NOW)
 
@@ -924,6 +993,7 @@ def test_story_pipeline_audit_is_read_only_and_has_stable_json_keys(monkeypatch)
         "thread_country": "AZ",
         "article_country": "GB",
     }]
+    assert fetch_calls == [{"published_after": NOW - timedelta(days=30)}]
     assert session.statements
 
 

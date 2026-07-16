@@ -66,7 +66,10 @@ def run_audit(
     scope_start = now - timedelta(days=recent_days)
 
     candidates = []
-    for candidate in fetch_story_candidates(session):
+    for candidate in fetch_story_candidates(
+        session,
+        published_after=scope_start,
+    ):
         scoped = _scope_candidate_articles(
             candidate,
             published_after=scope_start,
