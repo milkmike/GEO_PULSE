@@ -17,7 +17,7 @@ import WorldMap from "@/components/WorldMap";
 import { api } from "@/lib/api";
 import { HOME_TIPS } from "@/lib/explain";
 import { fmtDate } from "@/lib/format";
-import type { Brief, CountrySummary, Headline, Meta, Signal, StoryListItem } from "@/lib/types";
+import type { Brief, CountrySummary, Headline, Meta, Signal, StoryListItem, TopicBriefResponse } from "@/lib/types";
 
 // Default order of the home dashboard cards; visitors can drag to reorder
 // (persisted per browser in localStorage under "home-panel-order").
@@ -33,8 +33,9 @@ export default function HomePage() {
   const [filters, setFilters] = useState<FilterState>({ region: null, level: null, topic: null });
   const [topicCounts, setTopicCounts] =
     useState<Record<string, { articles: number; avg_sentiment: number | null }> | null>(null);
-  const [topicBrief, setTopicBrief] = useState<(Brief & { label?: string }) | null>(null);
+  const [topicBrief, setTopicBrief] = useState<TopicBriefResponse | null>(null);
   const [topicBriefLoading, setTopicBriefLoading] = useState(false);
+  const [topicBriefError, setTopicBriefError] = useState(false);
   const [stories, setStories] = useState<StoryListItem[]>([]);
   const [storiesState, setStoriesState] = useState<"loading" | "ready" | "error">("loading");
   const [storiesReload, setStoriesReload] = useState(0);
@@ -94,13 +95,19 @@ export default function HomePage() {
   useEffect(() => {
     if (!filters.topic) {
       setTopicBrief(null);
+      setTopicBriefError(false);
       return;
     }
+    setTopicBrief(null);
+    setTopicBriefError(false);
     setTopicBriefLoading(true);
     api
       .topicBrief(filters.topic)
       .then(setTopicBrief)
-      .catch(() => setTopicBrief(null))
+      .catch(() => {
+        setTopicBrief(null);
+        setTopicBriefError(true);
+      })
       .finally(() => setTopicBriefLoading(false));
   }, [filters.topic]);
 
@@ -207,17 +214,25 @@ export default function HomePage() {
             {filters.topic ? (
               topicBriefLoading ? (
                 <div className="px-4 py-3 text-xs text-dim">
-                  Готовлю тематический брифинг — первые ~10 секунд при смене линзы…
+                  Загружаю тематический брифинг…
                 </div>
-              ) : topicBrief ? (
+              ) : topicBriefError ? (
+                <div className="py-2 text-xs text-dim">
+                  Не удалось загрузить тематический брифинг
+                </div>
+              ) : topicBrief?.status === "ready" ? (
                 <>
                   <Markdown text={topicBrief.content} citations={topicBrief.citations ?? topicBrief.meta?.citations} />
                   <div className="mt-2 text-[11px] text-dim">
                     {topicBrief.model} · {fmtDate(topicBrief.created_at)}
                   </div>
                 </>
-              ) : (
+              ) : topicBrief?.status === "pending" ? (
+                <div className="py-2 text-xs text-dim">Тематический брифинг обновляется</div>
+              ) : topicBrief?.status === "insufficient" ? (
                 <div className="py-2 text-xs text-dim">Недостаточно данных по теме</div>
+              ) : (
+                <div className="py-2 text-xs text-dim">Состояние тематического брифинга неизвестно</div>
               )
             ) : brief ? (
               <>

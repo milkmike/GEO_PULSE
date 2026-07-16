@@ -145,6 +145,10 @@ export interface Brief {
   citations?: Citation[] | null;
 }
 
+export type TopicBriefResponse =
+  | ({ status: "ready"; topic: string; label: string } & Brief)
+  | { status: "pending" | "insufficient"; topic: string; label: string };
+
 export interface Health {
   verdict: "HEALTHY" | "WARNING" | "DEGRADED" | "UNHEALTHY";
   sources_total: number;

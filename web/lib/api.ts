@@ -3,7 +3,7 @@ import type {
   Dossier, EntityStat, EntitySuggestionsResponse, FxSeries, Headline, Health, MapEntry,
   IndexExplanation, IndexExplanationRequest, Meta, Signal, SignalDetail, SourceHealthRow,
   SourceRow, StoriesListResponse, StoriesRequest, StoryDetailResponse, TemperatureMethodology,
-  Thread, TopicStat, TradeYear, UNVoteYear,
+  Thread, TopicBriefResponse, TopicStat, TradeYear, UNVoteYear,
 } from "./types";
 
 /** API base: build-time env wins; otherwise same host on :8100 (compose default). */
@@ -146,7 +146,7 @@ export const api = {
     get<{ headlines: Headline[]; total: number }>(
       `/api/v2/headlines?hours=${hours}&limit=${limit}${region ? `&region=${region}` : ""}${topic ? `&topic=${topic}` : ""}`),
   topicBrief: (topic: string) =>
-    get<Brief & { topic: string; label: string }>(`/api/v2/topics/${topic}/brief`),
+    get<TopicBriefResponse>(`/api/v2/topics/${topic}/brief`),
   signals: (params = "") =>
     get<{ signals: Signal[]; total: number }>(`/api/v2/signals?days=7&limit=200${params}`),
   health: () => get<Health>("/api/v2/health"),
