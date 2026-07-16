@@ -613,7 +613,7 @@ def fetch_story_candidates(session: Any) -> list[StoryCandidate]:
         JOIN article_country_facts s ON s.article_id = ar.id
         LEFT JOIN analysis an ON an.article_id = ar.id
         WHERE t.article_count > 0
-        ORDER BY t.id, ar.published_at, ar.id
+        ORDER BY t.id, s.country_code, ar.published_at, ar.id
     """)).fetchall()
     if not rows:
         return []
@@ -630,12 +630,16 @@ def fetch_story_candidates(session: Any) -> list[StoryCandidate]:
             _value(mention, "entity_id")
         )
 
-    grouped: dict[int, list[Any]] = {}
+    grouped: dict[tuple[int, str], list[Any]] = {}
     for row in rows:
-        grouped.setdefault(_value(row, "thread_id"), []).append(row)
+        partition = (
+            int(_value(row, "thread_id")),
+            str(_value(row, "country_code")).strip(),
+        )
+        grouped.setdefault(partition, []).append(row)
 
     candidates: list[StoryCandidate] = []
-    for thread_id, thread_rows in grouped.items():
+    for (thread_id, country_code), thread_rows in grouped.items():
         articles = []
         topics: set[str] = set()
         entities: set[str] = set()
@@ -671,7 +675,7 @@ def fetch_story_candidates(session: Any) -> list[StoryCandidate]:
         event_key = str(_value(first_row, "thread_key") or (event_keys[0] if event_keys else ""))
         candidates.append(StoryCandidate(
             thread_id=thread_id,
-            country_code=str(_value(first_row, "country_code")).strip(),
+            country_code=country_code,
             event_key=event_key,
             title=str(_value(first_row, "thread_title") or event_key),
             article_ids=tuple(sorted({article.article_id for article in articles})),
@@ -838,7 +842,7 @@ def _membership_evidence(
     matches = [
         (other, score_story_match(candidate, other))
         for other in cluster
-        if other.thread_id != candidate.thread_id and other.country_code != candidate.country_code
+        if other.country_code != candidate.country_code
     ]
     if not matches:
         return 1.0, {
@@ -860,6 +864,7 @@ def _membership_evidence(
         "country": candidate.country_code,
         "action_level_snapshot": candidate.highest_action_level,
         "peer_thread_id": best_other.thread_id,
+        "peer_country": best_other.country_code,
         "score": best.total,
         "components": best.components,
         "effective_components": best.evidence.get(
@@ -1493,7 +1498,10 @@ def persist_story_cluster(
         SELECT :story_id, aem.entity_id, COUNT(*), AVG(aem.confidence),
                jsonb_build_object('article_ids', jsonb_agg(DISTINCT aem.article_id))
         FROM story_articles sa
-        JOIN article_entity_mentions aem ON aem.article_id = sa.article_id
+        JOIN articles ar ON ar.id = sa.article_id
+        JOIN article_country_facts entity_source
+          ON entity_source.article_id = ar.id
+        JOIN article_entity_mentions aem ON aem.article_id = ar.id
         WHERE sa.story_id = :story_id
         GROUP BY aem.entity_id
     """), {"story_id": story_id})
@@ -1519,6 +1527,8 @@ def persist_story_cluster(
             FROM story_articles sa
             JOIN article_entity_mentions aem ON aem.article_id = sa.article_id
             JOIN articles ar ON ar.id = sa.article_id
+            JOIN article_country_facts event_source
+              ON event_source.article_id = ar.id
             LEFT JOIN analysis an ON an.article_id = ar.id
             WHERE sa.story_id = :story_id
             ORDER BY aem.entity_id, ar.published_at DESC NULLS LAST, ar.id DESC

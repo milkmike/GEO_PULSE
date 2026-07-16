@@ -493,6 +493,42 @@ class PublisherAttributionFixtureSession:
         raise AssertionError(f"Unexpected fixture query: {sql}")
 
 
+class MixedLegacyThreadFixtureSession(PublisherAttributionFixtureSession):
+    def execute(self, statement, params=None):
+        sql = str(statement)
+        if "FROM threads t" in sql:
+            self.statements.append(sql)
+            return FakeResult(rows=[
+                SimpleNamespace(
+                    thread_id=2501,
+                    country_code=country,
+                    thread_key="отношения с россией",
+                    thread_title="Legacy mixed-country thread",
+                    first_seen=NOW,
+                    last_seen=NOW,
+                    article_id=item["article_id"],
+                    article_title=item["title"],
+                    url=f"https://example.test/{item['article_id']}",
+                    published_at=NOW,
+                    source_name=source_name,
+                    publisher_source_id=publisher_source_id,
+                    sentiment=0.2,
+                    action_level=3,
+                    article_event_key="отношения с россией",
+                    topics=["diplomacy"],
+                )
+                for item, country, source_name, publisher_source_id
+                in self._attributed(sql)
+            ])
+        if "FROM article_entity_mentions" in sql:
+            self.statements.append(sql)
+            return FakeResult(rows=[
+                SimpleNamespace(article_id=501, entity_id="entity-russia"),
+                SimpleNamespace(article_id=502, entity_id="entity-russia"),
+            ])
+        return super().execute(statement, params)
+
+
 def test_verified_publishers_drive_briefs_threads_and_story_candidates():
     import scripts.build_threads as build_threads
 
@@ -529,6 +565,35 @@ def test_verified_publishers_drive_briefs_threads_and_story_candidates():
         for candidate_item in candidates
         for article in candidate_item.articles
     )
+
+
+def test_mixed_legacy_thread_partitions_into_canonical_country_candidates():
+    candidates = fetch_story_candidates(MixedLegacyThreadFixtureSession())
+
+    assert [
+        (item.thread_id, item.country_code, item.article_ids)
+        for item in candidates
+    ] == [
+        (2501, "ES", (501,)),
+        (2501, "GB", (502,)),
+    ]
+    [edge] = cluster_story_candidates(candidates)
+    assert {(item.thread_id, item.country_code) for item in edge} == {
+        (2501, "ES"),
+        (2501, "GB"),
+    }
+
+    session = PersistenceSession()
+    persist_story_cluster(session, edge, now=NOW, membership_generation=1)
+    membership_evidence = [
+        json.loads(params["evidence"])
+        for sql, params in session.calls
+        if "INSERT INTO story_articles" in sql and "VALUES" in sql
+    ]
+    assert {
+        (item["country"], item["peer_country"])
+        for item in membership_evidence
+    } == {("ES", "GB"), ("GB", "ES")}
 
 
 class PersistenceSession:
@@ -789,6 +854,73 @@ class FakeStorySession:
         if "candidate_links AS" in sql or "WITH story_windows AS" in sql:
             return FakeResult(rows=[])
         return FakeResult(rows=[story_row(7), story_row(6, last_seen=NOW - timedelta(hours=1))])
+
+
+class UnknownMembershipStorySession(FakeStorySession):
+    def execute(self, statement, params=None):
+        sql = str(statement)
+        normalized_sql = " ".join(sql.split())
+        params = params or {}
+        if "WITH story_rank_raw AS" in sql and "WHERE st.id = :story_id" in sql:
+            self.calls.append((sql, params))
+            row = story_row(7)
+            verified_url = "https://elpais.com/verified-story"
+            unknown_url = "https://news.google.com/rss/articles/unknown-story"
+            row.primary_url_candidates = (
+                [verified_url]
+                if "JOIN article_country_facts primary_source " in normalized_sql
+                else [unknown_url, verified_url]
+            )
+            return FakeResult(row=row)
+        if "WITH entity_aggregates AS" in sql:
+            self.calls.append((sql, params))
+            verified = SimpleNamespace(
+                entity_id="entity-verified",
+                mentions=1,
+                confidence=0.8,
+                evidence={"article_ids": [501]},
+                canonical_name="Verified entity",
+                kind="organization",
+            )
+            unknown = SimpleNamespace(
+                entity_id="entity-unknown",
+                mentions=1,
+                confidence=0.99,
+                evidence={"article_ids": [503]},
+                canonical_name="Unknown entity",
+                kind="organization",
+            )
+            rows = (
+                [verified]
+                if "JOIN article_country_facts entity_source " in normalized_sql
+                else [unknown, verified]
+            )
+            return FakeResult(rows=rows)
+        if "WITH representative_events AS" in sql:
+            self.calls.append((sql, params))
+            verified = SimpleNamespace(
+                entity_id="entity-verified",
+                event_key="verified event",
+                event_at=NOW - timedelta(minutes=1),
+                action_level=3,
+                evidence={"article_ids": [501], "representative_article_id": 501},
+                confidence=0.8,
+            )
+            unknown = SimpleNamespace(
+                entity_id="entity-unknown",
+                event_key="unknown event",
+                event_at=NOW,
+                action_level=6,
+                evidence={"article_ids": [503], "representative_article_id": 503},
+                confidence=0.99,
+            )
+            rows = (
+                [verified]
+                if "JOIN article_country_facts event_source " in normalized_sql
+                else [unknown, verified]
+            )
+            return FakeResult(rows=rows)
+        return super().execute(statement, params)
 
 
 class LinkedStoryContextSession(FakeStorySession):
@@ -1294,6 +1426,24 @@ def test_story_detail_includes_evidence_and_country_primary_urls(monkeypatch):
     assert "JOIN sources" not in country_sql
 
 
+def test_story_detail_excludes_unknown_primary_url_entity_and_event_evidence(
+    monkeypatch,
+):
+    client, _ = story_client(monkeypatch, UnknownMembershipStorySession())
+
+    response = client.get("/api/v2/stories/7")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["primary_url"] == "https://elpais.com/verified-story"
+    assert [item["entity_id"] for item in payload["entities"]] == [
+        "entity-verified",
+    ]
+    assert [item["event_key"] for item in payload["events"]] == [
+        "verified event",
+    ]
+
+
 def test_story_cards_and_detail_expose_bounded_proven_signal_context(monkeypatch):
     client, session = story_client(monkeypatch, LinkedStoryContextSession())
 
@@ -1473,7 +1623,13 @@ def test_story_list_supports_topic_entity_date_filters_and_active_ranking(monkey
     assert params["entity_id"] == "entity-route"
     assert params["date_from"].isoformat().startswith("2026-07-01")
     assert params["date_to"].isoformat().startswith("2026-07-20")
-    assert "story_entities" in sql
+    assert "FROM story_articles filter_membership" in sql
+    assert "JOIN articles filter_article" in sql
+    assert (
+        "JOIN article_country_facts filter_source "
+        "ON filter_source.article_id = filter_article.id"
+    ) in " ".join(sql.split())
+    assert "JOIN article_entity_mentions filter_entity" in sql
     assert "meta->'topics'" in sql
     assert "sa.membership_generation <= :membership_generation" in sql
     assert "action_level_snapshot" in sql
@@ -2044,6 +2200,33 @@ def test_persistence_recomputes_header_counts_from_saved_memberships():
     ) >= 2
     assert "COUNT(DISTINCT s.country_code)" in aggregate_sql
     assert "MAX(LEAST(6, GREATEST(1, COALESCE(an.action_level, 1))))" in aggregate_sql
+
+
+def test_persisted_story_entity_and_event_evidence_requires_verified_memberships():
+    session = PersistenceSession()
+
+    persist_story_cluster(
+        session, [candidate("AZ"), candidate("KZ")], now=NOW,
+        membership_generation=1,
+    )
+
+    entity_sql = next(
+        sql for sql in session.statements if "INSERT INTO story_entities" in sql
+    )
+    event_sql = next(
+        sql for sql in session.statements if "INSERT INTO story_events" in sql
+    )
+    normalized_entity_sql = " ".join(entity_sql.split())
+    normalized_event_sql = " ".join(event_sql.split())
+    assert "JOIN articles ar ON ar.id = sa.article_id" in normalized_entity_sql
+    assert (
+        "JOIN article_country_facts entity_source "
+        "ON entity_source.article_id = ar.id"
+    ) in normalized_entity_sql
+    assert (
+        "JOIN article_country_facts event_source "
+        "ON event_source.article_id = ar.id"
+    ) in normalized_event_sql
 
 
 @pytest.mark.parametrize("invalid_action_level", [0, 7])

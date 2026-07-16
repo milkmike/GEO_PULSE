@@ -121,6 +121,8 @@ STORY_FIELDS = """
          SELECT ar.url, ar.published_at, ar.id
          FROM story_articles primary_membership
          JOIN articles ar ON ar.id = primary_membership.article_id
+         JOIN article_country_facts primary_source
+           ON primary_source.article_id = ar.id
          WHERE primary_membership.story_id = st.id
            AND primary_membership.membership_generation <= :membership_generation
            AND ar.url IS NOT NULL
@@ -1120,11 +1122,22 @@ def _list_stories(
         conditions.append("COALESCE(st.meta->'topics', '[]'::jsonb) ? :topic")
         params["topic"] = topic
     if entity_id:
-        conditions.append(
-            "EXISTS (SELECT 1 FROM story_entities filter_entity "
-            "WHERE filter_entity.story_id = st.id "
-            "AND filter_entity.entity_id::text = :entity_id)"
-        )
+        conditions.append("""
+            EXISTS (
+                SELECT 1
+                FROM story_articles filter_membership
+                JOIN articles filter_article
+                  ON filter_article.id = filter_membership.article_id
+                JOIN article_country_facts filter_source
+                  ON filter_source.article_id = filter_article.id
+                JOIN article_entity_mentions filter_entity
+                  ON filter_entity.article_id = filter_article.id
+                WHERE filter_membership.story_id = st.id
+                  AND filter_membership.membership_generation
+                      <= :membership_generation
+                  AND filter_entity.entity_id::text = :entity_id
+            )
+        """)
         params["entity_id"] = entity_id
     if date_from:
         conditions.append("rf.last_seen >= :date_from")
@@ -1462,8 +1475,10 @@ def get_story(
                            'article_ids', jsonb_agg(DISTINCT aem.article_id)
                        ) AS evidence
                 FROM story_articles sa
-                JOIN article_entity_mentions aem
-                  ON aem.article_id = sa.article_id
+                JOIN articles ar ON ar.id = sa.article_id
+                JOIN article_country_facts entity_source
+                  ON entity_source.article_id = ar.id
+                JOIN article_entity_mentions aem ON aem.article_id = ar.id
                 WHERE sa.story_id = :story_id
                   AND sa.membership_generation <= :membership_generation
                 GROUP BY aem.entity_id
@@ -1506,6 +1521,8 @@ def get_story(
                 JOIN article_entity_mentions aem
                   ON aem.article_id = sa.article_id
                 JOIN articles ar ON ar.id = sa.article_id
+                JOIN article_country_facts event_source
+                  ON event_source.article_id = ar.id
                 LEFT JOIN analysis an ON an.article_id = ar.id
                 WHERE sa.story_id = :story_id
                   AND sa.membership_generation <= :membership_generation
@@ -1514,6 +1531,10 @@ def get_story(
             ), entity_confidence AS (
                 SELECT aem.entity_id, AVG(aem.confidence) AS confidence
                 FROM story_articles confidence_membership
+                JOIN articles confidence_article
+                  ON confidence_article.id = confidence_membership.article_id
+                JOIN article_country_facts confidence_source
+                  ON confidence_source.article_id = confidence_article.id
                 JOIN article_entity_mentions aem
                   ON aem.article_id = confidence_membership.article_id
                 WHERE confidence_membership.story_id = :story_id
