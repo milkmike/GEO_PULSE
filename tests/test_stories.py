@@ -327,6 +327,92 @@ def test_thread_pair_drops_when_own_article_events_are_different():
     assert _filter_story_cluster_articles((left, right)) is None
 
 
+def test_three_country_article_support_chain_without_full_triangle_is_rejected():
+    thread_event = "заседание консульского совета стран снг"
+
+    def supported_candidate(country, thread_id, article_specs):
+        articles = tuple(
+            StoryArticle(
+                article_id,
+                country,
+                f"Article {article_id}",
+                None,
+                NOW,
+                f"Source {article_id}",
+                event_key=event_key,
+                source_id=article_id,
+            )
+            for article_id, event_key in article_specs
+        )
+        return replace(
+            candidate(country, event_key=thread_event),
+            thread_id=thread_id,
+            article_ids=tuple(article.article_id for article in articles),
+            articles=articles,
+        )
+
+    event_ab = "заседание совета консульских служб снг"
+    event_bc = "форум креативной молодежи центральной азии"
+    left = supported_candidate("TJ", 9401, ((601, event_ab),))
+    bridge = supported_candidate(
+        "KG",
+        9402,
+        ((701, event_ab), (702, event_bc)),
+    )
+    right = supported_candidate("UZ", 9403, ((801, event_bc),))
+
+    assert _filter_story_cluster_articles((left, bridge, right)) is None
+
+
+def test_three_country_complete_article_support_triangle_retains_exact_endpoints():
+    thread_event = "заседание консульского совета стран снг"
+    own_event = "заседание совета консульских служб снг"
+
+    def supported_candidate(country, thread_id, article_id, dirty_id):
+        dirty_events = {
+            "TJ": "строительство новой школы в душанбе",
+            "KG": "изменение тарифов на электроэнергию в бишкеке",
+            "UZ": "археологические раскопки возле самарканда",
+        }
+        supported = StoryArticle(
+            article_id,
+            country,
+            f"Supported {article_id}",
+            None,
+            NOW,
+            f"Source {article_id}",
+            event_key=own_event,
+            source_id=article_id,
+        )
+        dirty = StoryArticle(
+            dirty_id,
+            country,
+            f"Dirty {dirty_id}",
+            None,
+            NOW,
+            f"Source {dirty_id}",
+            event_key=dirty_events[country],
+            source_id=dirty_id,
+        )
+        return replace(
+            candidate(country, event_key=thread_event),
+            thread_id=thread_id,
+            article_ids=(article_id, dirty_id),
+            articles=(supported, dirty),
+        )
+
+    cluster = (
+        supported_candidate("TJ", 9501, 901, 911),
+        supported_candidate("KG", 9502, 902, 912),
+        supported_candidate("UZ", 9503, 903, 913),
+    )
+
+    filtered = _filter_story_cluster_articles(cluster)
+
+    assert filtered is not None
+    assert [item.article_ids for item in filtered] == [(901,), (902,), (903,)]
+
+
 def test_identical_event_key_does_not_double_count_title_similarity():
     left = candidate("AZ", title="Одинаковый заголовок")
     same_title = candidate("KZ", title="Одинаковый заголовок")

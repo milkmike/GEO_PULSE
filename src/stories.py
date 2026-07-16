@@ -1944,6 +1944,7 @@ def _filter_story_cluster_articles(
         for right in cluster[left_index + 1:]:
             if left.country_code == right.country_code:
                 continue
+            pair_supported = False
             for left_article in left.articles:
                 if (
                     left_article.country_code != left.country_code
@@ -1971,12 +1972,15 @@ def _filter_story_cluster_articles(
                             right_article.event_key,
                         ) >= CONCRETE_EVENT_MATCH_THRESHOLD
                     ):
+                        pair_supported = True
                         supported_ids.setdefault(left.thread_id, set()).add(
                             left_article.article_id
                         )
                         supported_ids.setdefault(right.thread_id, set()).add(
                             right_article.article_id
                         )
+            if not pair_supported:
+                return None
 
     filtered = []
     for candidate in cluster:
