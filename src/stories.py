@@ -67,6 +67,7 @@ class StoryCandidate:
     last_seen: datetime | None = None
     highest_action_level: int = 1
     articles: tuple[StoryArticle, ...] = field(default_factory=tuple)
+    source_ids: frozenset[int] = field(default_factory=frozenset)
 
 
 @dataclass(frozen=True, slots=True)
@@ -182,7 +183,11 @@ def score_story_match(left: StoryCandidate, right: StoryCandidate) -> StorySimil
         "entities": raw_entity_overlap if raw_entity_overlap >= MIN_MEANINGFUL_OVERLAP else 0.0,
         "topics": raw_topic_overlap if raw_topic_overlap >= MIN_MEANINGFUL_OVERLAP else 0.0,
         "time": max(0.0, 1.0 - gap_days / MAX_MERGE_GAP_DAYS),
-        "source_diversity": 1.0 if left.sources and right.sources and left.sources != right.sources else 0.0,
+        "source_diversity": 1.0 if (
+            (left.source_ids or left.sources)
+            and (right.source_ids or right.sources)
+            and (left.source_ids or left.sources) != (right.source_ids or right.sources)
+        ) else 0.0,
         "country_diversity": 1.0 if left.country_code != right.country_code else 0.0,
         "title": trigram_similarity(left.title, right.title),
     }
@@ -383,6 +388,7 @@ def _copy_input_payload(
             "entities": sorted(item.entities),
             "topics": sorted(item.topics),
             "sources": sorted(item.sources),
+            "source_ids": sorted(item.source_ids),
             "first_seen": _as_utc(item.first_seen).isoformat() if item.first_seen else None,
             "last_seen": _as_utc(item.last_seen).isoformat() if item.last_seen else None,
             "highest_action_level": item.highest_action_level,
@@ -593,17 +599,18 @@ def fetch_story_candidates(session: Any) -> list[StoryCandidate]:
     """Project existing country threads and analyzed articles into candidates."""
 
     rows = session.execute(text("""
-        SELECT t.id AS thread_id, TRIM(t.country_code) AS country_code,
+        SELECT t.id AS thread_id, TRIM(s.country_code) AS country_code,
                t.thread_key, t.title AS thread_title, t.first_seen, t.last_seen,
                ar.id AS article_id, ar.title AS article_title, ar.url,
-               ar.published_at, s.name AS source_name,
+               ar.published_at, s.id AS publisher_source_id,
+               s.name AS source_name,
                an.sentiment, COALESCE(an.action_level, 1) AS action_level,
                COALESCE(NULLIF(an.event_key, ''), t.thread_key) AS article_event_key,
                COALESCE(an.topics, ARRAY[]::text[]) AS topics
         FROM threads t
         JOIN thread_articles ta ON ta.thread_id = t.id
         JOIN articles ar ON ar.id = ta.article_id
-        JOIN sources s ON s.id = ar.source_id
+        JOIN article_country_facts s ON s.article_id = ar.id
         LEFT JOIN analysis an ON an.article_id = ar.id
         WHERE t.article_count > 0
         ORDER BY t.id, ar.published_at, ar.id
@@ -633,6 +640,7 @@ def fetch_story_candidates(session: Any) -> list[StoryCandidate]:
         topics: set[str] = set()
         entities: set[str] = set()
         sources: set[str] = set()
+        source_ids: set[int] = set()
         event_keys: list[str] = []
         for row in thread_rows:
             article_id = _value(row, "article_id")
@@ -641,6 +649,7 @@ def fetch_story_candidates(session: Any) -> list[StoryCandidate]:
             topics.update(str(topic) for topic in row_topics if topic)
             entities.update(article_entities)
             sources.add(str(_value(row, "source_name", "unknown")))
+            source_ids.add(int(_value(row, "publisher_source_id")))
             article_event_key = _value(row, "article_event_key")
             if article_event_key:
                 event_keys.append(str(article_event_key))
@@ -673,6 +682,7 @@ def fetch_story_candidates(session: Any) -> list[StoryCandidate]:
             last_seen=_value(first_row, "last_seen") or (max(dates) if dates else None),
             highest_action_level=max((article.action_level for article in articles), default=1),
             articles=tuple(articles),
+            source_ids=frozenset(source_ids),
         ))
     return candidates
 
@@ -757,6 +767,7 @@ def fetch_story_member_evidence(
         return []
     rows = session.execute(text("""
         SELECT ar.id AS article_id, ar.title, ar.published_at,
+               s.id AS publisher_source_id,
                TRIM(s.country_code) AS country_code, s.name AS source_name,
                COALESCE(NULLIF(an.event_key, ''), ar.title, '') AS event_key,
                COALESCE(an.topics, ARRAY[]::text[]) AS topics,
@@ -767,7 +778,7 @@ def fetch_story_member_evidence(
                    WHERE aem.article_id = ar.id
                ), ARRAY[]::text[]) AS entity_ids
         FROM articles ar
-        JOIN sources s ON s.id = ar.source_id
+        JOIN article_country_facts s ON s.article_id = ar.id
         LEFT JOIN analysis an ON an.article_id = ar.id
         WHERE ar.id = ANY(:article_ids)
         ORDER BY ar.id
@@ -776,6 +787,7 @@ def fetch_story_member_evidence(
         "article_id": int(_value(row, "article_id")),
         "title": _value(row, "title"),
         "published_at": _iso_datetime(_value(row, "published_at")),
+        "publisher_source_id": int(_value(row, "publisher_source_id")),
         "country_code": str(_value(row, "country_code", "")).strip(),
         "source_name": _value(row, "source_name"),
         "event_key": _value(row, "event_key"),
@@ -1241,7 +1253,11 @@ def persist_story_cluster(
         "first_seen": first_seen,
         "last_seen": last_seen,
         "article_count": len(article_ids),
-        "source_count": len({item for candidate in candidates for item in candidate.sources}),
+        "source_count": len({
+            item
+            for candidate in candidates
+            for item in (candidate.source_ids or candidate.sources)
+        }),
         "country_count": len({item.country_code for item in candidates}),
         "highest_action_level": highest_action,
         "confidence": confidence,
@@ -1436,7 +1452,7 @@ def persist_story_cluster(
             updated_at = :now
         FROM (
             SELECT sa.story_id, COUNT(DISTINCT ar.id) AS article_count,
-                   COUNT(DISTINCT ar.source_id) AS source_count,
+                   COUNT(DISTINCT s.id) AS source_count,
                    COUNT(DISTINCT s.country_code) AS country_count,
                    MAX(LEAST(6, GREATEST(1, COALESCE(an.action_level, 1))))
                        AS highest_action_level,
@@ -1444,7 +1460,7 @@ def persist_story_cluster(
                    MAX(ar.published_at) AS last_seen
             FROM story_articles sa
             JOIN articles ar ON ar.id = sa.article_id
-            JOIN sources s ON s.id = ar.source_id
+            JOIN article_country_facts s ON s.article_id = ar.id
             LEFT JOIN analysis an ON an.article_id = ar.id
             WHERE sa.story_id = :story_id
             GROUP BY sa.story_id
@@ -1459,11 +1475,11 @@ def persist_story_cluster(
             media_tone, first_seen, last_seen
         )
         SELECT :story_id, s.country_code, COUNT(DISTINCT ar.id),
-               COUNT(DISTINCT ar.source_id), AVG(an.sentiment),
+               COUNT(DISTINCT s.id), AVG(an.sentiment),
                MIN(ar.published_at), MAX(ar.published_at)
         FROM story_articles sa
         JOIN articles ar ON ar.id = sa.article_id
-        JOIN sources s ON s.id = ar.source_id
+        JOIN article_country_facts s ON s.article_id = ar.id
         LEFT JOIN analysis an ON an.article_id = ar.id
         WHERE sa.story_id = :story_id
         GROUP BY s.country_code

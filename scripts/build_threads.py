@@ -216,12 +216,13 @@ def fetch_articles(session, days: int = 30) -> list[dict]:
             ar.title,
             ar.url,
             ar.published_at,
+            s.id AS publisher_source_id,
             s.country_code,
             s.name AS source_name,
             s.tier
         FROM analysis an
         JOIN articles ar ON an.article_id = ar.id
-        JOIN sources s ON ar.source_id = s.id
+        JOIN article_country_facts s ON s.article_id = ar.id
         WHERE an.is_relevant = true
           AND ar.published_at > NOW() - INTERVAL :days
           AND (
@@ -250,6 +251,7 @@ def fetch_articles(session, days: int = 30) -> list[dict]:
             "title": r.title,
             "url": r.url,
             "published_at": r.published_at,
+            "publisher_source_id": r.publisher_source_id,
             "country_code": r.country_code.strip(),
             "source_name": r.source_name,
             "tier": r.tier or "mainstream",
@@ -770,7 +772,10 @@ def calculate_importance_v2(articles: list[dict]) -> dict:
     dates = sorted([a["published_at"] for a in articles if a["published_at"]])
     sentiments = [a["sentiment"] for a in articles if a["sentiment"] is not None]
     tiers = {a["tier"] for a in articles}
-    sources = {a["source_name"] for a in articles}
+    sources = {
+        a.get("publisher_source_id") or a["source_name"]
+        for a in articles
+    }
     max_action = max((a["action_level"] or 1) for a in articles)
 
     # Velocity: articles per day (higher = faster growing)
@@ -880,7 +885,10 @@ def generate_structured_narrative(
     )
 
     tiers = list({a["tier"] for a in articles})
-    sources = list({a["source_name"] for a in articles})
+    sources = list({
+        a.get("publisher_source_id") or a["source_name"]
+        for a in articles
+    })
 
     prompt = f"""Ты геополитический аналитик. Проанализируй сюжет и верни структурированный JSON.
 

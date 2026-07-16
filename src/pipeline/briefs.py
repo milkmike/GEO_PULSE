@@ -141,11 +141,12 @@ def gather_world_inputs(session) -> dict:
 
     headlines = session.execute(
         text("""
-            SELECT s.country_code, ar.title, ar.url, s.name AS source_name,
+            SELECT s.id AS publisher_source_id, s.country_code,
+                   ar.title, ar.url, s.name AS source_name,
                    a.sentiment, a.action_level
             FROM analysis a
             JOIN articles ar ON a.article_id = ar.id
-            JOIN sources s ON ar.source_id = s.id
+            JOIN article_country_facts s ON s.article_id = ar.id
             WHERE ar.published_at > NOW() - INTERVAL '24 hours'
               AND a.is_relevant = TRUE AND a.action_level >= 3
             ORDER BY a.action_level DESC, ar.reprint_count DESC
@@ -174,6 +175,7 @@ def gather_world_inputs(session) -> dict:
     tier1_headlines = []
     for r in headlines:
         entry = {"country": country_name_ru(r.country_code), "title": r.title,
+                 "publisher_source_id": int(r.publisher_source_id),
                  "sentiment": float(r.sentiment or 0),
                  "action_level": int(r.action_level or 1)}
         if r.url:
@@ -231,11 +233,12 @@ def gather_country_inputs(session, code: str) -> dict:
 
     headlines = session.execute(
         text("""
-            SELECT ar.title, ar.url, s.name AS source_name,
+            SELECT s.id AS publisher_source_id, ar.title, ar.url,
+                   s.name AS source_name,
                    a.sentiment, a.action_level, ar.published_at::date AS day
             FROM analysis a
             JOIN articles ar ON a.article_id = ar.id
-            JOIN sources s ON ar.source_id = s.id
+            JOIN article_country_facts s ON s.article_id = ar.id
             WHERE s.country_code = :cc AND a.is_relevant = TRUE
               AND ar.published_at > NOW() - INTERVAL '7 days'
             ORDER BY a.action_level DESC, ar.published_at DESC
@@ -262,7 +265,9 @@ def gather_country_inputs(session, code: str) -> dict:
 
     own_media_headlines = []
     for r in headlines:
-        entry = {"title": r.title, "sentiment": float(r.sentiment or 0),
+        entry = {"title": r.title,
+                 "publisher_source_id": int(r.publisher_source_id),
+                 "sentiment": float(r.sentiment or 0),
                  "action_level": int(r.action_level or 1), "day": str(r.day)}
         if r.url:
             entry["n"] = _cite(r.title, r.url, r.source_name, code)
@@ -427,11 +432,12 @@ def gather_topic_inputs(session, topic: str) -> dict:
     """Headlines and country stats for a topic-lens brief."""
     headlines = session.execute(
         text("""
-            SELECT s.country_code, ar.title, ar.url, s.name AS source_name,
+            SELECT s.id AS publisher_source_id, s.country_code,
+                   ar.title, ar.url, s.name AS source_name,
                    a.sentiment, a.action_level
             FROM analysis a
             JOIN articles ar ON a.article_id = ar.id
-            JOIN sources s ON ar.source_id = s.id
+            JOIN article_country_facts s ON s.article_id = ar.id
             WHERE a.is_relevant = TRUE AND ar.is_duplicate = FALSE
               AND :topic = ANY(a.topics)
               AND ar.published_at > NOW() - INTERVAL '7 days'
@@ -448,7 +454,7 @@ def gather_topic_inputs(session, topic: str) -> dict:
             SELECT s.country_code, COUNT(*) AS articles, AVG(a.sentiment) AS avg_sentiment
             FROM analysis a
             JOIN articles ar ON a.article_id = ar.id
-            JOIN sources s ON ar.source_id = s.id
+            JOIN article_country_facts s ON s.article_id = ar.id
             WHERE a.is_relevant = TRUE AND ar.is_duplicate = FALSE
               AND :topic = ANY(a.topics)
               AND ar.published_at > NOW() - INTERVAL '14 days'
@@ -470,6 +476,7 @@ def gather_topic_inputs(session, topic: str) -> dict:
     numbered_headlines = []
     for r in headlines:
         entry = {"country": country_name_ru(r.country_code), "title": r.title,
+                 "publisher_source_id": int(r.publisher_source_id),
                  "sentiment": float(r.sentiment or 0),
                  "action_level": int(r.action_level or 1)}
         if r.url:

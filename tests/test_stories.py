@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from src.api.routes import stories as stories_routes
+from src.pipeline.briefs import gather_country_inputs
 from src.stories import (
     StoryCandidate,
     StoryArticle,
@@ -17,6 +18,7 @@ from src.stories import (
     cluster_story_candidates,
     compute_source_hash,
     deterministic_story_copy,
+    fetch_story_candidates,
     merge_rejection_reasons,
     persist_story_cluster,
     resolve_story_copy,
@@ -371,6 +373,162 @@ class FakeResult:
 
     def fetchone(self):
         return self._row
+
+
+class PublisherAttributionFixtureSession:
+    """Model the ES discovery triplet on either side of the canonical view."""
+
+    articles = (
+        {
+            "article_id": 501,
+            "publisher_source_id": 11,
+            "publisher_name": "EL PAÍS",
+            "publisher_country": "ES",
+            "title": "El País informa sobre Rusia",
+        },
+        {
+            "article_id": 502,
+            "publisher_source_id": 12,
+            "publisher_name": "Reuters",
+            "publisher_country": "GB",
+            "title": "Reuters informa sobre Rusia",
+        },
+        {
+            "article_id": 503,
+            "publisher_source_id": None,
+            "publisher_name": None,
+            "publisher_country": None,
+            "title": "Unknown informa sobre Rusia",
+        },
+    )
+
+    def __init__(self):
+        self.statements = []
+
+    def _attributed(self, sql, *, country=None):
+        canonical = "JOIN article_country_facts s ON s.article_id = ar.id" in sql
+        rows = []
+        for item in self.articles:
+            if canonical and item["publisher_source_id"] is None:
+                continue
+            item_country = item["publisher_country"] if canonical else "ES"
+            if country and item_country != country:
+                continue
+            rows.append((
+                item,
+                item_country,
+                item["publisher_name"] if canonical else "Google News (ES) — Россия",
+                item["publisher_source_id"] if canonical else 900,
+            ))
+        return rows
+
+    def execute(self, statement, params=None):
+        sql = str(statement)
+        params = params or {}
+        self.statements.append(sql)
+        if "FROM ru_index" in sql:
+            return FakeResult(row=None)
+        if "FROM signals" in sql or "FROM gdelt_daily" in sql:
+            return FakeResult(rows=[])
+        if "ar.published_at::date AS day" in sql:
+            return FakeResult(rows=[
+                SimpleNamespace(
+                    title=item["title"],
+                    url=f"https://example.test/{item['article_id']}",
+                    source_name=source_name,
+                    publisher_source_id=publisher_source_id,
+                    sentiment=0.2,
+                    action_level=3,
+                    day=NOW.date(),
+                )
+                for item, _, source_name, publisher_source_id
+                in self._attributed(sql, country=params["cc"])
+            ])
+        if "an.embedding IS NOT NULL AS has_embedding" in sql:
+            return FakeResult(rows=[
+                SimpleNamespace(
+                    analysis_id=item["article_id"] + 1000,
+                    article_id=item["article_id"],
+                    event_key="отношения с россией",
+                    sentiment=0.2,
+                    action_level=3,
+                    event_type="diplomatic",
+                    has_embedding=True,
+                    title=item["title"],
+                    url=f"https://example.test/{item['article_id']}",
+                    published_at=NOW,
+                    country_code=country,
+                    source_name=source_name,
+                    publisher_source_id=publisher_source_id,
+                    tier="mainstream",
+                )
+                for item, country, source_name, publisher_source_id
+                in self._attributed(sql)
+            ])
+        if "FROM threads t" in sql:
+            return FakeResult(rows=[
+                SimpleNamespace(
+                    thread_id=item["article_id"] + 2000,
+                    country_code=country,
+                    thread_key="отношения с россией",
+                    thread_title=item["title"],
+                    first_seen=NOW,
+                    last_seen=NOW,
+                    article_id=item["article_id"],
+                    article_title=item["title"],
+                    url=f"https://example.test/{item['article_id']}",
+                    published_at=NOW,
+                    source_name=source_name,
+                    publisher_source_id=publisher_source_id,
+                    sentiment=0.2,
+                    action_level=3,
+                    article_event_key="отношения с россией",
+                    topics=["diplomacy"],
+                )
+                for item, country, source_name, publisher_source_id
+                in self._attributed(sql)
+            ])
+        if "FROM article_entity_mentions" in sql:
+            return FakeResult(rows=[])
+        raise AssertionError(f"Unexpected fixture query: {sql}")
+
+
+def test_verified_publishers_drive_briefs_threads_and_story_candidates():
+    import scripts.build_threads as build_threads
+
+    brief_session = PublisherAttributionFixtureSession()
+    brief = gather_country_inputs(brief_session, "ES")
+
+    assert [item["title"] for item in brief["own_media_headlines"]] == [
+        "El País informa sobre Rusia",
+    ]
+    assert brief["own_media_headlines"][0]["publisher_source_id"] == 11
+    assert [(item["source"], item["country"]) for item in brief["citations"]] == [
+        ("EL PAÍS", "ES"),
+    ]
+
+    thread_articles = build_threads.fetch_articles(PublisherAttributionFixtureSession())
+    assert [
+        (item["publisher_source_id"], item["source_name"], item["country_code"])
+        for item in thread_articles
+    ] == [
+        (11, "EL PAÍS", "ES"),
+        (12, "Reuters", "GB"),
+    ]
+
+    candidates = fetch_story_candidates(PublisherAttributionFixtureSession())
+    assert [
+        (item.country_code, item.sources, item.source_ids)
+        for item in candidates
+    ] == [
+        ("ES", frozenset({"EL PAÍS"}), frozenset({11})),
+        ("GB", frozenset({"Reuters"}), frozenset({12})),
+    ]
+    assert all(
+        "Google News (" not in article.source_name
+        for candidate_item in candidates
+        for article in candidate_item.articles
+    )
 
 
 class PersistenceSession:
@@ -1092,6 +1250,8 @@ def test_story_list_filters_cursor_and_primary_url(monkeypatch):
     assert "primary_membership.membership_generation <= :membership_generation" in list_sql
     assert "rf.article_count AS article_count" in list_sql
     assert "rf.country_codes" in list_sql
+    assert "JOIN article_country_facts src ON src.article_id = ar.id" in list_sql
+    assert "COUNT(DISTINCT src.id)::integer AS source_count" in list_sql
 
 
 def test_story_detail_includes_evidence_and_country_primary_urls(monkeypatch):
@@ -1119,12 +1279,19 @@ def test_story_detail_includes_evidence_and_country_primary_urls(monkeypatch):
     )
     assert "sa.membership_generation <= :membership_generation" in article_sql
     assert article_params["membership_generation"] == 12
+    assert "JOIN article_country_facts s ON s.article_id = ar.id" in article_sql
+    assert "JOIN sources" not in article_sql
     country_sql, country_params = next(
         call for call in session.calls
         if "country_stats" in call[0] and "primary_url_candidates" in call[0]
     )
     assert "sa.membership_generation <= :membership_generation" in country_sql
     assert country_params["membership_generation"] == 12
+    assert country_sql.count(
+        "JOIN article_country_facts s ON s.article_id = ar.id"
+    ) == 2
+    assert "COUNT(DISTINCT s.id)::integer AS source_count" in country_sql
+    assert "JOIN sources" not in country_sql
 
 
 def test_story_cards_and_detail_expose_bounded_proven_signal_context(monkeypatch):
@@ -1871,7 +2038,10 @@ def test_persistence_recomputes_header_counts_from_saved_memberships():
 
     aggregate_sql = "\n".join(session.statements)
     assert "UPDATE stories st SET" in aggregate_sql
-    assert "COUNT(DISTINCT ar.source_id)" in aggregate_sql
+    assert "COUNT(DISTINCT s.id) AS source_count" in aggregate_sql
+    assert aggregate_sql.count(
+        "JOIN article_country_facts s ON s.article_id = ar.id"
+    ) >= 2
     assert "COUNT(DISTINCT s.country_code)" in aggregate_sql
     assert "MAX(LEAST(6, GREATEST(1, COALESCE(an.action_level, 1))))" in aggregate_sql
 

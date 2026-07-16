@@ -62,7 +62,7 @@ WITH story_rank_raw AS (
            MIN(ar.published_at) AS first_seen,
            MAX(ar.published_at) AS last_seen,
            COUNT(DISTINCT sa.article_id)::integer AS article_count,
-           COUNT(DISTINCT ar.source_id)::integer AS source_count,
+           COUNT(DISTINCT src.id)::integer AS source_count,
            COUNT(DISTINCT TRIM(src.country_code))::integer AS country_count,
            COALESCE(MAX(
                CASE
@@ -79,7 +79,7 @@ WITH story_rank_raw AS (
       ON sa.story_id = st_snapshot.id
      AND sa.membership_generation <= :membership_generation
     JOIN articles ar ON ar.id = sa.article_id
-    JOIN sources src ON src.id = ar.source_id
+    JOIN article_country_facts src ON src.article_id = ar.id
     GROUP BY st_snapshot.id
 ), story_rank_features AS (
     SELECT raw.*,
@@ -604,7 +604,7 @@ def _load_rri_shifts(
             SELECT DISTINCT sa.story_id, TRIM(source.country_code) AS country_code
             FROM story_articles sa
             JOIN articles ar ON ar.id = sa.article_id
-            JOIN sources source ON source.id = ar.source_id
+            JOIN article_country_facts source ON source.article_id = ar.id
             WHERE sa.story_id = ANY(CAST(:story_ids AS bigint[]))
               AND sa.membership_generation <= :membership_generation
         ), participating_rri AS (
@@ -679,11 +679,11 @@ def _load_country_contexts(
         SELECT sa.story_id,
                TRIM(source.country_code) AS country_code,
                COUNT(DISTINCT ar.id)::integer AS article_count,
-               COUNT(DISTINCT ar.source_id)::integer AS source_count,
+               COUNT(DISTINCT source.id)::integer AS source_count,
                AVG(an.sentiment) AS media_tone
         FROM story_articles sa
         JOIN articles ar ON ar.id = sa.article_id
-        JOIN sources source ON source.id = ar.source_id
+        JOIN article_country_facts source ON source.article_id = ar.id
         LEFT JOIN analysis an ON an.article_id = ar.id
         WHERE sa.story_id = ANY(CAST(:story_ids AS bigint[]))
           AND sa.membership_generation <= :membership_generation
@@ -723,7 +723,7 @@ def _load_story_coverage(
         SELECT (
             SELECT ar.published_at
             FROM articles ar
-            JOIN sources source_from ON source_from.id = ar.source_id
+            JOIN article_country_facts source_from ON source_from.article_id = ar.id
             WHERE EXISTS (
                 SELECT 1
                 FROM analysis analyzed_from
@@ -740,7 +740,7 @@ def _load_story_coverage(
         (
             SELECT ar.published_at
             FROM articles ar
-            JOIN sources source_to ON source_to.id = ar.source_id
+            JOIN article_country_facts source_to ON source_to.article_id = ar.id
             WHERE EXISTS (
                 SELECT 1
                 FROM analysis analyzed_to
@@ -1424,7 +1424,7 @@ def get_story(
                         SELECT ar.url, ar.published_at, ar.id
                         FROM story_articles candidate_membership
                         JOIN articles ar ON ar.id = candidate_membership.article_id
-                        JOIN sources s ON s.id = ar.source_id
+                        JOIN article_country_facts s ON s.article_id = ar.id
                         WHERE candidate_membership.story_id = country_stats.story_id
                           AND candidate_membership.membership_generation
                               <= :membership_generation
@@ -1437,13 +1437,13 @@ def get_story(
             FROM (
                 SELECT sa.story_id, TRIM(s.country_code) AS country_code,
                        COUNT(DISTINCT ar.id)::integer AS article_count,
-                       COUNT(DISTINCT ar.source_id)::integer AS source_count,
+                       COUNT(DISTINCT s.id)::integer AS source_count,
                        AVG(an.sentiment) AS media_tone,
                        MIN(ar.published_at) AS first_seen,
                        MAX(ar.published_at) AS last_seen
                 FROM story_articles sa
                 JOIN articles ar ON ar.id = sa.article_id
-                JOIN sources s ON s.id = ar.source_id
+                JOIN article_country_facts s ON s.article_id = ar.id
                 LEFT JOIN analysis an ON an.article_id = ar.id
                 WHERE sa.story_id = :story_id
                   AND sa.membership_generation <= :membership_generation
@@ -1552,7 +1552,7 @@ def get_story(
                        ) = 1 AS is_primary
                 FROM story_articles sa
                 JOIN articles ar ON ar.id = sa.article_id
-                JOIN sources s ON s.id = ar.source_id
+                JOIN article_country_facts s ON s.article_id = ar.id
                 WHERE sa.story_id = :story_id
                   AND sa.membership_generation <= :membership_generation
             )
