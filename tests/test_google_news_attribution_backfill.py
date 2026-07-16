@@ -17,6 +17,68 @@ from scripts import backfill_google_news_attribution as backfill
 NOW = datetime(2026, 7, 16, 8, tzinfo=timezone.utc)
 
 
+LEGACY_DEDUP_CANDIDATES_SQL = """
+    /* test-only: legacy gnews-backfill:dedup-candidates */
+    WITH affected AS (
+        SELECT article.id, publisher.id AS publisher_id,
+               publisher.country_code AS country_code,
+               article.external_id, article.title_normalized,
+               article.published_at
+        FROM articles article
+        JOIN sources discovery ON discovery.id = article.source_id
+        JOIN sources publisher ON publisher.id = CASE
+            WHEN COALESCE(
+                discovery.config->>'feed_mode', 'publisher'
+            ) = 'publisher_discovery'
+                THEN article.publisher_source_id
+            ELSE COALESCE(article.publisher_source_id, article.source_id)
+        END
+        WHERE article.id = ANY(CAST(:affected_ids AS INTEGER[]))
+          AND article.geo_status IN (
+              'source_verified', 'publisher_verified', 'publisher_reassigned'
+          )
+    )
+    SELECT DISTINCT candidate.id,
+           candidate_publisher.id AS publisher_id,
+           candidate_publisher.country_code AS country_code,
+           candidate.external_id, candidate.title_normalized,
+           candidate.published_at, candidate.is_duplicate,
+           candidate.duplicate_of, candidate.reprint_count
+    FROM articles candidate
+    JOIN sources candidate_discovery
+      ON candidate_discovery.id = candidate.source_id
+    JOIN sources candidate_publisher ON candidate_publisher.id = CASE
+        WHEN COALESCE(
+            candidate_discovery.config->>'feed_mode', 'publisher'
+        ) = 'publisher_discovery'
+            THEN candidate.publisher_source_id
+        ELSE COALESCE(candidate.publisher_source_id, candidate.source_id)
+    END
+    JOIN affected ON (
+        candidate.id = affected.id
+        OR (
+            candidate.external_id IS NOT NULL
+            AND candidate.external_id <> ''
+            AND candidate.external_id = affected.external_id
+            AND candidate_publisher.id = affected.publisher_id
+        )
+        OR (
+            candidate.title_normalized IS NOT NULL
+            AND candidate.title_normalized <> ''
+            AND candidate.title_normalized = affected.title_normalized
+            AND candidate_publisher.country_code = affected.country_code
+            AND candidate.published_at BETWEEN
+                affected.published_at - INTERVAL '48 hours'
+                AND affected.published_at + INTERVAL '48 hours'
+        )
+    )
+    WHERE candidate.geo_status IN (
+        'source_verified', 'publisher_verified', 'publisher_reassigned'
+    )
+    ORDER BY candidate.id
+"""
+
+
 class MemoryResult:
     def __init__(self, rows=(), *, rowcount=0):
         self.rows = list(rows)
@@ -907,8 +969,19 @@ def test_batch_sql_is_keyset_bounded_and_mutations_preserve_provenance():
     dedup_compact = " ".join(backfill.DEDUP_CANDIDATES_SQL.split())
     assert "candidate_publisher.country_code = affected.country_code" in dedup_compact
     assert "candidate_ids AS" in dedup_compact
-    assert dedup_compact.count(" UNION ") >= 4
+    assert dedup_compact.count(" UNION ") == 4
+    assert " OR " not in dedup_compact
     assert "JOIN affected ON (" not in dedup_compact
+    assert dedup_compact.count(
+        "candidate.external_id = affected.external_id"
+    ) == 2
+    assert dedup_compact.count(
+        "candidate.title_normalized = affected.title_normalized"
+    ) == 2
+    assert dedup_compact.count("candidate.published_at BETWEEN") == 2
+    assert dedup_compact.count(
+        ") <> 'publisher_discovery'"
+    ) == 2
     assert (
         "candidate.publisher_source_id = affected.publisher_id "
         "AND candidate.external_id = affected.external_id"
@@ -919,6 +992,9 @@ def test_batch_sql_is_keyset_bounded_and_mutations_preserve_provenance():
     ) in dedup_compact
     assert (
         "candidate.title_normalized = affected.title_normalized"
+    ) in dedup_compact
+    assert (
+        "JOIN articles candidate ON candidate.id = candidate_ids.id"
     ) in dedup_compact
     assert "MAX(id)" in backfill.ARTICLE_HIGH_WATER_SQL
     invariant_compact = " ".join(backfill.INVARIANT_COUNTS_SQL.split())
@@ -943,6 +1019,7 @@ def _reset_postgres_backfill_schema(engine):
     with engine.begin() as connection:
         connection.exec_driver_sql("DROP SCHEMA public CASCADE")
         connection.exec_driver_sql("CREATE SCHEMA public")
+        connection.exec_driver_sql("CREATE EXTENSION IF NOT EXISTS pg_trgm")
         connection.exec_driver_sql("""
             CREATE TABLE sources (
                 id INTEGER PRIMARY KEY,
@@ -988,10 +1065,236 @@ def _reset_postgres_backfill_schema(engine):
             "CREATE TABLE story_articles (article_id INTEGER)"
         )
         connection.exec_driver_sql("""
+            CREATE UNIQUE INDEX uq_articles_source_external_test
+            ON articles (source_id, external_id)
+        """)
+        connection.exec_driver_sql("""
             CREATE UNIQUE INDEX uq_articles_publisher_external_id
             ON articles (publisher_source_id, external_id)
             WHERE publisher_source_id IS NOT NULL
         """)
+        connection.exec_driver_sql("""
+            CREATE INDEX idx_articles_title_trgm
+            ON articles USING GIN (title_normalized gin_trgm_ops)
+        """)
+
+
+def test_postgres_split_dedup_candidates_are_exactly_legacy_equivalent():
+    dsn = os.getenv("GEO_PULSE_TEST_DATABASE_URL")
+    if not dsn or os.getenv("GEO_PULSE_TEST_DATABASE_RESET") != "1":
+        pytest.skip("requires an explicitly disposable PostgreSQL database")
+    pytest.importorskip("psycopg2")
+    engine = create_engine(dsn)
+
+    affected_ids = [104, 100, 100, 101, 102, 103, 104, 105, 999_999]
+    try:
+        _reset_postgres_backfill_schema(engine)
+        with engine.begin() as connection:
+            connection.execute(text("""
+                INSERT INTO sources(id,name,url,country_code,config) VALUES
+                  (1,'Google ES','https://news.google.com/es','ES',
+                   '{"feed_mode":"publisher_discovery"}'::jsonb),
+                  (2,'Publisher ES','https://es.example','ES','{}'::jsonb),
+                  (3,'Publisher GB','https://gb.example','GB','{}'::jsonb),
+                  (4,'Other ES','https://other-es.example','ES','{}'::jsonb),
+                  (5,'Google GB','https://news.google.com/gb','GB',
+                   '{"feed_mode":"publisher_discovery"}'::jsonb),
+                  (6,'Override origin','https://origin.example','US','{}'::jsonb)
+            """))
+            connection.execute(text("""
+                INSERT INTO articles(
+                    id,source_id,external_id,published_at,title_normalized,
+                    publisher_source_id,geo_status,is_duplicate,
+                    duplicate_of,reprint_count
+                ) VALUES
+                  (100,1,'shared-ext',:now,'boundary-title',2,
+                   'publisher_reassigned',FALSE,NULL,0),
+                  (101,6,'override-ext',:now,'override-title',2,
+                   'publisher_verified',FALSE,NULL,0),
+                  (102,2,'native-ext',:now,'native-title',NULL,
+                   'source_verified',FALSE,NULL,0),
+                  (103,2,NULL,:now,NULL,NULL,
+                   'source_verified',FALSE,NULL,0),
+                  (104,2,'',:now,'',NULL,
+                   'source_verified',FALSE,NULL,0),
+                  (105,2,'invalid-affected',:now,'boundary-title',NULL,
+                   'legacy_unverified',FALSE,NULL,0),
+
+                  (200,2,'shared-ext',:now,'different-title',NULL,
+                   'source_verified',FALSE,NULL,0),
+                  (201,6,'explicit-title',:now,'boundary-title',2,
+                   'publisher_verified',FALSE,NULL,0),
+                  (202,4,'minus-boundary',:now - INTERVAL '48 hours',
+                   'boundary-title',NULL,'source_verified',FALSE,NULL,0),
+                  (203,4,'plus-boundary',:now + INTERVAL '48 hours',
+                   'boundary-title',NULL,'source_verified',FALSE,NULL,0),
+                  (204,4,'plus-outside',
+                   :now + INTERVAL '48 hours 1 second','boundary-title',NULL,
+                   'source_verified',FALSE,NULL,0),
+                  (205,4,'minus-outside',
+                   :now - INTERVAL '48 hours 1 second','boundary-title',NULL,
+                   'source_verified',FALSE,NULL,0),
+                  (206,3,'different-country',:now,'boundary-title',NULL,
+                   'source_verified',FALSE,NULL,0),
+                  (207,2,'different-everything',:now,'different-title',NULL,
+                   'source_verified',FALSE,NULL,0),
+                  (208,1,'broad-without-publisher',:now,'boundary-title',NULL,
+                   'source_verified',FALSE,NULL,0),
+                  (209,2,'invalid-candidate',:now,'boundary-title',NULL,
+                   'legacy_unverified',FALSE,NULL,0),
+                  (210,6,'native-ext',:now,'external-only',2,
+                   'publisher_verified',FALSE,NULL,0),
+                  (211,2,'override-ext',:now,'external-only',NULL,
+                   'source_verified',FALSE,NULL,0),
+                  (212,5,'override-ext',:now,'external-only',3,
+                   'publisher_verified',FALSE,NULL,0),
+                  (213,2,NULL,:now,NULL,NULL,
+                   'source_verified',FALSE,NULL,0),
+                  (214,4,'',:now,'',NULL,
+                   'source_verified',FALSE,NULL,0)
+            """), {"now": NOW})
+
+        with engine.connect() as connection:
+            legacy = [
+                dict(row)
+                for row in connection.execute(
+                    text(LEGACY_DEDUP_CANDIDATES_SQL),
+                    {"affected_ids": affected_ids},
+                ).mappings()
+            ]
+            split = [
+                dict(row)
+                for row in connection.execute(
+                    text(backfill.DEDUP_CANDIDATES_SQL),
+                    {"affected_ids": affected_ids},
+                ).mappings()
+            ]
+
+        assert split == legacy
+        assert [row["id"] for row in split] == [
+            100, 101, 102, 103, 104, 200, 201, 202, 203, 210, 211,
+        ]
+    finally:
+        engine.dispose()
+
+
+def _postgres_explain_dedup(connection, sql):
+    payload = connection.execute(
+        text("EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " + sql),
+        {"affected_ids": [200_001]},
+    ).scalar_one()
+    return payload[0]
+
+
+def _postgres_plan_nodes(node):
+    yield node
+    for child in node.get("Plans", []):
+        yield from _postgres_plan_nodes(child)
+
+
+def test_postgres_split_dedup_plan_uses_bounded_index_paths():
+    dsn = os.getenv("GEO_PULSE_TEST_DATABASE_URL")
+    if not dsn or os.getenv("GEO_PULSE_TEST_DATABASE_RESET") != "1":
+        pytest.skip("requires an explicitly disposable PostgreSQL database")
+    pytest.importorskip("psycopg2")
+    engine = create_engine(dsn)
+
+    try:
+        _reset_postgres_backfill_schema(engine)
+        with engine.begin() as connection:
+            connection.execute(text("""
+                INSERT INTO sources(id,name,url,country_code,config) VALUES
+                  (1,'Google ES','https://news.google.com/es','ES',
+                   '{"feed_mode":"publisher_discovery"}'::jsonb),
+                  (2,'Publisher ES','https://es.example','ES','{}'::jsonb),
+                  (3,'Publisher GB','https://gb.example','GB','{}'::jsonb)
+            """))
+            connection.execute(text("""
+                INSERT INTO articles(
+                    id,source_id,external_id,published_at,title_normalized,
+                    publisher_source_id,geo_status
+                )
+                SELECT value,
+                       CASE WHEN value % 2 = 0 THEN 2 ELSE 3 END,
+                       'noise-external-' || value,
+                       :now,
+                       'noise-title-' || value,
+                       NULL,
+                       'source_verified'
+                FROM generate_series(1, 100000) AS value
+            """), {"now": NOW})
+            connection.execute(text("""
+                INSERT INTO articles(
+                    id,source_id,external_id,published_at,title_normalized,
+                    publisher_source_id,geo_status
+                ) VALUES
+                  (200001,1,'target-external',:now,'target-title',2,
+                   'publisher_reassigned'),
+                  (200002,2,'target-external',:now,'external-match',NULL,
+                   'source_verified'),
+                  (200003,2,'title-match',:now,'target-title',NULL,
+                   'source_verified')
+            """), {"now": NOW})
+            connection.exec_driver_sql("ANALYZE articles")
+
+        with engine.connect() as connection:
+            # Warm both plans once so the printed execution comparison is not a
+            # cold-cache artifact. Plan-shape and cost assertions remain the gate.
+            connection.execute(
+                text(LEGACY_DEDUP_CANDIDATES_SQL),
+                {"affected_ids": [200_001]},
+            ).all()
+            connection.execute(
+                text(backfill.DEDUP_CANDIDATES_SQL),
+                {"affected_ids": [200_001]},
+            ).all()
+            legacy = _postgres_explain_dedup(
+                connection, LEGACY_DEDUP_CANDIDATES_SQL,
+            )
+            split = _postgres_explain_dedup(
+                connection, backfill.DEDUP_CANDIDATES_SQL,
+            )
+
+        legacy_nodes = list(_postgres_plan_nodes(legacy["Plan"]))
+        split_nodes = list(_postgres_plan_nodes(split["Plan"]))
+        split_indexes = {
+            node["Index Name"]
+            for node in split_nodes
+            if node.get("Index Name")
+        }
+        legacy_candidate_seq_scans = [
+            node for node in legacy_nodes
+            if node.get("Node Type") == "Seq Scan"
+            and node.get("Relation Name") == "articles"
+            and node.get("Alias") == "candidate"
+        ]
+        split_candidate_seq_scans = [
+            node for node in split_nodes
+            if node.get("Node Type") == "Seq Scan"
+            and node.get("Relation Name") == "articles"
+            and node.get("Alias") == "candidate"
+        ]
+        benchmark = {
+            "rows": 100_003,
+            "legacy_execution_ms": round(legacy["Execution Time"], 3),
+            "split_execution_ms": round(split["Execution Time"], 3),
+            "legacy_total_cost": round(legacy["Plan"]["Total Cost"], 2),
+            "split_total_cost": round(split["Plan"]["Total Cost"], 2),
+        }
+        print("dedup-plan-benchmark " + json.dumps(benchmark, sort_keys=True))
+
+        assert legacy_candidate_seq_scans
+        assert split_candidate_seq_scans == []
+        assert {
+            "articles_pkey",
+            "uq_articles_source_external_test",
+            "uq_articles_publisher_external_id",
+            "idx_articles_title_trgm",
+        }.issubset(split_indexes)
+        assert split["Plan"]["Actual Rows"] == legacy["Plan"]["Actual Rows"]
+        assert split["Plan"]["Total Cost"] < legacy["Plan"]["Total Cost"]
+    finally:
+        engine.dispose()
 
 
 @pytest.mark.parametrize("external_id", ["shared", ""])
