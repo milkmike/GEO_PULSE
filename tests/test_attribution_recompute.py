@@ -1076,6 +1076,8 @@ def test_recent_thread_rebuild_never_runs_global_cleanup_or_membership_replaceme
 
     assert observed["days"] == 30
     assert observed["upsert"]["replace_memberships"] is False
+    assert observed["upsert"]["generate_narrative"] is False
+    assert observed["upsert"]["preserve_existing_copy"] is True
     assert observed["upsert"]["minimum_existing_last_seen"] == NOW - timedelta(days=30)
     assert observed["story_thread_ids"] == {42}
     assert observed["story_scope_start"] == NOW - timedelta(days=30)
@@ -1137,6 +1139,152 @@ def test_scoped_thread_upsert_guards_old_conflicts_and_contains_no_delete(monkey
     assert "WHERE threads.last_seen >= :minimum_existing_last_seen" in sql
     assert params["minimum_existing_last_seen"] == NOW - timedelta(days=30)
     assert "DELETE FROM" not in sql
+
+
+def test_scoped_thread_upsert_skips_llm_narrative(monkeypatch):
+    build_threads = _load_task7_module("scripts.build_threads")
+    calls = []
+
+    class InsertSession:
+        def execute(self, statement, params=None):
+            sql = str(statement)
+            calls.append((sql, params))
+            if "INSERT INTO threads" in sql:
+                return FakeResult(row=(42,))
+            if "INSERT INTO thread_articles" in sql:
+                return FakeResult()
+            raise AssertionError(sql)
+
+    articles = [
+        {
+            "article_id": article_id,
+            "sentiment": 0.0,
+            "action_level": action_level,
+            "published_at": NOW - timedelta(hours=hours_ago),
+            "title": title,
+            "tier": "mainstream",
+            "source_name": "Source",
+            "event_type": "diplomatic",
+        }
+        for article_id, action_level, hours_ago, title in (
+            (11, 2, 2, "Secondary article"),
+            (12, 4, 1, "Deterministic best article"),
+        )
+    ]
+    monkeypatch.setattr(
+        build_threads,
+        "calculate_importance_v2",
+        lambda items: {
+            "importance": 8.0,
+            "velocity": 2.0,
+            "sentiment_shift": 0.1,
+        },
+    )
+    monkeypatch.setattr(
+        build_threads,
+        "determine_arc_phase",
+        lambda items: ("emerging", "developing"),
+    )
+    monkeypatch.setattr(
+        build_threads,
+        "generate_structured_narrative",
+        lambda *args, **kwargs: pytest.fail("scoped upsert must not call narrative LLM"),
+    )
+
+    thread_id = build_threads.upsert_thread(
+        InsertSession(),
+        "ES",
+        "recent-event",
+        articles,
+        ["recent-event"],
+        replace_memberships=False,
+        generate_narrative=False,
+        preserve_existing_copy=True,
+        minimum_existing_last_seen=NOW - timedelta(days=30),
+    )
+
+    assert thread_id == 42
+    insert_sql, insert_params = calls[0]
+    assert "title = threads.title" in insert_sql
+    assert "narrative = threads.narrative" in insert_sql
+    assert "summary_json = threads.summary_json" in insert_sql
+    assert insert_params["title"] == "Deterministic best article"
+    assert insert_params["narrative"] is None
+    assert insert_params["summary_json"] is None
+
+
+def test_full_thread_upsert_still_generates_and_updates_narrative(monkeypatch):
+    build_threads = _load_task7_module("scripts.build_threads")
+    calls = []
+    narrative_calls = []
+
+    class InsertSession:
+        def execute(self, statement, params=None):
+            sql = str(statement)
+            calls.append((sql, params))
+            if "INSERT INTO threads" in sql:
+                return FakeResult(row=(42,))
+            if "DELETE FROM thread_articles" in sql:
+                return FakeResult()
+            if "INSERT INTO thread_articles" in sql:
+                return FakeResult()
+            raise AssertionError(sql)
+
+    articles = [
+        {
+            "article_id": article_id,
+            "sentiment": 0.0,
+            "action_level": 3,
+            "published_at": NOW - timedelta(hours=article_id),
+            "title": f"Article {article_id}",
+            "tier": "mainstream",
+            "source_name": "Source",
+            "event_type": "diplomatic",
+        }
+        for article_id in (11, 12)
+    ]
+    monkeypatch.setattr(
+        build_threads,
+        "calculate_importance_v2",
+        lambda items: {
+            "importance": 8.0,
+            "velocity": 2.0,
+            "sentiment_shift": 0.1,
+        },
+    )
+    monkeypatch.setattr(
+        build_threads,
+        "determine_arc_phase",
+        lambda items: ("emerging", "developing"),
+    )
+
+    def fake_generate(cc, canonical_key, items, metrics):
+        narrative_calls.append((cc, canonical_key, items, metrics))
+        return {
+            "title": "Generated title",
+            "summary": "Generated summary.",
+            "dynamics": "Generated dynamics.",
+        }
+
+    monkeypatch.setattr(build_threads, "generate_structured_narrative", fake_generate)
+
+    thread_id = build_threads.upsert_thread(
+        InsertSession(),
+        "ES",
+        "recent-event",
+        articles,
+        ["recent-event"],
+    )
+
+    assert thread_id == 42
+    assert len(narrative_calls) == 1
+    insert_sql, insert_params = calls[0]
+    assert "title = EXCLUDED.title" in insert_sql
+    assert "narrative = COALESCE(EXCLUDED.narrative, threads.narrative)" in insert_sql
+    assert "summary_json = COALESCE(EXCLUDED.summary_json, threads.summary_json)" in insert_sql
+    assert insert_params["title"] == "Generated title"
+    assert insert_params["narrative"] == "Generated summary. Generated dynamics."
+    assert json.loads(insert_params["summary_json"])["title"] == "Generated title"
 
 
 def test_scoped_story_runner_forwards_cutoff_and_non_destructive_mode(monkeypatch):

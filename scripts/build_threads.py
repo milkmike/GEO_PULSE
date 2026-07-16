@@ -964,6 +964,8 @@ def upsert_thread(
     all_keys: list[str],
     *,
     replace_memberships: bool = True,
+    generate_narrative: bool = True,
+    preserve_existing_copy: bool = False,
     minimum_existing_last_seen: datetime | None = None,
 ) -> int | None:
     """Upsert a single thread. Returns thread_id or None."""
@@ -988,7 +990,7 @@ def upsert_thread(
     title = canonical_key[:200]
     narrative = None
 
-    if metrics["importance"] >= NARRATIVE_MIN_IMPORTANCE:
+    if generate_narrative and metrics["importance"] >= NARRATIVE_MIN_IMPORTANCE:
         structured = generate_structured_narrative(cc, canonical_key, articles, metrics)
         if structured:
             summary_json = structured
@@ -999,8 +1001,32 @@ def upsert_thread(
     
     if not narrative:
         # Fallback: use best article title
-        best = max(articles, key=lambda a: (a.get("action_level") or 1))
+        if generate_narrative:
+            best = max(articles, key=lambda a: (a.get("action_level") or 1))
+        else:
+            best = max(
+                articles,
+                key=lambda article: (
+                    article.get("action_level") or 1,
+                    str(article.get("published_at") or ""),
+                    str(article.get("article_id") or ""),
+                    str(article.get("title") or ""),
+                ),
+            )
         title = best.get("title", canonical_key)[:500]
+
+    if preserve_existing_copy:
+        copy_updates = """
+            title = threads.title,
+            narrative = threads.narrative,"""
+        summary_update = "summary_json = threads.summary_json,"
+    else:
+        copy_updates = """
+            title = EXCLUDED.title,
+            narrative = COALESCE(EXCLUDED.narrative, threads.narrative),"""
+        summary_update = (
+            "summary_json = COALESCE(EXCLUDED.summary_json, threads.summary_json),"
+        )
 
     conflict_guard = ""
     if minimum_existing_last_seen is not None:
@@ -1021,8 +1047,7 @@ def upsert_thread(
         )
         ON CONFLICT (country_code, thread_key)
         DO UPDATE SET
-            title = EXCLUDED.title,
-            narrative = COALESCE(EXCLUDED.narrative, threads.narrative),
+            {copy_updates}
             status = EXCLUDED.status,
             arc_phase = EXCLUDED.arc_phase,
             first_seen = LEAST(threads.first_seen, EXCLUDED.first_seen),
@@ -1034,7 +1059,7 @@ def upsert_thread(
             velocity = EXCLUDED.velocity,
             sentiment_shift = EXCLUDED.sentiment_shift,
             merged_keys = EXCLUDED.merged_keys,
-            summary_json = COALESCE(EXCLUDED.summary_json, threads.summary_json),
+            {summary_update}
             generated_at = NOW()
         {conflict_guard}
         RETURNING id
@@ -1459,6 +1484,8 @@ def rebuild_recent_threads_and_stories(
                 cluster_articles,
                 all_keys,
                 replace_memberships=False,
+                generate_narrative=False,
+                preserve_existing_copy=True,
                 minimum_existing_last_seen=scope_start,
             )
             if thread_id is not None:
