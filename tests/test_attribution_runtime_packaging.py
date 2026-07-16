@@ -11,5 +11,6 @@ def test_temperature_image_contains_attribution_maintenance_commands():
         "backfill_google_news_attribution.py",
         "recompute_attribution_window.py",
         "audit_google_news_attribution.py",
+        "generate_briefs.py",
     ):
         assert script in dockerfile
