@@ -30,7 +30,7 @@ from src.db import get_session, wait_for_db
 
 logger = logging.getLogger("backfill-google-news-attribution")
 
-CHECKPOINT_VERSION = 1
+CHECKPOINT_VERSION = 2
 DEFAULT_CHECKPOINT = Path("backups/google-news-attribution-checkpoint.json")
 DEFAULT_SINCE_DAYS = 104
 DEFAULT_BATCH_SIZE = 500
@@ -64,6 +64,12 @@ ARTICLE_BATCH_SQL = """
     JOIN sources source ON source.id = article.source_id
     WHERE source.config->>'feed_mode' = 'publisher_discovery'
       AND article.published_at >= NOW() - make_interval(days => :since_days)
+      AND article.publisher_source_id IS NULL
+      AND article.geo_method IS NULL
+      AND article.geo_verified_at IS NULL
+      AND article.geo_status IN (
+          'source_verified', 'unverified', 'legacy_unverified'
+      )
       AND article.id > :last_id
     ORDER BY article.id
     LIMIT :batch_size
@@ -81,6 +87,12 @@ CLASSIFIED_UPDATE_SQL = """
         geo_confidence = 1.000,
         geo_verified_at = NOW()
     WHERE id = :article_id
+      AND publisher_source_id IS NULL
+      AND geo_method IS NULL
+      AND geo_verified_at IS NULL
+      AND geo_status IN (
+          'source_verified', 'unverified', 'legacy_unverified'
+      )
       AND (
         publisher_source_id IS DISTINCT FROM :publisher_source_id
         OR publisher_name IS DISTINCT FROM :publisher_name
@@ -98,6 +110,12 @@ UNCLASSIFIED_UPDATE_SQL = """
     UPDATE articles
     SET geo_status = 'legacy_unverified'
     WHERE id = :article_id
+      AND publisher_source_id IS NULL
+      AND geo_method IS NULL
+      AND geo_verified_at IS NULL
+      AND geo_status IN (
+          'source_verified', 'unverified', 'legacy_unverified'
+      )
       AND geo_status IS DISTINCT FROM 'legacy_unverified'
 """
 
@@ -118,35 +136,53 @@ PROVENANCE_SQL = """
 DEDUP_CANDIDATES_SQL = """
     /* gnews-backfill:dedup-candidates */
     WITH affected AS (
-        SELECT id,
-               COALESCE(publisher_source_id, source_id) AS publisher_id,
-               external_id, title_normalized, published_at
-        FROM articles
-        WHERE id = ANY(CAST(:affected_ids AS INTEGER[]))
-          AND geo_status IN (
+        SELECT article.id, publisher.id AS publisher_id,
+               publisher.country_code AS country_code,
+               article.external_id, article.title_normalized,
+               article.published_at
+        FROM articles article
+        JOIN sources discovery ON discovery.id = article.source_id
+        JOIN sources publisher ON publisher.id = CASE
+            WHEN COALESCE(
+                discovery.config->>'feed_mode', 'publisher'
+            ) = 'publisher_discovery'
+                THEN article.publisher_source_id
+            ELSE COALESCE(article.publisher_source_id, article.source_id)
+        END
+        WHERE article.id = ANY(CAST(:affected_ids AS INTEGER[]))
+          AND article.geo_status IN (
               'source_verified', 'publisher_verified', 'publisher_reassigned'
           )
     )
     SELECT DISTINCT candidate.id,
-           COALESCE(candidate.publisher_source_id,
-                    candidate.source_id) AS publisher_id,
+           candidate_publisher.id AS publisher_id,
+           candidate_publisher.country_code AS country_code,
            candidate.external_id, candidate.title_normalized,
            candidate.published_at, candidate.is_duplicate,
            candidate.duplicate_of, candidate.reprint_count
     FROM articles candidate
+    JOIN sources candidate_discovery
+      ON candidate_discovery.id = candidate.source_id
+    JOIN sources candidate_publisher ON candidate_publisher.id = CASE
+        WHEN COALESCE(
+            candidate_discovery.config->>'feed_mode', 'publisher'
+        ) = 'publisher_discovery'
+            THEN candidate.publisher_source_id
+        ELSE COALESCE(candidate.publisher_source_id, candidate.source_id)
+    END
     JOIN affected ON (
         candidate.id = affected.id
         OR (
             candidate.external_id IS NOT NULL
             AND candidate.external_id <> ''
             AND candidate.external_id = affected.external_id
-            AND COALESCE(candidate.publisher_source_id, candidate.source_id)
-                = affected.publisher_id
+            AND candidate_publisher.id = affected.publisher_id
         )
         OR (
             candidate.title_normalized IS NOT NULL
             AND candidate.title_normalized <> ''
             AND candidate.title_normalized = affected.title_normalized
+            AND candidate_publisher.country_code = affected.country_code
             AND candidate.published_at BETWEEN
                 affected.published_at - INTERVAL '48 hours'
                 AND affected.published_at + INTERVAL '48 hours'
@@ -156,6 +192,37 @@ DEDUP_CANDIDATES_SQL = """
         'source_verified', 'publisher_verified', 'publisher_reassigned'
     )
     ORDER BY candidate.id
+"""
+
+PUBLISHER_EXTERNAL_CONFLICT_SQL = """
+    /* gnews-backfill:publisher-external-conflict */
+    SELECT id
+    FROM articles
+    WHERE publisher_source_id = :publisher_source_id
+      AND external_id = :external_id
+      AND id <> :article_id
+    ORDER BY id
+    LIMIT 1
+"""
+
+DUPLICATE_FAMILY_SQL = """
+    /* gnews-backfill:duplicate-family */
+    WITH RECURSIVE family AS (
+        SELECT id
+        FROM articles
+        WHERE id = ANY(CAST(:seed_ids AS INTEGER[]))
+        UNION
+        SELECT related.id
+        FROM family current
+        JOIN articles member ON member.id = current.id
+        JOIN articles related ON (
+            related.duplicate_of = current.id
+            OR related.id = member.duplicate_of
+        )
+    )
+    SELECT id
+    FROM family
+    ORDER BY id
 """
 
 DEDUP_UPDATE_SQL = """
@@ -185,6 +252,7 @@ class BackfillReport:
     last_id: int
     done: bool
     counts: Mapping[str, Mapping[str, int]]
+    matrix: Mapping[str, Mapping[str, int]]
     invariants: Mapping[str, Any]
 
 
@@ -407,6 +475,10 @@ def _dedup_connected(left: Mapping[str, Any], right: Mapping[str, Any]) -> bool:
     right_title = _value(right, "title_normalized")
     if not left_title or left_title != right_title:
         return False
+    left_country = str(_value(left, "country_code", "")).upper()
+    right_country = str(_value(right, "country_code", "")).upper()
+    if not left_country or left_country != right_country:
+        return False
     left_time = _value(left, "published_at")
     right_time = _value(right, "published_at")
     return bool(
@@ -414,6 +486,64 @@ def _dedup_connected(left: Mapping[str, Any], right: Mapping[str, Any]) -> bool:
         and isinstance(right_time, datetime)
         and abs(left_time - right_time) <= timedelta(hours=48)
     )
+
+
+def _claim_publisher_external_id(
+    session: Any,
+    row: Mapping[str, Any],
+    classification: _Classification,
+    claims: dict[tuple[int, str], int],
+) -> int | None:
+    external_id = _value(row, "external_id")
+    if not isinstance(external_id, str) or not external_id:
+        return None
+    article_id = int(_value(row, "id"))
+    key = (classification.publisher_source_id, external_id)
+    claimed_id = claims.get(key)
+    if claimed_id is not None and claimed_id != article_id:
+        return claimed_id
+    rows = _mapping_rows(session.execute(
+        text(PUBLISHER_EXTERNAL_CONFLICT_SQL),
+        {
+            "publisher_source_id": classification.publisher_source_id,
+            "external_id": external_id,
+            "article_id": article_id,
+        },
+    ))
+    if rows:
+        conflict_id = int(_value(rows[0], "id"))
+        claims[key] = conflict_id
+        return conflict_id
+    claims[key] = article_id
+    return None
+
+
+def _reconcile_exact_conflict(
+    session: Any,
+    article_id: int,
+    conflict_id: int,
+) -> int:
+    rows = _mapping_rows(session.execute(
+        text(DUPLICATE_FAMILY_SQL),
+        {"seed_ids": [article_id, conflict_id]},
+    ))
+    family_ids = sorted({
+        article_id,
+        conflict_id,
+        *(int(_value(row, "id")) for row in rows),
+    })
+    parent_id = family_ids[0]
+    updated = 0
+    for member_id in family_ids:
+        is_duplicate = member_id != parent_id
+        result = session.execute(text(DEDUP_UPDATE_SQL), {
+            "article_id": member_id,
+            "is_duplicate": is_duplicate,
+            "duplicate_of": parent_id if is_duplicate else None,
+            "reprint_count": len(family_ids) - 1 if not is_duplicate else 0,
+        })
+        updated += _rowcount(result)
+    return updated
 
 
 def _reconcile_duplicates(session: Any, affected_ids: list[int]) -> int:
@@ -478,6 +608,24 @@ def _checkpoint_store(checkpoint: Any) -> Any:
     return JsonCheckpointStore(Path(checkpoint))
 
 
+def _empty_audit() -> dict[str, Any]:
+    return {
+        "scanned": 0,
+        "classifiable": 0,
+        "unclassified": 0,
+        "updated": 0,
+        "duplicates_updated": 0,
+        "batches": 0,
+        "counts": {
+            "discovery_country": {},
+            "publisher_country": {},
+            "status": {},
+            "domain": {},
+        },
+        "matrix": {},
+    }
+
+
 def _validated_state(
     store: Any,
     *,
@@ -492,6 +640,7 @@ def _validated_state(
             "last_id": 0,
             "done": False,
             "before_invariants": dict(before),
+            "audit": _empty_audit(),
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
         store.save(state)
@@ -502,6 +651,8 @@ def _validated_state(
         raise ValueError("checkpoint since_days does not match this run")
     if not isinstance(state.get("before_invariants"), Mapping):
         raise ValueError("checkpoint is missing before_invariants")
+    if not isinstance(state.get("audit"), Mapping):
+        raise ValueError("checkpoint is missing cumulative audit state")
     return dict(state)
 
 
@@ -509,6 +660,38 @@ def _sorted_counts(counters: Mapping[str, Counter]) -> dict[str, dict[str, int]]
     return {
         name: dict(sorted(counter.items()))
         for name, counter in counters.items()
+    }
+
+
+def _sorted_matrix(
+    matrix: Mapping[str, Counter],
+) -> dict[str, dict[str, int]]:
+    return {
+        country: dict(sorted(destinations.items()))
+        for country, destinations in sorted(matrix.items())
+    }
+
+
+def _audit_payload(
+    *,
+    scanned: int,
+    classifiable: int,
+    unclassified: int,
+    updated: int,
+    duplicates_updated: int,
+    batches: int,
+    counters: Mapping[str, Counter],
+    matrix: Mapping[str, Counter],
+) -> dict[str, Any]:
+    return {
+        "scanned": scanned,
+        "classifiable": classifiable,
+        "unclassified": unclassified,
+        "updated": updated,
+        "duplicates_updated": duplicates_updated,
+        "batches": batches,
+        "counts": _sorted_counts(counters),
+        "matrix": _sorted_matrix(matrix),
     }
 
 
@@ -546,14 +729,24 @@ def run_backfill(
         last_id = 0
         done = False
 
+    audit = dict(state["audit"]) if apply else _empty_audit()
+    saved_counts = audit.get("counts", {})
     counters = {
-        "discovery_country": Counter(),
-        "publisher_country": Counter(),
-        "status": Counter(),
-        "domain": Counter(),
+        name: Counter(saved_counts.get(name, {}))
+        for name in (
+            "discovery_country", "publisher_country", "status", "domain",
+        )
     }
-    scanned = classifiable = unclassified = updated = 0
-    duplicates_updated = batches = 0
+    matrix: defaultdict[str, Counter] = defaultdict(Counter)
+    for discovery_country, destinations in audit.get("matrix", {}).items():
+        matrix[str(discovery_country)].update(destinations)
+    scanned = int(audit.get("scanned", 0))
+    classifiable = int(audit.get("classifiable", 0))
+    unclassified = int(audit.get("unclassified", 0))
+    updated = int(audit.get("updated", 0))
+    duplicates_updated = int(audit.get("duplicates_updated", 0))
+    batches = int(audit.get("batches", 0))
+    publisher_external_claims: dict[tuple[int, str], int] = {}
 
     while not done:
         with get_session() as session:
@@ -571,7 +764,9 @@ def run_backfill(
             else:
                 batch_last_id = int(_value(rows[-1], "id"))
                 batch_updated = 0
+                batch_duplicates = 0
                 classifications = []
+                exact_conflicts: list[tuple[int, int]] = []
                 for row in rows:
                     scanned += 1
                     discovery_country = str(
@@ -579,15 +774,28 @@ def run_backfill(
                     ).upper()
                     counters["discovery_country"][discovery_country] += 1
                     classification = _classify(row, publishers)
-                    if classification is None:
+                    conflict_id = (
+                        _claim_publisher_external_id(
+                            session,
+                            row,
+                            classification,
+                            publisher_external_claims,
+                        )
+                        if classification is not None
+                        else None
+                    )
+                    if classification is None or conflict_id is not None:
                         unclassified += 1
                         counters["status"]["legacy_unverified"] += 1
                         counters["domain"]["(unknown)"] += 1
                         if apply:
+                            article_id = int(_value(row, "id"))
                             batch_updated += _rowcount(session.execute(
                                 text(UNCLASSIFIED_UPDATE_SQL),
-                                {"article_id": int(_value(row, "id"))},
+                                {"article_id": article_id},
                             ))
+                            if conflict_id is not None:
+                                exact_conflicts.append((article_id, conflict_id))
                         continue
 
                     classifiable += 1
@@ -595,6 +803,7 @@ def run_backfill(
                     counters["publisher_country"][classification.country_code] += 1
                     counters["status"][classification.status] += 1
                     counters["domain"][classification.publisher_domain] += 1
+                    matrix[discovery_country][classification.country_code] += 1
                     if apply:
                         batch_updated += _rowcount(session.execute(
                             text(CLASSIFIED_UPDATE_SQL),
@@ -609,9 +818,17 @@ def run_backfill(
                                 "status": classification.status,
                             },
                         ))
-                batch_duplicates = (
-                    _reconcile_duplicates(session, classifications) if apply else 0
-                )
+                if apply:
+                    batch_duplicates += _reconcile_duplicates(
+                        session,
+                        classifications,
+                    )
+                    for article_id, conflict_id in exact_conflicts:
+                        batch_duplicates += _reconcile_exact_conflict(
+                            session,
+                            article_id,
+                            conflict_id,
+                        )
                 done = len(rows) < batch_size
 
         if not rows:
@@ -619,6 +836,16 @@ def run_backfill(
                 state.update({
                     "last_id": batch_last_id,
                     "done": True,
+                    "audit": _audit_payload(
+                        scanned=scanned,
+                        classifiable=classifiable,
+                        unclassified=unclassified,
+                        updated=updated,
+                        duplicates_updated=duplicates_updated,
+                        batches=batches,
+                        counters=counters,
+                        matrix=matrix,
+                    ),
                     "updated_at": datetime.now(timezone.utc).isoformat(),
                 })
                 store.save(state)
@@ -632,6 +859,16 @@ def run_backfill(
             state.update({
                 "last_id": last_id,
                 "done": done,
+                "audit": _audit_payload(
+                    scanned=scanned,
+                    classifiable=classifiable,
+                    unclassified=unclassified,
+                    updated=updated,
+                    duplicates_updated=duplicates_updated,
+                    batches=batches,
+                    counters=counters,
+                    matrix=matrix,
+                ),
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             })
             store.save(state)
@@ -657,6 +894,7 @@ def run_backfill(
         last_id=last_id,
         done=done,
         counts=_sorted_counts(counters),
+        matrix=_sorted_matrix(matrix),
         invariants=invariants,
     )
 
