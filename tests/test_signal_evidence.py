@@ -846,7 +846,7 @@ def test_signal_detail_route_rejects_non_positive_ids_before_service_call():
 
 def test_sql_signal_detail_returns_concrete_evidence_and_http_safe_links(monkeypatch):
     created_at = datetime(2026, 7, 15, 12, 0, tzinfo=timezone.utc)
-    expires_at = created_at + timedelta(hours=24)
+    expires_at = datetime(9999, 1, 1, tzinfo=timezone.utc)
     base = SimpleNamespace(
         id=12,
         signal_type="index_shift",
