@@ -706,9 +706,20 @@ def derive_reactivation_pairs(
           AND NOT (COALESCE(st.meta, '{}'::jsonb) ? 'merged_into_story_id')
         ORDER BY st.id
     """)).fetchall()
-    by_thread_id = {candidate.thread_id: candidate for candidate in candidates}
     pairs: set[tuple[int, int]] = set()
-    ordered = sorted(candidates, key=lambda item: (item.country_code, item.thread_id))
+    ordered = sorted(
+        candidates,
+        key=lambda item: (
+            item.country_code,
+            item.thread_id,
+            item.article_ids,
+            item.event_key,
+            item.title,
+        ),
+    )
+    by_thread_id: dict[int, list[StoryCandidate]] = {}
+    for candidate in ordered:
+        by_thread_id.setdefault(candidate.thread_id, []).append(candidate)
     for row in rows:
         if _value(row, "lifecycle") != "resolved":
             continue
@@ -729,9 +740,9 @@ def derive_reactivation_pairs(
             if isinstance(thread_id, int) and not isinstance(thread_id, bool)
         }
         anchors = [
-            by_thread_id[thread_id]
+            candidate
             for thread_id in sorted(stored_thread_ids)
-            if thread_id in by_thread_id
+            for candidate in by_thread_id.get(thread_id, ())
         ]
         for anchor in anchors:
             for candidate in ordered:

@@ -18,6 +18,7 @@ from src.stories import (
     cluster_story_candidates,
     compute_source_hash,
     deterministic_story_copy,
+    derive_reactivation_pairs,
     fetch_story_candidates,
     merge_rejection_reasons,
     persist_story_cluster,
@@ -2634,6 +2635,73 @@ def test_background_builder_derives_reactivation_pairs_from_resolved_story(monke
     assert result.stories_upserted == 1
     assert observed["pairs"] == frozenset({(1, 2)})
     assert observed["membership_generation"] == 5
+
+
+def test_reactivation_pairs_evaluate_all_country_partitions_deterministically():
+    resolved_thread_id = 2501
+    later_thread_id = 3001
+    matching_event = "подписано соглашение о зеленом коридоре"
+    matching_entities = frozenset({"entity-green-corridor", "entity-ministry"})
+    old_first_seen = NOW - timedelta(days=20)
+    old_last_seen = NOW - timedelta(days=15)
+    es_partition = replace(
+        candidate(
+            "ES",
+            event_key=matching_event,
+            title="Испания подписала соглашение о зеленом коридоре",
+            entities=matching_entities,
+            first_seen=old_first_seen,
+            last_seen=old_last_seen,
+        ),
+        thread_id=resolved_thread_id,
+        article_ids=(501,),
+    )
+    gb_partition = replace(
+        candidate(
+            "GB",
+            event_key="обсуждение налоговой реформы в парламенте",
+            title="Парламент обсудил налоговую реформу",
+            entities=frozenset({"entity-parliament", "entity-tax"}),
+            first_seen=old_first_seen,
+            last_seen=old_last_seen,
+        ),
+        thread_id=resolved_thread_id,
+        article_ids=(502,),
+    )
+    kz_later = replace(
+        candidate(
+            "KZ",
+            event_key=matching_event,
+            title="Казахстан присоединился к зеленому коридору",
+            entities=matching_entities,
+            first_seen=NOW,
+            last_seen=NOW,
+        ),
+        thread_id=later_thread_id,
+        article_ids=(503,),
+    )
+
+    class ResolvedPartitionSession:
+        def execute(self, statement, params=None):
+            return FakeResult(rows=[SimpleNamespace(
+                id=10,
+                lifecycle="resolved",
+                last_seen=old_last_seen,
+                meta={"thread_ids": [resolved_thread_id]},
+            )])
+
+    expected = frozenset({(resolved_thread_id, later_thread_id)})
+
+    assert (
+        derive_reactivation_pairs(
+            ResolvedPartitionSession(),
+            [es_partition, gb_partition, kz_later],
+        ),
+        derive_reactivation_pairs(
+            ResolvedPartitionSession(),
+            [gb_partition, es_partition, kz_later],
+        ),
+    ) == (expected, expected)
 
 
 def test_background_builder_allocates_one_generation_for_the_whole_transaction(monkeypatch):
