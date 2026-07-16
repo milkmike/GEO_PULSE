@@ -89,6 +89,59 @@ def test_title_only_similarity_does_not_merge():
     assert not should_merge(similarity)
 
 
+def test_strong_cross_language_semantics_plus_entity_evidence_merge():
+    left = replace(
+        candidate(
+            "AZ",
+            event_key="nazirlik enerji danisiqlarini davam etdirir",
+            title="Nazirlik yeni danisiqlar barədə məlumat verdi",
+            entities=frozenset({"entity-minister"}),
+            topics=frozenset(),
+        ),
+        semantic_matches=((2, 0.82),),
+    )
+    right = candidate(
+        "KZ",
+        event_key="ведомство продолжило консультации по энергетике",
+        title="Министерство сообщило о новом раунде консультаций",
+        entities=frozenset({"entity-minister"}),
+        topics=frozenset(),
+    )
+
+    similarity = score_story_match(left, right)
+
+    assert similarity.components["semantic"] == pytest.approx(0.82)
+    assert {"semantic", "entities"}.issubset(similarity.matched_features)
+    assert similarity.total >= 0.65
+    assert should_merge(similarity)
+
+
+def test_embedding_similarity_alone_cannot_merge():
+    left = replace(
+        candidate(
+            "AZ",
+            event_key="tamamilə fərqli xəbər",
+            title="Birinci yerli xəbər",
+            entities=frozenset(),
+            topics=frozenset(),
+        ),
+        semantic_matches=((2, 1.0),),
+    )
+    right = candidate(
+        "KZ",
+        event_key="совершенно другая новость",
+        title="Вторая местная новость",
+        entities=frozenset(),
+        topics=frozenset(),
+    )
+
+    similarity = score_story_match(left, right)
+
+    assert similarity.components["semantic"] == 1.0
+    assert similarity.matched_features == frozenset({"semantic"})
+    assert not should_merge(similarity)
+
+
 def test_merge_threshold_is_inclusive_and_requires_two_features():
     baseline = score_story_match(candidate("AZ"), candidate("KZ"))
 
@@ -549,6 +602,8 @@ class PublisherAttributionFixtureSession:
             ])
         if "FROM article_entity_mentions" in sql:
             return FakeResult(rows=[])
+        if "semantic_story_pairs" in sql:
+            return FakeResult(rows=[])
         raise AssertionError(f"Unexpected fixture query: {sql}")
 
 
@@ -633,6 +688,31 @@ def test_verified_publishers_drive_briefs_threads_and_story_candidates():
     )
 
 
+def test_ready_active_semantic_pairs_are_attached_symmetrically():
+    class SemanticPairSession(PublisherAttributionFixtureSession):
+        def execute(self, statement, params=None):
+            sql = str(statement)
+            if "semantic_story_pairs" in sql:
+                self.statements.append(sql)
+                assert params == {
+                    "semantic_thread_ids": [2501, 2502],
+                    "semantic_article_ids": ["501", "502"],
+                }
+                return FakeResult(rows=[SimpleNamespace(
+                    left_thread_id=2501,
+                    right_thread_id=2502,
+                    semantic_score=0.91,
+                )])
+            return super().execute(statement, params)
+
+    candidates = fetch_story_candidates(SemanticPairSession())
+
+    assert [item.semantic_matches for item in candidates] == [
+        ((2502, 0.91),),
+        ((2501, 0.91),),
+    ]
+
+
 def test_mixed_legacy_thread_uses_one_canonical_thread_country_candidate():
     session = MixedLegacyThreadFixtureSession()
     candidates = fetch_story_candidates(session)
@@ -690,6 +770,21 @@ def test_candidate_thread_and_date_scope_reaches_sql_before_mention_materializat
                     article_id=141,
                     entity_id="entity-recent",
                 )])
+            if "semantic_story_pairs" in sql:
+                assert params == {
+                    "semantic_thread_ids": [41],
+                    "semantic_article_ids": ["141"],
+                }
+                assert "embedding_profiles" in sql
+                assert "content_embeddings" in sql
+                assert "ep.active = TRUE" in sql
+                assert "ep.dimensions = 1024" in sql
+                assert "ce.status = 'ready'" in sql
+                assert "ce.object_type = 'article'" in sql
+                assert "ANY(:semantic_article_ids)" in sql
+                assert "ANY(:semantic_thread_ids)" in sql
+                assert "HAVING COUNT(*) = 1" in sql
+                return FakeResult(rows=[])
             raise AssertionError(f"Unexpected scoped candidate query: {sql}")
 
     session = ScopedCandidateSession()
@@ -703,7 +798,8 @@ def test_candidate_thread_and_date_scope_reaches_sql_before_mention_materializat
     assert [(item.thread_id, item.article_ids) for item in candidates] == [
         (41, (141,)),
     ]
-    assert len(session.calls) == 2
+    assert candidates[0].semantic_matches == ()
+    assert len(session.calls) == 3
 
 
 class PersistenceSession:
@@ -793,6 +889,7 @@ def test_scoped_story_build_excludes_pre_window_article_memberships(monkeypatch)
             published_at=scope_start - timedelta(seconds=1),
             source_name="Old source",
             entity_ids=frozenset({"old-entity"}),
+            topics=frozenset({"old-topic"}),
         )
         recent_article = StoryArticle(
             article_id=article_id,
@@ -802,6 +899,7 @@ def test_scoped_story_build_excludes_pre_window_article_memberships(monkeypatch)
             published_at=scope_start,
             source_name="Recent source",
             entity_ids=frozenset({"recent-entity"}),
+            topics=frozenset({"recent-topic"}),
         )
         return replace(
             candidate(country),
@@ -809,6 +907,7 @@ def test_scoped_story_build_excludes_pre_window_article_memberships(monkeypatch)
             article_ids=(old_article.article_id, recent_article.article_id),
             articles=(old_article, recent_article),
             entities=frozenset({"old-entity", "recent-entity"}),
+            topics=frozenset({"old-topic", "recent-topic"}),
             sources=frozenset({"Old source", "Recent source"}),
             source_ids=frozenset({1, 2}),
         )
@@ -861,6 +960,7 @@ def test_scoped_story_build_excludes_pre_window_article_memberships(monkeypatch)
     assert [item.article_ids for item in observed["candidates"]] == [(141,), (142,)]
     assert all(
         item.entities == frozenset({"recent-entity"})
+        and item.topics == frozenset({"recent-topic"})
         and item.sources == frozenset({"Recent source"})
         and item.source_ids == frozenset()
         for item in observed["candidates"]

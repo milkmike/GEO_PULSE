@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import re
 import unicodedata
 from dataclasses import dataclass, field, replace
@@ -34,7 +35,10 @@ STORY_COMPONENT_WEIGHTS = {
     "source_diversity": 0.05,
     "country_diversity": 0.05,
     "title": 0.05,
+    "semantic": 0.30,
 }
+SEMANTIC_MATCH_THRESHOLD = 0.82
+MIN_SEMANTIC_THREAD_COVERAGE = 0.30
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +53,7 @@ class StoryArticle:
     action_level: int = 1
     event_key: str | None = None
     entity_ids: frozenset[str] = field(default_factory=frozenset)
+    topics: frozenset[str] = field(default_factory=frozenset)
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +73,7 @@ class StoryCandidate:
     highest_action_level: int = 1
     articles: tuple[StoryArticle, ...] = field(default_factory=tuple)
     source_ids: frozenset[int] = field(default_factory=frozenset)
+    semantic_matches: tuple[tuple[int, float], ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True, slots=True)
@@ -168,6 +174,28 @@ def _gap_days(left: StoryCandidate, right: StoryCandidate) -> float:
     return 0.0
 
 
+def _semantic_similarity(left: StoryCandidate, right: StoryCandidate) -> float:
+    """Return a normalized precomputed thread similarity, or fail closed."""
+
+    scores = (
+        score
+        for matches, expected_thread_id in (
+            (left.semantic_matches, right.thread_id),
+            (right.semantic_matches, left.thread_id),
+        )
+        for thread_id, score in matches
+        if thread_id == expected_thread_id
+    )
+    for score in scores:
+        try:
+            normalized = float(score)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(normalized):
+            return max(0.0, min(1.0, normalized))
+    return 0.0
+
+
 def score_story_match(left: StoryCandidate, right: StoryCandidate) -> StorySimilarity:
     """Score whether two country threads describe one concrete global story.
 
@@ -178,6 +206,7 @@ def score_story_match(left: StoryCandidate, right: StoryCandidate) -> StorySimil
     gap_days = _gap_days(left, right)
     raw_entity_overlap = _jaccard(left.entities, right.entities)
     raw_topic_overlap = _jaccard(left.topics, right.topics)
+    semantic_similarity = _semantic_similarity(left, right)
     components = {
         "event_key": trigram_similarity(left.event_key, right.event_key),
         "entities": raw_entity_overlap if raw_entity_overlap >= MIN_MEANINGFUL_OVERLAP else 0.0,
@@ -190,10 +219,25 @@ def score_story_match(left: StoryCandidate, right: StoryCandidate) -> StorySimil
         ) else 0.0,
         "country_diversity": 1.0 if left.country_code != right.country_code else 0.0,
         "title": trigram_similarity(left.title, right.title),
+        "semantic": semantic_similarity,
     }
     effective_components = dict(components)
     if components["event_key"] >= TITLE_FALLBACK_EVENT_CEILING:
         effective_components["title"] = 0.0
+    if components["semantic"] < SEMANTIC_MATCH_THRESHOLD:
+        effective_components["semantic"] = 0.0
+    uncapped_total = sum(
+        effective_components[name] * weight
+        for name, weight in STORY_COMPONENT_WEIGHTS.items()
+    )
+    if uncapped_total > 1.0:
+        legacy_total = uncapped_total - (
+            effective_components["semantic"] * STORY_COMPONENT_WEIGHTS["semantic"]
+        )
+        effective_components["semantic"] = max(
+            0.0,
+            (1.0 - legacy_total) / STORY_COMPONENT_WEIGHTS["semantic"],
+        )
     total = round(
         sum(
             effective_components[name] * weight
@@ -214,6 +258,8 @@ def score_story_match(left: StoryCandidate, right: StoryCandidate) -> StorySimil
         and components["event_key"] < TITLE_FALLBACK_EVENT_CEILING
     ):
         matched_features.add("title")
+    if components["semantic"] >= SEMANTIC_MATCH_THRESHOLD:
+        matched_features.add("semantic")
 
     evidence = {
         "countries": sorted({left.country_code, right.country_code}),
@@ -223,6 +269,7 @@ def score_story_match(left: StoryCandidate, right: StoryCandidate) -> StorySimil
         "raw_entity_overlap": raw_entity_overlap,
         "raw_topic_overlap": raw_topic_overlap,
         "title_used_as_fallback": effective_components["title"] > 0,
+        "semantic_threshold": SEMANTIC_MATCH_THRESHOLD,
         "effective_components": effective_components,
         "weights": STORY_COMPONENT_WEIGHTS,
         "score": total,
@@ -673,6 +720,79 @@ def fetch_story_candidates(
             _value(mention, "entity_id")
         )
 
+    semantic_thread_ids = [int(_value(row, "thread_id")) for row in rows]
+    semantic_article_ids = [str(_value(row, "article_id")) for row in rows]
+    semantic_rows = session.execute(text(f"""
+        WITH active_profile AS (
+            SELECT MIN(ep.id) AS profile_id
+            FROM embedding_profiles ep
+            WHERE ep.active = TRUE
+            HAVING COUNT(*) = 1
+               AND BOOL_AND(ep.dimensions = 1024)
+        ), candidate_articles AS (
+            SELECT input.thread_id, input.article_id
+            FROM UNNEST(
+                CAST(:semantic_thread_ids AS bigint[]),
+                CAST(:semantic_article_ids AS text[])
+            ) AS input(thread_id, article_id)
+            WHERE input.thread_id = ANY(:semantic_thread_ids)
+              AND input.article_id = ANY(:semantic_article_ids)
+        ), latest_embeddings AS (
+            SELECT DISTINCT ON (ce.object_id)
+                   ce.object_id, ce.embedding
+            FROM content_embeddings ce
+            JOIN active_profile ap ON ap.profile_id = ce.profile_id
+            WHERE ce.object_type = 'article'
+              AND ce.status = 'ready'
+              AND ce.embedding IS NOT NULL
+              AND ce.object_id = ANY(:semantic_article_ids)
+            ORDER BY ce.object_id, ce.updated_at DESC, ce.id DESC
+        ), thread_centroids AS (
+            SELECT ca.thread_id,
+                   TRIM(t.country_code) AS country_code,
+                   AVG(le.embedding) AS centroid
+            FROM candidate_articles ca
+            JOIN threads t ON t.id = ca.thread_id
+            LEFT JOIN latest_embeddings le ON le.object_id = ca.article_id
+            WHERE ca.thread_id = ANY(:semantic_thread_ids)
+            GROUP BY ca.thread_id, TRIM(t.country_code)
+            HAVING COUNT(le.object_id)::float / NULLIF(COUNT(*), 0)
+                   >= {MIN_SEMANTIC_THREAD_COVERAGE}
+        ), semantic_story_pairs AS (
+            SELECT left_thread.thread_id AS left_thread_id,
+                   right_thread.thread_id AS right_thread_id,
+                   GREATEST(
+                       0.0,
+                       LEAST(
+                           1.0,
+                           1.0 - (left_thread.centroid <=> right_thread.centroid)
+                       )
+                   )::float AS semantic_score
+            FROM thread_centroids left_thread
+            JOIN thread_centroids right_thread
+              ON left_thread.thread_id < right_thread.thread_id
+             AND left_thread.country_code <> right_thread.country_code
+        )
+        SELECT left_thread_id, right_thread_id, semantic_score
+        FROM semantic_story_pairs
+        WHERE semantic_score >= {SEMANTIC_MATCH_THRESHOLD}
+        ORDER BY left_thread_id, right_thread_id
+    """), {
+        "semantic_thread_ids": semantic_thread_ids,
+        "semantic_article_ids": semantic_article_ids,
+    }).fetchall()
+    semantic_matches_by_thread: dict[int, list[tuple[int, float]]] = {}
+    for semantic_row in semantic_rows:
+        left_thread_id = int(_value(semantic_row, "left_thread_id"))
+        right_thread_id = int(_value(semantic_row, "right_thread_id"))
+        semantic_score = float(_value(semantic_row, "semantic_score"))
+        semantic_matches_by_thread.setdefault(left_thread_id, []).append(
+            (right_thread_id, semantic_score)
+        )
+        semantic_matches_by_thread.setdefault(right_thread_id, []).append(
+            (left_thread_id, semantic_score)
+        )
+
     grouped: dict[int, list[Any]] = {}
     for row in rows:
         grouped.setdefault(int(_value(row, "thread_id")), []).append(row)
@@ -690,6 +810,7 @@ def fetch_story_candidates(
             article_id = _value(row, "article_id")
             article_entities = frozenset(entities_by_article.get(article_id, set()))
             row_topics = _value(row, "topics") or []
+            article_topics = frozenset(str(topic) for topic in row_topics if topic)
             topics.update(str(topic) for topic in row_topics if topic)
             entities.update(article_entities)
             sources.add(str(_value(row, "source_name", "unknown")))
@@ -709,6 +830,7 @@ def fetch_story_candidates(
                 action_level=int(_value(row, "action_level", 1) or 1),
                 event_key=article_event_key,
                 entity_ids=article_entities,
+                topics=article_topics,
             ))
         first_row = thread_rows[0]
         dates = [article.published_at for article in articles if article.published_at]
@@ -727,6 +849,7 @@ def fetch_story_candidates(
             highest_action_level=max((article.action_level for article in articles), default=1),
             articles=tuple(articles),
             source_ids=frozenset(source_ids),
+            semantic_matches=tuple(semantic_matches_by_thread.get(thread_id, ())),
         ))
     return candidates
 
@@ -1679,7 +1802,11 @@ def _scope_candidate_articles(
             for article in recent_articles
             for entity_id in article.entity_ids
         ),
-        topics=frozenset(),
+        topics=frozenset(
+            topic
+            for article in recent_articles
+            for topic in article.topics
+        ),
         sources=frozenset(article.source_name for article in recent_articles),
         source_ids=frozenset(),
         first_seen=min(activity_dates),
@@ -1688,6 +1815,11 @@ def _scope_candidate_articles(
             article.action_level for article in recent_articles
         ),
         articles=recent_articles,
+        semantic_matches=(
+            candidate.semantic_matches
+            if len(recent_articles) == len(candidate.articles)
+            else ()
+        ),
     )
 
 
