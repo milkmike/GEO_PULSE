@@ -311,6 +311,26 @@ def transition_lifecycle(
     return "developing"
 
 
+def _candidate_pair_should_merge(
+    left: StoryCandidate,
+    right: StoryCandidate,
+    reactivation_pairs: frozenset[tuple[int, int]],
+) -> bool:
+    if left.thread_id == right.thread_id:
+        return False
+    pair = tuple(sorted((left.thread_id, right.thread_id)))
+    explicit_reactivation = pair in reactivation_pairs
+    if (
+        not explicit_reactivation
+        and _gap_days(left, right) > MAX_MERGE_GAP_DAYS
+    ):
+        return False
+    return should_merge(
+        score_story_match(left, right),
+        explicit_reactivation=explicit_reactivation,
+    )
+
+
 def cluster_story_candidates(
     candidates: Sequence[StoryCandidate],
     *,
@@ -323,11 +343,10 @@ def cluster_story_candidates(
     for candidate in ordered:
         for cluster in grouped:
             if all(
-                should_merge(
-                    score_story_match(candidate, member),
-                    explicit_reactivation=tuple(sorted(
-                        (candidate.thread_id, member.thread_id)
-                    )) in reactivation_pairs,
+                _candidate_pair_should_merge(
+                    candidate,
+                    member,
+                    reactivation_pairs,
                 )
                 for member in cluster
             ):
@@ -599,7 +618,7 @@ def fetch_story_candidates(session: Any) -> list[StoryCandidate]:
     """Project existing country threads and analyzed articles into candidates."""
 
     rows = session.execute(text("""
-        SELECT t.id AS thread_id, TRIM(s.country_code) AS country_code,
+        SELECT t.id AS thread_id, TRIM(t.country_code) AS country_code,
                t.thread_key, t.title AS thread_title, t.first_seen, t.last_seen,
                ar.id AS article_id, ar.title AS article_title, ar.url,
                ar.published_at, s.id AS publisher_source_id,
@@ -610,10 +629,12 @@ def fetch_story_candidates(session: Any) -> list[StoryCandidate]:
         FROM threads t
         JOIN thread_articles ta ON ta.thread_id = t.id
         JOIN articles ar ON ar.id = ta.article_id
-        JOIN article_country_facts s ON s.article_id = ar.id
+        JOIN article_country_facts s
+          ON s.article_id = ar.id
+         AND TRIM(s.country_code) = TRIM(t.country_code)
         LEFT JOIN analysis an ON an.article_id = ar.id
         WHERE t.article_count > 0
-        ORDER BY t.id, s.country_code, ar.published_at, ar.id
+        ORDER BY t.id, ar.published_at, ar.id
     """)).fetchall()
     if not rows:
         return []
@@ -630,16 +651,13 @@ def fetch_story_candidates(session: Any) -> list[StoryCandidate]:
             _value(mention, "entity_id")
         )
 
-    grouped: dict[tuple[int, str], list[Any]] = {}
+    grouped: dict[int, list[Any]] = {}
     for row in rows:
-        partition = (
-            int(_value(row, "thread_id")),
-            str(_value(row, "country_code")).strip(),
-        )
-        grouped.setdefault(partition, []).append(row)
+        grouped.setdefault(int(_value(row, "thread_id")), []).append(row)
 
     candidates: list[StoryCandidate] = []
-    for (thread_id, country_code), thread_rows in grouped.items():
+    for thread_id, thread_rows in grouped.items():
+        country_code = str(_value(thread_rows[0], "country_code")).strip()
         articles = []
         topics: set[str] = set()
         entities: set[str] = set()

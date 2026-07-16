@@ -242,6 +242,60 @@ def test_cluster_builder_emits_only_cross_country_stories():
     assert same_country == []
 
 
+def test_same_thread_candidates_are_rejected_before_scoring(monkeypatch):
+    import src.stories as stories_module
+
+    left = candidate("AZ")
+    duplicate_partition = replace(
+        candidate("KZ"),
+        thread_id=left.thread_id,
+    )
+
+    def fail_if_scored(left_item, right_item):
+        raise AssertionError(
+            f"same thread was scored: {left_item.thread_id}/{right_item.thread_id}"
+        )
+
+    monkeypatch.setattr(stories_module, "score_story_match", fail_if_scored)
+
+    assert cluster_story_candidates([left, duplicate_partition]) == []
+
+
+def test_far_pairs_are_prefiltered_but_near_pairs_use_existing_scorer(monkeypatch):
+    import src.stories as stories_module
+
+    old = replace(
+        candidate(
+            "AZ",
+            first_seen=NOW - timedelta(days=30),
+            last_seen=NOW - timedelta(days=30),
+        ),
+        thread_id=1,
+    )
+    near = replace(
+        candidate(
+            "KZ",
+            first_seen=NOW - timedelta(days=29),
+            last_seen=NOW - timedelta(days=29),
+        ),
+        thread_id=2,
+    )
+    far = replace(candidate("UZ"), thread_id=3)
+    real_scorer = score_story_match
+    scored_pairs = []
+
+    def recording_scorer(left_item, right_item):
+        scored_pairs.append((left_item.thread_id, right_item.thread_id))
+        return real_scorer(left_item, right_item)
+
+    monkeypatch.setattr(stories_module, "score_story_match", recording_scorer)
+
+    clusters = cluster_story_candidates([far, near, old])
+
+    assert [[item.thread_id for item in cluster] for cluster in clusters] == [[1, 2]]
+    assert scored_pairs == [(2, 1)]
+
+
 def test_single_link_chain_cannot_bridge_a_non_cohesive_cluster():
     left = candidate(
         "AZ",
@@ -407,7 +461,10 @@ class PublisherAttributionFixtureSession:
         self.statements = []
 
     def _attributed(self, sql, *, country=None):
-        canonical = "JOIN article_country_facts s ON s.article_id = ar.id" in sql
+        canonical = (
+            "JOIN article_country_facts s" in sql
+            and "s.article_id = ar.id" in sql
+        )
         rows = []
         for item in self.articles:
             if canonical and item["publisher_source_id"] is None:
@@ -499,6 +556,13 @@ class MixedLegacyThreadFixtureSession(PublisherAttributionFixtureSession):
         sql = str(statement)
         if "FROM threads t" in sql:
             self.statements.append(sql)
+            canonical_country_boundary = (
+                "TRIM(s.country_code) = TRIM(t.country_code)" in sql
+                and "TRIM(t.country_code) AS country_code" in sql
+            )
+            attributed = self._attributed(sql)
+            if canonical_country_boundary:
+                attributed = [row for row in attributed if row[1] == "ES"]
             return FakeResult(rows=[
                 SimpleNamespace(
                     thread_id=2501,
@@ -519,7 +583,7 @@ class MixedLegacyThreadFixtureSession(PublisherAttributionFixtureSession):
                     topics=["diplomacy"],
                 )
                 for item, country, source_name, publisher_source_id
-                in self._attributed(sql)
+                in attributed
             ])
         if "FROM article_entity_mentions" in sql:
             self.statements.append(sql)
@@ -568,33 +632,19 @@ def test_verified_publishers_drive_briefs_threads_and_story_candidates():
     )
 
 
-def test_mixed_legacy_thread_partitions_into_canonical_country_candidates():
-    candidates = fetch_story_candidates(MixedLegacyThreadFixtureSession())
+def test_mixed_legacy_thread_uses_one_canonical_thread_country_candidate():
+    session = MixedLegacyThreadFixtureSession()
+    candidates = fetch_story_candidates(session)
 
     assert [
         (item.thread_id, item.country_code, item.article_ids)
         for item in candidates
     ] == [
         (2501, "ES", (501,)),
-        (2501, "GB", (502,)),
     ]
-    [edge] = cluster_story_candidates(candidates)
-    assert {(item.thread_id, item.country_code) for item in edge} == {
-        (2501, "ES"),
-        (2501, "GB"),
-    }
-
-    session = PersistenceSession()
-    persist_story_cluster(session, edge, now=NOW, membership_generation=1)
-    membership_evidence = [
-        json.loads(params["evidence"])
-        for sql, params in session.calls
-        if "INSERT INTO story_articles" in sql and "VALUES" in sql
-    ]
-    assert {
-        (item["country"], item["peer_country"])
-        for item in membership_evidence
-    } == {("ES", "GB"), ("GB", "ES")}
+    candidate_sql = next(sql for sql in session.statements if "FROM threads t" in sql)
+    assert "TRIM(t.country_code) AS country_code" in candidate_sql
+    assert "TRIM(s.country_code) = TRIM(t.country_code)" in candidate_sql
 
 
 class PersistenceSession:
