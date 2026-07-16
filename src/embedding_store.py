@@ -252,6 +252,57 @@ class EmbeddingStore:
             raise RuntimeError("multiple active embedding profiles are configured")
         return _profile_from_row(rows[0]) if rows else None
 
+    def ensure_active_profile(
+        self,
+        session: Any,
+        profile: EmbeddingProfile,
+    ) -> EmbeddingProfile:
+        """Create or reuse the configured profile and make it the only active one."""
+        raw = session.execute(
+            text(
+                """
+                WITH deactivated AS (
+                    UPDATE embedding_profiles
+                    SET active = FALSE
+                    WHERE active = TRUE
+                      AND profile_key <> :profile_key
+                    RETURNING id
+                ), configured AS (
+                    INSERT INTO embedding_profiles
+                        (profile_key, provider, model, dimensions, task,
+                         version, active)
+                    VALUES
+                        (:profile_key, :provider, :model, :dimensions, :task,
+                         :version, TRUE)
+                    ON CONFLICT (profile_key)
+                    DO UPDATE SET
+                        provider = EXCLUDED.provider,
+                        model = EXCLUDED.model,
+                        dimensions = EXCLUDED.dimensions,
+                        task = EXCLUDED.task,
+                        version = EXCLUDED.version,
+                        active = TRUE
+                    RETURNING id, profile_key, provider, model, dimensions,
+                              task, version, active
+                )
+                SELECT id, profile_key, provider, model, dimensions, task,
+                       version, active
+                FROM configured
+                """
+            ),
+            {
+                "profile_key": profile.profile_key,
+                "provider": profile.provider,
+                "model": profile.model,
+                "dimensions": profile.dimensions,
+                "task": profile.task,
+                "version": profile.version,
+            },
+        ).fetchone()
+        if raw is None:
+            raise RuntimeError("could not create or activate embedding profile")
+        return _profile_from_row(raw)
+
     def count_pending_jobs(self, session: Any, *, profile_id: int) -> int:
         """Count jobs currently eligible for a dry-run of the active profile."""
         return int(
@@ -431,15 +482,25 @@ class EmbeddingStore:
                             status = 'ready',
                             error = NULL,
                             updated_at = now()
-                        RETURNING 1
+                        RETURNING object_type, object_id
+                    ), projected AS (
+                        UPDATE analysis
+                        SET embedding = CAST(:embedding AS vector)
+                        FROM stored
+                        WHERE :dimensions = 1536
+                          AND stored.object_type = 'article'
+                          AND analysis.article_id::text = stored.object_id
+                        RETURNING analysis.article_id
                     )
-                    SELECT EXISTS(SELECT 1 FROM stored)
+                    SELECT EXISTS(SELECT 1 FROM stored),
+                           (SELECT COUNT(*) FROM projected) AS projected_count
                     """
                 ),
                 {
                     "job_id": job.id,
                     "generation": job.attempts,
                     "embedding": vector,
+                    "dimensions": profile.dimensions,
                 },
             ).scalar_one()
         )

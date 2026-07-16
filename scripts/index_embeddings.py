@@ -251,6 +251,8 @@ def index_pending(
                         processed += 1
             else:
                 for job, vector in successful:
+                    # Persistence also performs the guarded legacy article
+                    # projection in this transaction when the vector is 1536-D.
                     if store.record_success(
                         session,
                         job=job,

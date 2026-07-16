@@ -1,4 +1,5 @@
 import hashlib
+import importlib.util
 from pathlib import Path
 
 import pytest
@@ -207,6 +208,56 @@ def test_active_profile_rejects_multiple_active_rows():
 
     with pytest.raises(RuntimeError, match="multiple active embedding profiles"):
         EmbeddingStore().active_profile(session)
+
+
+class EnsureProfileSession:
+    def __init__(self):
+        self.profile_id = 17
+        self.statements = []
+
+    def execute(self, statement, params):
+        sql = str(statement)
+        self.statements.append((sql, params))
+        return ProfileResult(
+            [
+                {
+                    "id": self.profile_id,
+                    "profile_key": params["profile_key"],
+                    "provider": params["provider"],
+                    "model": params["model"],
+                    "dimensions": params["dimensions"],
+                    "task": params["task"],
+                    "version": params["version"],
+                    "active": True,
+                }
+            ]
+        )
+
+
+def test_ensure_active_profile_creates_or_reuses_configured_profile():
+    session = EnsureProfileSession()
+    configured = EmbeddingProfile(
+        profile_key="openrouter:openai/text-embedding-3-small:1536:text-matching:v1",
+        provider="openrouter",
+        model="openai/text-embedding-3-small",
+        dimensions=1536,
+        task="text-matching",
+        version="v1",
+        active=True,
+    )
+    store = EmbeddingStore()
+
+    first = store.ensure_active_profile(session, configured)
+    second = store.ensure_active_profile(session, configured)
+
+    assert first == second
+    assert first.id == 17
+    assert first.active is True
+    sql, params = session.statements[0]
+    assert "INSERT INTO embedding_profiles" in sql
+    assert "ON CONFLICT (profile_key)" in sql
+    assert "active = FALSE" in sql
+    assert params["profile_key"] == configured.profile_key
 
 
 class ClaimingSession:
@@ -418,6 +469,220 @@ def test_record_success_rejects_wrong_dimension_and_non_finite_vectors(vector):
             profile=profile,
             embedding=vector,
         )
+
+
+class ProjectionSession:
+    def __init__(self):
+        self.statement = None
+        self.params = None
+
+    def execute(self, statement, params):
+        self.statement = str(statement)
+        self.params = params
+        return ScalarResult(True)
+
+
+def test_article_success_projects_1536_vector_from_authoritative_store_in_same_statement():
+    profile = EmbeddingProfile(
+        id=4,
+        profile_key="openrouter-profile",
+        provider="openrouter",
+        model="openai/text-embedding-3-small",
+        dimensions=1536,
+        task="text-matching",
+        version="v1",
+        active=True,
+    )
+    job = EmbeddingJob(
+        id=11,
+        profile_id=4,
+        object_type="article",
+        object_id="42",
+        content_hash="a" * 64,
+        attempts=1,
+    )
+    session = ProjectionSession()
+
+    assert EmbeddingStore().record_success(
+        session,
+        job=job,
+        profile=profile,
+        embedding=[0.25] * 1536,
+    )
+
+    assert "INSERT INTO content_embeddings" in session.statement
+    assert "UPDATE analysis" in session.statement
+    assert "FROM stored" in session.statement
+    assert ":dimensions = 1536" in session.statement
+    assert "stored.object_type = 'article'" in session.statement
+    assert "analysis.article_id::text = stored.object_id" in session.statement
+    assert session.params["dimensions"] == 1536
+
+
+def test_prepare_embedding_jobs_command_exists():
+    assert importlib.util.find_spec("scripts.prepare_embedding_jobs") is not None
+
+
+def _preparation_module():
+    return importlib.import_module("scripts.prepare_embedding_jobs")
+
+
+def configured_preparation_profile(profile_id=4):
+    return EmbeddingProfile(
+        id=profile_id,
+        profile_key="openrouter:openai/text-embedding-3-small:1536:text-matching:v1",
+        provider="openrouter",
+        model="openai/text-embedding-3-small",
+        dimensions=1536,
+        task="text-matching",
+        version="v1",
+        active=True,
+    )
+
+
+class ArticleRowsSession:
+    def __init__(self, rows):
+        self.rows = rows
+        self.statement = None
+        self.params = None
+
+    def execute(self, statement, params):
+        self.statement = str(statement)
+        self.params = params
+        return FakeResult(self.rows)
+
+
+class PreparationSessionFactory:
+    def __call__(self):
+        class SessionContext:
+            def __enter__(self):
+                return object()
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+        return SessionContext()
+
+
+class PreparationStore:
+    def __init__(self, profile, *, allow_mutation=True):
+        self.profile = profile
+        self.allow_mutation = allow_mutation
+        self.ensure_calls = 0
+        self.enqueue_calls = 0
+        self.jobs = {}
+
+    def active_profile(self, session):
+        return self.profile
+
+    def ensure_active_profile(self, session, configured):
+        if not self.allow_mutation:
+            raise AssertionError("dry-run must not create or activate a profile")
+        self.ensure_calls += 1
+        assert configured.profile_key == self.profile.profile_key
+        return self.profile
+
+    def enqueue_job(self, session, key):
+        if not self.allow_mutation:
+            raise AssertionError("dry-run must not enqueue jobs")
+        self.enqueue_calls += 1
+        return self.jobs.setdefault(key.idempotency_key, len(self.jobs) + 1)
+
+
+def test_prepare_embedding_jobs_cli_defaults():
+    args = _preparation_module().build_parser().parse_args([])
+
+    assert args.days == 30
+    assert args.limit == 500
+    assert args.dry_run is False
+
+
+def test_article_loader_excludes_irrelevant_duplicates_and_old_articles():
+    expected = {
+        "id": 42,
+        "title": "Eligible",
+        "body": "Body",
+        "summary": "Summary",
+    }
+    session = ArticleRowsSession([expected])
+
+    rows = _preparation_module().load_eligible_articles(
+        session,
+        days=30,
+        limit=500,
+    )
+
+    assert rows == [expected]
+    assert "JOIN analysis an ON an.article_id = a.id" in session.statement
+    assert "an.is_relevant = TRUE" in session.statement
+    assert "a.is_duplicate = FALSE" in session.statement
+    assert "a.published_at >= now() - make_interval(days => :days)" in session.statement
+    assert session.params == {"days": 30, "limit": 500}
+
+
+def test_prepare_embedding_jobs_dry_run_does_not_mutate_profiles_or_jobs():
+    module = _preparation_module()
+    profile = configured_preparation_profile()
+    store = PreparationStore(profile, allow_mutation=False)
+    rows = [
+        {
+            "id": 42,
+            "title": "Eligible",
+            "body": "Body",
+            "summary": "Summary",
+        }
+    ]
+
+    result = module.prepare_jobs(
+        days=30,
+        limit=500,
+        dry_run=True,
+        store=store,
+        session_factory=PreparationSessionFactory(),
+        profile_factory=lambda: profile,
+        article_loader=lambda session, **kwargs: rows,
+    )
+
+    assert result == {
+        "eligible": 1,
+        "enqueued": 0,
+        "profile": profile.profile_key,
+        "dry_run": True,
+    }
+    assert store.ensure_calls == 0
+    assert store.enqueue_calls == 0
+    assert store.jobs == {}
+
+
+def test_repeat_preparation_reuses_profile_and_does_not_duplicate_ready_job():
+    module = _preparation_module()
+    profile = configured_preparation_profile()
+    store = PreparationStore(profile)
+    rows = [
+        {
+            "id": 42,
+            "title": "Eligible",
+            "body": "Ignored because summary is preferred",
+            "summary": "Summary",
+        }
+    ]
+    kwargs = {
+        "store": store,
+        "session_factory": PreparationSessionFactory(),
+        "profile_factory": lambda: profile,
+        "article_loader": lambda session, **options: rows,
+    }
+
+    first = module.prepare_jobs(**kwargs)
+    second = module.prepare_jobs(**kwargs)
+
+    assert first["enqueued"] == second["enqueued"] == 1
+    assert store.ensure_calls == 2
+    assert store.enqueue_calls == 2
+    assert len(store.jobs) == 1
+    idempotency_key = next(iter(store.jobs))
+    expected_content = "Eligible\nSummary"
+    assert idempotency_key == f"4:article:42:{content_hash(expected_content)}"
 
 
 class IndexStore:
