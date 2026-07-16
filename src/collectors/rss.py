@@ -8,6 +8,8 @@ from time import mktime
 import feedparser
 import httpx
 
+from src.collectors.publisher_attribution import normalize_publisher_domain
+
 logger = logging.getLogger(__name__)
 
 USER_AGENT = "CIS-Thermometer/1.0 (research project; +https://github.com/cis-thermometer)"
@@ -47,12 +49,20 @@ def _parse_entries(feed) -> list[dict]:
         if not title and not body:
             continue
 
+        source_meta = getattr(entry, "source", None) or {}
+        publisher_url = source_meta.get("href") or source_meta.get("url")
+        publisher_name = source_meta.get("title")
+
         articles.append({
             "external_id": link or title[:200],
             "title": title,
             "body": body[:10000],
             "url": link,
             "published_at": published,
+            "publisher_name": publisher_name or None,
+            "publisher_url": publisher_url or None,
+            "publisher_domain": normalize_publisher_domain(publisher_url),
+            "raw_source": dict(source_meta) if source_meta else {},
         })
     return articles
 

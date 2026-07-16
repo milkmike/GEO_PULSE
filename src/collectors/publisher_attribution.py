@@ -17,7 +17,7 @@ import re
 from typing import Literal
 from urllib.parse import parse_qs, urlparse
 
-from sqlalchemy import text
+from sqlalchemy import select, text
 
 FeedMode = Literal["publisher", "site_wrapper", "publisher_discovery"]
 _FEED_MODES = {"publisher", "site_wrapper", "publisher_discovery"}
@@ -178,6 +178,128 @@ def _explicit_aliases(config: Mapping) -> tuple[str, ...]:
         if alias and not is_aggregator_domain(alias)
     }
     return tuple(sorted(aliases))
+
+
+def classify_article(session, discovery_source, article: Mapping) -> PublisherMatch:
+    """Classify one fetched item before it can reach either deduplication pass."""
+    mode = feed_mode(
+        getattr(discovery_source, "url", None),
+        _source_config(getattr(discovery_source, "config", None)),
+    )
+    source_country = str(discovery_source.country_code).upper()
+
+    if mode == "publisher":
+        return PublisherMatch(
+            status="verified",
+            publisher_source_id=None,
+            country_code=source_country,
+            method="source_catalog",
+            confidence=1.0,
+            reason="direct publisher source",
+        )
+
+    domain = normalize_publisher_domain(
+        article.get("publisher_domain") or article.get("publisher_url")
+    )
+    if mode == "site_wrapper":
+        expected_domain = expected_site_domain(discovery_source.url)
+        if not domain or domain != expected_domain:
+            return PublisherMatch(
+                status="blocked",
+                publisher_source_id=None,
+                country_code=None,
+                method="site_wrapper",
+                confidence=0.0,
+                reason=(
+                    "site wrapper publisher mismatch: "
+                    f"expected {expected_domain or 'one valid site domain'}, "
+                    f"got {domain or 'no publisher domain'}"
+                ),
+            )
+
+    if not domain:
+        return PublisherMatch(
+            status="unknown",
+            publisher_source_id=None,
+            country_code=None,
+            method="publisher_domain",
+            confidence=0.0,
+            reason="RSS item has no valid publisher domain",
+        )
+
+    from src.db import PublisherDomain
+
+    registry = session.get(PublisherDomain, domain)
+    if registry is None:
+        return PublisherMatch(
+            status="unknown",
+            publisher_source_id=None,
+            country_code=None,
+            method="publisher_domain",
+            confidence=0.0,
+            reason=f"publisher domain {domain} is not in the verified registry",
+        )
+    if registry.status != "verified":
+        return PublisherMatch(
+            status="blocked",
+            publisher_source_id=registry.publisher_source_id,
+            country_code=registry.country_code,
+            method=registry.method,
+            confidence=float(registry.confidence),
+            reason=f"publisher domain {domain} is blocked in the registry",
+        )
+
+    publisher_country = str(registry.country_code).upper()
+    return PublisherMatch(
+        status="reassigned" if publisher_country != source_country else "verified",
+        publisher_source_id=registry.publisher_source_id,
+        country_code=publisher_country,
+        method=registry.method,
+        confidence=float(registry.confidence),
+        reason=f"publisher domain {domain} matched the verified registry",
+    )
+
+
+def upsert_article_discovery(session, discovery_source, article: Mapping,
+                             match: PublisherMatch):
+    """Persist a quarantined discovery without promoting or enqueueing it."""
+    from src.db import ArticleDiscovery
+
+    discovery = session.scalar(select(ArticleDiscovery).where(
+        ArticleDiscovery.discovery_source_id == discovery_source.id,
+        ArticleDiscovery.external_id == article["external_id"],
+    ))
+    if discovery is None:
+        discovery = ArticleDiscovery(
+            discovery_source_id=discovery_source.id,
+            external_id=article["external_id"],
+            published_at=article["published_at"],
+            feed_country_code=str(discovery_source.country_code).upper(),
+        )
+        session.add(discovery)
+
+    discovery.title = article.get("title")
+    discovery.body = article.get("body", "")
+    discovery.google_url = article.get("url", "")
+    discovery.published_at = article["published_at"]
+    discovery.feed_country_code = str(discovery_source.country_code).upper()
+    discovery.publisher_name = article.get("publisher_name")
+    discovery.publisher_url = article.get("publisher_url")
+    discovery.publisher_domain = normalize_publisher_domain(
+        article.get("publisher_domain") or article.get("publisher_url")
+    )
+    discovery.geo_status = "blocked" if match.status == "blocked" else "unverified"
+    discovery.reason = match.reason
+    discovery.raw_metadata = {
+        "source": article.get("raw_source") or {},
+        "classification": {
+            "status": match.status,
+            "method": match.method,
+            "confidence": match.confidence,
+        },
+    }
+    session.flush()
+    return discovery
 
 
 def _candidate(row: Mapping, domain: str, method: str, *, alias: bool = False) -> dict:

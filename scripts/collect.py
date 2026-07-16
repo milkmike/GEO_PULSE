@@ -11,7 +11,11 @@ from sqlalchemy import text
 
 from src.collectors.rss import collect_rss_status
 from src.collectors.scraper import scrape_web_status
-from src.collectors.publisher_attribution import sync_publisher_domains
+from src.collectors.publisher_attribution import (
+    classify_article,
+    sync_publisher_domains,
+    upsert_article_discovery,
+)
 from src.config import load_sources
 from src.countries import COUNTRIES
 from src.db import get_session, wait_for_db, Source, Article
@@ -248,11 +252,43 @@ def _save_source(source, articles: list[dict]) -> tuple[int, int, int]:
     new_count = dupe_count = skipped = 0
     with get_session() as session:
         for art in articles:
-            # Exact duplicate (same source + external_id) → skip.
-            existing = session.execute(
-                text("SELECT id FROM articles WHERE source_id = :sid AND external_id = :eid"),
-                {"sid": source.id, "eid": art["external_id"]},
-            ).fetchone()
+            match = classify_article(session, source, art)
+            if match.status in {"unknown", "blocked"}:
+                upsert_article_discovery(session, source, art, match)
+                skipped += 1
+                continue
+
+            is_direct_source = match.publisher_source_id is None
+            effective_country = match.country_code or source.country_code
+            geo_status = (
+                "source_verified"
+                if is_direct_source
+                else "publisher_reassigned"
+                if effective_country != source.country_code
+                else "publisher_verified"
+            )
+
+            if is_direct_source:
+                exact_sql = (
+                    "SELECT id FROM articles "
+                    "WHERE source_id = :source_id AND external_id = :external_id"
+                )
+                exact_params = {
+                    "source_id": source.id,
+                    "external_id": art["external_id"],
+                }
+            else:
+                exact_sql = (
+                    "SELECT id FROM articles "
+                    "WHERE publisher_source_id = :publisher_source_id "
+                    "AND external_id = :external_id"
+                )
+                exact_params = {
+                    "publisher_source_id": match.publisher_source_id,
+                    "external_id": art["external_id"],
+                }
+
+            existing = session.execute(text(exact_sql), exact_params).fetchone()
             if existing:
                 skipped += 1
                 continue
@@ -267,7 +303,7 @@ def _save_source(source, articles: list[dict]) -> tuple[int, int, int]:
 
             parent_id = None
             if title_norm and len(title_norm) >= 10:
-                parent_id = find_duplicate(session, title_norm, source.country_code, published_at)
+                parent_id = find_duplicate(session, title_norm, effective_country, published_at)
 
             age_hours = (datetime.now(timezone.utc) - published_at).total_seconds() / 3600
             is_backfill = age_hours > BACKFILL_HOURS
@@ -286,6 +322,16 @@ def _save_source(source, articles: list[dict]) -> tuple[int, int, int]:
                         is_duplicate=parent_id is not None,
                         duplicate_of=parent_id,
                         is_backfill=is_backfill,
+                        publisher_source_id=match.publisher_source_id,
+                        publisher_name=art.get("publisher_name"),
+                        publisher_url=art.get("publisher_url"),
+                        publisher_domain=art.get("publisher_domain"),
+                        geo_country_code=effective_country,
+                        geo_status=geo_status,
+                        geo_method=match.method,
+                        geo_confidence=match.confidence,
+                        geo_verified_at=datetime.now(timezone.utc),
+                        resolved_url=art.get("resolved_url"),
                     )
                     session.add(article)
                     session.flush()  # Get article.id for Redis enqueue
@@ -298,7 +344,7 @@ def _save_source(source, articles: list[dict]) -> tuple[int, int, int]:
                         dupe_count += 1
                     else:
                         new_count += 1
-                        _enqueue_article(article.id, source.country_code)
+                        _enqueue_article(article.id, effective_country)
             except Exception as e:
                 skipped += 1
                 logger.warning(
@@ -312,7 +358,10 @@ def collect_all():
     """Collect from all active sources — fetch concurrently, save serially."""
     with get_session() as session:
         sources = session.execute(
-            text("SELECT id, name, url, country_code, source_type, weight FROM sources WHERE active = true")
+            text(
+                "SELECT id, name, url, country_code, source_type, weight, config "
+                "FROM sources WHERE active = true"
+            )
         ).fetchall()
 
     total_new = total_skipped = total_dupes = 0

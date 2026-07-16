@@ -107,9 +107,9 @@ def _analyze_article_by_id(article_id: int) -> bool:
         row = session.execute(
             text("""
                 SELECT ar.id, ar.title, ar.body, ar.source_id,
-                       s.name as source_name, s.country_code, s.weight
+                       source.name as source_name, source.country_code, source.weight
                 FROM articles ar
-                JOIN sources s ON ar.source_id = s.id
+                JOIN article_country_facts source ON source.article_id = ar.id
                 LEFT JOIN analysis an ON an.article_id = ar.id
                 WHERE ar.id = :aid AND an.id IS NULL AND ar.is_duplicate = FALSE
             """),
@@ -169,9 +169,9 @@ def analyze_new_articles(batch_size: int = 100):
         rows = session.execute(
             text("""
                 SELECT ar.id, ar.title, ar.body, ar.source_id,
-                       s.name as source_name, s.country_code, s.weight
+                       source.name as source_name, source.country_code, source.weight
                 FROM articles ar
-                JOIN sources s ON ar.source_id = s.id
+                JOIN article_country_facts source ON source.article_id = ar.id
                 LEFT JOIN analysis an ON an.article_id = ar.id
                 WHERE an.id IS NULL AND ar.is_duplicate = FALSE
                 ORDER BY ar.collected_at DESC

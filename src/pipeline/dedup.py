@@ -36,7 +36,7 @@ def find_duplicate(session, title_normalized: str, country_code: str,
         SELECT a.id,
                similarity(a.title_normalized, :title) AS sim
         FROM articles a
-        JOIN sources s ON a.source_id = s.id
+        JOIN article_country_facts s ON s.article_id = a.id
         WHERE s.country_code = :country
           AND a.published_at BETWEEN :from_date AND :to_date
           AND a.is_duplicate = FALSE
