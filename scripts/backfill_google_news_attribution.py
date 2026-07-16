@@ -260,14 +260,13 @@ PUBLISHER_EXTERNAL_CONFLICT_SQL = """
     LIMIT 1
 """
 
-DUPLICATE_FAMILY_SQL = """
-    /* gnews-backfill:duplicate-family */
-    WITH RECURSIVE family AS (
-        SELECT id
-        FROM articles
-        WHERE id = ANY(CAST(:seed_ids AS INTEGER[]))
+DUPLICATE_FAMILIES_BATCH_SQL = """
+    /* gnews-backfill:duplicate-families-batch */
+    WITH RECURSIVE family(root_id, id) AS (
+        SELECT seed.id, seed.id
+        FROM unnest(CAST(:seed_ids AS INTEGER[])) AS seed(id)
         UNION
-        SELECT related.id
+        SELECT current.root_id, related.id
         FROM family current
         JOIN articles member ON member.id = current.id
         JOIN articles related ON (
@@ -275,9 +274,33 @@ DUPLICATE_FAMILY_SQL = """
             OR related.id = member.duplicate_of
         )
     )
-    SELECT id
+    SELECT root_id, id
     FROM family
-    ORDER BY id
+    ORDER BY root_id, id
+"""
+
+DEDUP_BATCH_UPDATE_SQL = """
+    /* gnews-backfill:update-duplicates-batch */
+    WITH desired AS (
+        SELECT *
+        FROM unnest(
+            CAST(:article_ids AS INTEGER[]),
+            CAST(:is_duplicates AS BOOLEAN[]),
+            CAST(:duplicate_ofs AS INTEGER[]),
+            CAST(:reprint_counts AS INTEGER[])
+        ) AS value(article_id, is_duplicate, duplicate_of, reprint_count)
+    )
+    UPDATE articles AS article
+    SET is_duplicate = desired.is_duplicate,
+        duplicate_of = desired.duplicate_of,
+        reprint_count = desired.reprint_count
+    FROM desired
+    WHERE article.id = desired.article_id
+      AND (
+        article.is_duplicate IS DISTINCT FROM desired.is_duplicate
+        OR article.duplicate_of IS DISTINCT FROM desired.duplicate_of
+        OR article.reprint_count IS DISTINCT FROM desired.reprint_count
+      )
 """
 
 DEDUP_UPDATE_SQL = """
@@ -621,32 +644,67 @@ def _claim_publisher_external_id(
     return None
 
 
-def _reconcile_exact_conflict(
+def _reconcile_exact_conflicts(
     session: Any,
-    article_id: int,
-    conflict_id: int,
+    conflicts: list[tuple[int, int]],
 ) -> int:
-    rows = _mapping_rows(session.execute(
-        text(DUPLICATE_FAMILY_SQL),
-        {"seed_ids": [article_id, conflict_id]},
-    ))
-    family_ids = sorted({
-        article_id,
-        conflict_id,
-        *(int(_value(row, "id")) for row in rows),
+    pairs = sorted({
+        (int(article_id), int(conflict_id))
+        for article_id, conflict_id in conflicts
+        if int(article_id) != int(conflict_id)
     })
-    parent_id = family_ids[0]
-    updated = 0
-    for member_id in family_ids:
-        is_duplicate = member_id != parent_id
-        result = session.execute(text(DEDUP_UPDATE_SQL), {
-            "article_id": member_id,
-            "is_duplicate": is_duplicate,
-            "duplicate_of": parent_id if is_duplicate else None,
-            "reprint_count": len(family_ids) - 1 if not is_duplicate else 0,
-        })
-        updated += _rowcount(result)
-    return updated
+    if not pairs:
+        return 0
+    seed_ids = sorted({article_id for pair in pairs for article_id in pair})
+    rows = _mapping_rows(session.execute(
+        text(DUPLICATE_FAMILIES_BATCH_SQL),
+        {"seed_ids": seed_ids},
+    ))
+
+    parents = {article_id: article_id for article_id in seed_ids}
+
+    def find(article_id: int) -> int:
+        parents.setdefault(article_id, article_id)
+        while parents[article_id] != article_id:
+            parents[article_id] = parents[parents[article_id]]
+            article_id = parents[article_id]
+        return article_id
+
+    def union(left: int, right: int) -> None:
+        left_root = find(left)
+        right_root = find(right)
+        if left_root != right_root:
+            parents[right_root] = left_root
+
+    for article_id, conflict_id in pairs:
+        union(article_id, conflict_id)
+    for row in rows:
+        union(int(_value(row, "root_id")), int(_value(row, "id")))
+
+    components: defaultdict[int, set[int]] = defaultdict(set)
+    for article_id in parents:
+        components[find(article_id)].add(article_id)
+
+    article_ids: list[int] = []
+    is_duplicates: list[bool] = []
+    duplicate_ofs: list[int | None] = []
+    reprint_counts: list[int] = []
+    for members in sorted(components.values(), key=min):
+        ordered = sorted(members)
+        parent_id = ordered[0]
+        for member_id in ordered:
+            is_duplicate = member_id != parent_id
+            article_ids.append(member_id)
+            is_duplicates.append(is_duplicate)
+            duplicate_ofs.append(parent_id if is_duplicate else None)
+            reprint_counts.append(len(ordered) - 1 if not is_duplicate else 0)
+
+    return _rowcount(session.execute(text(DEDUP_BATCH_UPDATE_SQL), {
+        "article_ids": article_ids,
+        "is_duplicates": is_duplicates,
+        "duplicate_ofs": duplicate_ofs,
+        "reprint_counts": reprint_counts,
+    }))
 
 
 def _reconcile_duplicates(session: Any, affected_ids: list[int]) -> int:
@@ -945,12 +1003,10 @@ def run_backfill(
                         session,
                         classifications,
                     )
-                    for article_id, conflict_id in exact_conflicts:
-                        batch_duplicates += _reconcile_exact_conflict(
-                            session,
-                            article_id,
-                            conflict_id,
-                        )
+                    batch_duplicates += _reconcile_exact_conflicts(
+                        session,
+                        exact_conflicts,
+                    )
                 done = len(rows) < batch_size
 
         if not rows:

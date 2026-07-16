@@ -108,11 +108,13 @@ class MemorySession:
         self.backend = backend
         self.articles = articles
         self.mutations = []
+        self.executions = []
 
     def execute(self, statement, params=None):
         sql = str(statement)
         params = dict(params or {})
         normalized = " ".join(sql.split())
+        self.executions.append((normalized, params))
 
         if "gnews-backfill:registry" in sql:
             rows = []
@@ -234,31 +236,32 @@ class MemorySession:
             ]
             return MemoryResult(rows[:1])
 
-        if "gnews-backfill:duplicate-family" in sql:
-            seeds = set(params["seed_ids"])
-            family = set(seeds)
-            changed = True
-            while changed:
-                changed = False
-                for article in self.articles:
-                    if (
-                        article.get("duplicate_of") in family
-                        and article["id"] not in family
-                    ):
-                        family.add(article["id"])
-                        changed = True
-                    if (
-                        article["id"] in family
-                        and article.get("duplicate_of") is not None
-                        and article["duplicate_of"] not in family
-                    ):
-                        family.add(article["duplicate_of"])
-                        changed = True
-            return MemoryResult([
-                {"id": article["id"]}
-                for article in sorted(self.articles, key=lambda item: item["id"])
-                if article["id"] in family
-            ])
+        if "gnews-backfill:duplicate-families-batch" in sql:
+            rows = []
+            for root_id in params["seed_ids"]:
+                family = {root_id}
+                changed = True
+                while changed:
+                    changed = False
+                    for article in self.articles:
+                        if (
+                            article.get("duplicate_of") in family
+                            and article["id"] not in family
+                        ):
+                            family.add(article["id"])
+                            changed = True
+                        if (
+                            article["id"] in family
+                            and article.get("duplicate_of") is not None
+                            and article["duplicate_of"] not in family
+                        ):
+                            family.add(article["duplicate_of"])
+                            changed = True
+                rows.extend(
+                    {"root_id": root_id, "id": article_id}
+                    for article_id in sorted(family)
+                )
+            return MemoryResult(rows)
 
         if "gnews-backfill:update-unclassified" in sql:
             changed = 0
@@ -304,6 +307,29 @@ class MemorySession:
                     "source_verified", "publisher_verified", "publisher_reassigned"
                 }
             ])
+
+        if "gnews-backfill:update-duplicates-batch" in sql:
+            changed = 0
+            for article_id, is_duplicate, duplicate_of, reprint_count in zip(
+                params["article_ids"],
+                params["is_duplicates"],
+                params["duplicate_ofs"],
+                params["reprint_counts"],
+            ):
+                article = self._article(article_id)
+                desired = {
+                    "is_duplicate": is_duplicate,
+                    "duplicate_of": duplicate_of,
+                    "reprint_count": reprint_count,
+                }
+                if any(
+                    article.get(key) != value
+                    for key, value in desired.items()
+                ):
+                    article.update(desired)
+                    changed += 1
+            self.mutations.append((normalized, params))
+            return MemoryResult(rowcount=changed)
 
         if "gnews-backfill:update-duplicate" in sql:
             article = self._article(params["article_id"])
@@ -405,6 +431,7 @@ class MemoryBackend:
         self.invariant_snapshot_count = 0
         self.invariant_snapshot_hook = None
         self.mutation_sql = []
+        self.execution_sql = []
 
     @staticmethod
     def _article(article_id, source_id, external_id, url, title,
@@ -443,6 +470,7 @@ class MemoryBackend:
         else:
             self.articles = working
             self.mutation_sql.extend(session.mutations)
+            self.execution_sql.extend(session.executions)
 
     def article(self, article_id):
         return next(item for item in self.articles if item["id"] == article_id)
@@ -554,6 +582,118 @@ def test_apply_bulk_updates_500_unclassified_rows_once_per_batch(monkeypatch):
     assert all(
         article["geo_status"] == "legacy_unverified"
         for article in backend.articles
+    )
+
+
+def test_apply_batches_exact_conflict_family_queries_and_updates(monkeypatch):
+    backend = MemoryBackend()
+    reuters_parent = backend._article(
+        900, 3, "", "https://reuters.com/empty-parent",
+        "Reuters empty parent", "reuters empty parent",
+        NOW - timedelta(hours=2), geo_status="source_verified",
+    )
+    reuters_parent.update({
+        "publisher_source_id": 3,
+        "geo_country_code": "GB",
+        "reprint_count": 1,
+    })
+    reuters_child = backend._article(
+        901, 3, "reuters-child", "https://reuters.com/empty-child",
+        "Reuters existing child", "reuters existing child",
+        NOW - timedelta(hours=1), geo_status="source_verified",
+    )
+    reuters_child.update({"is_duplicate": True, "duplicate_of": 900})
+    elpais_parent = backend._article(
+        910, 2, "", "https://elpais.com/empty-parent",
+        "EL PAÍS empty parent", "elpais empty parent",
+        NOW - timedelta(hours=2), geo_status="source_verified",
+    )
+    elpais_parent.update({
+        "publisher_source_id": 2,
+        "geo_country_code": "ES",
+        "reprint_count": 1,
+    })
+    elpais_child = backend._article(
+        911, 2, "elpais-child", "https://elpais.com/empty-child",
+        "EL PAÍS existing child", "elpais existing child",
+        NOW - timedelta(hours=1), geo_status="source_verified",
+    )
+    elpais_child.update({"is_duplicate": True, "duplicate_of": 910})
+    backend.articles = [
+        reuters_parent, reuters_child, elpais_parent, elpais_child,
+        *[
+        backend._article(
+            article_id,
+            1,
+            "",
+            f"https://news.google.com/empty-{article_id}",
+            (
+                f"Collision {article_id} - Reuters"
+                if article_id < 1_050
+                else f"Collision {article_id} - EL PAÍS"
+            ),
+            f"collision {article_id}",
+            NOW - timedelta(minutes=1),
+        )
+        for article_id in range(1_000, 1_100)
+        ],
+    ]
+    checkpoint = InterruptingCheckpoint()
+    checkpoint.interrupt = False
+    monkeypatch.setattr(backfill, "get_session", backend.session_factory)
+
+    report = backfill.run_backfill(
+        apply=True,
+        since_days=104,
+        batch_size=100,
+        checkpoint=checkpoint,
+    )
+
+    family_queries = [
+        params
+        for sql, params in backend.execution_sql
+        if "gnews-backfill:duplicate-families-batch" in sql
+    ]
+    family_updates = [
+        params
+        for sql, params in backend.execution_sql
+        if "gnews-backfill:update-duplicates-batch" in sql
+    ]
+    legacy_family_queries = [
+        sql
+        for sql, _ in backend.execution_sql
+        if "gnews-backfill:duplicate-family" in sql
+        and "duplicate-families-batch" not in sql
+    ]
+    legacy_family_updates = [
+        sql
+        for sql, _ in backend.execution_sql
+        if "gnews-backfill:update-duplicate" in sql
+        and "update-duplicates-batch" not in sql
+    ]
+
+    assert len(family_queries) == 1
+    assert len(family_updates) == 1
+    assert legacy_family_queries == []
+    assert legacy_family_updates == []
+    assert len(family_queries[0]["seed_ids"]) == 102
+    assert len(family_updates[0]["article_ids"]) == 104
+    assert report.duplicates_updated == 102
+    assert backend.article(900)["is_duplicate"] is False
+    assert backend.article(900)["duplicate_of"] is None
+    assert backend.article(900)["reprint_count"] == 51
+    assert backend.article(910)["is_duplicate"] is False
+    assert backend.article(910)["duplicate_of"] is None
+    assert backend.article(910)["reprint_count"] == 51
+    assert backend.article(901)["duplicate_of"] == 900
+    assert backend.article(911)["duplicate_of"] == 910
+    assert all(
+        backend.article(article_id)["is_duplicate"] is True
+        and backend.article(article_id)["duplicate_of"] == (
+            900 if article_id < 1_050 else 910
+        )
+        and backend.article(article_id)["reprint_count"] == 0
+        for article_id in range(1_000, 1_100)
     )
 
 
@@ -999,6 +1139,19 @@ def test_batch_sql_is_keyset_bounded_and_mutations_preserve_provenance():
     assert (
         "JOIN articles candidate ON candidate.id = candidate_ids.id"
     ) in dedup_compact
+    family_compact = " ".join(
+        backfill.DUPLICATE_FAMILIES_BATCH_SQL.split()
+    )
+    assert "family(root_id, id)" in family_compact
+    assert "unnest(CAST(:seed_ids AS INTEGER[]))" in family_compact
+    assert "SELECT current.root_id, related.id" in family_compact
+    batch_dedup_update_compact = " ".join(
+        backfill.DEDUP_BATCH_UPDATE_SQL.split()
+    )
+    assert "CAST(:article_ids AS INTEGER[])" in batch_dedup_update_compact
+    assert "CAST(:is_duplicates AS BOOLEAN[])" in batch_dedup_update_compact
+    assert "CAST(:duplicate_ofs AS INTEGER[])" in batch_dedup_update_compact
+    assert "CAST(:reprint_counts AS INTEGER[])" in batch_dedup_update_compact
     assert "MAX(id)" in backfill.ARTICLE_HIGH_WATER_SQL
     invariant_compact = " ".join(backfill.INVARIANT_COUNTS_SQL.split())
     provenance_compact = " ".join(backfill.PROVENANCE_SQL.split())
@@ -1010,7 +1163,11 @@ def test_batch_sql_is_keyset_bounded_and_mutations_preserve_provenance():
     assert "geo_method IS NULL" in unclassified_compact
     assert "geo_verified_at IS NULL" in unclassified_compact
     mutation_sql = " ".join(
-        (backfill.CLASSIFIED_UPDATE_SQL, backfill.UNCLASSIFIED_UPDATE_SQL)
+        (
+            backfill.CLASSIFIED_UPDATE_SQL,
+            backfill.UNCLASSIFIED_UPDATE_SQL,
+            backfill.DEDUP_BATCH_UPDATE_SQL,
+        )
     ).upper()
     assert "DELETE " not in mutation_sql
     for column in ("SOURCE_ID", "EXTERNAL_ID", "URL"):
@@ -1302,6 +1459,96 @@ def test_postgres_split_dedup_plan_uses_bounded_index_paths():
         }.issubset(split_indexes)
         assert split["Plan"]["Actual Rows"] == legacy["Plan"]["Actual Rows"]
         assert split["Plan"]["Total Cost"] < legacy["Plan"]["Total Cost"]
+    finally:
+        engine.dispose()
+
+
+def test_postgres_batch_exact_conflicts_merge_existing_families_once():
+    dsn = os.getenv("GEO_PULSE_TEST_DATABASE_URL")
+    if not dsn or os.getenv("GEO_PULSE_TEST_DATABASE_RESET") != "1":
+        pytest.skip("requires an explicitly disposable PostgreSQL database")
+    pytest.importorskip("psycopg2")
+    engine = create_engine(dsn)
+    Session = sessionmaker(bind=engine, expire_on_commit=False)
+    family_queries = 0
+    family_updates = 0
+
+    @event.listens_for(engine, "before_cursor_execute")
+    def count_family_sql(
+        connection, cursor, statement, parameters, context, executemany,
+    ):
+        nonlocal family_queries, family_updates
+        if "gnews-backfill:duplicate-families-batch" in statement:
+            family_queries += 1
+        if "gnews-backfill:update-duplicates-batch" in statement:
+            family_updates += 1
+
+    try:
+        _reset_postgres_backfill_schema(engine)
+        with engine.begin() as connection:
+            connection.execute(text("""
+                INSERT INTO sources(id,name,url,country_code,config)
+                VALUES (1,'Publisher','https://publisher.example','ES','{}')
+            """))
+            connection.execute(text("""
+                INSERT INTO articles(
+                    id,source_id,external_id,url,published_at,
+                    title_normalized,geo_status,is_duplicate,
+                    duplicate_of,reprint_count
+                ) VALUES
+                  (10,1,'10','https://publisher.example/10',:now,
+                   'family-a-parent','source_verified',FALSE,NULL,1),
+                  (11,1,'11','https://publisher.example/11',:now,
+                   'family-a-child','source_verified',TRUE,10,0),
+                  (12,1,'12','https://publisher.example/12',:now,
+                   'family-a-new','source_verified',FALSE,NULL,0),
+                  (20,1,'20','https://publisher.example/20',:now,
+                   'family-b-parent','source_verified',FALSE,NULL,1),
+                  (21,1,'21','https://publisher.example/21',:now,
+                   'family-b-child','source_verified',TRUE,20,0),
+                  (22,1,'22','https://publisher.example/22',:now,
+                   'family-b-new','source_verified',FALSE,NULL,0)
+            """), {"now": NOW})
+
+        with Session.begin() as session:
+            updated = backfill._reconcile_exact_conflicts(
+                session,
+                [(12, 11), (22, 21), (12, 22), (12, 22)],
+            )
+
+        with engine.connect() as connection:
+            rows = connection.execute(text("""
+                SELECT id,source_id,external_id,url,is_duplicate,
+                       duplicate_of,reprint_count
+                FROM articles
+                ORDER BY id
+            """)).mappings().all()
+
+        assert updated == 5
+        assert family_queries == 1
+        assert family_updates == 1
+        assert [
+            (
+                row["id"], row["is_duplicate"],
+                row["duplicate_of"], row["reprint_count"],
+            )
+            for row in rows
+        ] == [
+            (10, False, None, 5),
+            (11, True, 10, 0),
+            (12, True, 10, 0),
+            (20, True, 10, 0),
+            (21, True, 10, 0),
+            (22, True, 10, 0),
+        ]
+        assert [
+            (row["id"], row["source_id"], row["external_id"], row["url"])
+            for row in rows
+        ] == [
+            (article_id, 1, str(article_id),
+             f"https://publisher.example/{article_id}")
+            for article_id in (10, 11, 12, 20, 21, 22)
+        ]
     finally:
         engine.dispose()
 
