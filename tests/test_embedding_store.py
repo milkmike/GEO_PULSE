@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from src import embedding_store as embedding_store_module
 from src.embedding_store import (
     EmbeddingJob,
     EmbeddingProfile,
@@ -218,6 +219,8 @@ class EnsureProfileSession:
     def execute(self, statement, params):
         sql = str(statement)
         self.statements.append((sql, params))
+        if "pg_advisory_xact_lock" in sql:
+            return ScalarResult(None)
         return ProfileResult(
             [
                 {
@@ -253,7 +256,12 @@ def test_ensure_active_profile_creates_or_reuses_configured_profile():
     assert first == second
     assert first.id == 17
     assert first.active is True
-    sql, params = session.statements[0]
+    lock_sql, lock_params = session.statements[0]
+    assert "pg_advisory_xact_lock(:lock_key)" in lock_sql
+    assert lock_params == {
+        "lock_key": embedding_store_module.ACTIVE_PROFILE_LOCK_KEY,
+    }
+    sql, params = session.statements[1]
     assert "INSERT INTO embedding_profiles" in sql
     assert "ON CONFLICT (profile_key)" in sql
     assert "active = FALSE" in sql
@@ -513,10 +521,15 @@ def test_article_success_projects_1536_vector_from_authoritative_store_in_same_s
     assert "INSERT INTO content_embeddings" in session.statement
     assert "UPDATE analysis" in session.statement
     assert "FROM stored" in session.statement
-    assert ":dimensions = 1536" in session.statement
+    assert "RETURNING profile_id, object_type, object_id, embedding" in session.statement
+    assert "SET embedding = stored.embedding" in session.statement
+    assert "JOIN embedding_profiles" in session.statement
+    assert "dimensions = 1536" in session.statement
+    assert "active = TRUE" in session.statement
+    assert ":dimensions" not in session.statement
     assert "stored.object_type = 'article'" in session.statement
     assert "analysis.article_id::text = stored.object_id" in session.statement
-    assert session.params["dimensions"] == 1536
+    assert "dimensions" not in session.params
 
 
 def test_prepare_embedding_jobs_command_exists():

@@ -17,6 +17,8 @@ from sqlalchemy import text
 
 
 EMBEDDABLE_OBJECT_TYPES = frozenset({"article", "entity", "event", "story"})
+# Stable transaction-lock namespace for the singleton active-profile switch.
+ACTIVE_PROFILE_LOCK_KEY = 4_383_600_651_739_901_817
 
 
 @dataclass(frozen=True)
@@ -258,6 +260,10 @@ class EmbeddingStore:
         profile: EmbeddingProfile,
     ) -> EmbeddingProfile:
         """Create or reuse the configured profile and make it the only active one."""
+        session.execute(
+            text("SELECT pg_advisory_xact_lock(:lock_key)"),
+            {"lock_key": ACTIVE_PROFILE_LOCK_KEY},
+        )
         raw = session.execute(
             text(
                 """
@@ -482,13 +488,16 @@ class EmbeddingStore:
                             status = 'ready',
                             error = NULL,
                             updated_at = now()
-                        RETURNING object_type, object_id
+                        RETURNING profile_id, object_type, object_id, embedding
                     ), projected AS (
                         UPDATE analysis
-                        SET embedding = CAST(:embedding AS vector)
+                        SET embedding = stored.embedding
                         FROM stored
-                        WHERE :dimensions = 1536
-                          AND stored.object_type = 'article'
+                        JOIN embedding_profiles ep
+                          ON ep.id = stored.profile_id
+                         AND ep.dimensions = 1536
+                         AND ep.active = TRUE
+                        WHERE stored.object_type = 'article'
                           AND analysis.article_id::text = stored.object_id
                         RETURNING analysis.article_id
                     )
@@ -500,7 +509,6 @@ class EmbeddingStore:
                     "job_id": job.id,
                     "generation": job.attempts,
                     "embedding": vector,
-                    "dimensions": profile.dimensions,
                 },
             ).scalar_one()
         )
