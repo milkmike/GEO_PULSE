@@ -1,0 +1,712 @@
+#!/usr/bin/env python3
+"""Backfill legacy Google News publisher attribution without provenance rewrites.
+
+The command is read-only unless ``--apply`` is supplied. Apply mode commits
+bounded keyset batches and persists the cursor only after each transaction has
+committed successfully.
+"""
+
+from __future__ import annotations
+
+import argparse
+from collections import Counter, defaultdict
+from dataclasses import asdict, dataclass
+from datetime import datetime, timedelta, timezone
+import hashlib
+import json
+import logging
+import os
+from pathlib import Path
+import re
+import tempfile
+import unicodedata
+from typing import Any, Mapping
+
+from sqlalchemy import text
+
+from src.collectors.publisher_attribution import normalize_publisher_domain
+from src.db import get_session, wait_for_db
+
+
+logger = logging.getLogger("backfill-google-news-attribution")
+
+CHECKPOINT_VERSION = 1
+DEFAULT_CHECKPOINT = Path("backups/google-news-attribution-checkpoint.json")
+DEFAULT_SINCE_DAYS = 104
+DEFAULT_BATCH_SIZE = 500
+MAX_BATCH_SIZE = 1000
+_FINAL_SUFFIX_SEPARATOR = re.compile(r" (?:-|–|—) ")
+
+
+REGISTRY_SQL = """
+    /* gnews-backfill:registry */
+    SELECT registry.domain,
+           registry.publisher_source_id,
+           registry.country_code,
+           source.name AS source_name,
+           source.url AS source_url
+    FROM publisher_domains registry
+    JOIN sources source ON source.id = registry.publisher_source_id
+    WHERE registry.status = 'verified'
+    ORDER BY registry.domain, registry.publisher_source_id
+"""
+
+ARTICLE_BATCH_SQL = """
+    /* gnews-backfill:batch */
+    SELECT article.id, article.source_id, article.external_id, article.title,
+           article.url, article.resolved_url, article.published_at,
+           article.title_normalized, article.publisher_source_id,
+           article.publisher_name, article.publisher_domain,
+           article.geo_country_code, article.geo_status, article.geo_method,
+           article.geo_confidence, article.geo_verified_at,
+           source.country_code AS discovery_country_code
+    FROM articles article
+    JOIN sources source ON source.id = article.source_id
+    WHERE source.config->>'feed_mode' = 'publisher_discovery'
+      AND article.published_at >= NOW() - make_interval(days => :since_days)
+      AND article.id > :last_id
+    ORDER BY article.id
+    LIMIT :batch_size
+"""
+
+CLASSIFIED_UPDATE_SQL = """
+    /* gnews-backfill:update-classified */
+    UPDATE articles
+    SET publisher_source_id = :publisher_source_id,
+        publisher_name = :publisher_name,
+        publisher_domain = :publisher_domain,
+        geo_country_code = :country_code,
+        geo_status = :status,
+        geo_method = 'legacy_title_suffix',
+        geo_confidence = 1.000,
+        geo_verified_at = NOW()
+    WHERE id = :article_id
+      AND (
+        publisher_source_id IS DISTINCT FROM :publisher_source_id
+        OR publisher_name IS DISTINCT FROM :publisher_name
+        OR publisher_domain IS DISTINCT FROM :publisher_domain
+        OR geo_country_code IS DISTINCT FROM :country_code
+        OR geo_status IS DISTINCT FROM :status
+        OR geo_method IS DISTINCT FROM 'legacy_title_suffix'
+        OR geo_confidence IS DISTINCT FROM 1.000
+        OR geo_verified_at IS NULL
+      )
+"""
+
+UNCLASSIFIED_UPDATE_SQL = """
+    /* gnews-backfill:update-unclassified */
+    UPDATE articles
+    SET geo_status = 'legacy_unverified'
+    WHERE id = :article_id
+      AND geo_status IS DISTINCT FROM 'legacy_unverified'
+"""
+
+INVARIANT_COUNTS_SQL = """
+    /* gnews-backfill:invariant-counts */
+    SELECT (SELECT COUNT(*) FROM articles) AS article_rows,
+           (SELECT COUNT(*) FROM analysis) AS analysis_rows,
+           (SELECT COUNT(*) FROM story_articles) AS story_article_rows
+"""
+
+PROVENANCE_SQL = """
+    /* gnews-backfill:provenance */
+    SELECT id, source_id, external_id, url
+    FROM articles
+    ORDER BY id
+"""
+
+DEDUP_CANDIDATES_SQL = """
+    /* gnews-backfill:dedup-candidates */
+    WITH affected AS (
+        SELECT id,
+               COALESCE(publisher_source_id, source_id) AS publisher_id,
+               external_id, title_normalized, published_at
+        FROM articles
+        WHERE id = ANY(CAST(:affected_ids AS INTEGER[]))
+          AND geo_status IN (
+              'source_verified', 'publisher_verified', 'publisher_reassigned'
+          )
+    )
+    SELECT DISTINCT candidate.id,
+           COALESCE(candidate.publisher_source_id,
+                    candidate.source_id) AS publisher_id,
+           candidate.external_id, candidate.title_normalized,
+           candidate.published_at, candidate.is_duplicate,
+           candidate.duplicate_of, candidate.reprint_count
+    FROM articles candidate
+    JOIN affected ON (
+        candidate.id = affected.id
+        OR (
+            candidate.external_id IS NOT NULL
+            AND candidate.external_id <> ''
+            AND candidate.external_id = affected.external_id
+            AND COALESCE(candidate.publisher_source_id, candidate.source_id)
+                = affected.publisher_id
+        )
+        OR (
+            candidate.title_normalized IS NOT NULL
+            AND candidate.title_normalized <> ''
+            AND candidate.title_normalized = affected.title_normalized
+            AND candidate.published_at BETWEEN
+                affected.published_at - INTERVAL '48 hours'
+                AND affected.published_at + INTERVAL '48 hours'
+        )
+    )
+    WHERE candidate.geo_status IN (
+        'source_verified', 'publisher_verified', 'publisher_reassigned'
+    )
+    ORDER BY candidate.id
+"""
+
+DEDUP_UPDATE_SQL = """
+    /* gnews-backfill:update-duplicate */
+    UPDATE articles
+    SET is_duplicate = :is_duplicate,
+        duplicate_of = :duplicate_of,
+        reprint_count = :reprint_count
+    WHERE id = :article_id
+      AND (
+        is_duplicate IS DISTINCT FROM :is_duplicate
+        OR duplicate_of IS DISTINCT FROM :duplicate_of
+        OR reprint_count IS DISTINCT FROM :reprint_count
+      )
+"""
+
+
+@dataclass(frozen=True)
+class BackfillReport:
+    mode: str
+    scanned: int
+    classifiable: int
+    unclassified: int
+    updated: int
+    duplicates_updated: int
+    batches: int
+    last_id: int
+    done: bool
+    counts: Mapping[str, Mapping[str, int]]
+    invariants: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
+class _Publisher:
+    source_id: int
+    source_name: str
+    country_code: str
+    domains: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _Classification:
+    publisher_source_id: int
+    publisher_name: str
+    publisher_domain: str
+    country_code: str
+    status: str
+
+
+class JsonCheckpointStore:
+    """Atomic file checkpoint; compatible stores need only load/save methods."""
+
+    def __init__(self, path: Path):
+        self.path = Path(path)
+
+    def load(self) -> dict[str, Any] | None:
+        if not self.path.exists():
+            return None
+        try:
+            payload = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(f"invalid checkpoint {self.path}: {exc}") from exc
+        if not isinstance(payload, dict):
+            raise ValueError(f"invalid checkpoint {self.path}: expected object")
+        return payload
+
+    def save(self, state: Mapping[str, Any]) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        payload = json.dumps(
+            state,
+            ensure_ascii=False,
+            sort_keys=True,
+            indent=2,
+            default=_json_default,
+        )
+        fd, temporary_name = tempfile.mkstemp(
+            dir=self.path.parent,
+            prefix=f".{self.path.name}.",
+            suffix=".tmp",
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(payload)
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary_name, self.path)
+        except Exception:
+            try:
+                os.unlink(temporary_name)
+            except FileNotFoundError:
+                pass
+            raise
+
+
+def _json_default(value: Any) -> str:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    raise TypeError(f"{type(value).__name__} is not JSON serializable")
+
+
+def _value(row: Any, name: str, default: Any = None) -> Any:
+    if isinstance(row, Mapping):
+        return row.get(name, default)
+    mapping = getattr(row, "_mapping", None)
+    if mapping is not None:
+        return mapping.get(name, default)
+    return getattr(row, name, default)
+
+
+def _mapping_rows(result: Any) -> list[Mapping[str, Any]]:
+    mappings = getattr(result, "mappings", None)
+    if mappings is not None:
+        return list(mappings().all())
+    return [dict(getattr(row, "_mapping", row)) for row in result.fetchall()]
+
+
+def _normalize_name(value: str | None) -> str:
+    normalized = unicodedata.normalize("NFKC", value or "").casefold()
+    normalized = normalized.replace("ё", "е")
+    normalized = re.sub(r"[^\w]+", " ", normalized, flags=re.UNICODE)
+    return " ".join(normalized.split())
+
+
+def _publisher_suffix(title: str | None) -> str | None:
+    if not isinstance(title, str):
+        return None
+    matches = list(_FINAL_SUFFIX_SEPARATOR.finditer(title))
+    if not matches:
+        return None
+    match = matches[-1]
+    if not title[:match.start()].strip():
+        return None
+    suffix = title[match.end():].strip()
+    return suffix or None
+
+
+def _publisher_map(session: Any) -> dict[str, _Publisher]:
+    rows = _mapping_rows(session.execute(text(REGISTRY_SQL)))
+    grouped: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
+    for row in rows:
+        normalized = _normalize_name(str(_value(row, "source_name", "")))
+        if normalized:
+            grouped[normalized].append(row)
+
+    result: dict[str, _Publisher] = {}
+    for normalized, candidates in grouped.items():
+        source_ids = {int(_value(row, "publisher_source_id")) for row in candidates}
+        if len(source_ids) != 1:
+            continue
+        source_id = next(iter(source_ids))
+        source_rows = [
+            row for row in candidates
+            if int(_value(row, "publisher_source_id")) == source_id
+        ]
+        countries = {
+            str(_value(row, "country_code", "")).upper()
+            for row in source_rows
+        }
+        if len(countries) != 1:
+            continue
+        domains = tuple(sorted({
+            domain
+            for row in source_rows
+            for domain in (normalize_publisher_domain(_value(row, "domain")),)
+            if domain
+        }))
+        if not domains:
+            continue
+        result[normalized] = _Publisher(
+            source_id=source_id,
+            source_name=str(_value(source_rows[0], "source_name")),
+            country_code=next(iter(countries)),
+            domains=domains,
+        )
+    return result
+
+
+def _classify(row: Mapping[str, Any], publishers: Mapping[str, _Publisher]) -> (
+    _Classification | None
+):
+    suffix = _publisher_suffix(_value(row, "title"))
+    publisher = publishers.get(_normalize_name(suffix)) if suffix else None
+    if publisher is None:
+        return None
+    resolved_domain = normalize_publisher_domain(_value(row, "resolved_url"))
+    stored_domain = normalize_publisher_domain(_value(row, "publisher_domain"))
+    publisher_domain = next(
+        (
+            domain for domain in (resolved_domain, stored_domain)
+            if domain in publisher.domains
+        ),
+        publisher.domains[0],
+    )
+    discovery_country = str(_value(row, "discovery_country_code", "")).upper()
+    status = (
+        "publisher_verified"
+        if discovery_country == publisher.country_code
+        else "publisher_reassigned"
+    )
+    return _Classification(
+        publisher_source_id=publisher.source_id,
+        publisher_name=publisher.source_name,
+        publisher_domain=publisher_domain,
+        country_code=publisher.country_code,
+        status=status,
+    )
+
+
+def _snapshot_invariants(session: Any) -> dict[str, Any]:
+    counts = _mapping_rows(session.execute(text(INVARIANT_COUNTS_SQL)))[0]
+    digest = hashlib.sha256()
+    for row in _mapping_rows(session.execute(text(PROVENANCE_SQL))):
+        payload = [
+            int(_value(row, "id")),
+            int(_value(row, "source_id")),
+            _value(row, "external_id"),
+            _value(row, "url"),
+        ]
+        digest.update(
+            json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode(
+                "utf-8"
+            )
+        )
+        digest.update(b"\n")
+    return {
+        "article_rows": int(_value(counts, "article_rows", 0)),
+        "analysis_rows": int(_value(counts, "analysis_rows", 0)),
+        "story_article_rows": int(_value(counts, "story_article_rows", 0)),
+        "provenance_sha256": digest.hexdigest(),
+    }
+
+
+def _rowcount(result: Any) -> int:
+    return max(0, int(getattr(result, "rowcount", 0) or 0))
+
+
+def _dedup_connected(left: Mapping[str, Any], right: Mapping[str, Any]) -> bool:
+    left_external = _value(left, "external_id")
+    right_external = _value(right, "external_id")
+    if (
+        left_external
+        and right_external
+        and left_external == right_external
+        and int(_value(left, "publisher_id")) == int(_value(right, "publisher_id"))
+    ):
+        return True
+    left_title = _value(left, "title_normalized")
+    right_title = _value(right, "title_normalized")
+    if not left_title or left_title != right_title:
+        return False
+    left_time = _value(left, "published_at")
+    right_time = _value(right, "published_at")
+    return bool(
+        isinstance(left_time, datetime)
+        and isinstance(right_time, datetime)
+        and abs(left_time - right_time) <= timedelta(hours=48)
+    )
+
+
+def _reconcile_duplicates(session: Any, affected_ids: list[int]) -> int:
+    if not affected_ids:
+        return 0
+    rows = _mapping_rows(session.execute(
+        text(DEDUP_CANDIDATES_SQL),
+        {"affected_ids": affected_ids},
+    ))
+    if len(rows) < 2:
+        return 0
+
+    parents = list(range(len(rows)))
+
+    def find(index: int) -> int:
+        while parents[index] != index:
+            parents[index] = parents[parents[index]]
+            index = parents[index]
+        return index
+
+    def union(left: int, right: int) -> None:
+        left_root = find(left)
+        right_root = find(right)
+        if left_root != right_root:
+            parents[right_root] = left_root
+
+    for left in range(len(rows)):
+        for right in range(left + 1, len(rows)):
+            if _dedup_connected(rows[left], rows[right]):
+                union(left, right)
+
+    components: dict[int, list[Mapping[str, Any]]] = defaultdict(list)
+    for index, row in enumerate(rows):
+        components[find(index)].append(row)
+
+    affected = set(affected_ids)
+    updated = 0
+    for component in components.values():
+        if len(component) < 2 or not any(
+            int(_value(row, "id")) in affected for row in component
+        ):
+            continue
+        ordered = sorted(component, key=lambda row: int(_value(row, "id")))
+        parent_id = int(_value(ordered[0], "id"))
+        for index, row in enumerate(ordered):
+            article_id = int(_value(row, "id"))
+            result = session.execute(text(DEDUP_UPDATE_SQL), {
+                "article_id": article_id,
+                "is_duplicate": index > 0,
+                "duplicate_of": parent_id if index > 0 else None,
+                "reprint_count": len(ordered) - 1 if index == 0 else 0,
+            })
+            updated += _rowcount(result)
+    return updated
+
+
+def _checkpoint_store(checkpoint: Any) -> Any:
+    if checkpoint is None:
+        return JsonCheckpointStore(DEFAULT_CHECKPOINT)
+    if hasattr(checkpoint, "load") and hasattr(checkpoint, "save"):
+        return checkpoint
+    return JsonCheckpointStore(Path(checkpoint))
+
+
+def _validated_state(
+    store: Any,
+    *,
+    since_days: int,
+    before: Mapping[str, Any],
+) -> dict[str, Any]:
+    state = store.load()
+    if state is None:
+        state = {
+            "version": CHECKPOINT_VERSION,
+            "since_days": since_days,
+            "last_id": 0,
+            "done": False,
+            "before_invariants": dict(before),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        store.save(state)
+        return state
+    if state.get("version") != CHECKPOINT_VERSION:
+        raise ValueError(f"unsupported checkpoint version: {state.get('version')!r}")
+    if int(state.get("since_days", 0)) != since_days:
+        raise ValueError("checkpoint since_days does not match this run")
+    if not isinstance(state.get("before_invariants"), Mapping):
+        raise ValueError("checkpoint is missing before_invariants")
+    return dict(state)
+
+
+def _sorted_counts(counters: Mapping[str, Counter]) -> dict[str, dict[str, int]]:
+    return {
+        name: dict(sorted(counter.items()))
+        for name, counter in counters.items()
+    }
+
+
+def run_backfill(
+    *,
+    since_days: int = DEFAULT_SINCE_DAYS,
+    batch_size: int = DEFAULT_BATCH_SIZE,
+    apply: bool = False,
+    checkpoint: Any = None,
+) -> BackfillReport:
+    """Classify legacy discovery articles in resumable, bounded transactions."""
+
+    if since_days < 1:
+        raise ValueError("since_days must be positive")
+    if not 1 <= batch_size <= MAX_BATCH_SIZE:
+        raise ValueError(f"batch_size must be between 1 and {MAX_BATCH_SIZE}")
+
+    with get_session() as session:
+        publishers = _publisher_map(session)
+        current_before = _snapshot_invariants(session)
+
+    store = _checkpoint_store(checkpoint)
+    if apply:
+        state = _validated_state(
+            store,
+            since_days=since_days,
+            before=current_before,
+        )
+        before = dict(state["before_invariants"])
+        last_id = int(state.get("last_id", 0))
+        done = bool(state.get("done", False))
+    else:
+        state = {}
+        before = current_before
+        last_id = 0
+        done = False
+
+    counters = {
+        "discovery_country": Counter(),
+        "publisher_country": Counter(),
+        "status": Counter(),
+        "domain": Counter(),
+    }
+    scanned = classifiable = unclassified = updated = 0
+    duplicates_updated = batches = 0
+
+    while not done:
+        with get_session() as session:
+            rows = _mapping_rows(session.execute(text(ARTICLE_BATCH_SQL), {
+                "since_days": since_days,
+                "last_id": last_id,
+                "batch_size": batch_size,
+            }))
+            if not rows:
+                done = True
+                batch_last_id = last_id
+                batch_updated = 0
+                batch_duplicates = 0
+                classifications: list[int] = []
+            else:
+                batch_last_id = int(_value(rows[-1], "id"))
+                batch_updated = 0
+                classifications = []
+                for row in rows:
+                    scanned += 1
+                    discovery_country = str(
+                        _value(row, "discovery_country_code", "unknown")
+                    ).upper()
+                    counters["discovery_country"][discovery_country] += 1
+                    classification = _classify(row, publishers)
+                    if classification is None:
+                        unclassified += 1
+                        counters["status"]["legacy_unverified"] += 1
+                        counters["domain"]["(unknown)"] += 1
+                        if apply:
+                            batch_updated += _rowcount(session.execute(
+                                text(UNCLASSIFIED_UPDATE_SQL),
+                                {"article_id": int(_value(row, "id"))},
+                            ))
+                        continue
+
+                    classifiable += 1
+                    classifications.append(int(_value(row, "id")))
+                    counters["publisher_country"][classification.country_code] += 1
+                    counters["status"][classification.status] += 1
+                    counters["domain"][classification.publisher_domain] += 1
+                    if apply:
+                        batch_updated += _rowcount(session.execute(
+                            text(CLASSIFIED_UPDATE_SQL),
+                            {
+                                "article_id": int(_value(row, "id")),
+                                "publisher_source_id": (
+                                    classification.publisher_source_id
+                                ),
+                                "publisher_name": classification.publisher_name,
+                                "publisher_domain": classification.publisher_domain,
+                                "country_code": classification.country_code,
+                                "status": classification.status,
+                            },
+                        ))
+                batch_duplicates = (
+                    _reconcile_duplicates(session, classifications) if apply else 0
+                )
+                done = len(rows) < batch_size
+
+        if not rows:
+            if apply:
+                state.update({
+                    "last_id": batch_last_id,
+                    "done": True,
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                })
+                store.save(state)
+            break
+
+        batches += 1
+        last_id = batch_last_id
+        updated += batch_updated
+        duplicates_updated += batch_duplicates
+        if apply:
+            state.update({
+                "last_id": last_id,
+                "done": done,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            })
+            store.save(state)
+
+    with get_session() as session:
+        after = _snapshot_invariants(session)
+    invariants = {
+        "before": before,
+        "after": after,
+        "passed": before == after,
+    }
+    if not invariants["passed"]:
+        raise RuntimeError("backfill changed protected row counts or provenance")
+
+    return BackfillReport(
+        mode="apply" if apply else "dry-run",
+        scanned=scanned,
+        classifiable=classifiable,
+        unclassified=unclassified,
+        updated=updated,
+        duplicates_updated=duplicates_updated,
+        batches=batches,
+        last_id=last_id,
+        done=done,
+        counts=_sorted_counts(counters),
+        invariants=invariants,
+    )
+
+
+def write_report(path: Path, report: BackfillReport) -> None:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(
+        asdict(report),
+        ensure_ascii=False,
+        sort_keys=True,
+        indent=2,
+        default=_json_default,
+    )
+    path.write_text(payload + "\n", encoding="utf-8")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Backfill verified Google News publishers conservatively"
+    )
+    parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="Commit bounded batches; without this flag the command is read-only",
+    )
+    parser.add_argument("--since-days", type=int, default=DEFAULT_SINCE_DAYS)
+    parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
+    parser.add_argument("--checkpoint", type=Path, default=DEFAULT_CHECKPOINT)
+    parser.add_argument("--report", type=Path)
+    return parser
+
+
+def main() -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+    )
+    args = build_parser().parse_args()
+    wait_for_db()
+    report = run_backfill(
+        since_days=args.since_days,
+        batch_size=args.batch_size,
+        apply=args.apply,
+        checkpoint=args.checkpoint,
+    )
+    if args.report:
+        write_report(args.report, report)
+    print(json.dumps(asdict(report), ensure_ascii=False, sort_keys=True, default=_json_default))
+
+
+if __name__ == "__main__":
+    main()
