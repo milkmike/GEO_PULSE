@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -909,3 +910,29 @@ def test_story_resume_fails_closed_when_the_frozen_candidate_snapshot_changes(
     )
     with pytest.raises(RuntimeError, match="snapshot changed"):
         backfill.backfill_story_membership(resumed_context, saved)
+
+
+def test_story_candidate_snapshot_hash_tracks_semantic_matches_deterministically():
+    import scripts.backfill_investigation_data as backfill
+
+    baseline = StoryCandidate(
+        thread_id=1,
+        country_code="ES",
+        event_key="переговоры",
+        title="Переговоры",
+        article_ids=(1,),
+        first_seen=NOW,
+        last_seen=NOW,
+        semantic_matches=((3, 0.91), (2, 0.87)),
+    )
+
+    baseline_hash = backfill.story_candidate_snapshot_hash([baseline])
+    reordered_hash = backfill.story_candidate_snapshot_hash([
+        replace(baseline, semantic_matches=((2, 0.87), (3, 0.91))),
+    ])
+    changed_score_hash = backfill.story_candidate_snapshot_hash([
+        replace(baseline, semantic_matches=((3, 0.92), (2, 0.87))),
+    ])
+
+    assert reordered_hash == baseline_hash
+    assert changed_score_hash != baseline_hash

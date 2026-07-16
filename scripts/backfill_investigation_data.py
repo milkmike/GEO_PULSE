@@ -248,6 +248,10 @@ def story_candidate_snapshot_hash(candidates: list[Any]) -> str:
             "first_seen": candidate.first_seen,
             "last_seen": candidate.last_seen,
             "highest_action_level": candidate.highest_action_level,
+            "semantic_matches": [
+                [int(thread_id), float(score)]
+                for thread_id, score in sorted(candidate.semantic_matches)
+            ],
             "articles": [
                 {
                     "article_id": article.article_id,

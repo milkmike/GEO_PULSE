@@ -722,6 +722,7 @@ def fetch_story_candidates(
 
     semantic_thread_ids = [int(_value(row, "thread_id")) for row in rows]
     semantic_article_ids = [str(_value(row, "article_id")) for row in rows]
+    semantic_published_ats = [_value(row, "published_at") for row in rows]
     semantic_rows = session.execute(text(f"""
         WITH active_profile AS (
             SELECT MIN(ep.id) AS profile_id
@@ -730,11 +731,12 @@ def fetch_story_candidates(
             HAVING COUNT(*) = 1
                AND BOOL_AND(ep.dimensions = 1024)
         ), candidate_articles AS (
-            SELECT input.thread_id, input.article_id
+            SELECT input.thread_id, input.article_id, input.published_at
             FROM UNNEST(
                 CAST(:semantic_thread_ids AS bigint[]),
-                CAST(:semantic_article_ids AS text[])
-            ) AS input(thread_id, article_id)
+                CAST(:semantic_article_ids AS text[]),
+                CAST(:semantic_published_ats AS timestamptz[])
+            ) AS input(thread_id, article_id, published_at)
             WHERE input.thread_id = ANY(:semantic_thread_ids)
               AND input.article_id = ANY(:semantic_article_ids)
         ), latest_embeddings AS (
@@ -750,6 +752,8 @@ def fetch_story_candidates(
         ), thread_centroids AS (
             SELECT ca.thread_id,
                    TRIM(t.country_code) AS country_code,
+                   MIN(ca.published_at) AS activity_first_seen,
+                   MAX(ca.published_at) AS activity_last_seen,
                    AVG(le.embedding) AS centroid
             FROM candidate_articles ca
             JOIN threads t ON t.id = ca.thread_id
@@ -758,20 +762,28 @@ def fetch_story_candidates(
             GROUP BY ca.thread_id, TRIM(t.country_code)
             HAVING COUNT(le.object_id)::float / NULLIF(COUNT(*), 0)
                    >= {MIN_SEMANTIC_THREAD_COVERAGE}
-        ), semantic_story_pairs AS (
+        ), eligible_story_pairs AS (
             SELECT left_thread.thread_id AS left_thread_id,
                    right_thread.thread_id AS right_thread_id,
-                   GREATEST(
-                       0.0,
-                       LEAST(
-                           1.0,
-                           1.0 - (left_thread.centroid <=> right_thread.centroid)
-                       )
-                   )::float AS semantic_score
+                   left_thread.centroid AS left_centroid,
+                   right_thread.centroid AS right_centroid
             FROM thread_centroids left_thread
             JOIN thread_centroids right_thread
               ON left_thread.thread_id < right_thread.thread_id
              AND left_thread.country_code <> right_thread.country_code
+             AND left_thread.activity_first_seen <= right_thread.activity_last_seen + INTERVAL '14 days'
+             AND right_thread.activity_first_seen <= left_thread.activity_last_seen + INTERVAL '14 days'
+        ), semantic_story_pairs AS (
+            SELECT eligible.left_thread_id,
+                   eligible.right_thread_id,
+                   GREATEST(
+                       0.0,
+                       LEAST(
+                           1.0,
+                           1.0 - (eligible.left_centroid <=> eligible.right_centroid)
+                       )
+                   )::float AS semantic_score
+            FROM eligible_story_pairs eligible
         )
         SELECT left_thread_id, right_thread_id, semantic_score
         FROM semantic_story_pairs
@@ -780,6 +792,7 @@ def fetch_story_candidates(
     """), {
         "semantic_thread_ids": semantic_thread_ids,
         "semantic_article_ids": semantic_article_ids,
+        "semantic_published_ats": semantic_published_ats,
     }).fetchall()
     semantic_matches_by_thread: dict[int, list[tuple[int, float]]] = {}
     for semantic_row in semantic_rows:

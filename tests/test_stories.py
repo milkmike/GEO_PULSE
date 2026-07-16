@@ -697,6 +697,7 @@ def test_ready_active_semantic_pairs_are_attached_symmetrically():
                 assert params == {
                     "semantic_thread_ids": [2501, 2502],
                     "semantic_article_ids": ["501", "502"],
+                    "semantic_published_ats": [NOW, NOW],
                 }
                 return FakeResult(rows=[SimpleNamespace(
                     left_thread_id=2501,
@@ -774,6 +775,7 @@ def test_candidate_thread_and_date_scope_reaches_sql_before_mention_materializat
                 assert params == {
                     "semantic_thread_ids": [41],
                     "semantic_article_ids": ["141"],
+                    "semantic_published_ats": [scope_start],
                 }
                 assert "embedding_profiles" in sql
                 assert "content_embeddings" in sql
@@ -784,6 +786,20 @@ def test_candidate_thread_and_date_scope_reaches_sql_before_mention_materializat
                 assert "ANY(:semantic_article_ids)" in sql
                 assert "ANY(:semantic_thread_ids)" in sql
                 assert "HAVING COUNT(*) = 1" in sql
+                assert "MIN(ca.published_at) AS activity_first_seen" in sql
+                assert "MAX(ca.published_at) AS activity_last_seen" in sql
+                left_bound = (
+                    "left_thread.activity_first_seen <= "
+                    "right_thread.activity_last_seen + INTERVAL '14 days'"
+                )
+                right_bound = (
+                    "right_thread.activity_first_seen <= "
+                    "left_thread.activity_last_seen + INTERVAL '14 days'"
+                )
+                assert left_bound in sql
+                assert right_bound in sql
+                assert sql.index(left_bound) < sql.index("<=>")
+                assert sql.index(right_bound) < sql.index("<=>")
                 return FakeResult(rows=[])
             raise AssertionError(f"Unexpected scoped candidate query: {sql}")
 
