@@ -207,7 +207,7 @@ CREATE TABLE temperature (
     article_count INTEGER,
     source_count INTEGER,
     trend VARCHAR(10),
-    anomaly_score DECIMAL(4,2),
+    anomaly_score DECIMAL(8,2),
     pattern_type VARCHAR(20),
     PRIMARY KEY (time, country_code)
 );

@@ -11,6 +11,7 @@ import shlex
 import shutil
 import subprocess
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -631,5 +632,56 @@ def test_actual_runner_does_not_record_failure_and_retries_same_file():
             assert [row[0] for row in cursor.fetchall()] == [1, 2, 3]
             cursor.execute("SELECT count(*) FROM schema_migrations")
             assert cursor.fetchone()[0] == 3
+    finally:
+        connection.close()
+
+
+def test_temperature_anomaly_precision_migration_preserves_rows_and_retries():
+    dsn, psycopg2 = _requirements()
+    connection = psycopg2.connect(dsn)
+    connection.autocommit = True
+    try:
+        with connection.cursor() as cursor:
+            _reset(cursor, initialize=True)
+            cursor.execute("""
+                ALTER TABLE public.temperature
+                ALTER COLUMN anomaly_score TYPE NUMERIC(4,2)
+            """)
+            cursor.execute("""
+                INSERT INTO public.temperature(
+                    time, country_code, temperature, anomaly_score
+                ) VALUES (%s, 'ES', 10.0, 99.99)
+            """, (datetime(2026, 7, 15, tzinfo=timezone.utc),))
+
+            migration_sql = (
+                MIGRATIONS / "026_temperature_anomaly_precision.sql"
+            ).read_text()
+            cursor.execute(migration_sql)
+            cursor.execute(migration_sql)
+
+            cursor.execute("""
+                SELECT numeric_precision, numeric_scale
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'temperature'
+                  AND column_name = 'anomaly_score'
+            """)
+            assert cursor.fetchone() == (8, 2)
+
+            extreme = Decimal("109544.33")
+            cursor.execute("""
+                INSERT INTO public.temperature(
+                    time, country_code, temperature, anomaly_score
+                ) VALUES (%s, 'ES', 100.0, %s)
+            """, (datetime(2026, 7, 16, tzinfo=timezone.utc), extreme))
+            cursor.execute("""
+                SELECT anomaly_score
+                FROM public.temperature
+                ORDER BY time
+            """)
+            assert [row[0] for row in cursor.fetchall()] == [
+                Decimal("99.99"),
+                extreme,
+            ]
     finally:
         connection.close()

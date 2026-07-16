@@ -205,6 +205,25 @@ def test_article_duplicate_family_index_is_present_and_retry_safe():
     assert "idx.indisvalid AND idx.indisready" in migration_sql
 
 
+def test_temperature_anomaly_storage_preserves_unbounded_v1_z_scores():
+    from src.db import Temperature
+    from src.engine.index import _anomaly_statistics
+
+    anomaly = _anomaly_statistics(100.0, [-100.0] * 29 + [-99.99])
+    assert anomaly is not None
+    assert anomaly[0] == 109544.33
+    assert anomaly[0] > 99.99
+
+    anomaly_type = Temperature.__table__.c.anomaly_score.type
+    assert anomaly_type.precision == 8
+    assert anomaly_type.scale == 2
+
+    migration_sql = migration("026_temperature_anomaly_precision.sql")
+    init_sql = (ROOT / "data" / "init.sql").read_text()
+    assert "ALTER COLUMN anomaly_score TYPE NUMERIC(8,2)" in migration_sql
+    assert "anomaly_score DECIMAL(8,2)" in init_sql
+
+
 def test_google_news_publisher_attribution_orm_contract():
     from src.db import Article, ArticleDiscovery, PublisherDomain
 

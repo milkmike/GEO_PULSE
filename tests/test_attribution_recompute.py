@@ -337,6 +337,52 @@ def test_calculate_temperature_from_rows_has_exact_wrapper_parity(monkeypatch):
     assert pure == wrapped
 
 
+def test_extreme_anomaly_score_keeps_exact_pure_wrapper_parity(monkeypatch):
+    article_rows = [SimpleNamespace(
+        analysis_id=101,
+        article_id=201,
+        sentiment=3.0,
+        event_type="diplomatic",
+        sentiment_confidence=1.0,
+        action_level=1,
+        event_key=None,
+        published_at=NOW - timedelta(hours=1),
+        weight=1.0,
+        source_id=11,
+        reprint_count=0,
+    )]
+    history = [-100.0] * 29 + [-99.99]
+
+    class ExtremeAnomalySession(ParityTemperatureSession):
+        def execute(self, statement, params=None):
+            sql = str(statement)
+            self.calls.append((sql, params or {}))
+            if "FROM analysis a" in sql:
+                return FakeResult(rows=self.article_rows)
+            if "ORDER BY time DESC LIMIT 30" in sql:
+                return FakeResult(rows=[
+                    SimpleNamespace(temperature=value) for value in history
+                ])
+            raise AssertionError(sql)
+
+    session = ExtremeAnomalySession(article_rows)
+    monkeypatch.setattr(index, "get_session", lambda: SessionContext(session))
+
+    with index.suppress_temperature_alerts():
+        wrapped = index.calculate_temperature_at("ES", NOW)
+    pure = index.calculate_temperature_from_rows(
+        "ES",
+        NOW,
+        article_rows,
+        history=history,
+    )
+
+    assert pure == wrapped
+    assert pure is not None
+    assert pure["temperature"] == 100.0
+    assert pure["anomaly_score"] == 109544.33
+
+
 def test_calculate_temperature_from_rows_default_is_database_free():
     row = SimpleNamespace(
         analysis_id=101,

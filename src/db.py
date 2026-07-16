@@ -197,7 +197,7 @@ class Temperature(Base):
     article_count = Column(Integer)
     source_count = Column(Integer)
     trend = Column(String(10))
-    anomaly_score = Column(Numeric(4, 2))
+    anomaly_score = Column(Numeric(8, 2))
     pattern_type = Column(String(20))
 
 
