@@ -168,11 +168,13 @@ class SqlSignalDetailService:
         return session.execute(
             text(
                 """
-                SELECT ar.id, ar.title, ar.url, ar.published_at,
+                SELECT ar.id, ar.title,
+                       COALESCE(NULLIF(ar.resolved_url, ''), ar.url) AS url,
+                       ar.published_at,
                        s.name AS source_name, s.country_code,
                        a.sentiment, a.action_level, a.event_key
                 FROM articles ar
-                JOIN sources s ON s.id = ar.source_id
+                JOIN article_country_facts s ON s.article_id = ar.id
                 LEFT JOIN analysis a ON a.article_id = ar.id
                 WHERE ar.id = ANY(CAST(:article_ids AS integer[]))
                 ORDER BY array_position(CAST(:article_ids AS integer[]), ar.id), ar.id

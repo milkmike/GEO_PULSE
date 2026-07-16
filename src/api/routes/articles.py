@@ -7,6 +7,7 @@ Articles Feed — API Routes
 from fastapi import APIRouter, Query
 from sqlalchemy import text
 
+from src.api.public_urls import safe_public_url
 from src.db import get_session
 
 router = APIRouter(prefix="/api/v1/articles", tags=["articles"])
@@ -34,7 +35,7 @@ def articles_feed(
             conditions.append("s.source_type = :source_type")
             params["source_type"] = source_type
         if source_id:
-            conditions.append("a.source_id = :source_id")
+            conditions.append("s.id = :source_id")
             params["source_id"] = source_id
         if search:
             conditions.append("(a.title ILIKE :search OR a.body ILIKE :search)")
@@ -43,11 +44,13 @@ def articles_feed(
         where = " AND ".join(conditions)
 
         rows = session.execute(text(f"""
-            SELECT a.id, a.title, a.body, a.url, a.published_at, a.language,
+            SELECT a.id, a.title, a.body,
+                   COALESCE(NULLIF(a.resolved_url, ''), a.url) AS url,
+                   a.published_at, a.language,
                    a.is_duplicate,
                    s.name as source_name, s.country_code, s.source_type, s.tier
             FROM articles a
-            JOIN sources s ON s.id = a.source_id
+            JOIN article_country_facts s ON s.article_id = a.id
             WHERE {where}
               AND a.is_duplicate = false
             ORDER BY a.published_at DESC
@@ -56,7 +59,7 @@ def articles_feed(
 
         total = session.execute(text(f"""
             SELECT COUNT(*) FROM articles a
-            JOIN sources s ON s.id = a.source_id
+            JOIN article_country_facts s ON s.article_id = a.id
             WHERE {where} AND a.is_duplicate = false
         """), params).scalar()
 
@@ -65,7 +68,7 @@ def articles_feed(
                 "id": r.id,
                 "title": r.title[:300] if r.title else "",
                 "body": (r.body[:500] + "...") if r.body and len(r.body) > 500 else (r.body or ""),
-                "url": r.url,
+                "url": safe_public_url(r.url),
                 "published_at": r.published_at.isoformat() if r.published_at else None,
                 "language": r.language,
                 "source_name": r.source_name,
@@ -114,13 +117,15 @@ def article_detail(article_id: int):
     """Полный текст статьи."""
     with get_session() as session:
         row = session.execute(text("""
-            SELECT a.id, a.title, a.body, a.url, a.published_at, a.language,
+            SELECT a.id, a.title, a.body,
+                   COALESCE(NULLIF(a.resolved_url, ''), a.url) AS url,
+                   a.published_at, a.language,
                    a.external_id,
                    s.name as source_name, s.country_code, s.source_type, s.tier, s.url as source_url,
                    an.sentiment, an.action_level, an.event_type, an.event_key,
                    an.model_used, an.prompt_version, an.raw_response
             FROM articles a
-            JOIN sources s ON s.id = a.source_id
+            JOIN article_country_facts s ON s.article_id = a.id
             LEFT JOIN analysis an ON an.article_id = a.id
             WHERE a.id = :id
         """), {"id": article_id}).fetchone()
@@ -132,7 +137,7 @@ def article_detail(article_id: int):
             "id": row.id,
             "title": row.title,
             "body": row.body,
-            "url": row.url,
+            "url": safe_public_url(row.url),
             "published_at": row.published_at.isoformat() if row.published_at else None,
             "language": row.language,
             "source_name": row.source_name,

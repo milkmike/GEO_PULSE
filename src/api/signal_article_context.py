@@ -137,7 +137,7 @@ def load_signal_article_previews(
                 SELECT requested.signal_id,
                        ar.id AS article_id,
                        ar.title,
-                       ar.url,
+                       COALESCE(NULLIF(ar.resolved_url, ''), ar.url) AS url,
                        ar.published_at,
                        source.name AS source_name,
                        source.country_code,
@@ -146,7 +146,7 @@ def load_signal_article_previews(
                 CROSS JOIN LATERAL unnest(requested.article_ids)
                   WITH ORDINALITY AS persisted(article_id, ordinality)
                 JOIN articles ar ON ar.id = persisted.article_id
-                JOIN sources source ON source.id = ar.source_id
+                JOIN article_country_facts source ON source.article_id = ar.id
             ), exact_ranked AS (
                 SELECT exact_candidates.*,
                        COUNT(*) OVER (PARTITION BY signal_id) AS total,
@@ -173,7 +173,7 @@ def load_signal_article_previews(
             ), context_article_pool AS MATERIALIZED (
                 SELECT ar.id AS article_id,
                        ar.title,
-                       ar.url,
+                       COALESCE(NULLIF(ar.resolved_url, ''), ar.url) AS url,
                        ar.published_at,
                        source.name AS source_name,
                        source.country_code,
@@ -181,11 +181,11 @@ def load_signal_article_previews(
                        ABS(analysis.sentiment) AS absolute_sentiment,
                        ar.reprint_count
                 FROM context_pool_bounds
-                JOIN sources source
-                  ON source.country_code = ANY(context_pool_bounds.country_codes)
-                JOIN articles ar ON ar.source_id = source.id
+                JOIN articles ar ON TRUE
+                JOIN article_country_facts source ON source.article_id = ar.id
                 JOIN analysis analysis ON analysis.article_id = ar.id
                 WHERE context_pool_bounds.global_start IS NOT NULL
+                  AND source.country_code = ANY(context_pool_bounds.country_codes)
                   AND ar.published_at >= context_pool_bounds.global_start
                   AND ar.published_at < context_pool_bounds.global_end
                   AND ar.is_duplicate = FALSE

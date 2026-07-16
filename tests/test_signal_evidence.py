@@ -971,6 +971,17 @@ def test_sql_signal_detail_returns_concrete_evidence_and_http_safe_links(monkeyp
     assert len(session.calls) == 4
 
 
+def test_signal_detail_articles_use_verified_publishers_and_resolved_urls():
+    session = SequentialSession([[]])
+
+    assert SqlSignalDetailService._load_articles(session, (41,)) == []
+
+    sql = " ".join(session.calls[0][0].split())
+    assert "JOIN article_country_facts s ON s.article_id = ar.id" in sql
+    assert "COALESCE(NULLIF(ar.resolved_url, ''), ar.url) AS url" in sql
+    assert "JOIN sources s ON s.id = ar.source_id" not in sql
+
+
 def test_reconstructed_signal_detail_preserves_unknown_window_metadata(monkeypatch):
     created_at = datetime(2026, 7, 10, 12, 0, tzinfo=timezone.utc)
     base = SimpleNamespace(

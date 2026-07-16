@@ -516,6 +516,16 @@ def test_full_text_ranking_avoids_loading_stored_body_vectors():
     assert "a.body" not in ranked_candidates_sql
 
 
+def test_search_sql_uses_verified_publishers_and_resolved_article_urls():
+    compact_sql = " ".join(ARTICLE_SEARCH_SQL.split())
+
+    assert "FROM article_country_facts s" in compact_sql
+    assert "JOIN article_country_facts s ON s.article_id = a.id" in compact_sql
+    assert "JOIN sources s ON s.id = a.source_id" not in compact_sql
+    assert "JOIN matching_sources s ON s.article_id = a.id" in compact_sql
+    assert "COALESCE(NULLIF(a.resolved_url, ''), a.url) AS url" in compact_sql
+
+
 def test_search_service_uses_parameterized_hybrid_candidates_and_deterministic_ranking():
     published_at = datetime.now(timezone.utc)
     rows = [

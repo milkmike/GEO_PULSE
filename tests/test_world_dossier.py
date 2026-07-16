@@ -1,11 +1,13 @@
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+import inspect
 import re
 from types import SimpleNamespace
 
 import pytest
 
 from src.api.routes import world
+from src.api.routes import articles as article_routes
 
 
 class QueryResult:
@@ -17,6 +19,9 @@ class QueryResult:
 
     def fetchall(self):
         return self.rows
+
+    def scalar(self):
+        return self.rows[0] if self.rows else 0
 
 
 class SequentialSession:
@@ -300,8 +305,9 @@ def test_signal_list_includes_context_article_preview_in_one_batch(monkeypatch):
     assert "context_previews AS" in preview_sql
     assert "JOIN context_top" in preview_sql
     assert "FROM requested LEFT JOIN LATERAL ( WITH exact_candidates AS" not in preview_sql
-    assert "JOIN articles ar ON ar.source_id = source.id" in preview_sql
-    assert preview_sql.count("JOIN articles ar ON ar.source_id = source.id") == 1
+    assert "JOIN article_country_facts source ON source.article_id = ar.id" in preview_sql
+    assert "JOIN sources source ON source.id = ar.source_id" not in preview_sql
+    assert "COALESCE(NULLIF(ar.resolved_url, ''), ar.url) AS url" in preview_sql
     assert "FROM context_windows JOIN articles" not in preview_sql
     assert "FROM context_windows JOIN sources" not in preview_sql
     assert "FROM context_windows JOIN context_article_pool" in preview_sql
@@ -548,3 +554,123 @@ def test_signal_article_preview_limit_must_be_between_one_and_one_hundred(limit)
         load_signal_article_previews(session, [], limit=limit)
 
     assert session.calls == []
+
+
+def test_articles_feed_uses_verified_publisher_and_resolved_public_url(monkeypatch):
+    published_at = datetime(2026, 7, 15, 12, tzinfo=timezone.utc)
+    row = SimpleNamespace(
+        id=501,
+        title="EL PAÍS: Испания и Россия",
+        body="Материал",
+        url="https://elpais.com/resolved-story",
+        published_at=published_at,
+        language="es",
+        is_duplicate=False,
+        source_name="EL PAÍS",
+        country_code="ES",
+        source_type="rss",
+        tier="mainstream",
+    )
+    unsafe = SimpleNamespace(
+        **{
+            **vars(row),
+            "id": 502,
+            "title": "Небезопасная ссылка",
+            "url": "javascript:alert(1)",
+        }
+    )
+    session = SequentialSession([[row, unsafe], [2]])
+
+    @contextmanager
+    def session_factory():
+        yield session
+
+    monkeypatch.setattr(article_routes, "get_session", session_factory)
+
+    result = article_routes.articles_feed(
+        country="ES",
+        source_type=None,
+        source_id=None,
+        search=None,
+        days=3,
+        limit=20,
+        offset=0,
+    )
+
+    assert result["articles"][0]["source_name"] == "EL PAÍS"
+    assert result["articles"][0]["country_code"] == "ES"
+    assert result["articles"][0]["url"] == "https://elpais.com/resolved-story"
+    assert result["articles"][1]["url"] is None
+    assert all("Google News (" not in item["source_name"] for item in result["articles"])
+    select_sql = " ".join(session.calls[0][0].split())
+    count_sql = " ".join(session.calls[1][0].split())
+    assert "JOIN article_country_facts s ON s.article_id = a.id" in select_sql
+    assert "COALESCE(NULLIF(a.resolved_url, ''), a.url) AS url" in select_sql
+    assert "JOIN article_country_facts s ON s.article_id = a.id" in count_sql
+    assert "JOIN sources s ON s.id = a.source_id" not in select_sql + count_sql
+
+    module_source = inspect.getsource(article_routes)
+    assert "JOIN sources s ON s.id = a.source_id" not in module_source
+    assert module_source.count(
+        "JOIN article_country_facts s ON s.article_id = a.id"
+    ) >= 3
+    assert module_source.count(
+        "COALESCE(NULLIF(a.resolved_url, ''), a.url) AS url"
+    ) >= 2
+
+
+def test_world_headlines_use_verified_publisher_and_resolved_public_url(monkeypatch):
+    published_at = datetime(2026, 7, 15, 12, tzinfo=timezone.utc)
+    row = SimpleNamespace(
+        title="Испания и Россия",
+        url="https://elpais.com/resolved-story",
+        source_name="EL PAÍS",
+        tier="mainstream",
+        country_code="ES",
+        published_at=published_at,
+        sentiment=-0.5,
+        action_level=3,
+    )
+    unsafe = SimpleNamespace(
+        **{
+            **vars(row),
+            "title": "Небезопасная ссылка",
+            "url": "javascript:alert(1)",
+        }
+    )
+    session = SequentialSession([[row, unsafe]])
+
+    @contextmanager
+    def session_factory():
+        yield session
+
+    monkeypatch.setattr(world, "get_session", session_factory)
+
+    result = world.world_headlines(
+        hours=24,
+        tier=None,
+        country="ES",
+        region=None,
+        topic=None,
+        limit=20,
+    )
+
+    assert [item["source"] for item in result["headlines"]] == ["EL PAÍS", "EL PAÍS"]
+    assert [item["country_code"] for item in result["headlines"]] == ["ES", "ES"]
+    assert result["headlines"][0]["url"] == "https://elpais.com/resolved-story"
+    assert result["headlines"][1]["url"] is None
+    assert all("Google News (" not in item["source"] for item in result["headlines"])
+    sql = " ".join(session.calls[0][0].split())
+    assert "JOIN article_country_facts s ON s.article_id = ar.id" in sql
+    assert "COALESCE(NULLIF(ar.resolved_url, ''), ar.url) AS url" in sql
+    assert "JOIN sources s ON ar.source_id = s.id" not in sql
+
+
+def test_world_article_queries_never_join_discovery_sources_directly():
+    module_source = inspect.getsource(world)
+
+    assert "JOIN sources s ON ar.source_id = s.id" not in module_source
+    assert "JOIN sources s ON a.source_id = s.id" not in module_source
+    assert module_source.count(
+        "JOIN article_country_facts s ON s.article_id = ar.id"
+    ) >= 9

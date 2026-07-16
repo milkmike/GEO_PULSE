@@ -12,6 +12,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import text
 
+from src.api.public_urls import safe_public_url
 from src.api.signal_article_context import load_signal_article_previews
 from src.countries import COUNTRIES, REGIONS, country_name_ru
 from src.db import get_session
@@ -206,7 +207,7 @@ def country_entities(code: str, days: int = Query(30, ge=1, le=180)):
                 SELECT ek AS entity_key, COUNT(*) AS n, AVG(a.sentiment) AS avg_sent
                 FROM analysis a
                 JOIN articles ar ON a.article_id = ar.id
-                JOIN sources s ON ar.source_id = s.id
+                JOIN article_country_facts s ON s.article_id = ar.id
                 CROSS JOIN LATERAL jsonb_array_elements_text(a.entities) AS ek
                 WHERE s.country_code = :cc AND a.is_relevant = TRUE
                   AND a.entities IS NOT NULL
@@ -281,11 +282,13 @@ def country_agreements(code: str, days: int = Query(180, ge=7, le=365)):
         rows = session.execute(
             text("""
                 SELECT a.event_key, a.event_type, a.action_level,
-                       ar.title, ar.url, s.name AS source,
+                       ar.title,
+                       COALESCE(NULLIF(ar.resolved_url, ''), ar.url) AS url,
+                       s.name AS source,
                        ar.published_at
                 FROM analysis a
                 JOIN articles ar ON a.article_id = ar.id
-                JOIN sources s ON ar.source_id = s.id
+                JOIN article_country_facts s ON s.article_id = ar.id
                 WHERE s.country_code = :cc
                   AND a.event_type IN ('diplomatic', 'economic')
                   AND a.action_level >= 3
@@ -296,7 +299,8 @@ def country_agreements(code: str, days: int = Query(180, ge=7, le=365)):
                 LIMIT 500
             """), {"cc": code, "days": days}).fetchall()
     flat = [{"event_key": r.event_key, "event_type": r.event_type,
-             "action_level": r.action_level, "title": r.title, "url": r.url,
+             "action_level": r.action_level, "title": r.title,
+             "url": safe_public_url(r.url),
              "source": r.source,
              "published_at": r.published_at.isoformat() if r.published_at else ""}
             for r in rows]
@@ -444,7 +448,7 @@ def country_topics(code: str, days: int = Query(30, ge=1, le=365)):
                        MAX(a.action_level) AS max_al
                 FROM analysis a
                 JOIN articles ar ON a.article_id = ar.id
-                JOIN sources s ON ar.source_id = s.id
+                JOIN article_country_facts s ON s.article_id = ar.id
                 CROSS JOIN LATERAL unnest(a.topics) AS topic
                 WHERE s.country_code = :cc AND a.is_relevant = TRUE
                   AND ar.published_at > NOW() - make_interval(days => :days)
@@ -477,11 +481,13 @@ def country_headlines(code: str, days: int = Query(3, ge=1, le=30),
     with get_session() as session:
         rows = session.execute(
             text("""
-                SELECT ar.title, ar.url, ar.published_at, s.name AS source_name,
+                SELECT ar.title,
+                       COALESCE(NULLIF(ar.resolved_url, ''), ar.url) AS url,
+                       ar.published_at, s.name AS source_name,
                        s.tier, a.sentiment, a.action_level, a.topics
                 FROM analysis a
                 JOIN articles ar ON a.article_id = ar.id
-                JOIN sources s ON ar.source_id = s.id
+                JOIN article_country_facts s ON s.article_id = ar.id
                 WHERE s.country_code = :cc AND a.is_relevant = TRUE
                   AND ar.published_at > NOW() - make_interval(days => :days)
                 ORDER BY ar.published_at DESC LIMIT :lim
@@ -493,7 +499,7 @@ def country_headlines(code: str, days: int = Query(3, ge=1, le=30),
             return {
                 "country_code": code, "source": "own_media",
                 "headlines": [
-                    {"title": r.title, "url": r.url,
+                    {"title": r.title, "url": safe_public_url(r.url),
                      "published_at": r.published_at.isoformat(),
                      "source": r.source_name, "tier": r.tier,
                      "sentiment": float(r.sentiment) if r.sentiment is not None else None,
@@ -558,7 +564,7 @@ def country_tier_divergence(code: str, days: int = Query(30, ge=1, le=180)):
                        COUNT(DISTINCT s.id) AS sources
                 FROM analysis a
                 JOIN articles ar ON a.article_id = ar.id
-                JOIN sources s ON ar.source_id = s.id
+                JOIN article_country_facts s ON s.article_id = ar.id
                 WHERE s.country_code = :cc AND a.is_relevant = TRUE
                   AND a.sentiment IS NOT NULL
                   AND ar.published_at > NOW() - make_interval(days => :days)
@@ -778,7 +784,7 @@ def world_headlines(hours: int = Query(24, ge=1, le=26280),
     conditions = ["a.is_relevant = TRUE",
                   "ar.is_duplicate = FALSE",
                   "ar.published_at > NOW() - make_interval(hours => :h)",
-                  "ar.url IS NOT NULL"]
+                  "COALESCE(NULLIF(ar.resolved_url, ''), ar.url) IS NOT NULL"]
     params: dict = {"h": hours, "lim": limit}
     if tier:
         conditions.append("s.tier = :tier")
@@ -799,12 +805,14 @@ def world_headlines(hours: int = Query(24, ge=1, le=26280),
     if country:
         # Single-country view: no diversity caps, simple query.
         sql = f"""
-            SELECT ar.title, ar.url, s.name AS source_name, s.tier,
+            SELECT ar.title,
+                   COALESCE(NULLIF(ar.resolved_url, ''), ar.url) AS url,
+                   s.name AS source_name, s.tier,
                    s.country_code, ar.published_at,
                    a.sentiment, a.action_level
             FROM analysis a
             JOIN articles ar ON a.article_id = ar.id
-            JOIN sources s ON ar.source_id = s.id
+            JOIN article_country_facts s ON s.article_id = ar.id
             WHERE {where_clause}
             ORDER BY a.action_level DESC NULLS LAST,
                      ar.reprint_count DESC NULLS LAST,
@@ -818,11 +826,13 @@ def world_headlines(hours: int = Query(24, ge=1, le=26280),
             SELECT title, url, source_name, tier, country_code, published_at,
                    sentiment, action_level
             FROM (
-                SELECT ar.title, ar.url, s.name AS source_name, s.tier,
+                SELECT ar.title,
+                       COALESCE(NULLIF(ar.resolved_url, ''), ar.url) AS url,
+                       s.name AS source_name, s.tier,
                        s.country_code, ar.published_at, ar.reprint_count,
                        a.sentiment, a.action_level,
                        ROW_NUMBER() OVER (
-                           PARTITION BY ar.source_id
+                           PARTITION BY s.id
                            ORDER BY a.action_level DESC NULLS LAST,
                                     ar.published_at DESC
                        ) AS src_rank,
@@ -833,7 +843,7 @@ def world_headlines(hours: int = Query(24, ge=1, le=26280),
                        ) AS cc_rank
                 FROM analysis a
                 JOIN articles ar ON a.article_id = ar.id
-                JOIN sources s ON ar.source_id = s.id
+                JOIN article_country_facts s ON s.article_id = ar.id
                 WHERE {where_clause}
             ) t
             WHERE src_rank <= 2
@@ -851,7 +861,8 @@ def world_headlines(hours: int = Query(24, ge=1, le=26280),
         rows = session.execute(text(sql), params).fetchall()
 
     return {"headlines": [
-        {"title": r.title, "url": r.url, "source": r.source_name, "tier": r.tier,
+        {"title": r.title, "url": safe_public_url(r.url),
+         "source": r.source_name, "tier": r.tier,
          "country_code": r.country_code,
          "country_name": country_name_ru(r.country_code),
          "flag": (COUNTRIES.get(r.country_code) or {}).get("flag", ""),
@@ -885,7 +896,7 @@ def topic_countries(topic: str, days: int = Query(30, ge=1, le=180)):
                 SELECT s.country_code, COUNT(*) AS n, AVG(a.sentiment) AS avg_sent
                 FROM analysis a
                 JOIN articles ar ON a.article_id = ar.id
-                JOIN sources s ON ar.source_id = s.id
+                JOIN article_country_facts s ON s.article_id = ar.id
                 WHERE a.is_relevant = TRUE AND :topic = ANY(a.topics)
                   AND ar.published_at > NOW() - make_interval(days => :days)
                 GROUP BY s.country_code ORDER BY n DESC
@@ -933,7 +944,7 @@ def entity_mentions(key: str, days: int = Query(30, ge=1, le=180),
                 SELECT s.country_code, COUNT(*) AS n, AVG(a.sentiment) AS avg_sent,
                        MAX(ar.published_at) AS last_seen
                 FROM articles ar
-                JOIN sources s ON ar.source_id = s.id
+                JOIN article_country_facts s ON s.article_id = ar.id
                 LEFT JOIN analysis a ON a.article_id = ar.id AND a.is_relevant = TRUE
                 WHERE ar.published_at > NOW() - make_interval(days => :days)
                   AND ({like_clause})
@@ -944,9 +955,11 @@ def entity_mentions(key: str, days: int = Query(30, ge=1, le=180),
 
         recent = session.execute(
             text(f"""
-                SELECT ar.title, ar.url, ar.published_at, s.country_code, a.sentiment
+                SELECT ar.title,
+                       COALESCE(NULLIF(ar.resolved_url, ''), ar.url) AS url,
+                       ar.published_at, s.country_code, a.sentiment
                 FROM articles ar
-                JOIN sources s ON ar.source_id = s.id
+                JOIN article_country_facts s ON s.article_id = ar.id
                 LEFT JOIN analysis a ON a.article_id = ar.id
                 WHERE ar.published_at > NOW() - make_interval(days => :days)
                   AND ({like_clause})
@@ -967,7 +980,8 @@ def entity_mentions(key: str, days: int = Query(30, ge=1, le=180),
             for r in by_country
         ],
         "recent": [
-            {"title": r.title, "url": r.url, "country_code": r.country_code,
+            {"title": r.title, "url": safe_public_url(r.url),
+             "country_code": r.country_code,
              "published_at": r.published_at.isoformat(),
              "sentiment": float(r.sentiment) if r.sentiment is not None else None}
             for r in recent

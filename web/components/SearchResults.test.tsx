@@ -12,7 +12,7 @@ const result = {
   url: "https://elpais.com/mundo/putin-espana",
   published_at: "2026-07-14T12:30:00+00:00",
   language: "es",
-  source: { name: "El País", country: "ES", tier: "mainstream" },
+  source: { name: "EL PAÍS", country: "ES", tier: "mainstream" },
   topics: ["diplomacy"],
   matched_entities: [
     {
@@ -59,8 +59,9 @@ describe("SearchResults", () => {
     expect(
       screen.getByRole("heading", { name: result.title }),
     ).toBeInTheDocument();
-    expect(screen.getByText(/El País/)).toHaveTextContent("Испания");
-    expect(screen.getByText(/El País/)).toHaveTextContent("14 июл");
+    expect(screen.getByText(/EL PAÍS/)).toHaveTextContent("Испания");
+    expect(screen.getByText(/EL PAÍS/)).toHaveTextContent("14 июл");
+    expect(screen.queryByText(/Google News \(/)).not.toBeInTheDocument();
     expect(screen.getByText("Путин", { selector: "mark" })).toBeInTheDocument();
 
     const sourceLink = screen.getByRole("link", { name: /открыть источник/i });

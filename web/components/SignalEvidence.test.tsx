@@ -42,7 +42,7 @@ const complete: SignalDetail = {
   ],
   articles: [{
     id: 1, title: "El País: переговоры", url: "https://elpais.com/mundo/talks",
-    published_at: "2026-07-15T19:00:00Z", source_name: "El País", country_code: "ES",
+    published_at: "2026-07-15T19:00:00Z", source_name: "EL PAÍS", country_code: "ES",
     sentiment: -0.5, action_level: 3, event_key: "talks",
   }],
   context_preview: null,
@@ -94,6 +94,8 @@ describe("SignalEvidence", () => {
     const article = screen.getByRole("link", { name: /El País: переговоры/i });
     expect(article).toHaveAttribute("href", "https://elpais.com/mundo/talks");
     expect(article).toHaveAttribute("rel", expect.stringContaining("noopener"));
+    expect(screen.getByText(/EL PAÍS/)).toBeVisible();
+    expect(screen.queryByText(/Google News \(/)).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Переговоры в Испании/i })).toHaveAttribute("href", "/stories/42");
     expect(screen.getByText(/не доказывает причинность/i)).toBeVisible();
   });

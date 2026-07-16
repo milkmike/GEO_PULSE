@@ -46,7 +46,7 @@ const contextSignal: SignalListItem = {
         title: "Правительство прокомментировало отношения с Россией",
         url: "https://example.es/story",
         published_at: "2026-07-15T01:30:00Z",
-        source_name: "Ejemplo",
+        source_name: "EL PAÍS",
         country_code: "ES",
       },
       {
@@ -94,12 +94,13 @@ describe("SignalFeed", () => {
     expect(screen.getByText("2 из 47 релевантных публикаций")).toBeVisible();
 
     const source = screen.getByRole("link", {
-      name: /Открыть первоисточник: Правительство.*Ejemplo.*откроется в новой вкладке/i,
+      name: /Открыть первоисточник: Правительство.*EL PAÍS.*откроется в новой вкладке/i,
     });
     expect(source).toHaveAttribute("href", "https://example.es/story");
     expect(source).toHaveAttribute("target", "_blank");
     expect(source).toHaveAttribute("rel", expect.stringContaining("noopener"));
     expect(source).toHaveClass("min-h-11", "focus-visible:outline-2");
+    expect(screen.queryByText(/Google News \(/)).not.toBeInTheDocument();
     expect(screen.getByText("Правительство прокомментировало отношения с Россией")).toHaveClass("line-clamp-2");
 
     const detail = screen.getByRole("link", { name: /Открыть разбор сигнала/i });

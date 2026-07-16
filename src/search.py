@@ -72,48 +72,42 @@ snapshot AS (
            ) AS snapshot_max_article_id
 ),
 matching_sources AS MATERIALIZED (
-    SELECT s.id, s.country_code, s.tier, s.weight
-    FROM sources s
+    SELECT s.article_id, s.id, s.country_code, s.tier, s.weight
+    FROM article_country_facts s
     WHERE (:country IS NULL OR s.country_code = :country)
       AND (:tier IS NULL OR s.tier = :tier)
 ),
 source_filtered_articles AS MATERIALIZED (
-    SELECT a.id
+    SELECT candidate.id
     FROM matching_sources s
+    JOIN articles candidate ON candidate.id = s.article_id
     CROSS JOIN snapshot snapshot_state
-    JOIN LATERAL (
-        SELECT candidate.id, candidate.collected_at, candidate.published_at,
-               candidate.language
-        FROM articles candidate
-        WHERE candidate.source_id = s.id
-          AND candidate.is_duplicate = FALSE
-          AND (
-              snapshot_state.snapshot_collected_at IS NULL
-              OR (COALESCE(candidate.collected_at, candidate.published_at),
-                  candidate.id) <=
-                 (snapshot_state.snapshot_collected_at,
-                  snapshot_state.snapshot_collected_article_id)
-          )
-          AND (
-              snapshot_state.snapshot_max_article_id IS NULL
-              OR candidate.id <= snapshot_state.snapshot_max_article_id
-          )
-        ORDER BY candidate.published_at DESC, candidate.id DESC
-        LIMIT :candidate_limit
-        OFFSET 0
-    ) a ON TRUE
-    LEFT JOIN analysis an ON an.article_id = a.id
+    LEFT JOIN analysis an ON an.article_id = candidate.id
     WHERE (:country IS NOT NULL OR :tier IS NOT NULL)
+      AND candidate.is_duplicate = FALSE
+      AND (
+          snapshot_state.snapshot_collected_at IS NULL
+          OR (COALESCE(candidate.collected_at, candidate.published_at),
+              candidate.id) <=
+             (snapshot_state.snapshot_collected_at,
+              snapshot_state.snapshot_collected_article_id)
+      )
+      AND (
+          snapshot_state.snapshot_max_article_id IS NULL
+          OR candidate.id <= snapshot_state.snapshot_max_article_id
+      )
       AND (:topic IS NULL OR an.topics @> ARRAY[CAST(:topic AS TEXT)])
       AND (:entity_id IS NULL OR EXISTS (
           SELECT 1
           FROM article_entity_mentions aem_filter
-          WHERE aem_filter.article_id = a.id
+          WHERE aem_filter.article_id = candidate.id
             AND aem_filter.entity_id = CAST(:entity_id AS UUID)
       ))
-      AND (:date_from IS NULL OR a.published_at >= CAST(:date_from AS DATE))
-      AND (:date_to IS NULL OR a.published_at < CAST(:date_to AS DATE) + INTERVAL '1 day')
-      AND (:language IS NULL OR a.language = :language)
+      AND (:date_from IS NULL OR candidate.published_at >= CAST(:date_from AS DATE))
+      AND (:date_to IS NULL OR candidate.published_at < CAST(:date_to AS DATE) + INTERVAL '1 day')
+      AND (:language IS NULL OR candidate.language = :language)
+    ORDER BY candidate.published_at DESC, candidate.id DESC
+    LIMIT :candidate_limit
 ),
 matching_entity_ids AS MATERIALIZED (
     SELECT ce.id
@@ -131,7 +125,7 @@ matching_entity_ids AS MATERIALIZED (
 full_text_candidate_ids AS MATERIALIZED (
     SELECT a.id, a.published_at
     FROM articles a
-    JOIN matching_sources s ON s.id = a.source_id
+    JOIN matching_sources s ON s.article_id = a.id
     LEFT JOIN analysis an ON an.article_id = a.id
     CROSS JOIN search_query sq
     CROSS JOIN snapshot snapshot_state
@@ -180,7 +174,7 @@ trigram_candidates AS (
            similarity(COALESCE(a.title_normalized, ''), :q) AS lexical_score,
            'trigram'::TEXT AS match_kind
     FROM articles a
-    JOIN sources s ON s.id = a.source_id
+    JOIN article_country_facts s ON s.article_id = a.id
     LEFT JOIN analysis an ON an.article_id = a.id
     CROSS JOIN snapshot snapshot_state
     WHERE :q <> ''
@@ -232,7 +226,7 @@ entity_candidates AS (
     FROM matching_entity_ids matched_entity
     JOIN article_entity_mentions aem ON aem.entity_id = matched_entity.id
     JOIN articles a ON a.id = aem.article_id
-    JOIN matching_sources s ON s.id = a.source_id
+    JOIN matching_sources s ON s.article_id = a.id
     LEFT JOIN analysis an ON an.article_id = a.id
     CROSS JOIN snapshot snapshot_state
     WHERE :country IS NULL
@@ -272,7 +266,7 @@ topic_candidates AS (
            'topic'::TEXT AS match_kind
     FROM analysis an
     JOIN articles a ON a.id = an.article_id
-    JOIN sources s ON s.id = a.source_id
+    JOIN article_country_facts s ON s.article_id = a.id
     CROSS JOIN snapshot snapshot_state
     WHERE :country IS NULL
       AND :tier IS NULL
@@ -326,7 +320,7 @@ story_candidates AS (
     FROM matching_story_ids matched_story
     JOIN story_articles sa_match ON sa_match.story_id = matched_story.id
     JOIN articles a ON a.id = sa_match.article_id
-    JOIN sources s ON s.id = a.source_id
+    JOIN article_country_facts s ON s.article_id = a.id
     LEFT JOIN analysis an ON an.article_id = a.id
     CROSS JOIN snapshot snapshot_state
     WHERE :country IS NULL
@@ -369,7 +363,7 @@ structured_entity_candidates AS (
            'structured'::TEXT AS match_kind
     FROM article_entity_mentions aem
     JOIN articles a ON a.id = aem.article_id
-    JOIN sources s ON s.id = a.source_id
+    JOIN article_country_facts s ON s.article_id = a.id
     LEFT JOIN analysis an ON an.article_id = a.id
     CROSS JOIN snapshot snapshot_state
     WHERE :q = ''
@@ -410,7 +404,7 @@ structured_topic_candidates AS (
            'structured'::TEXT AS match_kind
     FROM analysis an
     JOIN articles a ON a.id = an.article_id
-    JOIN sources s ON s.id = a.source_id
+    JOIN article_country_facts s ON s.article_id = a.id
     CROSS JOIN snapshot snapshot_state
     WHERE :q = ''
       AND :entity_id IS NULL
@@ -448,7 +442,7 @@ structured_date_candidates AS (
     SELECT a.id, 0.0::REAL AS lexical_score,
            'structured'::TEXT AS match_kind
     FROM articles a
-    JOIN sources s ON s.id = a.source_id
+    JOIN article_country_facts s ON s.article_id = a.id
     CROSS JOIN snapshot snapshot_state
     WHERE :q = ''
       AND :entity_id IS NULL
@@ -475,7 +469,7 @@ structured_language_candidates AS (
     SELECT a.id, 0.0::REAL AS lexical_score,
            'structured'::TEXT AS match_kind
     FROM articles a
-    JOIN sources s ON s.id = a.source_id
+    JOIN article_country_facts s ON s.article_id = a.id
     CROSS JOIN snapshot snapshot_state
     WHERE :q = ''
       AND :entity_id IS NULL
@@ -575,7 +569,7 @@ raw_candidate_features AS (
            )) AS story_score
     FROM candidate_ids
     JOIN articles a ON a.id = candidate_ids.id
-    JOIN sources s ON s.id = a.source_id
+    JOIN article_country_facts s ON s.article_id = a.id
     LEFT JOIN analysis an ON an.article_id = a.id
     CROSS JOIN snapshot snapshot_state
     LEFT JOIN LATERAL (
@@ -629,7 +623,9 @@ limited_candidates AS (
              published_at DESC, id DESC
     LIMIT :candidate_limit
 )
-SELECT a.id, a.title, a.summary, a.url, a.published_at, a.language,
+SELECT a.id, a.title, a.summary,
+       COALESCE(NULLIF(a.resolved_url, ''), a.url) AS url,
+       a.published_at, a.language,
        s.name AS source_name, s.country_code, s.tier,
        COALESCE(s.weight, 0.5) AS source_weight,
        COALESCE(an.topics, ARRAY[]::TEXT[]) AS topics,
@@ -661,7 +657,7 @@ SELECT a.id, a.title, a.summary, a.url, a.published_at, a.language,
        END AS match_snippet
 FROM limited_candidates candidates
 JOIN articles a ON a.id = candidates.id
-JOIN sources s ON s.id = a.source_id
+JOIN article_country_facts s ON s.article_id = a.id
 LEFT JOIN analysis an ON an.article_id = a.id
 CROSS JOIN search_query sq
 CROSS JOIN snapshot snapshot_state
