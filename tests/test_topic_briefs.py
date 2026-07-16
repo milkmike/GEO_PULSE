@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from scripts import generate_briefs
 from src.pipeline import briefs
 
 
@@ -63,3 +64,91 @@ def test_topic_has_inputs_distinguishes_empty_topic(monkeypatch):
     monkeypatch.setattr(briefs, "get_session", lambda: FakeSessionContext(topic_count=3))
 
     assert briefs.topic_has_inputs("culture_sport") is True
+
+
+def test_generate_topic_briefs_isolates_one_failure(monkeypatch):
+    calls = []
+    monkeypatch.setattr(generate_briefs, "TOPICS", {"a": "A", "b": "B", "c": "C"}, raising=False)
+
+    def fake(topic, force=False):
+        calls.append((topic, force))
+        if topic == "b":
+            raise RuntimeError("provider down")
+        return {"content": topic}
+
+    monkeypatch.setattr(generate_briefs, "generate_topic_brief", fake, raising=False)
+    monkeypatch.setattr(generate_briefs.time, "sleep", lambda _seconds: None)
+
+    assert generate_briefs.generate_topic_briefs(force=True) == {
+        "generated": 2,
+        "empty": 0,
+        "failed": 1,
+    }
+    assert calls == [("a", True), ("b", True), ("c", True)]
+
+
+def test_run_pass_orders_world_topics_then_countries(monkeypatch):
+    calls = []
+    monkeypatch.setattr(generate_briefs, "generate_world_brief", lambda force=False: calls.append(("world", force)))
+    monkeypatch.setattr(
+        generate_briefs,
+        "generate_topic_briefs",
+        lambda force=False: calls.append(("topics", force)) or {"generated": 2, "empty": 0, "failed": 1},
+        raising=False,
+    )
+    monkeypatch.setattr(generate_briefs, "tier1_codes", lambda: ["AA", "BB"])
+    monkeypatch.setattr(
+        generate_briefs,
+        "generate_country_brief",
+        lambda code, max_age_hours, force=False: calls.append((code, max_age_hours, force)),
+    )
+    monkeypatch.setattr(generate_briefs.time, "sleep", lambda _seconds: None)
+
+    generate_briefs.run_pass(country_max_age_hours=12, force=True)
+
+    assert calls == [
+        ("world", True),
+        ("topics", True),
+        ("AA", 12, True),
+        ("BB", 12, True),
+    ]
+
+
+@pytest.mark.parametrize("loop", [False, True])
+def test_topics_only_skips_world_and_country_work(monkeypatch, loop):
+    calls = []
+    argv = ["generate_briefs.py", "--topics-only", "--force"]
+    if loop:
+        argv.append("--loop")
+
+    monkeypatch.setattr(generate_briefs, "wait_for_db", lambda: None)
+    monkeypatch.setattr(
+        generate_briefs,
+        "generate_topic_briefs",
+        lambda force=False: calls.append(("topics", force)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        generate_briefs,
+        "generate_world_brief",
+        lambda *args, **kwargs: pytest.fail("world brief called"),
+    )
+    monkeypatch.setattr(
+        generate_briefs,
+        "run_pass",
+        lambda *args, **kwargs: pytest.fail("country pass called"),
+    )
+    monkeypatch.setattr("sys.argv", argv)
+
+    if loop:
+        monkeypatch.setattr(
+            generate_briefs.time,
+            "sleep",
+            lambda _seconds: (_ for _ in ()).throw(SystemExit),
+        )
+        with pytest.raises(SystemExit):
+            generate_briefs.main()
+    else:
+        generate_briefs.main()
+
+    assert calls == [("topics", True)]

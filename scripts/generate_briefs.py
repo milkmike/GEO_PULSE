@@ -6,7 +6,12 @@ from datetime import datetime, timezone
 
 from src.countries import tier1_codes
 from src.db import wait_for_db
-from src.pipeline.briefs import generate_country_brief, generate_world_brief
+from src.pipeline.briefs import (
+    generate_country_brief,
+    generate_topic_brief,
+    generate_world_brief,
+)
+from src.pipeline.topics import TOPICS
 
 logging.basicConfig(
     level=logging.INFO,
@@ -15,8 +20,22 @@ logging.basicConfig(
 logger = logging.getLogger("briefs")
 
 
+def generate_topic_briefs(force: bool = False) -> dict[str, int]:
+    result = {"generated": 0, "empty": 0, "failed": 0}
+    for topic in TOPICS:
+        try:
+            brief = generate_topic_brief(topic, force=force)
+            result["generated" if brief else "empty"] += 1
+        except Exception as exc:
+            result["failed"] += 1
+            logger.error("Topic brief %s failed: %s", topic, exc)
+        time.sleep(1)
+    return result
+
+
 def run_pass(country_max_age_hours: float = 24.0, force: bool = False):
     generate_world_brief(force=force)
+    generate_topic_briefs(force=force)
     for code in tier1_codes():
         try:
             generate_country_brief(code, max_age_hours=country_max_age_hours, force=force)
@@ -30,6 +49,7 @@ def main():
     parser.add_argument("--loop", action="store_true")
     parser.add_argument("--interval", type=int, default=7200, help="World brief cadence, sec")
     parser.add_argument("--world-only", action="store_true")
+    parser.add_argument("--topics-only", action="store_true")
     parser.add_argument("--force", action="store_true",
                         help="Regenerate even if inputs are unchanged")
     args = parser.parse_args()
@@ -40,7 +60,9 @@ def main():
         logger.info(f"Starting briefs loop (interval: {args.interval}s)")
         while True:
             try:
-                if args.world_only:
+                if args.topics_only:
+                    generate_topic_briefs(force=args.force)
+                elif args.world_only:
                     generate_world_brief(force=args.force)
                 else:
                     run_pass(force=args.force)
@@ -48,7 +70,10 @@ def main():
                 logger.error(f"Briefs pass error: {e}", exc_info=True)
             time.sleep(args.interval)
     else:
-        run_pass(force=args.force)
+        if args.topics_only:
+            generate_topic_briefs(force=args.force)
+        else:
+            run_pass(force=args.force)
 
 
 if __name__ == "__main__":
