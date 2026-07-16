@@ -1175,11 +1175,12 @@ def test_scoped_story_build_filters_candidates_and_skips_global_lifecycle(monkey
     old = SimpleNamespace(thread_id=1)
     recent = SimpleNamespace(thread_id=2)
     observed = {}
-    monkeypatch.setattr(
-        stories,
-        "fetch_story_candidates",
-        lambda session: [old, recent],
-    )
+
+    def fake_fetch(session, **kwargs):
+        observed["fetch_options"] = kwargs
+        return [old, recent]
+
+    monkeypatch.setattr(stories, "fetch_story_candidates", fake_fetch)
 
     def fake_pairs(session, candidates):
         observed["pair_candidates"] = list(candidates)
@@ -1206,6 +1207,7 @@ def test_scoped_story_build_filters_candidates_and_skips_global_lifecycle(monkey
 
     assert result.candidates == 1
     assert observed == {
+        "fetch_options": {"thread_ids": frozenset({2})},
         "pair_candidates": [recent],
         "cluster_candidates": [recent],
     }
