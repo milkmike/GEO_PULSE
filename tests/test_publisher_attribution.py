@@ -39,6 +39,23 @@ def test_normalize_publisher_domain_is_exact_and_deterministic(url, expected):
     assert normalize_publisher_domain(url) == expected
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://localhost/feed",
+        "com",
+        "http://127.0.0.1/feed",
+        "http://[::1]/feed",
+        "https://bad_domain.example/feed",
+        "https://-bad.example/feed",
+        "https://bad-.example/feed",
+        "https://bad..example/feed",
+    ],
+)
+def test_normalize_publisher_domain_rejects_non_dns_hosts(url):
+    assert normalize_publisher_domain(url) is None
+
+
 def test_native_google_market_is_discovery_not_country_evidence():
     url = native_feed_url("ES", "es")
 
@@ -62,6 +79,20 @@ def test_ambiguous_site_wrapper_does_not_choose_a_domain():
 
     assert feed_mode(url, {}) == "publisher_discovery"
     assert expected_site_domain(url) is None
+
+
+@pytest.mark.parametrize(
+    "domain",
+    ["localhost", "com", "127.0.0.1", "bad_domain.example", "-bad.example"],
+)
+def test_invalid_site_filter_is_discovery_not_site_wrapper(domain):
+    url = (
+        "https://news.google.com/rss/search?"
+        f"q=site:{domain}+russia&hl=en-US&gl=US&ceid=US:en"
+    )
+
+    assert expected_site_domain(url) is None
+    assert feed_mode(url, {}) == "publisher_discovery"
 
 
 def test_country_code_tld_does_not_create_verified_registry_entry():
@@ -119,4 +150,3 @@ def test_generated_native_catalog_marks_all_85_broad_feeds_as_discovery():
     assert len(sources) == 85
     assert all(source.get("config", {}).get("feed_mode") == "publisher_discovery" for source in sources)
     assert all(source["config"].get("provider") == "google_news" for source in sources)
-

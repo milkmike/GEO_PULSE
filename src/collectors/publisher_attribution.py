@@ -11,6 +11,7 @@ from collections import defaultdict
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import ipaddress
 import json
 import re
 from typing import Literal
@@ -29,6 +30,7 @@ _AGGREGATOR_DOMAINS = {
     "news.yahoo.com",
 }
 _SITE_FILTER_RE = re.compile(r"(?<![-\w])site:([^\s+]+)", re.IGNORECASE)
+_DNS_LABEL_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z")
 
 
 @dataclass(frozen=True)
@@ -85,7 +87,18 @@ def normalize_publisher_domain(url: str | None) -> str | None:
                 break
         else:
             break
-    return host or None
+    if len(host) > 253 or "." not in host:
+        return None
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        pass
+    else:
+        return None
+    labels = host.split(".")
+    if any(not _DNS_LABEL_RE.fullmatch(label) for label in labels):
+        return None
+    return host
 
 
 def expected_site_domain(url: str | None) -> str | None:
@@ -179,6 +192,51 @@ def _candidate(row: Mapping, domain: str, method: str, *, alias: bool = False) -
     }
 
 
+def _existing_candidates(existing, domain: str) -> list[dict]:
+    """Recover unresolved registry evidence so a blocked row stays fail-closed."""
+    evidence = existing.evidence if isinstance(existing.evidence, Mapping) else {}
+    raw_candidates = (
+        evidence.get("candidates", ())
+        if existing.status == "blocked"
+        else (evidence.get("candidate"),)
+    )
+    recovered = []
+    for raw in raw_candidates:
+        if not isinstance(raw, Mapping):
+            continue
+        try:
+            source_id = int(raw["source_id"])
+            country_code = str(raw["country_code"]).upper()
+        except (KeyError, TypeError, ValueError):
+            continue
+        recovered.append(
+            {
+                "domain": domain,
+                "source_id": source_id,
+                "source_name": raw.get("source_name"),
+                "source_url": raw.get("source_url"),
+                "country_code": country_code,
+                "method": raw.get("method") or existing.method,
+                "explicit_alias": bool(raw.get("explicit_alias", False)),
+                "existing_registry": True,
+            }
+        )
+    if recovered:
+        return recovered
+    return [
+        {
+            "domain": domain,
+            "source_id": existing.publisher_source_id,
+            "source_name": None,
+            "source_url": None,
+            "country_code": existing.country_code,
+            "method": existing.method,
+            "explicit_alias": False,
+            "existing_registry": True,
+        }
+    ]
+
+
 def sync_publisher_domains(session) -> RegistrySyncReport:
     """Seed/update the verified registry from deterministic catalog evidence.
 
@@ -214,8 +272,12 @@ def sync_publisher_domains(session) -> RegistrySyncReport:
     verified = blocked = 0
     now = datetime.now(timezone.utc)
     for domain in sorted(grouped):
+        existing = session.get(PublisherDomain, domain)
+        candidates = list(grouped[domain])
+        if existing is not None and existing.status in {"verified", "blocked"}:
+            candidates.extend(_existing_candidates(existing, domain))
         candidates = sorted(
-            grouped[domain],
+            candidates,
             key=lambda candidate: (candidate["source_id"], candidate["country_code"]),
         )
         unique_candidates = []
@@ -226,28 +288,12 @@ def sync_publisher_domains(session) -> RegistrySyncReport:
                 unique_candidates.append(candidate)
                 seen_identities.add(identity)
 
-        existing = session.get(PublisherDomain, domain)
-        if existing is not None and existing.status == "verified":
-            existing_identity = (existing.publisher_source_id, existing.country_code)
-            if existing_identity not in seen_identities:
-                unique_candidates.append(
-                    {
-                        "domain": domain,
-                        "source_id": existing.publisher_source_id,
-                        "source_name": None,
-                        "source_url": None,
-                        "country_code": existing.country_code,
-                        "method": existing.method,
-                        "explicit_alias": False,
-                        "existing_registry": True,
-                    }
-                )
-                seen_identities.add(existing_identity)
-
-        conflict = len(seen_identities) > 1
+        conflict = len(seen_identities) > 1 or (
+            existing is not None and existing.status == "blocked"
+        )
         if conflict:
             blocked += 1
-            if existing is not None and existing.status == "verified":
+            if existing is not None and existing.status in {"verified", "blocked"}:
                 chosen_source_id = existing.publisher_source_id
                 chosen_country = existing.country_code
             else:

@@ -94,6 +94,57 @@ def test_registry_sync_seeds_direct_and_site_wrapper_but_not_discovery():
     engine.dispose()
 
 
+def test_registry_sync_skips_invalid_direct_and_site_domains():
+    engine, SessionLocal = _database()
+    invalid_direct_urls = [
+        "http://localhost/feed",
+        "https://com/feed",
+        "http://127.0.0.1/feed",
+        "http://[::1]/feed",
+        "https://bad_domain.example/feed",
+        "https://-bad.example/feed",
+    ]
+    invalid_site_domains = ["localhost", "com", "127.0.0.1", "bad_domain.example"]
+    with SessionLocal.begin() as session:
+        session.add_all(
+            [
+                Source(
+                    id=index,
+                    name=f"Invalid direct {index}",
+                    url=url,
+                    country_code="ES",
+                    source_type="rss",
+                    config={},
+                )
+                for index, url in enumerate(invalid_direct_urls, start=1)
+            ]
+            + [
+                Source(
+                    id=index,
+                    name=f"Invalid site {index}",
+                    url=(
+                        "https://news.google.com/rss/search?"
+                        f"q=site:{domain}+russia&hl=en-US&gl=US&ceid=US:en"
+                    ),
+                    country_code="ES",
+                    source_type="rss",
+                    config={},
+                )
+                for index, domain in enumerate(invalid_site_domains, start=101)
+            ]
+        )
+
+    with SessionLocal.begin() as session:
+        report = sync_publisher_domains(session)
+
+    with SessionLocal() as session:
+        assert session.scalars(select(PublisherDomain)).all() == []
+        assert report.verified == 0
+        assert report.blocked == 0
+        assert report.skipped == len(invalid_direct_urls) + len(invalid_site_domains)
+    engine.dispose()
+
+
 def test_registry_sync_blocks_cross_country_domain_conflict_idempotently():
     engine, SessionLocal = _database()
     with SessionLocal.begin() as session:
@@ -132,6 +183,69 @@ def test_registry_sync_blocks_cross_country_domain_conflict_idempotently():
         assert rows[0].publisher_source_id == 10
         assert [candidate["source_id"] for candidate in rows[0].evidence["candidates"]] == [10, 20]
         assert first.blocked == second.blocked == 1
+    engine.dispose()
+
+
+def test_registry_sync_never_repromotes_blocked_existing_mapping():
+    engine, SessionLocal = _database()
+    with SessionLocal.begin() as session:
+        session.add(
+            Source(
+                id=20,
+                name="Current ME",
+                url="https://shared.example/feed",
+                country_code="ME",
+                source_type="rss",
+                config={},
+            )
+        )
+        session.add(
+            PublisherDomain(
+                domain="shared.example",
+                publisher_source_id=10,
+                country_code="ES",
+                status="verified",
+                method="catalog",
+                confidence=1.0,
+                evidence={
+                    "candidate": {
+                        "domain": "shared.example",
+                        "source_id": 10,
+                        "source_name": "Historical ES",
+                        "source_url": "https://shared.example/old-feed",
+                        "country_code": "ES",
+                        "method": "catalog",
+                        "explicit_alias": False,
+                    }
+                },
+            )
+        )
+
+    snapshots = []
+    reports = []
+    for _ in range(3):
+        with SessionLocal.begin() as session:
+            reports.append(sync_publisher_domains(session))
+        with SessionLocal() as session:
+            row = session.get(PublisherDomain, "shared.example")
+            snapshots.append(
+                (
+                    row.status,
+                    row.publisher_source_id,
+                    row.country_code,
+                    [
+                        (candidate["source_id"], candidate["country_code"])
+                        for candidate in row.evidence["candidates"]
+                    ],
+                )
+            )
+
+    assert [report.blocked for report in reports] == [1, 1, 1]
+    assert snapshots == [
+        ("blocked", 10, "ES", [(10, "ES"), (20, "ME")]),
+        ("blocked", 10, "ES", [(10, "ES"), (20, "ME")]),
+        ("blocked", 10, "ES", [(10, "ES"), (20, "ME")]),
+    ]
     engine.dispose()
 
 
