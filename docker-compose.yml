@@ -73,6 +73,7 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      HTTPS_PROXY: ${HTTPS_PROXY:-}
       LLM_MODELS: ${LLM_MODELS:-}
       OLLAMA_URL: ${OLLAMA_URL:-}
       REDIS_URL: redis://redis:6379/0
@@ -107,6 +108,7 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      HTTPS_PROXY: ${HTTPS_PROXY:-}
       HEAVY_MODEL: ${HEAVY_MODEL:-qwen/qwen3.6-flash}
     depends_on:
       db:
@@ -185,6 +187,7 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      HTTPS_PROXY: ${HTTPS_PROXY:-}
       LLM_MODELS: ${LLM_MODELS:-}
       OLLAMA_URL: ${OLLAMA_URL:-}
       REDIS_URL: redis://redis:6379/0

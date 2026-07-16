@@ -1005,7 +1005,20 @@ def test_analyzer_image_includes_one_off_knowledge_and_index_commands():
     dockerfile = (root / "Dockerfile.analyzer").read_text()
 
     assert "scripts/backfill_knowledge.py" in dockerfile
+    assert "scripts/prepare_embedding_jobs.py" in dockerfile
     assert "scripts/index_embeddings.py" in dockerfile
+
+
+def test_openrouter_workers_accept_https_proxy_without_exposing_public_api():
+    import yaml
+
+    root = Path(__file__).resolve().parents[1]
+    compose = yaml.safe_load((root / "docker-compose.yml").read_text())
+    services = compose["services"]
+
+    for service_name in ("analyzer", "briefs", "threads"):
+        assert services[service_name]["environment"]["HTTPS_PROXY"] == "${HTTPS_PROXY:-}"
+    assert "HTTPS_PROXY" not in services["api"]["environment"]
 
 
 def test_embedding_indexer_is_not_scheduled_in_compose():

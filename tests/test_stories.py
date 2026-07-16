@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 import base64
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
@@ -895,6 +896,13 @@ def test_build_threads_recent_days_routes_only_to_bounded_rebuild(monkeypatch):
     build_threads_script.main()
 
     assert calls == ["wait", ("recent", 30)]
+
+
+def test_temperature_image_includes_story_audit_command():
+    root = Path(__file__).resolve().parents[1]
+    dockerfile = (root / "Dockerfile.temperature").read_text(encoding="utf-8")
+
+    assert "scripts/audit_story_pipeline.py" in dockerfile
 
 
 def test_story_pipeline_audit_is_read_only_and_has_stable_json_keys(monkeypatch):
