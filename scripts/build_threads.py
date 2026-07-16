@@ -1446,6 +1446,36 @@ def cleanup_old_threads(session):
 
 # ── Main ────────────────────────────────────────────────
 
+def rebuild_recent_stories(
+    days: int = 30,
+    *,
+    now: datetime | None = None,
+) -> None:
+    """Refresh recent stories without rebuilding their country threads."""
+
+    if days < 1:
+        raise ValueError("days must be positive")
+    now = now or datetime.now(timezone.utc)
+    scope_start = now - timedelta(days=days)
+
+    with get_session() as session:
+        rows = session.execute(text("""
+            SELECT DISTINCT t.id AS thread_id
+            FROM threads t
+            JOIN thread_articles ta ON ta.thread_id = t.id
+            JOIN articles ar ON ar.id = ta.article_id
+            JOIN article_country_facts s
+              ON s.article_id = ar.id
+             AND TRIM(s.country_code) = TRIM(t.country_code)
+            WHERE t.article_count > 0
+              AND ar.published_at >= :scope_start
+            ORDER BY t.id
+        """), {"scope_start": scope_start}).fetchall()
+        thread_ids = {int(row.thread_id) for row in rows}
+
+    run_scoped_story_builder(thread_ids, scope_start=scope_start)
+
+
 def rebuild_recent_threads_and_stories(
     days: int = 30,
     *,
@@ -1556,12 +1586,18 @@ def build_threads():
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="GeoPulse — Narrative Threads v2")
-    parser.add_argument("--loop", action="store_true")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--loop", action="store_true")
     parser.add_argument("--interval", type=int, default=3600)
-    parser.add_argument(
+    mode.add_argument(
         "--recent-days",
         type=int,
         help="Run only the additive bounded recent thread/story rebuild",
+    )
+    mode.add_argument(
+        "--stories-only-recent-days",
+        type=int,
+        help="Refresh bounded recent stories without rebuilding country threads",
     )
     return parser
 
@@ -1574,7 +1610,9 @@ def main():
 
     wait_for_db()
 
-    if args.recent_days is not None:
+    if args.stories_only_recent_days is not None:
+        rebuild_recent_stories(args.stories_only_recent_days)
+    elif args.recent_days is not None:
         rebuild_recent_threads_and_stories(args.recent_days)
     elif args.loop:
         logger.info(f"Starting threads v2 (interval: {args.interval}s)")
