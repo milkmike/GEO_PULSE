@@ -200,6 +200,45 @@ def run_story_builder() -> None:
         )
 
 
+def run_scoped_story_builder(
+    thread_ids: set[int],
+    *,
+    scope_start: datetime,
+) -> None:
+    """Refresh only recent story candidates without cleanup or replacement."""
+
+    if not thread_ids:
+        return
+    try:
+        with track_duration() as timer:
+            with get_session() as session:
+                result = build_global_stories(
+                    session,
+                    summarizer=generate_story_copy,
+                    candidate_thread_ids=frozenset(thread_ids),
+                    candidate_article_start=scope_start,
+                    refresh_lifecycles=False,
+                    minimum_existing_last_seen=scope_start,
+                    non_destructive=True,
+                )
+        logger.info(
+            "Scoped stories built: %s clusters, %s stories, %s memberships",
+            result.clusters,
+            result.stories_upserted,
+            result.article_memberships,
+        )
+        track_api_call(
+            service="story-builder", endpoint="/build-scoped",
+            script="build_threads.py", status="ok", duration_ms=timer.ms,
+        )
+    except Exception as exc:
+        logger.error("Scoped story build failed: %s", exc, exc_info=True)
+        track_api_call(
+            service="story-builder", endpoint="/build-scoped",
+            script="build_threads.py", status="error", error=str(exc)[:500],
+        )
+
+
 # ── Step 1: Fetch articles ──────────────────────────────
 
 def fetch_articles(session, days: int = 30) -> list[dict]:
@@ -917,7 +956,16 @@ Sentiment shift: {metrics['sentiment_shift']:+.3f}
 
 # ── Step 5: Upsert ──────────────────────────────────────
 
-def upsert_thread(session, cc: str, canonical_key: str, articles: list[dict], all_keys: list[str]) -> int | None:
+def upsert_thread(
+    session,
+    cc: str,
+    canonical_key: str,
+    articles: list[dict],
+    all_keys: list[str],
+    *,
+    replace_memberships: bool = True,
+    minimum_existing_last_seen: datetime | None = None,
+) -> int | None:
     """Upsert a single thread. Returns thread_id or None."""
     n = len(articles)
     if n < MIN_ARTICLES_FOR_THREAD:
@@ -954,7 +1002,12 @@ def upsert_thread(session, cc: str, canonical_key: str, articles: list[dict], al
         best = max(articles, key=lambda a: (a.get("action_level") or 1))
         title = best.get("title", canonical_key)[:500]
 
-    result = session.execute(text("""
+    conflict_guard = ""
+    if minimum_existing_last_seen is not None:
+        conflict_guard = (
+            "WHERE threads.last_seen >= :minimum_existing_last_seen"
+        )
+    result = session.execute(text(f"""
         INSERT INTO threads (
             country_code, thread_key, title, narrative, status, arc_phase,
             first_seen, last_seen, article_count, avg_sentiment,
@@ -983,6 +1036,7 @@ def upsert_thread(session, cc: str, canonical_key: str, articles: list[dict], al
             merged_keys = EXCLUDED.merged_keys,
             summary_json = COALESCE(EXCLUDED.summary_json, threads.summary_json),
             generated_at = NOW()
+        {conflict_guard}
         RETURNING id
     """), {
         "cc": cc,
@@ -1001,13 +1055,21 @@ def upsert_thread(session, cc: str, canonical_key: str, articles: list[dict], al
         "sentiment_shift": metrics["sentiment_shift"],
         "merged_keys": all_keys,
         "summary_json": json.dumps(summary_json, ensure_ascii=False) if summary_json else None,
+        "minimum_existing_last_seen": minimum_existing_last_seen,
     })
 
-    thread_id = result.fetchone()[0]
+    persisted = result.fetchone()
+    if persisted is None:
+        return None
+    thread_id = persisted[0]
 
     # Update thread_articles
     article_ids = list({a["article_id"] for a in articles})
-    session.execute(text("DELETE FROM thread_articles WHERE thread_id = :tid"), {"tid": thread_id})
+    if replace_memberships:
+        session.execute(
+            text("DELETE FROM thread_articles WHERE thread_id = :tid"),
+            {"tid": thread_id},
+        )
     for aid in article_ids:
         session.execute(text("""
             INSERT INTO thread_articles (thread_id, article_id)
@@ -1358,6 +1420,52 @@ def cleanup_old_threads(session):
 
 
 # ── Main ────────────────────────────────────────────────
+
+def rebuild_recent_threads_and_stories(
+    days: int = 30,
+    *,
+    now: datetime | None = None,
+) -> None:
+    """Additively refresh recent threads/stories without global maintenance."""
+
+    if days < 1:
+        raise ValueError("days must be positive")
+    now = now or datetime.now(timezone.utc)
+    scope_start = now - timedelta(days=days)
+    thread_ids: set[int] = set()
+
+    with get_session() as session:
+        articles = fetch_articles(session, days=days)
+        if not articles:
+            return
+
+        embedded_count = sum(1 for article in articles if article["has_embedding"])
+        if embedded_count > len(articles) * 0.3:
+            clusters = cluster_pass1_embeddings(session, articles)
+        else:
+            clusters = cluster_pass1_trgm(session, articles)
+        clusters = cluster_pass2_llm(clusters)
+
+        for cluster_id, cluster_articles in clusters.items():
+            cc = cluster_id.split(":")[0]
+            canonical_key = (
+                cluster_id.split(":", 1)[1] if ":" in cluster_id else cluster_id
+            )
+            all_keys = list({article["event_key"] for article in cluster_articles})
+            thread_id = upsert_thread(
+                session,
+                cc,
+                canonical_key,
+                cluster_articles,
+                all_keys,
+                replace_memberships=False,
+                minimum_existing_last_seen=scope_start,
+            )
+            if thread_id is not None:
+                thread_ids.add(thread_id)
+
+    run_scoped_story_builder(thread_ids, scope_start=scope_start)
+
 
 def build_threads():
     """Main thread building pipeline."""

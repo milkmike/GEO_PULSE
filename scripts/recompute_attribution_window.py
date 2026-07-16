@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from collections import defaultdict
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -17,7 +18,9 @@ from src.engine.index import (
     WINDOW_DAYS,
     calculate_temperature_at,
     suppress_temperature_alerts,
+    use_temperature_history,
 )
+from src.methodology import TEMPERATURE_METHODOLOGY
 
 
 TEMPERATURE_VALUE_FIELDS = (
@@ -109,6 +112,39 @@ def _load_existing_rows(window_start: datetime, window_end: datetime) -> list[An
         }).fetchall()
 
 
+def _load_history_seeds(
+    country_codes: Sequence[str],
+    window_start: datetime,
+) -> list[Any]:
+    if not country_codes:
+        return []
+    history_points = max(
+        TEMPERATURE_METHODOLOGY.trend_history_points,
+        TEMPERATURE_METHODOLOGY.anomaly_history_points,
+    )
+    with get_session() as session:
+        return session.execute(text("""
+            /* attribution_recompute:history_seeds */
+            WITH ranked AS (
+                SELECT time, country_code, temperature,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY country_code ORDER BY time DESC
+                       ) AS history_rank
+                FROM temperature
+                WHERE country_code = ANY(:country_codes)
+                  AND time < :window_start
+            )
+            SELECT time, country_code, temperature
+            FROM ranked
+            WHERE history_rank <= :history_points
+            ORDER BY time, country_code
+        """), {
+            "country_codes": list(country_codes),
+            "window_start": window_start,
+            "history_points": history_points,
+        }).fetchall()
+
+
 def _upsert_batch(batch: Sequence[dict[str, Any]]) -> None:
     if not batch:
         return
@@ -141,7 +177,7 @@ def _upsert_batch(batch: Sequence[dict[str, Any]]) -> None:
 def _run_post_apply_jobs() -> None:
     """Refresh current derivatives, then rebuild only the normal 30-day threads."""
 
-    from scripts.build_threads import build_threads
+    from scripts.build_threads import rebuild_recent_threads_and_stories
     from scripts.calc_ru_index import calc_all as calculate_current_rri
     from scripts.generate_briefs import run_pass as generate_current_briefs
     from src.engine.signals import detect_all as detect_current_signals
@@ -149,7 +185,7 @@ def _run_post_apply_jobs() -> None:
     calculate_current_rri()
     detect_current_signals()
     generate_current_briefs(force=True)
-    build_threads()
+    rebuild_recent_threads_and_stories(days=30)
 
 
 def recompute_window(
@@ -170,12 +206,34 @@ def recompute_window(
     input_days = days + WINDOW_DAYS
     input_start = window_end - timedelta(days=input_days)
     existing_rows = _load_existing_rows(window_start, window_end)
+    country_codes = sorted({str(_value(row, "country_code")) for row in existing_rows})
+    history_seeds = _load_history_seeds(country_codes, window_start)
+    history_by_country: dict[str, list[tuple[datetime, float]]] = defaultdict(list)
+    for row in history_seeds:
+        temperature = _value(row, "temperature")
+        if temperature is not None:
+            history_by_country[str(_value(row, "country_code"))].append((
+                _value(row, "time"),
+                float(temperature),
+            ))
+
+    def rolling_history(
+        country_code: str,
+        as_of: datetime,
+        limit: int,
+    ) -> list[float]:
+        eligible = [
+            temperature
+            for at, temperature in history_by_country[country_code]
+            if at < as_of
+        ]
+        return list(reversed(eligible[-limit:]))
 
     deltas: list[TemperatureDelta] = []
     calculations: list[dict[str, Any]] = []
     changed = 0
     skipped = 0
-    with suppress_temperature_alerts():
+    with suppress_temperature_alerts(), use_temperature_history(rolling_history):
         for row in existing_rows:
             key_time = _value(row, "time")
             country_code = str(_value(row, "country_code"))
@@ -186,6 +244,12 @@ def recompute_window(
             )
             if calculation is None:
                 skipped += 1
+                old_temperature = _value(row, "temperature")
+                if old_temperature is not None:
+                    history_by_country[country_code].append((
+                        key_time,
+                        float(old_temperature),
+                    ))
                 continue
             if (
                 calculation.get("time") != key_time
@@ -214,6 +278,11 @@ def recompute_window(
                 "country_code": country_code,
                 **after,
             })
+            if after["temperature"] is not None:
+                history_by_country[country_code].append((
+                    key_time,
+                    float(after["temperature"]),
+                ))
 
     if apply:
         for start in range(0, len(calculations), batch_size):

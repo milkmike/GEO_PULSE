@@ -141,6 +141,15 @@ class RecomputeSession:
             ]
             rows.sort(key=lambda row: (row.time, row.country_code))
             return FakeResult(rows=rows)
+        if "attribution_recompute:history_seeds" in sql:
+            rows = [
+                SimpleNamespace(**row)
+                for row in self.values.values()
+                if row["country_code"] in params["country_codes"]
+                and row["time"] < params["window_start"]
+            ]
+            rows.sort(key=lambda row: (row.time, row.country_code))
+            return FakeResult(rows=rows)
         if "INSERT INTO temperature" in sql:
             batch = params if isinstance(params, list) else [params]
             for item in batch:
@@ -318,6 +327,99 @@ def test_recompute_window_apply_upserts_only_existing_90_day_keys(monkeypatch):
     assert not any("DELETE FROM" in sql for sql, _ in session.calls)
 
 
+class RollingRecomputeSession(RecomputeSession):
+    def __init__(self):
+        seed_times = [NOW - timedelta(days=95 - offset) for offset in range(5)]
+        rows = [
+            _temperature_row(at, "ES", 10.0)
+            for at in seed_times
+        ] + [
+            _temperature_row(NOW - timedelta(days=2), "ES", 10.0),
+            _temperature_row(NOW - timedelta(days=1), "ES", 10.0),
+        ]
+        self.values = {
+            (row["time"], row["country_code"]): dict(row)
+            for row in rows
+        }
+        self.calls = []
+        self.upserted_keys = []
+
+
+class HistoryQueryForbiddenSession:
+    def execute(self, statement, params=None):
+        raise AssertionError(
+            "rolling recompute must provide repaired in-memory temperature history"
+        )
+
+    def add(self, item):
+        raise AssertionError("historical recompute must not emit alerts")
+
+
+def _rolling_calculator(session: RollingRecomputeSession):
+    def calculate(country_code, as_of, *, exclude_backfill=True):
+        assert exclude_backfill is True
+        current = 30.0 if as_of == NOW - timedelta(days=2) else 20.0
+        old = session.values[(as_of, country_code)]
+        result = {
+            key: value
+            for key, value in old.items()
+            if key != "pattern_type"
+        }
+        history_session = HistoryQueryForbiddenSession()
+        result["temperature"] = current
+        result["raw_sentiment"] = round(current / (100 / 3), 2)
+        result["trend"] = index.detect_trend(
+            history_session,
+            country_code,
+            current,
+            as_of=as_of,
+        )
+        result["anomaly_score"] = index.detect_anomaly(
+            history_session,
+            country_code,
+            current,
+            as_of=as_of,
+        )
+        return result
+
+    return calculate
+
+
+def test_recompute_rolls_repaired_history_forward_and_dry_run_matches_apply(
+    monkeypatch,
+):
+    recompute = _load_task7_module("scripts.recompute_attribution_window")
+
+    def run(apply):
+        session = RollingRecomputeSession()
+        before = session.snapshot()
+        monkeypatch.setattr(recompute, "get_session", lambda: SessionContext(session))
+        monkeypatch.setattr(recompute, "_utc_now", lambda: NOW)
+        monkeypatch.setattr(
+            recompute,
+            "calculate_temperature_at",
+            _rolling_calculator(session),
+        )
+        monkeypatch.setattr(recompute, "_run_post_apply_jobs", lambda: None)
+        report = recompute.recompute_window(days=90, apply=apply, batch_size=1)
+        return session, before, report
+
+    dry_session, dry_before, dry_report = run(False)
+    apply_session, _, apply_report = run(True)
+
+    dry_series = [delta.after for delta in dry_report.deltas]
+    apply_series = [delta.after for delta in apply_report.deltas]
+    assert dry_series == apply_series
+    assert [point["trend"] for point in dry_series] == ["rising", "stable"]
+    assert [point["anomaly_score"] for point in dry_series] == [20.0, 0.82]
+    assert dry_session.snapshot() == dry_before
+    assert not any("INSERT INTO temperature" in sql for sql, _ in dry_session.calls)
+    assert [
+        apply_session.values[(NOW - timedelta(days=2), "ES")]["temperature"],
+        apply_session.values[(NOW - timedelta(days=1), "ES")]["temperature"],
+    ] == [30.0, 20.0]
+
+
 class AuditSession:
     def __init__(
         self,
@@ -454,5 +556,204 @@ def test_recompute_uses_only_current_scoped_downstream_jobs():
     assert "src.engine.signals" in text
     assert "scripts.generate_briefs" in text
     assert "scripts.build_threads" in text
+    assert "rebuild_recent_threads_and_stories" in text
+    assert "build_threads()" not in text
     assert "backfill_temperature" not in text
     assert "backfill_investigation_data" not in text
+
+
+def test_recent_thread_rebuild_never_runs_global_cleanup_or_membership_replacement(
+    monkeypatch,
+):
+    build_threads = _load_task7_module("scripts.build_threads")
+    article = {
+        "article_id": 11,
+        "event_key": "recent-event",
+        "country_code": "ES",
+        "has_embedding": False,
+    }
+    observed = {}
+
+    monkeypatch.setattr(
+        build_threads,
+        "get_session",
+        lambda: SessionContext(object()),
+    )
+    monkeypatch.setattr(
+        build_threads,
+        "fetch_articles",
+        lambda session, days=30: observed.setdefault("days", days) and [article],
+    )
+    monkeypatch.setattr(
+        build_threads,
+        "cluster_pass1_trgm",
+        lambda session, articles: {"ES:recent-event": articles},
+    )
+    monkeypatch.setattr(build_threads, "cluster_pass2_llm", lambda clusters: clusters)
+
+    def fake_upsert(session, cc, key, articles, all_keys, **kwargs):
+        observed["upsert"] = kwargs
+        return 42
+
+    monkeypatch.setattr(build_threads, "upsert_thread", fake_upsert)
+    monkeypatch.setattr(
+        build_threads,
+        "run_scoped_story_builder",
+        lambda thread_ids, *, scope_start: observed.update({
+            "story_thread_ids": set(thread_ids),
+            "story_scope_start": scope_start,
+        }),
+        raising=False,
+    )
+    for forbidden in (
+        "link_related_threads",
+        "cleanup_duplicate_threads",
+        "cleanup_old_threads",
+        "run_story_builder",
+        "build_threads",
+    ):
+        monkeypatch.setattr(
+            build_threads,
+            forbidden,
+            lambda *args, _name=forbidden, **kwargs: pytest.fail(
+                f"scoped rebuild called global/destructive {_name}"
+            ),
+        )
+
+    build_threads.rebuild_recent_threads_and_stories(days=30, now=NOW)
+
+    assert observed["days"] == 30
+    assert observed["upsert"]["replace_memberships"] is False
+    assert observed["upsert"]["minimum_existing_last_seen"] == NOW - timedelta(days=30)
+    assert observed["story_thread_ids"] == {42}
+    assert observed["story_scope_start"] == NOW - timedelta(days=30)
+
+
+def test_scoped_thread_upsert_guards_old_conflicts_and_contains_no_delete(monkeypatch):
+    build_threads = _load_task7_module("scripts.build_threads")
+    calls = []
+
+    class OldConflictSession:
+        def execute(self, statement, params=None):
+            sql = str(statement)
+            calls.append((sql, params))
+            if "INSERT INTO threads" in sql:
+                return FakeResult(row=None)
+            raise AssertionError(sql)
+
+    articles = [
+        {
+            "article_id": article_id,
+            "sentiment": 0.0,
+            "action_level": 1,
+            "published_at": NOW - timedelta(days=1),
+            "title": f"Article {article_id}",
+            "tier": "mainstream",
+            "source_name": "Source",
+            "event_type": "diplomatic",
+        }
+        for article_id in (11, 12)
+    ]
+    monkeypatch.setattr(
+        build_threads,
+        "calculate_importance_v2",
+        lambda items: {
+            "importance": 3.0,
+            "velocity": 1.0,
+            "sentiment_shift": 0.0,
+        },
+    )
+    monkeypatch.setattr(
+        build_threads,
+        "determine_arc_phase",
+        lambda items: ("emerging", "developing"),
+    )
+
+    thread_id = build_threads.upsert_thread(
+        OldConflictSession(),
+        "ES",
+        "recent-event",
+        articles,
+        ["recent-event"],
+        replace_memberships=False,
+        minimum_existing_last_seen=NOW - timedelta(days=30),
+    )
+
+    assert thread_id is None
+    assert len(calls) == 1
+    sql, params = calls[0]
+    assert "WHERE threads.last_seen >= :minimum_existing_last_seen" in sql
+    assert params["minimum_existing_last_seen"] == NOW - timedelta(days=30)
+    assert "DELETE FROM" not in sql
+
+
+def test_scoped_story_runner_forwards_cutoff_and_non_destructive_mode(monkeypatch):
+    build_threads = _load_task7_module("scripts.build_threads")
+    observed = {}
+
+    def fake_build(session, **kwargs):
+        observed.update(kwargs)
+        return SimpleNamespace(
+            clusters=1,
+            stories_upserted=1,
+            article_memberships=2,
+        )
+
+    monkeypatch.setattr(
+        build_threads,
+        "get_session",
+        lambda: SessionContext(object()),
+    )
+    monkeypatch.setattr(build_threads, "build_global_stories", fake_build)
+    monkeypatch.setattr(build_threads, "track_api_call", lambda **kwargs: None)
+
+    scope_start = NOW - timedelta(days=30)
+    build_threads.run_scoped_story_builder({41, 42}, scope_start=scope_start)
+
+    assert observed["candidate_thread_ids"] == frozenset({41, 42})
+    assert observed["candidate_article_start"] == scope_start
+    assert observed["refresh_lifecycles"] is False
+    assert observed["minimum_existing_last_seen"] == scope_start
+    assert observed["non_destructive"] is True
+
+
+def test_scoped_story_build_filters_candidates_and_skips_global_lifecycle(monkeypatch):
+    import src.stories as stories
+
+    old = SimpleNamespace(thread_id=1)
+    recent = SimpleNamespace(thread_id=2)
+    observed = {}
+    monkeypatch.setattr(
+        stories,
+        "fetch_story_candidates",
+        lambda session: [old, recent],
+    )
+
+    def fake_pairs(session, candidates):
+        observed["pair_candidates"] = list(candidates)
+        return frozenset()
+
+    def fake_clusters(candidates, *, reactivation_pairs):
+        observed["cluster_candidates"] = list(candidates)
+        return []
+
+    monkeypatch.setattr(stories, "derive_reactivation_pairs", fake_pairs)
+    monkeypatch.setattr(stories, "cluster_story_candidates", fake_clusters)
+    monkeypatch.setattr(
+        stories,
+        "refresh_story_lifecycles",
+        lambda *args, **kwargs: pytest.fail("scoped build ran global lifecycle update"),
+    )
+
+    result = stories.build_stories(
+        object(),
+        now=NOW,
+        candidate_thread_ids=frozenset({2}),
+        refresh_lifecycles=False,
+    )
+
+    assert result.candidates == 1
+    assert observed == {
+        "pair_candidates": [recent],
+        "cluster_candidates": [recent],
+    }

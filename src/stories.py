@@ -12,7 +12,7 @@ import json
 import logging
 import re
 import unicodedata
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Sequence
 
@@ -899,6 +899,8 @@ def persist_story_cluster(
     now: datetime | None = None,
     reactivation_pairs: frozenset[tuple[int, int]] = frozenset(),
     membership_generation: int | None = None,
+    minimum_existing_last_seen: datetime | None = None,
+    non_destructive: bool = False,
 ) -> tuple[int, int]:
     """Idempotently persist one cross-country cluster and all derived slices."""
 
@@ -968,7 +970,10 @@ def persist_story_cluster(
     proposed_slug = _story_slug(candidates, current_first_seen)
     thread_ids = sorted(item.thread_id for item in candidates)
 
-    matched_rows = session.execute(text("""
+    match_scope_guard = ""
+    if minimum_existing_last_seen is not None:
+        match_scope_guard = "AND st.last_seen >= :minimum_existing_last_seen"
+    matched_sql = """
         SELECT st.id, st.slug, st.title_ru, st.title_en, st.summary,
                st.summary_model, st.source_hash, st.article_count,
                st.highest_action_level, st.generated_at, st.meta,
@@ -987,7 +992,8 @@ def persist_story_cluster(
                      AS stored_thread(value)
                 WHERE stored_thread.value::bigint = ANY(:thread_ids)) AS thread_overlap
         FROM stories st
-        WHERE EXISTS (
+        WHERE (
+           EXISTS (
                SELECT 1 FROM story_articles matching_sa
                WHERE matching_sa.story_id = st.id
                  AND matching_sa.article_id = ANY(:article_ids)
@@ -998,12 +1004,19 @@ def persist_story_cluster(
                     AS matching_thread(value)
                WHERE matching_thread.value::bigint = ANY(:thread_ids)
            )
+        )
+        /* story_scope_guard */
         ORDER BY
             CASE WHEN COALESCE(st.meta, '{}'::jsonb) ? 'merged_into_story_id'
                  THEN 1 ELSE 0 END,
             article_overlap DESC, thread_overlap DESC, st.id
         FOR UPDATE OF st
-    """), {"article_ids": current_article_ids, "thread_ids": thread_ids}).fetchall()
+    """.replace("/* story_scope_guard */", match_scope_guard)
+    matched_rows = session.execute(text(matched_sql), {
+        "article_ids": current_article_ids,
+        "thread_ids": thread_ids,
+        "minimum_existing_last_seen": minimum_existing_last_seen,
+    }).fetchall()
 
     reactivation_gate_matches = [
         similarity
@@ -1037,6 +1050,13 @@ def persist_story_cluster(
         existing_matches.append(matched_row)
         reactivated_matches.append((matched_row, prior_last_seen, new_activity[0]))
 
+    if non_destructive and len(existing_matches) > 1:
+        retained_id = _value(existing_matches[0], "id")
+        existing_matches = existing_matches[:1]
+        reactivated_matches = [
+            match for match in reactivated_matches
+            if _value(match[0], "id") == retained_id
+        ]
     existing = existing_matches[0] if existing_matches else None
     if existing is None and denied_reactivation_starts:
         proposed_slug = _story_slug(candidates, min(denied_reactivation_starts))
@@ -1317,7 +1337,7 @@ def persist_story_cluster(
             raise RuntimeError("Story slug collision without article or thread identity overlap")
         story_id = inserted[0]
 
-    if duplicate_story_ids:
+    if duplicate_story_ids and not non_destructive:
         reconciliation_params = {
             "primary_story_id": story_id,
             "duplicate_story_ids": duplicate_story_ids,
@@ -1484,7 +1504,11 @@ def persist_story_cluster(
         WHERE st.id = stats.story_id
     """), {"story_id": story_id, "now": now})
 
-    session.execute(text("DELETE FROM story_countries WHERE story_id = :story_id"), {"story_id": story_id})
+    if not non_destructive:
+        session.execute(
+            text("DELETE FROM story_countries WHERE story_id = :story_id"),
+            {"story_id": story_id},
+        )
     session.execute(text("""
         INSERT INTO story_countries (
             story_id, country_code, article_count, source_count,
@@ -1499,9 +1523,19 @@ def persist_story_cluster(
         LEFT JOIN analysis an ON an.article_id = ar.id
         WHERE sa.story_id = :story_id
         GROUP BY s.country_code
+        ON CONFLICT (story_id, country_code) DO UPDATE SET
+            article_count = EXCLUDED.article_count,
+            source_count = EXCLUDED.source_count,
+            media_tone = EXCLUDED.media_tone,
+            first_seen = EXCLUDED.first_seen,
+            last_seen = EXCLUDED.last_seen
     """), {"story_id": story_id})
 
-    session.execute(text("DELETE FROM story_entities WHERE story_id = :story_id"), {"story_id": story_id})
+    if not non_destructive:
+        session.execute(
+            text("DELETE FROM story_entities WHERE story_id = :story_id"),
+            {"story_id": story_id},
+        )
     session.execute(text("""
         INSERT INTO story_entities (
             story_id, entity_id, mentions, confidence, evidence
@@ -1515,9 +1549,17 @@ def persist_story_cluster(
         JOIN article_entity_mentions aem ON aem.article_id = ar.id
         WHERE sa.story_id = :story_id
         GROUP BY aem.entity_id
+        ON CONFLICT (story_id, entity_id) DO UPDATE SET
+            mentions = EXCLUDED.mentions,
+            confidence = EXCLUDED.confidence,
+            evidence = EXCLUDED.evidence
     """), {"story_id": story_id})
 
-    session.execute(text("DELETE FROM story_events WHERE story_id = :story_id"), {"story_id": story_id})
+    if not non_destructive:
+        session.execute(
+            text("DELETE FROM story_events WHERE story_id = :story_id"),
+            {"story_id": story_id},
+        )
     session.execute(text("""
         INSERT INTO story_events (
             story_id, entity_id, event_key, event_at, action_level, evidence
@@ -1544,6 +1586,11 @@ def persist_story_cluster(
             WHERE sa.story_id = :story_id
             ORDER BY aem.entity_id, ar.published_at DESC NULLS LAST, ar.id DESC
         ) representative
+        ON CONFLICT (story_id, entity_id) DO UPDATE SET
+            event_key = EXCLUDED.event_key,
+            event_at = EXCLUDED.event_at,
+            action_level = EXCLUDED.action_level,
+            evidence = EXCLUDED.evidence
     """), {"story_id": story_id})
     return story_id, len(article_ids)
 
@@ -1560,17 +1607,84 @@ def refresh_story_lifecycles(session: Any, *, now: datetime) -> None:
     """), {"now": now})
 
 
+def _scope_candidate_articles(
+    candidate: StoryCandidate,
+    *,
+    published_after: datetime,
+) -> StoryCandidate | None:
+    """Return a candidate whose writable evidence is wholly inside the scope."""
+
+    if not candidate.articles:
+        return candidate
+    recent_articles = tuple(
+        article
+        for article in candidate.articles
+        if article.published_at is not None
+        and _as_utc(article.published_at) >= published_after
+    )
+    if not recent_articles:
+        return None
+    activity_dates = [
+        _as_utc(article.published_at)
+        for article in recent_articles
+        if article.published_at is not None
+    ]
+    return replace(
+        candidate,
+        article_ids=tuple(sorted({
+            article.article_id for article in recent_articles
+        })),
+        entities=frozenset(
+            entity_id
+            for article in recent_articles
+            for entity_id in article.entity_ids
+        ),
+        topics=frozenset(),
+        sources=frozenset(article.source_name for article in recent_articles),
+        source_ids=frozenset(),
+        first_seen=min(activity_dates),
+        last_seen=max(activity_dates),
+        highest_action_level=max(
+            article.action_level for article in recent_articles
+        ),
+        articles=recent_articles,
+    )
+
+
 def build_stories(
     session: Any,
     *,
     summarizer: Callable[[dict[str, Any]], dict[str, Any] | None] | None = None,
     now: datetime | None = None,
     reactivation_pairs: frozenset[tuple[int, int]] = frozenset(),
+    candidate_thread_ids: frozenset[int] | None = None,
+    candidate_article_start: datetime | None = None,
+    refresh_lifecycles: bool = True,
+    minimum_existing_last_seen: datetime | None = None,
+    non_destructive: bool = False,
 ) -> StoryBuildResult:
-    """Run the global story build inside the existing background cycle."""
+    """Build stories globally by default, or within an explicit safe scope."""
 
     now = _as_utc(now or datetime.now(timezone.utc))
     candidates = fetch_story_candidates(session)
+    if candidate_thread_ids is not None:
+        candidates = [
+            candidate
+            for candidate in candidates
+            if candidate.thread_id in candidate_thread_ids
+        ]
+    if candidate_article_start is not None:
+        candidate_article_start = _as_utc(candidate_article_start)
+        candidates = [
+            scoped
+            for candidate in candidates
+            if (
+                scoped := _scope_candidate_articles(
+                    candidate,
+                    published_after=candidate_article_start,
+                )
+            ) is not None
+        ]
     effective_reactivation_pairs = frozenset(
         set(reactivation_pairs) | set(derive_reactivation_pairs(session, candidates))
     )
@@ -1583,17 +1697,23 @@ def build_stories(
     stories_upserted = 0
     memberships = 0
     for cluster in clusters:
-        _, count = persist_story_cluster(
-            session,
-            cluster,
-            summarizer=summarizer,
-            now=now,
-            reactivation_pairs=effective_reactivation_pairs,
-            membership_generation=membership_generation,
-        )
+        persist_kwargs: dict[str, Any] = {
+            "summarizer": summarizer,
+            "now": now,
+            "reactivation_pairs": effective_reactivation_pairs,
+            "membership_generation": membership_generation,
+        }
+        if minimum_existing_last_seen is not None:
+            persist_kwargs["minimum_existing_last_seen"] = (
+                minimum_existing_last_seen
+            )
+        if non_destructive:
+            persist_kwargs["non_destructive"] = True
+        _, count = persist_story_cluster(session, cluster, **persist_kwargs)
         stories_upserted += 1
         memberships += count
-    refresh_story_lifecycles(session, now=now)
+    if refresh_lifecycles:
+        refresh_story_lifecycles(session, now=now)
     return StoryBuildResult(
         candidates=len(candidates),
         clusters=len(clusters),

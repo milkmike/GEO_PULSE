@@ -6,6 +6,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from typing import Callable, Sequence
 
 from sqlalchemy import text
 
@@ -23,6 +24,10 @@ _TEMPERATURE_ALERTS_ENABLED: ContextVar[bool] = ContextVar(
     "temperature_alerts_enabled",
     default=True,
 )
+TemperatureHistoryProvider = Callable[[str, datetime, int], Sequence[float]]
+_TEMPERATURE_HISTORY_PROVIDER: ContextVar[TemperatureHistoryProvider | None] = (
+    ContextVar("temperature_history_provider", default=None)
+)
 
 
 @contextmanager
@@ -34,6 +39,40 @@ def suppress_temperature_alerts():
         yield
     finally:
         _TEMPERATURE_ALERTS_ENABLED.reset(token)
+
+
+@contextmanager
+def use_temperature_history(provider: TemperatureHistoryProvider):
+    """Use caller-owned history for deterministic chronological recomputation."""
+
+    token = _TEMPERATURE_HISTORY_PROVIDER.set(provider)
+    try:
+        yield
+    finally:
+        _TEMPERATURE_HISTORY_PROVIDER.reset(token)
+
+
+def _temperature_history(
+    session,
+    country_code: str,
+    *,
+    as_of: datetime,
+    limit: int,
+) -> list[float]:
+    provider = _TEMPERATURE_HISTORY_PROVIDER.get()
+    if provider is not None:
+        return [float(value) for value in provider(country_code, as_of, limit)]
+
+    rows = session.execute(
+        text(f"""
+            SELECT temperature FROM temperature
+            WHERE country_code = :cc
+              AND time < :as_of
+            ORDER BY time DESC LIMIT {limit}
+        """),
+        {"cc": country_code, "as_of": as_of},
+    ).fetchall()
+    return [float(row.temperature) for row in rows]
 
 
 def calculate_temperature(country_code: str) -> dict | None:
@@ -224,20 +263,16 @@ def detect_trend(
     as_of: datetime,
 ) -> str:
     """Simple trend detection based on last 3 readings."""
-    rows = session.execute(
-        text(f"""
-            SELECT temperature FROM temperature
-            WHERE country_code = :cc
-              AND time < :as_of
-            ORDER BY time DESC LIMIT {TEMPERATURE_METHODOLOGY.trend_history_points}
-        """),
-        {"cc": country_code, "as_of": as_of},
-    ).fetchall()
+    prev_temps = _temperature_history(
+        session,
+        country_code,
+        as_of=as_of,
+        limit=TEMPERATURE_METHODOLOGY.trend_history_points,
+    )
 
-    if len(rows) < TEMPERATURE_METHODOLOGY.trend_minimum_samples:
+    if len(prev_temps) < TEMPERATURE_METHODOLOGY.trend_minimum_samples:
         return "stable"
 
-    prev_temps = [float(r.temperature) for r in rows]
     avg_prev = statistics.mean(prev_temps)
     diff = current - avg_prev
     
@@ -256,20 +291,16 @@ def detect_anomaly(
     as_of: datetime,
 ) -> float | None:
     """Z-score based anomaly detection."""
-    rows = session.execute(
-        text(f"""
-            SELECT temperature FROM temperature
-            WHERE country_code = :cc
-              AND time < :as_of
-            ORDER BY time DESC LIMIT {TEMPERATURE_METHODOLOGY.anomaly_history_points}
-        """),
-        {"cc": country_code, "as_of": as_of},
-    ).fetchall()
+    temps = _temperature_history(
+        session,
+        country_code,
+        as_of=as_of,
+        limit=TEMPERATURE_METHODOLOGY.anomaly_history_points,
+    )
 
-    if len(rows) < TEMPERATURE_METHODOLOGY.anomaly_minimum_samples:
+    if len(temps) < TEMPERATURE_METHODOLOGY.anomaly_minimum_samples:
         return None
 
-    temps = [float(r.temperature) for r in rows]
     mean = statistics.mean(temps)
     std = (
         statistics.stdev(temps)

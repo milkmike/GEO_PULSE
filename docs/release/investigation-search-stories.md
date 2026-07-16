@@ -193,9 +193,12 @@ docker compose run --rm -v "$PWD:/app" analyzer \
 ```
 
 After the bounded temperature upserts commit, the recompute command invokes the
-existing current RRI, signal, and brief jobs, then the normal 30-day
-thread/story builder. It does not invoke either legacy temperature backfill or
-the destructive investigation backfill path. Run the audit once more after
+existing current RRI, signal, and brief jobs, then a scoped additive 30-day
+thread/story refresh. That refresh does not run global thread linking, dedup,
+cleanup, membership replacement, story lifecycle refresh, or any delete. Old
+thread/story conflicts and pre-window story evidence are excluded by the same
+30-day cutoff. The command does not invoke either legacy temperature backfill
+or the destructive investigation backfill path. Run the audit once more after
 these jobs and stop on any non-zero exit; do not roll back by deleting rows.
 
 ## Data and product gates

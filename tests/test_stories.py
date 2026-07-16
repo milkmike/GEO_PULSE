@@ -649,6 +649,116 @@ class DuplicatePersistenceSession(PersistenceSession):
         return FakeResult()
 
 
+def test_scoped_story_persistence_guards_old_stories_and_executes_no_delete():
+    session = PersistenceSession()
+    scope_start = NOW - timedelta(days=30)
+
+    persist_story_cluster(
+        session,
+        [candidate("AZ"), candidate("KZ")],
+        now=NOW,
+        membership_generation=1,
+        minimum_existing_last_seen=scope_start,
+        non_destructive=True,
+    )
+
+    lookup_sql, lookup_params = next(
+        call for call in session.calls if "SELECT st.id, st.slug" in call[0]
+    )
+    assert "AND st.last_seen >= :minimum_existing_last_seen" in lookup_sql
+    assert lookup_params["minimum_existing_last_seen"] == scope_start
+    assert not any("DELETE FROM" in sql for sql in session.statements)
+
+
+def test_scoped_story_build_excludes_pre_window_article_memberships(monkeypatch):
+    import src.stories as stories_module
+
+    scope_start = NOW - timedelta(days=30)
+
+    def scoped_candidate(country, thread_id, article_id):
+        old_article = StoryArticle(
+            article_id=article_id - 100,
+            country_code=country,
+            title="Old",
+            url=None,
+            published_at=scope_start - timedelta(seconds=1),
+            source_name="Old source",
+            entity_ids=frozenset({"old-entity"}),
+        )
+        recent_article = StoryArticle(
+            article_id=article_id,
+            country_code=country,
+            title="Recent",
+            url=None,
+            published_at=scope_start,
+            source_name="Recent source",
+            entity_ids=frozenset({"recent-entity"}),
+        )
+        return replace(
+            candidate(country),
+            thread_id=thread_id,
+            article_ids=(old_article.article_id, recent_article.article_id),
+            articles=(old_article, recent_article),
+            entities=frozenset({"old-entity", "recent-entity"}),
+            sources=frozenset({"Old source", "Recent source"}),
+            source_ids=frozenset({1, 2}),
+        )
+
+    candidates = [
+        scoped_candidate("AZ", 41, 141),
+        scoped_candidate("KZ", 42, 142),
+    ]
+    observed = {}
+    monkeypatch.setattr(
+        stories_module,
+        "fetch_story_candidates",
+        lambda session: candidates,
+    )
+    monkeypatch.setattr(
+        stories_module,
+        "derive_reactivation_pairs",
+        lambda session, items: frozenset(),
+    )
+    monkeypatch.setattr(
+        stories_module,
+        "cluster_story_candidates",
+        lambda items, *, reactivation_pairs: [tuple(items)],
+    )
+    monkeypatch.setattr(
+        stories_module,
+        "allocate_story_membership_generation",
+        lambda session: 7,
+    )
+
+    def fake_persist(session, items, **kwargs):
+        observed["candidates"] = list(items)
+        observed["kwargs"] = kwargs
+        return 9, sum(len(item.article_ids) for item in items)
+
+    monkeypatch.setattr(stories_module, "persist_story_cluster", fake_persist)
+
+    result = build_stories(
+        object(),
+        now=NOW,
+        candidate_thread_ids=frozenset({41, 42}),
+        candidate_article_start=scope_start,
+        refresh_lifecycles=False,
+        minimum_existing_last_seen=scope_start,
+        non_destructive=True,
+    )
+
+    assert result.article_memberships == 2
+    assert [item.article_ids for item in observed["candidates"]] == [(141,), (142,)]
+    assert all(
+        item.entities == frozenset({"recent-entity"})
+        and item.sources == frozenset({"Recent source"})
+        and item.source_ids == frozenset()
+        for item in observed["candidates"]
+    )
+    assert observed["kwargs"]["minimum_existing_last_seen"] == scope_start
+    assert observed["kwargs"]["non_destructive"] is True
+
+
 class UnchangedPersistenceSession(PersistenceSession):
     def __init__(self, cluster):
         super().__init__()
