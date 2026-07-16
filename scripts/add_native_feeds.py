@@ -71,6 +71,10 @@ def render_yaml(data: dict[str, dict]) -> str:
         lines.append(f"        tier: mainstream")
         lines.append(f"        state_affiliated: false")
         lines.append(f"        propaganda_risk: low")
+        lines.append(f"        config:")
+        lines.append(f"          feed_mode: publisher_discovery")
+        lines.append(f'          discovery_country: "{cc}"')
+        lines.append(f"          provider: google_news")
     return "\n".join(lines) + "\n"
 
 

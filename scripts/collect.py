@@ -11,6 +11,7 @@ from sqlalchemy import text
 
 from src.collectors.rss import collect_rss_status
 from src.collectors.scraper import scrape_web_status
+from src.collectors.publisher_attribution import sync_publisher_domains
 from src.config import load_sources
 from src.countries import COUNTRIES
 from src.db import get_session, wait_for_db, Source, Article
@@ -127,6 +128,22 @@ def _update_collector_stats():
         logger.warning(f"Failed to update collector stats in Redis: {e}")
 
 
+def _apply_source_metadata(source: Source, src: dict, country_code: str) -> None:
+    """Refresh all catalog-owned fields on an existing source row."""
+    lang = src.get("language", "ru")
+    source.name = src["name"]
+    source.url = src["url"]
+    source.country_code = country_code
+    source.source_type = src["type"]
+    source.weight = src.get("weight", 1.0)
+    source.language = str(lang) if lang is not None else "ru"
+    source.config = src.get("config", {})
+    source.active = True
+    source.tier = src.get("tier", "mainstream")
+    source.state_affiliated = src.get("state_affiliated", False)
+    source.propaganda_risk = src.get("propaganda_risk", "low")
+
+
 def ensure_sources_in_db():
     """Sync sources from YAML config to database."""
     if SKIP_YAML_SYNC:
@@ -149,12 +166,19 @@ def ensure_sources_in_db():
                 # skipped instead of aborting (and crash-looping) the whole sync.
                 try:
                     with session.begin_nested():
-                        # Already present at this exact URL → nothing to do.
+                        # Exact URL and same-name matches both receive the full
+                        # catalog metadata refresh. This makes feed-mode changes
+                        # effective on existing databases, not just fresh rows.
                         by_url = session.execute(
-                            text("SELECT id FROM sources WHERE url = :url AND country_code = :cc"),
+                            text("""SELECT id FROM sources
+                                    WHERE url = :url AND country_code = :cc
+                                    ORDER BY id LIMIT 1"""),
                             {"url": src["url"], "cc": cc},
                         ).fetchone()
                         if by_url:
+                            source = session.get(Source, by_url.id)
+                            _apply_source_metadata(source, src, cc)
+                            updated += 1
                             continue
 
                         # Same (country, name) but a different URL → the YAML url
@@ -169,12 +193,10 @@ def ensure_sources_in_db():
                             {"cc": cc, "name": src["name"]},
                         ).fetchone()
                         if by_name:
-                            session.execute(
-                                text("UPDATE sources SET url = :url, active = TRUE WHERE id = :id"),
-                                {"url": src["url"], "id": by_name.id},
-                            )
+                            source = session.get(Source, by_name.id)
+                            _apply_source_metadata(source, src, cc)
                             updated += 1
-                            logger.info(f"Updated source URL: {src['name']} ({cc})")
+                            logger.info(f"Updated source: {src['name']} ({cc})")
                             continue
 
                         lang = src.get("language", "ru")
@@ -198,8 +220,11 @@ def ensure_sources_in_db():
                     skipped += 1
                     logger.warning(f"Skipping source {src.get('name')!r} ({cc}): {e}")
 
+        registry = sync_publisher_domains(session)
+
     logger.info(
-        f"Sources synced to database ({added} added, {updated} url-updated, {skipped} skipped)"
+        f"Sources synced to database ({added} added, {updated} updated, {skipped} skipped); "
+        f"publisher registry: {registry.verified} verified, {registry.blocked} blocked"
     )
 
 

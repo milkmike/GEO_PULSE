@@ -14,7 +14,9 @@ RUSSIA_TERM/LOCALE cover the registry's languages (src/countries.py). Anything
 missing falls back to English — and every generated feed is validated live
 before use, so an imperfect locale just gets skipped, never shipped broken.
 """
-from urllib.parse import quote, urlparse
+from urllib.parse import quote
+
+from src.collectors.publisher_attribution import normalize_publisher_domain
 
 GNEWS = "https://news.google.com/rss/search"
 
@@ -74,12 +76,8 @@ LOCALE = {
 
 
 def base_domain(url: str) -> str:
-    """Registrable-ish host for a site: filter (strip common feed prefixes)."""
-    host = urlparse(url).netloc.lower()
-    for p in ("rss.", "www.", "feeds.", "feed.", "en.", "amp.", "m."):
-        if host.startswith(p):
-            host = host[len(p):]
-    return host
+    """Exact publisher host with presentation-only prefixes removed."""
+    return normalize_publisher_domain(url) or ""
 
 
 def site_wrapper_url(url: str, lang: str) -> str:

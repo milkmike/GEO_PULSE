@@ -4,677 +4,921 @@
 # config.load_sources() after sources.yaml + sources_world.yaml.
 
 countries:
-  AE:
+  "AE":
     name: ОАЭ
     sources:
       - name: "Google News (AR) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=%D8%B1%D9%88%D8%B3%D9%8A%D8%A7&hl=ar&gl=AE&ceid=AE:ar"
         weight: 1.0
-        language: ar
+        language: "ar"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  AF:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "AE"
+          provider: google_news
+  "AF":
     name: Афганистан
     sources:
       - name: "Google News (PS) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=%D8%B1%D9%88%D8%B3%DB%8C%D9%87&hl=ps&gl=AF&ceid=AF:ps"
         weight: 1.0
-        language: ps
+        language: "ps"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  AL:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "AF"
+          provider: google_news
+  "AL":
     name: Албания
     sources:
       - name: "Google News (SQ) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=Rusia&hl=sq&gl=AL&ceid=AL:sq"
         weight: 1.0
-        language: sq
+        language: "sq"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  AM:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "AL"
+          provider: google_news
+  "AM":
     name: Армения
     sources:
       - name: "Google News (HY) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=%D5%8C%D5%B8%D6%82%D5%BD%D5%A1%D5%BD%D5%BF%D5%A1%D5%B6&hl=hy&gl=AM&ceid=AM:hy"
         weight: 1.0
-        language: hy
+        language: "hy"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  AR:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "AM"
+          provider: google_news
+  "AR":
     name: Аргентина
     sources:
       - name: "Google News (ES) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=Rusia&hl=es-419&gl=AR&ceid=AR:es-419"
         weight: 1.0
-        language: es
+        language: "es"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  AT:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "AR"
+          provider: google_news
+  "AT":
     name: Австрия
     sources:
       - name: "Google News (DE) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=Russland&hl=de&gl=AT&ceid=AT:de"
         weight: 1.0
-        language: de
+        language: "de"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  AZ:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "AT"
+          provider: google_news
+  "AZ":
     name: Азербайджан
     sources:
       - name: "Google News (AZ) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=Rusiya&hl=az&gl=AZ&ceid=AZ:az"
         weight: 1.0
-        language: az
+        language: "az"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  BA:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "AZ"
+          provider: google_news
+  "BA":
     name: Босния и Герцеговина
     sources:
       - name: "Google News (BS) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=Rusija&hl=bs&gl=BA&ceid=BA:bs"
         weight: 1.0
-        language: bs
+        language: "bs"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  BD:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "BA"
+          provider: google_news
+  "BD":
     name: Бангладеш
     sources:
       - name: "Google News (BN) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=%E0%A6%B0%E0%A6%BE%E0%A6%B6%E0%A6%BF%E0%A6%AF%E0%A6%BC%E0%A6%BE&hl=bn&gl=BD&ceid=BD:bn"
         weight: 1.0
-        language: bn
+        language: "bn"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  BE:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "BD"
+          provider: google_news
+  "BE":
     name: Бельгия
     sources:
       - name: "Google News (NL) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=Rusland&hl=nl&gl=BE&ceid=BE:nl"
         weight: 1.0
-        language: nl
+        language: "nl"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  BF:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "BE"
+          provider: google_news
+  "BF":
     name: Буркина-Фасо
     sources:
       - name: "Google News (FR) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=Russie&hl=fr&gl=BF&ceid=BF:fr"
         weight: 1.0
-        language: fr
+        language: "fr"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  BG:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "BF"
+          provider: google_news
+  "BG":
     name: Болгария
     sources:
       - name: "Google News (BG) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=%D0%A0%D1%83%D1%81%D0%B8%D1%8F&hl=bg&gl=BG&ceid=BG:bg"
         weight: 1.0
-        language: bg
+        language: "bg"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  BO:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "BG"
+          provider: google_news
+  "BO":
     name: Боливия
     sources:
       - name: "Google News (ES) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=Rusia&hl=es-419&gl=BO&ceid=BO:es-419"
         weight: 1.0
-        language: es
+        language: "es"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  BR:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "BO"
+          provider: google_news
+  "BR":
     name: Бразилия
     sources:
       - name: "Google News (PT) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=R%C3%BAssia&hl=pt-BR&gl=BR&ceid=BR:pt-419"
         weight: 1.0
-        language: pt
+        language: "pt"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  BY:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "BR"
+          provider: google_news
+  "BY":
     name: Беларусь
     sources:
       - name: "Google News (BE) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=%D0%A0%D0%B0%D1%81%D1%96%D1%8F&hl=be&gl=BY&ceid=BY:be"
         weight: 1.0
-        language: be
+        language: "be"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  CF:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "BY"
+          provider: google_news
+  "CF":
     name: ЦАР
     sources:
       - name: "Google News (FR) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=Russie&hl=fr&gl=CF&ceid=CF:fr"
         weight: 1.0
-        language: fr
+        language: "fr"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  CH:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "CF"
+          provider: google_news
+  "CH":
     name: Швейцария
     sources:
       - name: "Google News (DE) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=Russland&hl=de&gl=CH&ceid=CH:de"
         weight: 1.0
-        language: de
+        language: "de"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  CL:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "CH"
+          provider: google_news
+  "CL":
     name: Чили
     sources:
       - name: "Google News (ES) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=Rusia&hl=es-419&gl=CL&ceid=CL:es-419"
         weight: 1.0
-        language: es
+        language: "es"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  CN:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "CL"
+          provider: google_news
+  "CN":
     name: Китай
     sources:
       - name: "Google News (ZH) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=%E4%BF%84%E7%BD%97%E6%96%AF&hl=zh-CN&gl=CN&ceid=CN:zh-Hans"
         weight: 1.0
-        language: zh
+        language: "zh"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  CO:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "CN"
+          provider: google_news
+  "CO":
     name: Колумбия
     sources:
       - name: "Google News (ES) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=Rusia&hl=es-419&gl=CO&ceid=CO:es-419"
         weight: 1.0
-        language: es
+        language: "es"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  CU:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "CO"
+          provider: google_news
+  "CU":
     name: Куба
     sources:
       - name: "Google News (ES) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=Rusia&hl=es-419&gl=CU&ceid=CU:es-419"
         weight: 1.0
-        language: es
+        language: "es"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  CY:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "CU"
+          provider: google_news
+  "CY":
     name: Кипр
     sources:
       - name: "Google News (EL) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=%CE%A1%CF%89%CF%83%CE%AF%CE%B1&hl=el&gl=CY&ceid=CY:el"
         weight: 1.0
-        language: el
+        language: "el"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  CZ:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "CY"
+          provider: google_news
+  "CZ":
     name: Чехия
     sources:
       - name: "Google News (CS) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=Rusko&hl=cs&gl=CZ&ceid=CZ:cs"
         weight: 1.0
-        language: cs
+        language: "cs"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  DE:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "CZ"
+          provider: google_news
+  "DE":
     name: Германия
     sources:
       - name: "Google News (DE) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=Russland&hl=de&gl=DE&ceid=DE:de"
         weight: 1.0
-        language: de
+        language: "de"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  DK:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "DE"
+          provider: google_news
+  "DK":
     name: Дания
     sources:
       - name: "Google News (DA) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=Rusland&hl=da&gl=DK&ceid=DK:da"
         weight: 1.0
-        language: da
+        language: "da"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  DZ:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "DK"
+          provider: google_news
+  "DZ":
     name: Алжир
     sources:
       - name: "Google News (AR) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=%D8%B1%D9%88%D8%B3%D9%8A%D8%A7&hl=ar&gl=DZ&ceid=DZ:ar"
         weight: 1.0
-        language: ar
+        language: "ar"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  EE:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "DZ"
+          provider: google_news
+  "EE":
     name: Эстония
     sources:
       - name: "Google News (ET) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=Venemaa&hl=et&gl=EE&ceid=EE:et"
         weight: 1.0
-        language: et
+        language: "et"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  EG:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "EE"
+          provider: google_news
+  "EG":
     name: Египет
     sources:
       - name: "Google News (AR) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=%D8%B1%D9%88%D8%B3%D9%8A%D8%A7&hl=ar&gl=EG&ceid=EG:ar"
         weight: 1.0
-        language: ar
+        language: "ar"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  ES:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "EG"
+          provider: google_news
+  "ES":
     name: Испания
     sources:
       - name: "Google News (ES) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=Rusia&hl=es-419&gl=ES&ceid=ES:es-419"
         weight: 1.0
-        language: es
+        language: "es"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  FI:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "ES"
+          provider: google_news
+  "FI":
     name: Финляндия
     sources:
       - name: "Google News (FI) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=Ven%C3%A4j%C3%A4&hl=fi&gl=FI&ceid=FI:fi"
         weight: 1.0
-        language: fi
+        language: "fi"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  FR:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "FI"
+          provider: google_news
+  "FR":
     name: Франция
     sources:
       - name: "Google News (FR) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=Russie&hl=fr&gl=FR&ceid=FR:fr"
         weight: 1.0
-        language: fr
+        language: "fr"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  GR:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "FR"
+          provider: google_news
+  "GR":
     name: Греция
     sources:
       - name: "Google News (EL) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=%CE%A1%CF%89%CF%83%CE%AF%CE%B1&hl=el&gl=GR&ceid=GR:el"
         weight: 1.0
-        language: el
+        language: "el"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  HR:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "GR"
+          provider: google_news
+  "HR":
     name: Хорватия
     sources:
       - name: "Google News (HR) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=Rusija&hl=hr&gl=HR&ceid=HR:hr"
         weight: 1.0
-        language: hr
+        language: "hr"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  HU:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "HR"
+          provider: google_news
+  "HU":
     name: Венгрия
     sources:
       - name: "Google News (HU) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=Oroszorsz%C3%A1g&hl=hu&gl=HU&ceid=HU:hu"
         weight: 1.0
-        language: hu
+        language: "hu"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  ID:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "HU"
+          provider: google_news
+  "ID":
     name: Индонезия
     sources:
       - name: "Google News (ID) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=Rusia&hl=id&gl=ID&ceid=ID:id"
         weight: 1.0
-        language: id
+        language: "id"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  IL:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "ID"
+          provider: google_news
+  "IL":
     name: Израиль
     sources:
       - name: "Google News (HE) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=%D7%A8%D7%95%D7%A1%D7%99%D7%94&hl=he&gl=IL&ceid=IL:he"
         weight: 1.0
-        language: he
+        language: "he"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  IN:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "IL"
+          provider: google_news
+  "IN":
     name: Индия
     sources:
       - name: "Google News (HI) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=%E0%A4%B0%E0%A5%82%E0%A4%B8&hl=hi&gl=IN&ceid=IN:hi"
         weight: 1.0
-        language: hi
+        language: "hi"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  IQ:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "IN"
+          provider: google_news
+  "IQ":
     name: Ирак
     sources:
       - name: "Google News (AR) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=%D8%B1%D9%88%D8%B3%D9%8A%D8%A7&hl=ar&gl=IQ&ceid=IQ:ar"
         weight: 1.0
-        language: ar
+        language: "ar"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  IR:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "IQ"
+          provider: google_news
+  "IR":
     name: Иран
     sources:
       - name: "Google News (FA) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=%D8%B1%D9%88%D8%B3%DB%8C%D9%87&hl=fa&gl=IR&ceid=IR:fa"
         weight: 1.0
-        language: fa
+        language: "fa"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  IS:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "IR"
+          provider: google_news
+  "IS":
     name: Исландия
     sources:
       - name: "Google News (IS) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=R%C3%BAssland&hl=is&gl=IS&ceid=IS:is"
         weight: 1.0
-        language: is
+        language: "is"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  IT:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "IS"
+          provider: google_news
+  "IT":
     name: Италия
     sources:
       - name: "Google News (IT) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=Russia&hl=it&gl=IT&ceid=IT:it"
         weight: 1.0
-        language: it
+        language: "it"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  JP:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "IT"
+          provider: google_news
+  "JP":
     name: Япония
     sources:
       - name: "Google News (JA) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=%E3%83%AD%E3%82%B7%E3%82%A2&hl=ja&gl=JP&ceid=JP:ja"
         weight: 1.0
-        language: ja
+        language: "ja"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  KG:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "JP"
+          provider: google_news
+  "KG":
     name: Кыргызстан
     sources:
       - name: "Google News (KY) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=%D0%9E%D1%80%D1%83%D1%81%D0%B8%D1%8F&hl=ky&gl=KG&ceid=KG:ky"
         weight: 1.0
-        language: ky
+        language: "ky"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  KP:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "KG"
+          provider: google_news
+  "KP":
     name: КНДР
     sources:
       - name: "Google News (KO) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=%EB%9F%AC%EC%8B%9C%EC%95%84&hl=ko&gl=KP&ceid=KP:ko"
         weight: 1.0
-        language: ko
+        language: "ko"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  KR:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "KP"
+          provider: google_news
+  "KR":
     name: Южная Корея
     sources:
       - name: "Google News (KO) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=%EB%9F%AC%EC%8B%9C%EC%95%84&hl=ko&gl=KR&ceid=KR:ko"
         weight: 1.0
-        language: ko
+        language: "ko"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  KZ:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "KR"
+          provider: google_news
+  "KZ":
     name: Казахстан
     sources:
       - name: "Google News (KK) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=%D0%A0%D0%B5%D1%81%D0%B5%D0%B9&hl=kk&gl=KZ&ceid=KZ:kk"
         weight: 1.0
-        language: kk
+        language: "kk"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  LT:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "KZ"
+          provider: google_news
+  "LT":
     name: Литва
     sources:
       - name: "Google News (LT) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=Rusija&hl=lt&gl=LT&ceid=LT:lt"
         weight: 1.0
-        language: lt
+        language: "lt"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  LV:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "LT"
+          provider: google_news
+  "LV":
     name: Латвия
     sources:
       - name: "Google News (LV) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=Krievija&hl=lv&gl=LV&ceid=LV:lv"
         weight: 1.0
-        language: lv
+        language: "lv"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  LY:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "LV"
+          provider: google_news
+  "LY":
     name: Ливия
     sources:
       - name: "Google News (AR) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=%D8%B1%D9%88%D8%B3%D9%8A%D8%A7&hl=ar&gl=LY&ceid=LY:ar"
         weight: 1.0
-        language: ar
+        language: "ar"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  MA:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "LY"
+          provider: google_news
+  "MA":
     name: Марокко
     sources:
       - name: "Google News (AR) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=%D8%B1%D9%88%D8%B3%D9%8A%D8%A7&hl=ar&gl=MA&ceid=MA:ar"
         weight: 1.0
-        language: ar
+        language: "ar"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  MD:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "MA"
+          provider: google_news
+  "MD":
     name: Молдова
     sources:
       - name: "Google News (RO) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=Rusia&hl=ro&gl=MD&ceid=MD:ro"
         weight: 1.0
-        language: ro
+        language: "ro"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  ME:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "MD"
+          provider: google_news
+  "ME":
     name: Черногория
     sources:
       - name: "Google News (SR) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=%D0%A0%D1%83%D1%81%D0%B8%D1%98%D0%B0&hl=sr&gl=ME&ceid=ME:sr"
         weight: 1.0
-        language: sr
+        language: "sr"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  MK:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "ME"
+          provider: google_news
+  "MK":
     name: Северная Македония
     sources:
       - name: "Google News (MK) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=%D0%A0%D1%83%D1%81%D0%B8%D1%98%D0%B0&hl=mk&gl=MK&ceid=MK:mk"
         weight: 1.0
-        language: mk
+        language: "mk"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  ML:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "MK"
+          provider: google_news
+  "ML":
     name: Мали
     sources:
       - name: "Google News (FR) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=Russie&hl=fr&gl=ML&ceid=ML:fr"
         weight: 1.0
-        language: fr
+        language: "fr"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  MM:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "ML"
+          provider: google_news
+  "MM":
     name: Мьянма
     sources:
       - name: "Google News (MY) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=%E1%80%9B%E1%80%AF%E1%80%9B%E1%80%BE%E1%80%AC%E1%80%B8&hl=my&gl=MM&ceid=MM:my"
         weight: 1.0
-        language: my
+        language: "my"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  MN:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "MM"
+          provider: google_news
+  "MN":
     name: Монголия
     sources:
       - name: "Google News (MN) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=%D0%9E%D1%80%D0%BE%D1%81&hl=mn&gl=MN&ceid=MN:mn"
         weight: 1.0
-        language: mn
+        language: "mn"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  MX:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "MN"
+          provider: google_news
+  "MX":
     name: Мексика
     sources:
       - name: "Google News (ES) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=Rusia&hl=es-419&gl=MX&ceid=MX:es-419"
         weight: 1.0
-        language: es
+        language: "es"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  MY:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "MX"
+          provider: google_news
+  "MY":
     name: Малайзия
     sources:
       - name: "Google News (MS) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=Rusia&hl=ms&gl=MY&ceid=MY:ms"
         weight: 1.0
-        language: ms
+        language: "ms"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  NE:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "MY"
+          provider: google_news
+  "NE":
     name: Нигер
     sources:
       - name: "Google News (FR) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=Russie&hl=fr&gl=NE&ceid=NE:fr"
         weight: 1.0
-        language: fr
+        language: "fr"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  NI:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "NE"
+          provider: google_news
+  "NI":
     name: Никарагуа
     sources:
       - name: "Google News (ES) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=Rusia&hl=es-419&gl=NI&ceid=NI:es-419"
         weight: 1.0
-        language: es
+        language: "es"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  NL:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "NI"
+          provider: google_news
+  "NL":
     name: Нидерланды
     sources:
       - name: "Google News (NL) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=Rusland&hl=nl&gl=NL&ceid=NL:nl"
         weight: 1.0
-        language: nl
+        language: "nl"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "NL"
+          provider: google_news
   "NO":
     name: Норвегия
     sources:
@@ -686,256 +930,352 @@ countries:
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  PE:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "NO"
+          provider: google_news
+  "PE":
     name: Перу
     sources:
       - name: "Google News (ES) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=Rusia&hl=es-419&gl=PE&ceid=PE:es-419"
         weight: 1.0
-        language: es
+        language: "es"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  PK:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "PE"
+          provider: google_news
+  "PK":
     name: Пакистан
     sources:
       - name: "Google News (UR) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=%D8%B1%D9%88%D8%B3&hl=ur&gl=PK&ceid=PK:ur"
         weight: 1.0
-        language: ur
+        language: "ur"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  PL:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "PK"
+          provider: google_news
+  "PL":
     name: Польша
     sources:
       - name: "Google News (PL) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=Rosja&hl=pl&gl=PL&ceid=PL:pl"
         weight: 1.0
-        language: pl
+        language: "pl"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  PT:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "PL"
+          provider: google_news
+  "PT":
     name: Португалия
     sources:
       - name: "Google News (PT) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=R%C3%BAssia&hl=pt-BR&gl=PT&ceid=PT:pt-419"
         weight: 1.0
-        language: pt
+        language: "pt"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  QA:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "PT"
+          provider: google_news
+  "QA":
     name: Катар
     sources:
       - name: "Google News (AR) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=%D8%B1%D9%88%D8%B3%D9%8A%D8%A7&hl=ar&gl=QA&ceid=QA:ar"
         weight: 1.0
-        language: ar
+        language: "ar"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  RO:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "QA"
+          provider: google_news
+  "RO":
     name: Румыния
     sources:
       - name: "Google News (RO) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=Rusia&hl=ro&gl=RO&ceid=RO:ro"
         weight: 1.0
-        language: ro
+        language: "ro"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  RS:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "RO"
+          provider: google_news
+  "RS":
     name: Сербия
     sources:
       - name: "Google News (SR) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=%D0%A0%D1%83%D1%81%D0%B8%D1%98%D0%B0&hl=sr&gl=RS&ceid=RS:sr"
         weight: 1.0
-        language: sr
+        language: "sr"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  SA:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "RS"
+          provider: google_news
+  "SA":
     name: Саудовская Аравия
     sources:
       - name: "Google News (AR) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=%D8%B1%D9%88%D8%B3%D9%8A%D8%A7&hl=ar&gl=SA&ceid=SA:ar"
         weight: 1.0
-        language: ar
+        language: "ar"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  SD:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "SA"
+          provider: google_news
+  "SD":
     name: Судан
     sources:
       - name: "Google News (AR) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=%D8%B1%D9%88%D8%B3%D9%8A%D8%A7&hl=ar&gl=SD&ceid=SD:ar"
         weight: 1.0
-        language: ar
+        language: "ar"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  SE:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "SD"
+          provider: google_news
+  "SE":
     name: Швеция
     sources:
       - name: "Google News (SV) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=Ryssland&hl=sv&gl=SE&ceid=SE:sv"
         weight: 1.0
-        language: sv
+        language: "sv"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  SI:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "SE"
+          provider: google_news
+  "SI":
     name: Словения
     sources:
       - name: "Google News (SL) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=Rusija&hl=sl&gl=SI&ceid=SI:sl"
         weight: 1.0
-        language: sl
+        language: "sl"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  SK:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "SI"
+          provider: google_news
+  "SK":
     name: Словакия
     sources:
       - name: "Google News (SK) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=Rusko&hl=sk&gl=SK&ceid=SK:sk"
         weight: 1.0
-        language: sk
+        language: "sk"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  SY:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "SK"
+          provider: google_news
+  "SY":
     name: Сирия
     sources:
       - name: "Google News (AR) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=%D8%B1%D9%88%D8%B3%D9%8A%D8%A7&hl=ar&gl=SY&ceid=SY:ar"
         weight: 1.0
-        language: ar
+        language: "ar"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  TH:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "SY"
+          provider: google_news
+  "TH":
     name: Таиланд
     sources:
       - name: "Google News (TH) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=%E0%B8%A3%E0%B8%B1%E0%B8%AA%E0%B9%80%E0%B8%8B%E0%B8%B5%E0%B8%A2&hl=th&gl=TH&ceid=TH:th"
         weight: 1.0
-        language: th
+        language: "th"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  TJ:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "TH"
+          provider: google_news
+  "TJ":
     name: Таджикистан
     sources:
       - name: "Google News (TG) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=%D0%A0%D1%83%D1%81%D0%B8%D1%8F&hl=tg&gl=TJ&ceid=TJ:tg"
         weight: 1.0
-        language: tg
+        language: "tg"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  TM:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "TJ"
+          provider: google_news
+  "TM":
     name: Туркменистан
     sources:
       - name: "Google News (TK) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=Russi%C3%BDa&hl=tk&gl=TM&ceid=TM:tk"
         weight: 1.0
-        language: tk
+        language: "tk"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  TN:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "TM"
+          provider: google_news
+  "TN":
     name: Тунис
     sources:
       - name: "Google News (AR) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=%D8%B1%D9%88%D8%B3%D9%8A%D8%A7&hl=ar&gl=TN&ceid=TN:ar"
         weight: 1.0
-        language: ar
+        language: "ar"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  TR:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "TN"
+          provider: google_news
+  "TR":
     name: Турция
     sources:
       - name: "Google News (TR) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=Rusya&hl=tr&gl=TR&ceid=TR:tr"
         weight: 1.0
-        language: tr
+        language: "tr"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  TW:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "TR"
+          provider: google_news
+  "TW":
     name: Тайвань
     sources:
       - name: "Google News (ZH) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=%E4%BF%84%E7%BD%97%E6%96%AF&hl=zh-CN&gl=TW&ceid=TW:zh-Hans"
         weight: 1.0
-        language: zh
+        language: "zh"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  UA:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "TW"
+          provider: google_news
+  "UA":
     name: Украина
     sources:
       - name: "Google News (UK) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=%D0%A0%D0%BE%D1%81%D1%96%D1%8F&hl=uk&gl=UA&ceid=UA:uk"
         weight: 1.0
-        language: uk
+        language: "uk"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  UZ:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "UA"
+          provider: google_news
+  "UZ":
     name: Узбекистан
     sources:
       - name: "Google News (UZ) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=Rossiya&hl=uz&gl=UZ&ceid=UZ:uz"
         weight: 1.0
-        language: uz
+        language: "uz"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  VE:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "UZ"
+          provider: google_news
+  "VE":
     name: Венесуэла
     sources:
       - name: "Google News (ES) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=Rusia&hl=es-419&gl=VE&ceid=VE:es-419"
         weight: 1.0
-        language: es
+        language: "es"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
-  VN:
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "VE"
+          provider: google_news
+  "VN":
     name: Вьетнам
     sources:
       - name: "Google News (VI) — Россия"
         type: rss
         url: "https://news.google.com/rss/search?q=Nga&hl=vi&gl=VN&ceid=VN:vi"
         weight: 1.0
-        language: vi
+        language: "vi"
         tier: mainstream
         state_affiliated: false
         propaganda_risk: low
+        config:
+          feed_mode: publisher_discovery
+          discovery_country: "VN"
+          provider: google_news
