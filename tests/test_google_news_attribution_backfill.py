@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 
 import pytest
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import sessionmaker
 
 from scripts import backfill_google_news_attribution as backfill
@@ -199,12 +199,22 @@ class MemorySession:
             ])
 
         if "gnews-backfill:update-unclassified" in sql:
-            article = self._article(params["article_id"])
-            changed = article.get("geo_status") != "legacy_unverified"
-            if changed:
-                article["geo_status"] = "legacy_unverified"
+            changed = 0
+            for article_id in params["article_ids"]:
+                article = self._article(article_id)
+                eligible = (
+                    article.get("publisher_source_id") is None
+                    and article.get("geo_method") is None
+                    and article.get("geo_verified_at") is None
+                    and article.get("geo_status") in {
+                        "source_verified", "unverified", "legacy_unverified",
+                    }
+                )
+                if eligible and article.get("geo_status") != "legacy_unverified":
+                    article["geo_status"] = "legacy_unverified"
+                    changed += 1
             self.mutations.append((normalized, params))
-            return MemoryResult(rowcount=int(changed))
+            return MemoryResult(rowcount=changed)
 
         if "gnews-backfill:dedup-candidates" in sql:
             return MemoryResult([
@@ -443,6 +453,46 @@ def test_dry_run_is_default_read_only_and_reports_exact_classification(
         "reuters.com": 1,
     }
     assert report.invariants["passed"] is True
+
+
+def test_apply_bulk_updates_500_unclassified_rows_once_per_batch(monkeypatch):
+    backend = MemoryBackend()
+    backend.articles = [
+        backend._article(
+            article_id,
+            1,
+            f"google-{article_id}",
+            f"https://news.google.com/{article_id}",
+            f"Ambiguous report {article_id} - Wire",
+            f"ambiguous report {article_id}",
+            NOW - timedelta(minutes=1),
+        )
+        for article_id in range(1_000, 1_500)
+    ]
+    checkpoint = InterruptingCheckpoint()
+    checkpoint.interrupt = False
+    monkeypatch.setattr(backfill, "get_session", backend.session_factory)
+
+    report = backfill.run_backfill(
+        apply=True,
+        since_days=104,
+        batch_size=500,
+        checkpoint=checkpoint,
+    )
+
+    unclassified_updates = [
+        params
+        for sql, params in backend.mutation_sql
+        if "gnews-backfill:update-unclassified" in sql
+    ]
+    assert len(unclassified_updates) == 1
+    assert unclassified_updates[0]["article_ids"] == list(range(1_000, 1_500))
+    assert report.updated == 500
+    assert report.unclassified == 500
+    assert all(
+        article["geo_status"] == "legacy_unverified"
+        for article in backend.articles
+    )
 
 
 def test_invariants_allow_concurrent_appends_after_starting_high_water(monkeypatch):
@@ -861,6 +911,11 @@ def test_batch_sql_is_keyset_bounded_and_mutations_preserve_provenance():
     provenance_compact = " ".join(backfill.PROVENANCE_SQL.split())
     assert "articles WHERE id <= :max_article_id" in invariant_compact
     assert "WHERE id <= :max_article_id" in provenance_compact
+    unclassified_compact = " ".join(backfill.UNCLASSIFIED_UPDATE_SQL.split())
+    assert "id = ANY(CAST(:article_ids AS INTEGER[]))" in unclassified_compact
+    assert "publisher_source_id IS NULL" in unclassified_compact
+    assert "geo_method IS NULL" in unclassified_compact
+    assert "geo_verified_at IS NULL" in unclassified_compact
     mutation_sql = " ".join(
         (backfill.CLASSIFIED_UPDATE_SQL, backfill.UNCLASSIFIED_UPDATE_SQL)
     ).upper()
@@ -868,6 +923,61 @@ def test_batch_sql_is_keyset_bounded_and_mutations_preserve_provenance():
     for column in ("SOURCE_ID", "EXTERNAL_ID", "URL"):
         assert f"SET {column}" not in mutation_sql
         assert f", {column}" not in mutation_sql
+
+
+def _reset_postgres_backfill_schema(engine):
+    with engine.begin() as connection:
+        connection.exec_driver_sql("DROP SCHEMA public CASCADE")
+        connection.exec_driver_sql("CREATE SCHEMA public")
+        connection.exec_driver_sql("""
+            CREATE TABLE sources (
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                url TEXT NOT NULL,
+                country_code CHAR(2) NOT NULL,
+                config JSONB NOT NULL DEFAULT '{}'::jsonb
+            )
+        """)
+        connection.exec_driver_sql("""
+            CREATE TABLE publisher_domains (
+                domain TEXT PRIMARY KEY,
+                publisher_source_id INTEGER NOT NULL,
+                country_code CHAR(2) NOT NULL,
+                status TEXT NOT NULL
+            )
+        """)
+        connection.exec_driver_sql("""
+            CREATE TABLE articles (
+                id INTEGER PRIMARY KEY,
+                source_id INTEGER NOT NULL,
+                external_id TEXT,
+                title TEXT,
+                url TEXT,
+                resolved_url TEXT,
+                published_at TIMESTAMPTZ NOT NULL,
+                title_normalized TEXT,
+                publisher_source_id INTEGER,
+                publisher_name TEXT,
+                publisher_domain TEXT,
+                geo_country_code CHAR(2),
+                geo_status TEXT NOT NULL,
+                geo_method TEXT,
+                geo_confidence NUMERIC(4,3),
+                geo_verified_at TIMESTAMPTZ,
+                is_duplicate BOOLEAN NOT NULL DEFAULT FALSE,
+                duplicate_of INTEGER,
+                reprint_count INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+        connection.exec_driver_sql("CREATE TABLE analysis (id INTEGER)")
+        connection.exec_driver_sql(
+            "CREATE TABLE story_articles (article_id INTEGER)"
+        )
+        connection.exec_driver_sql("""
+            CREATE UNIQUE INDEX uq_articles_publisher_external_id
+            ON articles (publisher_source_id, external_id)
+            WHERE publisher_source_id IS NOT NULL
+        """)
 
 
 @pytest.mark.parametrize("external_id", ["shared", ""])
@@ -894,58 +1004,8 @@ def test_postgres_unique_publisher_external_collision_is_reconciled_safely(
             session.close()
 
     try:
+        _reset_postgres_backfill_schema(engine)
         with engine.begin() as connection:
-            connection.exec_driver_sql("DROP SCHEMA public CASCADE")
-            connection.exec_driver_sql("CREATE SCHEMA public")
-            connection.exec_driver_sql("""
-                CREATE TABLE sources (
-                    id INTEGER PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    url TEXT NOT NULL,
-                    country_code CHAR(2) NOT NULL,
-                    config JSONB NOT NULL DEFAULT '{}'::jsonb
-                )
-            """)
-            connection.exec_driver_sql("""
-                CREATE TABLE publisher_domains (
-                    domain TEXT PRIMARY KEY,
-                    publisher_source_id INTEGER NOT NULL,
-                    country_code CHAR(2) NOT NULL,
-                    status TEXT NOT NULL
-                )
-            """)
-            connection.exec_driver_sql("""
-                CREATE TABLE articles (
-                    id INTEGER PRIMARY KEY,
-                    source_id INTEGER NOT NULL,
-                    external_id TEXT,
-                    title TEXT,
-                    url TEXT,
-                    resolved_url TEXT,
-                    published_at TIMESTAMPTZ NOT NULL,
-                    title_normalized TEXT,
-                    publisher_source_id INTEGER,
-                    publisher_name TEXT,
-                    publisher_domain TEXT,
-                    geo_country_code CHAR(2),
-                    geo_status TEXT NOT NULL,
-                    geo_method TEXT,
-                    geo_confidence NUMERIC(4,3),
-                    geo_verified_at TIMESTAMPTZ,
-                    is_duplicate BOOLEAN NOT NULL DEFAULT FALSE,
-                    duplicate_of INTEGER,
-                    reprint_count INTEGER NOT NULL DEFAULT 0
-                )
-            """)
-            connection.exec_driver_sql("CREATE TABLE analysis (id INTEGER)")
-            connection.exec_driver_sql(
-                "CREATE TABLE story_articles (article_id INTEGER)"
-            )
-            connection.exec_driver_sql("""
-                CREATE UNIQUE INDEX uq_articles_publisher_external_id
-                ON articles (publisher_source_id, external_id)
-                WHERE publisher_source_id IS NOT NULL
-            """)
             connection.execute(text("""
                 INSERT INTO sources(id,name,url,country_code,config) VALUES
                   (1,'Google News GB A','https://news.google.com/a','GB',
@@ -1002,6 +1062,110 @@ def test_postgres_unique_publisher_external_collision_is_reconciled_safely(
                 "duplicate_of": 101,
                 "reprint_count": 0,
             },
+        ]
+    finally:
+        engine.dispose()
+
+
+def test_postgres_bulk_unclassified_update_resumes_from_nonzero_checkpoint(
+    monkeypatch,
+):
+    dsn = os.getenv("GEO_PULSE_TEST_DATABASE_URL")
+    if not dsn or os.getenv("GEO_PULSE_TEST_DATABASE_RESET") != "1":
+        pytest.skip("requires an explicitly disposable PostgreSQL database")
+    pytest.importorskip("psycopg2")
+    engine = create_engine(dsn)
+    Session = sessionmaker(bind=engine, expire_on_commit=False)
+    update_parameters = []
+
+    @event.listens_for(engine, "before_cursor_execute")
+    def capture_bulk_update(
+        connection, cursor, statement, parameters, context, executemany,
+    ):
+        if "gnews-backfill:update-unclassified" in statement:
+            update_parameters.append(parameters)
+
+    @contextmanager
+    def postgres_session():
+        session = Session()
+        try:
+            yield session
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    try:
+        _reset_postgres_backfill_schema(engine)
+        with engine.begin() as connection:
+            connection.execute(text("""
+                INSERT INTO sources(id,name,url,country_code,config) VALUES
+                  (1,'Google News GB','https://news.google.com/gb','GB',
+                   '{"feed_mode":"publisher_discovery"}'::jsonb)
+            """))
+            connection.execute(text("""
+                INSERT INTO articles(
+                    id,source_id,external_id,title,url,published_at,
+                    title_normalized,geo_status
+                ) VALUES
+                  (101,1,'unknown-101','Unknown 101',
+                   'https://news.google.com/101',NOW(),'unknown 101','unverified'),
+                  (102,1,'unknown-102','Unknown 102',
+                   'https://news.google.com/102',NOW(),'unknown 102','unverified'),
+                  (103,1,'unknown-103','Unknown 103',
+                   'https://news.google.com/103',NOW(),'unknown 103','unverified')
+            """))
+
+        checkpoint = InterruptingCheckpoint()
+        monkeypatch.setattr(backfill, "get_session", postgres_session)
+
+        with pytest.raises(RuntimeError, match="simulated interruption"):
+            backfill.run_backfill(
+                apply=True,
+                since_days=104,
+                batch_size=2,
+                checkpoint=checkpoint,
+            )
+
+        assert checkpoint.state["last_id"] == 102
+        assert checkpoint.state["audit"]["updated"] == 2
+        with engine.connect() as connection:
+            statuses_after_interrupt = connection.execute(text(
+                "SELECT id,geo_status FROM articles ORDER BY id"
+            )).all()
+        assert statuses_after_interrupt == [
+            (101, "legacy_unverified"),
+            (102, "legacy_unverified"),
+            (103, "unverified"),
+        ]
+
+        checkpoint.interrupt = False
+        report = backfill.run_backfill(
+            apply=True,
+            since_days=104,
+            batch_size=2,
+            checkpoint=checkpoint,
+        )
+
+        with engine.connect() as connection:
+            statuses = connection.execute(text(
+                "SELECT id,geo_status FROM articles ORDER BY id"
+            )).all()
+        assert statuses == [
+            (101, "legacy_unverified"),
+            (102, "legacy_unverified"),
+            (103, "legacy_unverified"),
+        ]
+        assert report.done is True
+        assert report.scanned == 3
+        assert report.unclassified == 3
+        assert report.updated == 3
+        assert report.last_id == 103
+        assert [params["article_ids"] for params in update_parameters] == [
+            [101, 102],
+            [103],
         ]
     finally:
         engine.dispose()

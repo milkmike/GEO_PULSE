@@ -131,6 +131,38 @@ in 0.35s`. Its disposable container was removed afterward.
 The final Task 6 + stories/search integration run reports `148 passed, 2
 opt-in PostgreSQL cases skipped, 2 pre-existing warnings in 0.76s`.
 
+### Bulk unclassified-update performance fix
+
+The first production apply was stopped safely after 2,500 committed rows when
+its checkpoint showed only about five 500-row batches per two minutes. The
+cause was one guarded `UNCLASSIFIED_UPDATE_SQL` round-trip for every
+unclassifiable row; the remaining 322,773 `legacy_unverified` candidates would
+therefore have required several hours despite bounded batch commits.
+
+A 500-row in-memory regression reproduced the old behavior before the fix:
+the assertion expected one unclassified update call but observed exactly 500
+(`1 failed in 0.26s`). The apply path now accumulates unclassified article IDs
+for the batch and executes one
+`id = ANY(CAST(:article_ids AS INTEGER[]))` update with the same defensive
+eligibility predicates. PostgreSQL's result rowcount remains the sole source
+for `updated`; classified updates, exact-collision handling, duplicate
+reconciliation, transaction boundaries, and checkpoint ordering are
+unchanged.
+
+The same 500-row regression now passes with one statement and `updated=500`
+(`1 passed in 0.24s`). At the production batch size this is a measured 500x
+statement-count reduction; 322,773 unclassified candidates require at most
+646 bulk updates instead of 322,773 per-row updates.
+
+A disposable PostgreSQL 16 regression verified real `INTEGER[]` adaptation,
+rowcount, and resume from a committed nonzero checkpoint. The interrupted
+first batch persisted `last_id=102` and `updated=2`; resume issued the second
+array update for `[103]` and returned cumulative `updated=3`. The focused
+resume case passed in `0.31s`, and all three Task 6 PostgreSQL cases passed in
+`0.28s`; the container was removed afterward. Final Task 6 + stories/search
+integration: `149 passed, 3 skipped, 2 pre-existing warnings in 0.97s`. Full
+backend suite: `477 passed, 8 skipped, 2 pre-existing warnings in 5.78s`.
+
 ## Files changed
 
 - `scripts/backfill_google_news_attribution.py`
@@ -150,7 +182,9 @@ opt-in PostgreSQL cases skipped, 2 pre-existing warnings in 0.76s`.
   when a verified registry source name maps uniquely to one publisher source.
   Ambiguous names fail closed as `legacy_unverified`.
 - Apply mode mutates only the allowed publisher/geo fields during attribution;
-  unclassified rows receive only the legacy-unverified status.
+  unclassified rows receive only the legacy-unverified status. Their IDs are
+  updated once per bounded batch with a typed PostgreSQL array while retaining
+  the full defensive eligibility predicate and exact rowcount accounting.
 - Each apply batch commits before its cursor is persisted. Atomic JSON-file
   checkpoints and compatible load/save checkpoint stores support crash/resume.
   Checkpoint version 2 also persists cumulative scan/mutation counters,
@@ -196,6 +230,10 @@ opt-in PostgreSQL cases skipped, 2 pre-existing warnings in 0.76s`.
   high-water snapshot;
 - negative controls for protected-prefix deletion with a compensating append,
   provenance rewrite, and analysis/story-membership count decreases;
+- 500 unclassified rows producing one update statement and an exact updated
+  count of 500;
+- real PostgreSQL typed-array rowcount plus interrupt/resume from a nonzero
+  checkpoint;
 - required keyset SQL, absence of deletes/protected-column writes, and the
   constrained CLI/report surface.
 

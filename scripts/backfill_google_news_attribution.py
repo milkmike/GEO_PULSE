@@ -109,7 +109,7 @@ UNCLASSIFIED_UPDATE_SQL = """
     /* gnews-backfill:update-unclassified */
     UPDATE articles
     SET geo_status = 'legacy_unverified'
-    WHERE id = :article_id
+    WHERE id = ANY(CAST(:article_ids AS INTEGER[]))
       AND publisher_source_id IS NULL
       AND geo_method IS NULL
       AND geo_verified_at IS NULL
@@ -839,6 +839,7 @@ def run_backfill(
                 batch_updated = 0
                 batch_duplicates = 0
                 classifications = []
+                unclassified_ids: list[int] = []
                 exact_conflicts: list[tuple[int, int]] = []
                 for row in rows:
                     scanned += 1
@@ -863,10 +864,7 @@ def run_backfill(
                         counters["domain"]["(unknown)"] += 1
                         if apply:
                             article_id = int(_value(row, "id"))
-                            batch_updated += _rowcount(session.execute(
-                                text(UNCLASSIFIED_UPDATE_SQL),
-                                {"article_id": article_id},
-                            ))
+                            unclassified_ids.append(article_id)
                             if conflict_id is not None:
                                 exact_conflicts.append((article_id, conflict_id))
                         continue
@@ -892,6 +890,11 @@ def run_backfill(
                             },
                         ))
                 if apply:
+                    if unclassified_ids:
+                        batch_updated += _rowcount(session.execute(
+                            text(UNCLASSIFIED_UPDATE_SQL),
+                            {"article_ids": unclassified_ids},
+                        ))
                     batch_duplicates += _reconcile_duplicates(
                         session,
                         classifications,
