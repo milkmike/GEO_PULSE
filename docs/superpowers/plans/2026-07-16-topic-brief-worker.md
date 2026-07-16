@@ -334,4 +334,3 @@ Expected: each topic is logged as generated or empty; one failure does not abort
 - [ ] **Step 5: Verify the reported bug and every topic endpoint**
 
 Check all 16 `/api/v2/topics/{topic}/brief` endpoints. `culture_sport` must return HTTP 200 with `status=ready`, and API logs must contain no new OpenRouter 403. Confirm protected production counts did not decrease.
-
