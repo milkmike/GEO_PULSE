@@ -906,6 +906,20 @@ def test_batch_sql_is_keyset_bounded_and_mutations_preserve_provenance():
     assert "'source_verified', 'unverified', 'legacy_unverified'" in compact
     dedup_compact = " ".join(backfill.DEDUP_CANDIDATES_SQL.split())
     assert "candidate_publisher.country_code = affected.country_code" in dedup_compact
+    assert "candidate_ids AS" in dedup_compact
+    assert dedup_compact.count(" UNION ") >= 4
+    assert "JOIN affected ON (" not in dedup_compact
+    assert (
+        "candidate.publisher_source_id = affected.publisher_id "
+        "AND candidate.external_id = affected.external_id"
+    ) in dedup_compact
+    assert (
+        "candidate.source_id = affected.publisher_id "
+        "AND candidate.external_id = affected.external_id"
+    ) in dedup_compact
+    assert (
+        "candidate.title_normalized = affected.title_normalized"
+    ) in dedup_compact
     assert "MAX(id)" in backfill.ARTICLE_HIGH_WATER_SQL
     invariant_compact = " ".join(backfill.INVARIANT_COUNTS_SQL.split())
     provenance_compact = " ".join(backfill.PROVENANCE_SQL.split())

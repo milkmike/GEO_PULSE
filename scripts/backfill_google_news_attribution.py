@@ -162,14 +162,78 @@ DEDUP_CANDIDATES_SQL = """
           AND article.geo_status IN (
               'source_verified', 'publisher_verified', 'publisher_reassigned'
           )
+    ), candidate_ids AS (
+        SELECT affected.id
+        FROM affected
+
+        UNION
+
+        SELECT candidate.id
+        FROM affected
+        JOIN articles candidate
+          ON candidate.publisher_source_id = affected.publisher_id
+         AND candidate.external_id = affected.external_id
+        WHERE affected.external_id IS NOT NULL
+          AND affected.external_id <> ''
+
+        UNION
+
+        SELECT candidate.id
+        FROM affected
+        JOIN articles candidate
+          ON candidate.source_id = affected.publisher_id
+         AND candidate.external_id = affected.external_id
+        JOIN sources candidate_discovery
+          ON candidate_discovery.id = candidate.source_id
+        WHERE affected.external_id IS NOT NULL
+          AND affected.external_id <> ''
+          AND candidate.publisher_source_id IS NULL
+          AND COALESCE(
+              candidate_discovery.config->>'feed_mode', 'publisher'
+          ) <> 'publisher_discovery'
+
+        UNION
+
+        SELECT candidate.id
+        FROM affected
+        JOIN articles candidate
+          ON candidate.title_normalized = affected.title_normalized
+         AND candidate.published_at BETWEEN
+             affected.published_at - INTERVAL '48 hours'
+             AND affected.published_at + INTERVAL '48 hours'
+        JOIN sources candidate_publisher
+          ON candidate_publisher.id = candidate.publisher_source_id
+         AND candidate_publisher.country_code = affected.country_code
+        WHERE affected.title_normalized IS NOT NULL
+          AND affected.title_normalized <> ''
+
+        UNION
+
+        SELECT candidate.id
+        FROM affected
+        JOIN articles candidate
+          ON candidate.title_normalized = affected.title_normalized
+         AND candidate.published_at BETWEEN
+             affected.published_at - INTERVAL '48 hours'
+             AND affected.published_at + INTERVAL '48 hours'
+        JOIN sources candidate_discovery
+          ON candidate_discovery.id = candidate.source_id
+         AND candidate_discovery.country_code = affected.country_code
+        WHERE affected.title_normalized IS NOT NULL
+          AND affected.title_normalized <> ''
+          AND candidate.publisher_source_id IS NULL
+          AND COALESCE(
+              candidate_discovery.config->>'feed_mode', 'publisher'
+          ) <> 'publisher_discovery'
     )
-    SELECT DISTINCT candidate.id,
+    SELECT candidate.id,
            candidate_publisher.id AS publisher_id,
            candidate_publisher.country_code AS country_code,
            candidate.external_id, candidate.title_normalized,
            candidate.published_at, candidate.is_duplicate,
            candidate.duplicate_of, candidate.reprint_count
-    FROM articles candidate
+    FROM candidate_ids
+    JOIN articles candidate ON candidate.id = candidate_ids.id
     JOIN sources candidate_discovery
       ON candidate_discovery.id = candidate.source_id
     JOIN sources candidate_publisher ON candidate_publisher.id = CASE
@@ -177,26 +241,8 @@ DEDUP_CANDIDATES_SQL = """
             candidate_discovery.config->>'feed_mode', 'publisher'
         ) = 'publisher_discovery'
             THEN candidate.publisher_source_id
-        ELSE COALESCE(candidate.publisher_source_id, candidate.source_id)
-    END
-    JOIN affected ON (
-        candidate.id = affected.id
-        OR (
-            candidate.external_id IS NOT NULL
-            AND candidate.external_id <> ''
-            AND candidate.external_id = affected.external_id
-            AND candidate_publisher.id = affected.publisher_id
-        )
-        OR (
-            candidate.title_normalized IS NOT NULL
-            AND candidate.title_normalized <> ''
-            AND candidate.title_normalized = affected.title_normalized
-            AND candidate_publisher.country_code = affected.country_code
-            AND candidate.published_at BETWEEN
-                affected.published_at - INTERVAL '48 hours'
-                AND affected.published_at + INTERVAL '48 hours'
-        )
-    )
+            ELSE COALESCE(candidate.publisher_source_id, candidate.source_id)
+        END
     WHERE candidate.geo_status IN (
         'source_verified', 'publisher_verified', 'publisher_reassigned'
     )
