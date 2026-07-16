@@ -188,6 +188,23 @@ def test_google_news_publisher_attribution_schema_contract():
         assert index_name in init_sql
 
 
+def test_article_duplicate_family_index_is_present_and_retry_safe():
+    migration_sql = migration("025_articles_duplicate_family_index.sql")
+    init_sql = (ROOT / "data" / "init.sql").read_text()
+
+    for sql in (migration_sql, init_sql):
+        assert "idx_articles_duplicate_of" in sql
+        assert "ON public.articles (duplicate_of)" in sql or (
+            "ON articles(duplicate_of)" in sql
+        )
+        assert "WHERE duplicate_of IS NOT NULL" in sql
+    assert "DROP INDEX CONCURRENTLY IF EXISTS" in migration_sql
+    assert "CREATE INDEX CONCURRENTLY IF NOT EXISTS" in migration_sql
+    assert "NOT index_state.indisvalid OR NOT index_state.indisready" in migration_sql
+    assert "index_state.indrelid = 'public.articles'::regclass" in migration_sql
+    assert "idx.indisvalid AND idx.indisready" in migration_sql
+
+
 def test_google_news_publisher_attribution_orm_contract():
     from src.db import Article, ArticleDiscovery, PublisherDomain
 

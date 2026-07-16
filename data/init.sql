@@ -343,6 +343,8 @@ CREATE INDEX idx_temperature_country ON temperature(country_code, time DESC);
 CREATE INDEX idx_alerts_country ON alerts(country_code, created_at DESC);
 CREATE INDEX idx_articles_title_trgm ON articles USING gin (title_normalized gin_trgm_ops);
 CREATE INDEX idx_articles_duplicate ON articles(is_duplicate);
+CREATE INDEX idx_articles_duplicate_of ON articles(duplicate_of)
+  WHERE duplicate_of IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_articles_language_published_id
   ON articles (language, published_at DESC, id DESC)
   WHERE is_duplicate = FALSE;

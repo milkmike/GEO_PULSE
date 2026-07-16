@@ -266,13 +266,20 @@ DUPLICATE_FAMILIES_BATCH_SQL = """
         SELECT seed.id, seed.id
         FROM unnest(CAST(:seed_ids AS INTEGER[])) AS seed(id)
         UNION
-        SELECT current.root_id, related.id
+        SELECT current.root_id, adjacent.id
         FROM family current
-        JOIN articles member ON member.id = current.id
-        JOIN articles related ON (
-            related.duplicate_of = current.id
-            OR related.id = member.duplicate_of
-        )
+        JOIN LATERAL (
+            (
+                SELECT parent.duplicate_of AS id
+                FROM articles parent
+                WHERE parent.id = current.id
+                LIMIT 1
+            )
+            UNION
+            SELECT child.id
+            FROM articles child
+            WHERE child.duplicate_of = current.id
+        ) adjacent ON adjacent.id IS NOT NULL
     )
     SELECT root_id, id
     FROM family

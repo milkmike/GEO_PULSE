@@ -1144,7 +1144,10 @@ def test_batch_sql_is_keyset_bounded_and_mutations_preserve_provenance():
     )
     assert "family(root_id, id)" in family_compact
     assert "unnest(CAST(:seed_ids AS INTEGER[]))" in family_compact
-    assert "SELECT current.root_id, related.id" in family_compact
+    assert " OR " not in family_compact
+    assert "JOIN LATERAL" in family_compact
+    assert "parent.id = current.id" in family_compact
+    assert "child.duplicate_of = current.id" in family_compact
     batch_dedup_update_compact = " ".join(
         backfill.DEDUP_BATCH_UPDATE_SQL.split()
     )
@@ -1227,6 +1230,11 @@ def _reset_postgres_backfill_schema(engine):
         connection.exec_driver_sql("""
             CREATE UNIQUE INDEX uq_articles_source_external_test
             ON articles (source_id, external_id)
+        """)
+        connection.exec_driver_sql("""
+            CREATE INDEX idx_articles_duplicate_of
+            ON articles (duplicate_of)
+            WHERE duplicate_of IS NOT NULL
         """)
         connection.exec_driver_sql("""
             CREATE UNIQUE INDEX uq_articles_publisher_external_id
@@ -1507,13 +1515,17 @@ def test_postgres_batch_exact_conflicts_merge_existing_families_once():
                   (21,1,'21','https://publisher.example/21',:now,
                    'family-b-child','source_verified',TRUE,20,0),
                   (22,1,'22','https://publisher.example/22',:now,
-                   'family-b-new','source_verified',FALSE,NULL,0)
+                   'family-b-new','source_verified',FALSE,NULL,0),
+                  (30,1,'30','https://publisher.example/30',:now,
+                   'cycle-a','source_verified',TRUE,31,0),
+                  (31,1,'31','https://publisher.example/31',:now,
+                   'cycle-b','source_verified',TRUE,30,0)
             """), {"now": NOW})
 
         with Session.begin() as session:
             updated = backfill._reconcile_exact_conflicts(
                 session,
-                [(12, 11), (22, 21), (12, 22), (12, 22)],
+                [(12, 11), (22, 21), (12, 22), (22, 30), (12, 22)],
             )
 
         with engine.connect() as connection:
@@ -1524,7 +1536,7 @@ def test_postgres_batch_exact_conflicts_merge_existing_families_once():
                 ORDER BY id
             """)).mappings().all()
 
-        assert updated == 5
+        assert updated == 7
         assert family_queries == 1
         assert family_updates == 1
         assert [
@@ -1534,12 +1546,14 @@ def test_postgres_batch_exact_conflicts_merge_existing_families_once():
             )
             for row in rows
         ] == [
-            (10, False, None, 5),
+            (10, False, None, 7),
             (11, True, 10, 0),
             (12, True, 10, 0),
             (20, True, 10, 0),
             (21, True, 10, 0),
             (22, True, 10, 0),
+            (30, True, 10, 0),
+            (31, True, 10, 0),
         ]
         assert [
             (row["id"], row["source_id"], row["external_id"], row["url"])
@@ -1547,8 +1561,75 @@ def test_postgres_batch_exact_conflicts_merge_existing_families_once():
         ] == [
             (article_id, 1, str(article_id),
              f"https://publisher.example/{article_id}")
-            for article_id in (10, 11, 12, 20, 21, 22)
+            for article_id in (10, 11, 12, 20, 21, 22, 30, 31)
         ]
+    finally:
+        engine.dispose()
+
+
+def test_postgres_duplicate_family_plan_uses_only_adjacency_indexes():
+    dsn = os.getenv("GEO_PULSE_TEST_DATABASE_URL")
+    if not dsn or os.getenv("GEO_PULSE_TEST_DATABASE_RESET") != "1":
+        pytest.skip("requires an explicitly disposable PostgreSQL database")
+    pytest.importorskip("psycopg2")
+    engine = create_engine(dsn)
+    seed_ids = list(range(199_801, 200_001))
+
+    try:
+        _reset_postgres_backfill_schema(engine)
+        with engine.begin() as connection:
+            connection.execute(text("""
+                INSERT INTO sources(id,name,url,country_code,config)
+                VALUES (1,'Publisher','https://publisher.example','ES','{}')
+            """))
+            connection.execute(text("""
+                INSERT INTO articles(
+                    id,source_id,external_id,url,published_at,
+                    title_normalized,geo_status
+                )
+                SELECT value,1,'external-' || value,
+                       'https://publisher.example/' || value,
+                       :now,'title-' || value,'source_verified'
+                FROM generate_series(1, 200000) AS value
+            """), {"now": NOW})
+            connection.exec_driver_sql("ANALYZE articles")
+
+        with engine.connect() as connection:
+            connection.execute(
+                text(backfill.DUPLICATE_FAMILIES_BATCH_SQL),
+                {"seed_ids": seed_ids},
+            ).all()
+            payload = connection.execute(
+                text(
+                    "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) "
+                    + backfill.DUPLICATE_FAMILIES_BATCH_SQL
+                ),
+                {"seed_ids": seed_ids},
+            ).scalar_one()[0]
+
+        nodes = list(_postgres_plan_nodes(payload["Plan"]))
+        article_seq_scans = [
+            node for node in nodes
+            if node.get("Node Type") == "Seq Scan"
+            and node.get("Relation Name") == "articles"
+        ]
+        indexes = {
+            node["Index Name"]
+            for node in nodes
+            if node.get("Index Name")
+        }
+        benchmark = {
+            "rows": 200_000,
+            "seeds": 200,
+            "execution_ms": round(payload["Execution Time"], 3),
+            "total_cost": round(payload["Plan"]["Total Cost"], 2),
+        }
+        print("duplicate-family-plan-benchmark " + json.dumps(
+            benchmark, sort_keys=True,
+        ))
+
+        assert article_seq_scans == []
+        assert {"articles_pkey", "idx_articles_duplicate_of"}.issubset(indexes)
     finally:
         engine.dispose()
 
