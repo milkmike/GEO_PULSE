@@ -41,6 +41,77 @@ class SequentialSession:
         return nullcontext()
 
 
+class CanonicalPublisherTierSession(SequentialSession):
+    def __init__(self):
+        super().__init__([])
+        self.discovery_articles = (
+            SimpleNamespace(
+                article_id=201,
+                discovery_source_id=900,
+                publisher_name="EL PAÍS",
+                publisher_source_id=11,
+                publisher_country_code="ES",
+                publisher_tier="mainstream",
+            ),
+            SimpleNamespace(
+                article_id=202,
+                discovery_source_id=900,
+                publisher_name="Reuters",
+                publisher_source_id=22,
+                publisher_country_code="GB",
+                publisher_tier="mainstream",
+            ),
+            SimpleNamespace(
+                article_id=203,
+                discovery_source_id=900,
+                publisher_name=None,
+                publisher_source_id=None,
+                publisher_country_code=None,
+                publisher_tier=None,
+            ),
+            SimpleNamespace(
+                article_id=204,
+                discovery_source_id=900,
+                publisher_name="Agencia EFE",
+                publisher_source_id=12,
+                publisher_country_code="ES",
+                publisher_tier="official",
+            ),
+            SimpleNamespace(
+                article_id=205,
+                discovery_source_id=900,
+                publisher_name="elDiario.es",
+                publisher_source_id=13,
+                publisher_country_code="ES",
+                publisher_tier="independent",
+            ),
+        )
+
+    def execute(self, statement, params=None):
+        sql = str(statement)
+        self.calls.append((sql, params or {}))
+        if "JOIN article_country_facts s ON s.article_id = ar.id" not in sql:
+            return QueryResult([])
+        spanish = [
+            item
+            for item in self.discovery_articles
+            if item.publisher_country_code == "ES"
+            and item.publisher_source_id is not None
+        ]
+        return QueryResult([
+            SimpleNamespace(
+                country_code="ES",
+                event_key="переговоры",
+                tiers=len({item.publisher_tier for item in spanish}),
+                n=len(spanish),
+                avg_sent=-1.0,
+                max_al=4,
+                tier_list=["official", "mainstream", "independent"],
+                article_ids=[item.article_id for item in spanish],
+            )
+        ])
+
+
 def test_signal_evidence_contract_normalizes_stable_evidence_ids():
     at = datetime(2026, 7, 15, 12, 0, tzinfo=timezone.utc)
 
@@ -514,6 +585,89 @@ def test_every_detector_path_builds_complete_versioned_evidence(monkeypatch):
         "fx_rate:KZT:2026-07-15",
     )
     assert captured["sanctions_escalation"].threshold["minimum_new_targets"] == 25
+
+
+def test_tier_convergence_uses_verified_publisher_tiers_and_article_evidence(
+    monkeypatch,
+):
+    captured = {}
+
+    def capture(
+        session,
+        signal_type,
+        country_code,
+        dedup_key,
+        title,
+        description,
+        payload,
+        *,
+        evidence,
+        severity="info",
+    ):
+        captured.update(
+            country_code=country_code,
+            evidence=evidence,
+            payload=payload,
+        )
+        return True
+
+    monkeypatch.setattr(signals, "_emit", capture)
+    session = CanonicalPublisherTierSession()
+
+    assert signals.detect_tier_convergence(session) == 1
+    assert {item.discovery_source_id for item in session.discovery_articles} == {900}
+    assert {
+        item.publisher_source_id
+        for item in session.discovery_articles
+        if item.publisher_country_code == "ES"
+    } == {11, 12, 13}
+    assert captured["country_code"] == "ES"
+    assert captured["payload"]["tiers"] == [
+        "official",
+        "mainstream",
+        "independent",
+    ]
+    assert captured["evidence"].article_ids == (201, 204, 205)
+    assert 202 not in captured["evidence"].article_ids  # Reuters belongs to GB.
+    assert 203 not in captured["evidence"].article_ids  # Unknown is quarantined.
+
+
+@pytest.mark.parametrize(
+    "detector",
+    (
+        signals.detect_tier_convergence,
+        signals.detect_official_silence,
+        signals.detect_velocity_spike,
+        signals.detect_notable_events,
+    ),
+)
+def test_article_signal_detectors_join_canonical_publisher_facts(detector):
+    session = SequentialSession([[]])
+
+    assert detector(session) == 0
+    article_sql = session.calls[0][0]
+    assert "JOIN article_country_facts s ON s.article_id = ar.id" in article_sql
+    assert "JOIN sources s ON ar.source_id = s.id" not in article_sql
+
+
+def test_official_silence_keeps_active_official_outlet_catalog_query(monkeypatch):
+    now = datetime.now(timezone.utc)
+    session = SequentialSession([
+        [SimpleNamespace(
+            country_code="ES",
+            event_key="санкции",
+            loud_n=3,
+            quiet_n=0,
+            first_seen=now - timedelta(hours=8),
+            avg_sent=-4.0,
+            article_ids=[21, 22, 23],
+        )],
+        [],
+    ])
+
+    assert signals.detect_official_silence(session) == 0
+    assert "JOIN article_country_facts s ON s.article_id = ar.id" in session.calls[0][0]
+    assert "SELECT 1 FROM sources" in session.calls[1][0]
 
 
 def test_missing_index_and_fx_comparators_mark_evidence_partial(monkeypatch):

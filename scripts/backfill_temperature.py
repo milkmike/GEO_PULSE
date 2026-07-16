@@ -40,7 +40,7 @@ def calculate_temperature_at(country_code: str, as_of: datetime) -> dict | None:
                        COALESCE(ar.reprint_count, 0) as reprint_count
                 FROM analysis a
                 JOIN articles ar ON a.article_id = ar.id
-                JOIN sources s ON ar.source_id = s.id
+                JOIN article_country_facts s ON s.article_id = ar.id
                 WHERE s.country_code = :cc
                   AND a.is_relevant = true
                   AND a.sentiment IS NOT NULL

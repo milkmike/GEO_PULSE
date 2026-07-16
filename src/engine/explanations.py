@@ -491,7 +491,7 @@ def _load_temperature_articles(
                COALESCE(ar.reprint_count, 0) AS reprint_count
         FROM analysis a
         JOIN articles ar ON ar.id = a.article_id
-        JOIN sources s ON s.id = ar.source_id
+        JOIN article_country_facts s ON s.article_id = ar.id
         WHERE s.country_code = :country_code
           AND a.is_relevant = TRUE
           AND a.sentiment IS NOT NULL
@@ -537,7 +537,7 @@ def _load_context(
                COALESCE(a.sentiment_confidence, 0.5) AS confidence,
                jsonb_build_object('published_at', ar.published_at) AS evidence
         FROM articles ar
-        JOIN sources s ON s.id = ar.source_id
+        JOIN article_country_facts s ON s.article_id = ar.id
         LEFT JOIN analysis a ON a.article_id = ar.id
         WHERE s.country_code = :country_code
           AND ar.published_at >= :from_time AND ar.published_at <= :to_time

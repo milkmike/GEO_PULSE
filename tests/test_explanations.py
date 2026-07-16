@@ -540,6 +540,28 @@ class ArticleInputCacheSession(CachedExplanationSession):
         return super().execute(statement, params)
 
 
+def test_explanation_article_inputs_and_context_use_verified_publishers():
+    session = CachedExplanationSession()
+
+    load_explanation_from_session(
+        session,
+        country_code="KZ",
+        from_time=NOW - timedelta(hours=24),
+        to_time=NOW,
+        rri_version="v1",
+    )
+
+    article_queries = [
+        sql
+        for sql, _ in session.calls
+        if "FROM analysis a" in sql or "AS context_scope" in sql
+    ]
+    assert len(article_queries) == 2
+    for sql in article_queries:
+        assert "JOIN article_country_facts s ON s.article_id = ar.id" in sql
+        assert "JOIN sources s ON s.id = ar.source_id" not in sql
+
+
 def test_loader_uses_full_migration_021_cache_key_without_writes():
     session = CachedExplanationSession()
 

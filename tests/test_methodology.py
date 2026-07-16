@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 from dataclasses import FrozenInstanceError
 from datetime import datetime, timezone
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -12,6 +13,7 @@ from src.engine import index
 
 
 NOW = datetime(2026, 7, 15, 12, 0, tzinfo=timezone.utc)
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_engine_and_api_share_one_immutable_methodology_definition():
@@ -148,6 +150,94 @@ class FixedDateTime:
         return NOW
 
 
+class CanonicalPublisherTemperatureSession(TemperatureSession):
+    def __init__(self):
+        super().__init__([])
+        self.selected_article_ids = {}
+        self.selected_publisher_names = {}
+        self.selected_source_ids = {}
+        self.triplet = (
+            SimpleNamespace(
+                article_id=101,
+                publisher_name="EL PAÍS",
+                publisher_country_code="ES",
+                publisher_source_id=11,
+                publisher_weight=2.0,
+                sentiment=3.0,
+                event_type="diplomatic",
+            ),
+            SimpleNamespace(
+                article_id=102,
+                publisher_name="Reuters",
+                publisher_country_code="GB",
+                publisher_source_id=22,
+                publisher_weight=1.5,
+                sentiment=-3.0,
+                event_type="economic",
+            ),
+            SimpleNamespace(
+                article_id=103,
+                publisher_name=None,
+                publisher_country_code=None,
+                publisher_source_id=None,
+                publisher_weight=None,
+                sentiment=1.0,
+                event_type="cultural",
+            ),
+        )
+
+    @staticmethod
+    def _temperature_row(item, *, source_id, weight):
+        return SimpleNamespace(
+            article_id=item.article_id,
+            sentiment=item.sentiment,
+            event_type=item.event_type,
+            sentiment_confidence=1.0,
+            action_level=1,
+            event_key=None,
+            published_at=NOW,
+            weight=weight,
+            source_id=source_id,
+            reprint_count=0,
+        )
+
+    def execute(self, statement, params=None):
+        sql = str(statement)
+        params = params or {}
+        if "FROM analysis a" not in sql:
+            return super().execute(statement, params)
+
+        country_code = params["cc"]
+        if "JOIN article_country_facts s ON s.article_id = ar.id" in sql:
+            matched = [
+                item
+                for item in self.triplet
+                if item.publisher_country_code == country_code
+                and item.publisher_source_id is not None
+            ]
+            rows = [
+                self._temperature_row(
+                    item,
+                    source_id=item.publisher_source_id,
+                    weight=item.publisher_weight,
+                )
+                for item in matched
+            ]
+        else:
+            matched = list(self.triplet) if country_code == "ES" else []
+            rows = [
+                self._temperature_row(item, source_id=900, weight=0.5)
+                for item in matched
+            ]
+
+        self.selected_article_ids[country_code] = [row.article_id for row in rows]
+        self.selected_publisher_names[country_code] = [
+            item.publisher_name for item in matched
+        ]
+        self.selected_source_ids[country_code] = [row.source_id for row in rows]
+        return FakeResult(rows)
+
+
 def test_methodology_extraction_preserves_existing_temperature_output(monkeypatch):
     rows = [
         SimpleNamespace(
@@ -205,3 +295,51 @@ def test_methodology_extraction_preserves_existing_temperature_output(monkeypatc
         "trend": "rising",
         "anomaly_score": None,
     }
+
+
+def test_temperature_uses_verified_publisher_country_weight_and_source_id(monkeypatch):
+    session = CanonicalPublisherTemperatureSession()
+    monkeypatch.setattr(index, "get_session", lambda: SessionContext(session))
+    monkeypatch.setattr(index, "datetime", FixedDateTime)
+
+    spain = index.calculate_temperature("ES")
+    britain = index.calculate_temperature("GB")
+
+    assert spain["temperature"] == 100.0
+    assert spain["article_count"] == 1
+    assert spain["source_count"] == 1
+    assert britain["temperature"] == -100.0
+    assert britain["article_count"] == 1
+    assert britain["source_count"] == 1
+    assert session.selected_article_ids == {"ES": [101], "GB": [102]}
+    assert session.selected_publisher_names == {
+        "ES": ["EL PAÍS"],
+        "GB": ["Reuters"],
+    }
+    assert session.selected_source_ids == {"ES": [11], "GB": [22]}
+    assert 103 not in session.selected_article_ids["ES"]
+    assert 900 not in session.selected_source_ids["ES"]
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "expected_joins"),
+    (
+        ("src/engine/index.py", 1),
+        ("src/engine/ru_index.py", 1),
+        ("src/engine/signals.py", 4),
+        ("src/engine/explanations.py", 2),
+        ("scripts/backfill_temperature.py", 1),
+        ("scripts/retro_temperature.py", 1),
+    ),
+)
+def test_article_derived_calculations_join_canonical_publisher_facts(
+    relative_path,
+    expected_joins,
+):
+    source = (ROOT / relative_path).read_text()
+
+    assert source.count(
+        "JOIN article_country_facts s ON s.article_id = ar.id"
+    ) == expected_joins
+    assert "JOIN sources s ON ar.source_id = s.id" not in source
+    assert "JOIN sources s ON s.id = ar.source_id" not in source

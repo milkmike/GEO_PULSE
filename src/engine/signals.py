@@ -350,7 +350,7 @@ def detect_tier_convergence(session) -> int:
                    ARRAY_AGG(DISTINCT ar.id ORDER BY ar.id) AS article_ids
             FROM analysis a
             JOIN articles ar ON a.article_id = ar.id
-            JOIN sources s ON ar.source_id = s.id
+            JOIN article_country_facts s ON s.article_id = ar.id
             WHERE ar.published_at > NOW() - INTERVAL '24 hours'
               AND ar.is_backfill = FALSE
               AND a.is_relevant = TRUE
@@ -418,7 +418,7 @@ def detect_official_silence(session) -> int:
                        FILTER (WHERE s.tier = ANY(:loud)) AS article_ids
             FROM analysis a
             JOIN articles ar ON a.article_id = ar.id
-            JOIN sources s ON ar.source_id = s.id
+            JOIN article_country_facts s ON s.article_id = ar.id
             WHERE ar.published_at > NOW() - INTERVAL '24 hours'
               AND ar.is_backfill = FALSE
               AND a.is_relevant = TRUE
@@ -509,7 +509,7 @@ def detect_velocity_spike(session) -> int:
                            FILTER (WHERE ar.published_at > NOW() - INTERVAL '24 hours') AS article_ids
                 FROM analysis a
                 JOIN articles ar ON a.article_id = ar.id
-                JOIN sources s ON ar.source_id = s.id
+                JOIN article_country_facts s ON s.article_id = ar.id
                 WHERE ar.published_at > NOW() - INTERVAL '30 days'
                   AND ar.is_backfill = FALSE
                   AND a.is_relevant = TRUE
@@ -832,7 +832,7 @@ def detect_notable_events(session) -> int:
                    ar.title, ar.reprint_count, ar.published_at, s.country_code
             FROM analysis a
             JOIN articles ar ON a.article_id = ar.id
-            JOIN sources s ON ar.source_id = s.id
+            JOIN article_country_facts s ON s.article_id = ar.id
             WHERE a.is_relevant = TRUE
               AND ar.is_backfill = FALSE
               AND a.action_level >= 4

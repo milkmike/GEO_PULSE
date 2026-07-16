@@ -193,7 +193,7 @@ def event_boost(code: str, session) -> tuple[float, dict]:
                     SELECT a.sentiment, a.action_level, COUNT(*) AS n
                     FROM analysis a
                     JOIN articles ar ON a.article_id = ar.id
-                    JOIN sources s ON ar.source_id = s.id
+                    JOIN article_country_facts s ON s.article_id = ar.id
                     WHERE s.country_code = :cc
                       AND ar.is_backfill = FALSE
                       AND a.is_relevant = TRUE
