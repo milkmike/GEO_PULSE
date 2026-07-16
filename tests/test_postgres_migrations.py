@@ -93,6 +93,36 @@ def _reset(cursor, *, initialize: bool) -> None:
         cursor.execute((ROOT / "data" / "init.sql").read_text())
 
 
+def _downgrade_to_pre_024(cursor) -> None:
+    cursor.execute("DROP VIEW IF EXISTS public.article_country_facts")
+    cursor.execute("""
+        DROP INDEX IF EXISTS public.idx_articles_publisher_source_id;
+        DROP INDEX IF EXISTS public.idx_article_discoveries_quarantine_keyset;
+        DROP INDEX IF EXISTS public.uq_articles_publisher_external_id;
+        DROP TABLE IF EXISTS public.article_discoveries;
+        DROP TABLE IF EXISTS public.publisher_domains;
+    """)
+    cursor.execute("""
+        ALTER TABLE public.articles
+          DROP CONSTRAINT IF EXISTS articles_geo_status_check,
+          DROP COLUMN IF EXISTS publisher_source_id,
+          DROP COLUMN IF EXISTS publisher_name,
+          DROP COLUMN IF EXISTS publisher_url,
+          DROP COLUMN IF EXISTS publisher_domain,
+          DROP COLUMN IF EXISTS geo_country_code,
+          DROP COLUMN IF EXISTS geo_status,
+          DROP COLUMN IF EXISTS geo_method,
+          DROP COLUMN IF EXISTS geo_confidence,
+          DROP COLUMN IF EXISTS geo_verified_at,
+          DROP COLUMN IF EXISTS resolved_url
+    """)
+    cursor.execute("""
+        UPDATE public.sources
+        SET config = COALESCE(config, '{}'::jsonb) - 'feed_mode'
+        WHERE config ? 'feed_mode'
+    """)
+
+
 def _runner_search_path(cursor, *, reset: bool) -> None:
     from psycopg2 import sql
 
@@ -140,8 +170,43 @@ def test_actual_runner_bootstraps_twice_and_story_resolution_is_safe():
                    'fi','mainstream'),
                   (902,'Google News (FI) — Россия',
                    'https://news.google.com/rss/search?q=Russia&hl=fi',
+                   'FI','rss',1,'fi','mainstream'),
+                  (903,'Google News (FI site) — Россия',
+                   'https://news.google.com/rss/search?q=site:publisher.example+Russia&hl=fi',
                    'FI','rss',1,'fi','mainstream')
             """)
+            _downgrade_to_pre_024(cursor)
+            cursor.execute("""
+                SELECT to_regclass('public.publisher_domains'),
+                       to_regclass('public.article_discoveries'),
+                       to_regclass('public.article_country_facts'),
+                       to_regclass('public.idx_articles_publisher_source_id'),
+                       to_regclass(
+                         'public.idx_article_discoveries_quarantine_keyset'
+                       ),
+                       to_regclass('public.uq_articles_publisher_external_id')
+            """)
+            assert cursor.fetchone() == (None, None, None, None, None, None)
+            cursor.execute("""
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'articles'
+                  AND column_name IN (
+                    'publisher_source_id', 'publisher_name', 'publisher_url',
+                    'publisher_domain', 'geo_country_code', 'geo_status',
+                    'geo_method', 'geo_confidence', 'geo_verified_at',
+                    'resolved_url'
+                  )
+            """)
+            assert cursor.fetchall() == []
+            cursor.execute("""
+                SELECT id, config->>'feed_mode'
+                FROM sources
+                WHERE id IN (901, 902, 903)
+                ORDER BY id
+            """)
+            assert cursor.fetchall() == [(901, None), (902, None), (903, None)]
             cursor.execute("""
                 INSERT INTO articles(
                     id,source_id,external_id,title,url,published_at,collected_at,
@@ -152,16 +217,21 @@ def test_actual_runner_bootstraps_twice_and_story_resolution_is_safe():
                    'direct before migration',FALSE,FALSE),
                   (902,902,'discovery-before-024','Discovery before migration',
                    'https://news.google.com/articles/discovery',NOW(),NOW(),'fi',
-                   'discovery before migration',FALSE,FALSE)
+                   'discovery before migration',FALSE,FALSE),
+                  (903,903,'site-before-024','Site wrapper before migration',
+                   'https://publisher.example/story',NOW(),NOW(),'fi',
+                   'site wrapper before migration',FALSE,FALSE)
             """)
 
         first = _run_migrations(dsn)
         _assert_success(first)
         assert "applying 002_threads.sql" in first.stdout
         assert "applying 022_postgres_hardening.sql" in first.stdout
+        assert "applying 024_google_news_publisher_attribution.sql" in first.stdout
         second = _run_migrations(dsn)
         _assert_success(second)
         assert "skip 022_postgres_hardening.sql (already applied)" in second.stdout
+        assert "skip 024_google_news_publisher_attribution.sql (already applied)" in second.stdout
 
         with connection.cursor() as cursor:
             rows = _index_rows(cursor)
@@ -194,11 +264,15 @@ def test_actual_runner_bootstraps_twice_and_story_resolution_is_safe():
             cursor.execute("SELECT count(*) FROM schema_migrations")
             assert cursor.fetchone()[0] == len(list(MIGRATIONS.glob("*.sql")))
             cursor.execute("""
-                SELECT config->>'feed_mode'
+                SELECT id, config->>'feed_mode'
                 FROM sources
-                WHERE id = 902
+                WHERE id IN (902, 903)
+                ORDER BY id
             """)
-            assert cursor.fetchone()[0] == "publisher_discovery"
+            assert cursor.fetchall() == [
+                (902, "publisher_discovery"),
+                (903, None),
+            ]
             cursor.execute("""
                 SELECT cls.relname, idx.indisvalid, idx.indisready
                 FROM pg_class cls
@@ -220,7 +294,7 @@ def test_actual_runner_bootstraps_twice_and_story_resolution_is_safe():
             cursor.execute("""
                 SELECT id, source_id, external_id, url
                 FROM articles
-                WHERE id IN (901, 902)
+                WHERE id IN (901, 902, 903)
                 ORDER BY id
             """)
             assert cursor.fetchall() == [
@@ -231,14 +305,18 @@ def test_actual_runner_bootstraps_twice_and_story_resolution_is_safe():
                     "discovery-before-024",
                     "https://news.google.com/articles/discovery",
                 ),
+                (903, 903, "site-before-024", "https://publisher.example/story"),
             ]
             cursor.execute("""
                 SELECT article_id, id, country_code
                 FROM article_country_facts
-                WHERE article_id IN (901, 902)
+                WHERE article_id IN (901, 902, 903)
                 ORDER BY article_id
             """)
-            assert cursor.fetchall() == [(901, 901, "FI")]
+            assert cursor.fetchall() == [
+                (901, 901, "FI"),
+                (903, 903, "FI"),
+            ]
 
         engine = create_engine(dsn)
         Session = sessionmaker(bind=engine, expire_on_commit=False)

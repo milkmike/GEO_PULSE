@@ -176,6 +176,8 @@ def test_google_news_publisher_attribution_schema_contract():
 
     assert "UPDATE articles SET source_id" not in migration_sql
     assert "DELETE FROM articles" not in migration_sql
+    assert "POSITION('site:' IN LOWER(url)) = 0" in migration_sql
+    assert "jsonb_build_object('feed_mode', 'publisher_discovery')" in migration_sql
     assert "indisvalid AND idx.indisready" in migration_sql
     for index_name in (
         "idx_articles_publisher_source_id",
