@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from src.api.public_urls import safe_public_url
@@ -873,15 +874,29 @@ def world_headlines(hours: int = Query(24, ge=1, le=26280),
 
 
 @router.get("/topics/{topic}/brief")
-def topic_brief(topic: str, refresh: bool = False):
-    """AI brief for a topic lens (cached 6h)."""
+def topic_brief(topic: str):
+    """Return the cached topic brief state without generating on request."""
     if topic not in TOPICS:
         raise HTTPException(404, f"Unknown topic: {topic}")
-    from src.pipeline.briefs import generate_topic_brief
-    brief = generate_topic_brief(topic, force=refresh)
-    if not brief:
-        raise HTTPException(404, "Недостаточно данных для брифинга по теме")
-    return {"topic": topic, "label": TOPICS[topic], **brief}
+    from src.pipeline.briefs import read_cached_topic_brief, topic_has_inputs
+
+    brief = read_cached_topic_brief(topic)
+    if brief:
+        return {
+            "status": "ready",
+            "topic": topic,
+            "label": TOPICS[topic],
+            **brief,
+        }
+
+    payload = {
+        "status": "pending" if topic_has_inputs(topic) else "insufficient",
+        "topic": topic,
+        "label": TOPICS[topic],
+    }
+    if payload["status"] == "pending":
+        return JSONResponse(status_code=202, content=payload)
+    return payload
 
 
 @router.get("/topics/{topic}/countries")

@@ -2,8 +2,10 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
+from fastapi.testclient import TestClient
 
 from scripts import generate_briefs
+from src.api.main import app
 from src.pipeline import briefs
 
 
@@ -48,6 +50,16 @@ def cached_topic_row():
         created_at=datetime(2026, 7, 16, 13, 0, tzinfo=timezone.utc),
         meta={"citations": [{"n": 1}]},
     )
+
+
+def cached_payload():
+    return {
+        "content": "cached culture brief",
+        "model": "qwen",
+        "created_at": "2026-07-16T13:00:00+00:00",
+        "cached": True,
+        "citations": [],
+    }
 
 
 def test_read_cached_topic_brief_never_generates(monkeypatch):
@@ -152,3 +164,45 @@ def test_topics_only_skips_world_and_country_work(monkeypatch, loop):
         generate_briefs.main()
 
     assert calls == [("topics", True)]
+
+
+def test_topic_route_returns_cached_without_generating(monkeypatch):
+    monkeypatch.setattr(briefs, "read_cached_topic_brief", lambda topic: cached_payload())
+    monkeypatch.setattr(briefs, "topic_has_inputs", lambda topic: True)
+    monkeypatch.setattr(
+        briefs,
+        "generate_topic_brief",
+        lambda *args, **kwargs: pytest.fail("LLM called"),
+    )
+
+    response = TestClient(app).get("/api/v2/topics/culture_sport/brief")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "ready",
+        "topic": "culture_sport",
+        "label": "Культура и спорт",
+        **cached_payload(),
+    }
+
+
+@pytest.mark.parametrize("has_inputs,status", [(True, "pending"), (False, "insufficient")])
+def test_topic_route_distinguishes_missing_cache(monkeypatch, has_inputs, status):
+    monkeypatch.setattr(briefs, "read_cached_topic_brief", lambda topic: None)
+    monkeypatch.setattr(briefs, "topic_has_inputs", lambda topic: has_inputs)
+    monkeypatch.setattr(
+        briefs,
+        "generate_topic_brief",
+        lambda *args, **kwargs: pytest.fail("LLM called"),
+    )
+
+    response = TestClient(app).get("/api/v2/topics/culture_sport/brief")
+
+    assert response.status_code == (202 if has_inputs else 200)
+    assert response.json()["status"] == status
+
+
+def test_topic_route_rejects_unknown_topic():
+    response = TestClient(app).get("/api/v2/topics/not-a-topic/brief")
+
+    assert response.status_code == 404
