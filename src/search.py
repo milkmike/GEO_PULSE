@@ -71,31 +71,65 @@ snapshot AS (
                (SELECT MAX(id) FROM articles)
            ) AS snapshot_max_article_id
 ),
-matching_sources AS MATERIALIZED (
+matching_publisher_ids AS MATERIALIZED (
+    SELECT publisher.id
+    FROM sources publisher
+    WHERE (:country IS NULL OR publisher.country_code = :country)
+      AND (:tier IS NULL OR publisher.tier = :tier)
+),
+publisher_article_candidates AS MATERIALIZED (
+    SELECT candidate.id, publisher_filter.id AS publisher_id
+    FROM matching_publisher_ids publisher_filter
+    CROSS JOIN snapshot snapshot_state
+    JOIN LATERAL (
+        SELECT candidate.id
+        FROM articles candidate
+        JOIN article_country_facts canonical_source
+          ON canonical_source.article_id = candidate.id
+         AND canonical_source.id = publisher_filter.id
+        WHERE (
+            candidate.source_id = publisher_filter.id
+            OR candidate.publisher_source_id = publisher_filter.id
+        )
+          AND candidate.is_duplicate = FALSE
+          AND (
+              snapshot_state.snapshot_collected_at IS NULL
+              OR (COALESCE(candidate.collected_at, candidate.published_at),
+                  candidate.id) <=
+                 (snapshot_state.snapshot_collected_at,
+                  snapshot_state.snapshot_collected_article_id)
+          )
+          AND (
+              snapshot_state.snapshot_max_article_id IS NULL
+              OR candidate.id <= snapshot_state.snapshot_max_article_id
+          )
+        ORDER BY candidate.published_at DESC, candidate.id DESC
+        LIMIT :candidate_limit
+    ) candidate ON TRUE
+    WHERE (:country IS NOT NULL OR :tier IS NOT NULL)
+),
+matching_sources AS NOT MATERIALIZED (
     SELECT s.article_id, s.id, s.country_code, s.tier, s.weight
     FROM article_country_facts s
     WHERE (:country IS NULL OR s.country_code = :country)
       AND (:tier IS NULL OR s.tier = :tier)
 ),
+source_ranked_articles AS MATERIALIZED (
+    SELECT candidate.id, candidate.published_at, candidate.language,
+           ROW_NUMBER() OVER (
+               PARTITION BY s.id
+               ORDER BY candidate.published_at DESC, candidate.id DESC
+           ) AS publisher_rank
+    FROM publisher_article_candidates publisher_candidate
+    JOIN articles candidate ON candidate.id = publisher_candidate.id
+    JOIN article_country_facts s ON s.article_id = candidate.id
+                                AND s.id = publisher_candidate.publisher_id
+),
 source_filtered_articles AS MATERIALIZED (
     SELECT candidate.id
-    FROM matching_sources s
-    JOIN articles candidate ON candidate.id = s.article_id
-    CROSS JOIN snapshot snapshot_state
+    FROM source_ranked_articles candidate
     LEFT JOIN analysis an ON an.article_id = candidate.id
-    WHERE (:country IS NOT NULL OR :tier IS NOT NULL)
-      AND candidate.is_duplicate = FALSE
-      AND (
-          snapshot_state.snapshot_collected_at IS NULL
-          OR (COALESCE(candidate.collected_at, candidate.published_at),
-              candidate.id) <=
-             (snapshot_state.snapshot_collected_at,
-              snapshot_state.snapshot_collected_article_id)
-      )
-      AND (
-          snapshot_state.snapshot_max_article_id IS NULL
-          OR candidate.id <= snapshot_state.snapshot_max_article_id
-      )
+    WHERE candidate.publisher_rank <= :candidate_limit
       AND (:topic IS NULL OR an.topics @> ARRAY[CAST(:topic AS TEXT)])
       AND (:entity_id IS NULL OR EXISTS (
           SELECT 1
@@ -106,8 +140,6 @@ source_filtered_articles AS MATERIALIZED (
       AND (:date_from IS NULL OR candidate.published_at >= CAST(:date_from AS DATE))
       AND (:date_to IS NULL OR candidate.published_at < CAST(:date_to AS DATE) + INTERVAL '1 day')
       AND (:language IS NULL OR candidate.language = :language)
-    ORDER BY candidate.published_at DESC, candidate.id DESC
-    LIMIT :candidate_limit
 ),
 matching_entity_ids AS MATERIALIZED (
     SELECT ce.id

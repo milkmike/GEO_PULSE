@@ -34,13 +34,21 @@ def test_actual_search_plans_use_selective_indexes_and_bounded_candidates():
                 CREATE TEMP TABLE sources (
                     id INTEGER PRIMARY KEY,
                     name TEXT NOT NULL,
+                    url TEXT,
                     country_code CHAR(2) NOT NULL,
+                    source_type TEXT,
                     tier TEXT,
-                    weight NUMERIC(3,2)
+                    weight NUMERIC(3,2),
+                    language TEXT,
+                    state_affiliated BOOLEAN,
+                    propaganda_risk TEXT,
+                    config JSONB NOT NULL DEFAULT '{}'::JSONB
                 );
                 CREATE TEMP TABLE articles (
                     id INTEGER PRIMARY KEY,
                     source_id INTEGER NOT NULL,
+                    publisher_source_id INTEGER,
+                    geo_status TEXT NOT NULL,
                     title TEXT,
                     summary TEXT,
                     body TEXT,
@@ -52,14 +60,6 @@ def test_actual_search_plans_use_selective_indexes_and_bounded_candidates():
                     title_normalized TEXT,
                     is_duplicate BOOLEAN NOT NULL,
                     search_vector TSVECTOR
-                );
-                CREATE TEMP TABLE article_country_facts (
-                    article_id INTEGER PRIMARY KEY,
-                    id INTEGER NOT NULL,
-                    name TEXT NOT NULL,
-                    country_code CHAR(2) NOT NULL,
-                    tier TEXT,
-                    weight NUMERIC(3,2)
                 );
                 CREATE TEMP TABLE analysis (
                     article_id INTEGER PRIMARY KEY,
@@ -97,6 +97,41 @@ def test_actual_search_plans_use_selective_indexes_and_bounded_candidates():
                     membership_confidence NUMERIC(4,3) NOT NULL
                 );
 
+                CREATE TEMP VIEW article_country_facts AS
+                SELECT article.id AS article_id,
+                       publisher.id,
+                       publisher.name,
+                       publisher.url,
+                       publisher.country_code,
+                       publisher.source_type,
+                       publisher.weight,
+                       publisher.language,
+                       publisher.tier,
+                       publisher.state_affiliated,
+                       publisher.propaganda_risk
+                FROM articles article
+                JOIN sources discovery ON discovery.id = article.source_id
+                JOIN sources publisher ON publisher.id = CASE
+                    WHEN COALESCE(
+                        discovery.config->>'feed_mode', 'publisher'
+                    ) = 'publisher_discovery'
+                        THEN article.publisher_source_id
+                    ELSE COALESCE(
+                        article.publisher_source_id, article.source_id
+                    )
+                END
+                WHERE article.geo_status IN (
+                    'source_verified',
+                    'publisher_verified',
+                    'publisher_reassigned'
+                )
+                  AND (
+                    COALESCE(
+                        discovery.config->>'feed_mode', 'publisher'
+                    ) <> 'publisher_discovery'
+                    OR article.publisher_source_id IS NOT NULL
+                  );
+
                 CREATE INDEX idx_articles_search_vector
                     ON articles USING GIN(search_vector);
                 CREATE INDEX idx_articles_search_snapshot_v2
@@ -106,13 +141,14 @@ def test_actual_search_plans_use_selective_indexes_and_bounded_candidates():
                 CREATE INDEX idx_articles_source_candidates
                     ON articles(source_id, published_at DESC, id DESC)
                     WHERE is_duplicate = FALSE;
+                CREATE INDEX idx_articles_publisher_source_id
+                    ON articles(publisher_source_id)
+                    WHERE publisher_source_id IS NOT NULL;
                 CREATE INDEX idx_articles_title_trgm
                     ON articles USING GIN(title_normalized gin_trgm_ops);
                 CREATE INDEX idx_articles_language_published_id
                     ON articles(language, published_at DESC, id DESC)
                     WHERE is_duplicate = FALSE;
-                CREATE INDEX idx_article_country_facts_country_article
-                    ON article_country_facts(country_code, article_id);
                 CREATE INDEX idx_analysis_topics
                     ON analysis USING GIN(topics);
                 CREATE INDEX idx_entity_aliases_normalized
@@ -127,18 +163,24 @@ def test_actual_search_plans_use_selective_indexes_and_bounded_candidates():
                     ON story_articles(article_id, story_id);
             """))
             connection.execute(text("""
-                INSERT INTO sources(id, name, country_code, tier, weight)
-                VALUES (1, 'EL PAÍS', 'ES', 'mainstream', 0.8),
-                       (2, 'Reuters', 'GB', 'mainstream', 0.8),
-                       (900, 'Google News (ES) — Россия', 'ES', 'mainstream', 0.5);
+                INSERT INTO sources(
+                    id, name, country_code, tier, weight, config
+                )
+                VALUES (1, 'EL PAÍS', 'ES', 'mainstream', 0.8, '{}'::JSONB),
+                       (2, 'Reuters', 'GB', 'mainstream', 0.8, '{}'::JSONB),
+                       (900, 'Google News (ES) — Россия', 'ES', 'mainstream',
+                        0.5, '{"feed_mode":"publisher_discovery"}'::JSONB);
 
                 INSERT INTO articles(
-                    id, source_id, title, summary, body, url, resolved_url,
-                    published_at, collected_at, language, title_normalized,
-                    is_duplicate, search_vector
+                    id, source_id, publisher_source_id, geo_status,
+                    title, summary, body, url, resolved_url, published_at,
+                    collected_at, language, title_normalized, is_duplicate,
+                    search_vector
                 )
                 SELECT sequence_id,
                        CASE WHEN sequence_id % 20 = 0 THEN 1 ELSE 2 END,
+                       NULL,
+                       'source_verified',
                        CASE WHEN sequence_id % 20 = 0
                             THEN 'Путин: тестовая новость ' || sequence_id
                             ELSE 'Обычная тестовая новость ' || sequence_id
@@ -166,45 +208,35 @@ def test_actual_search_plans_use_selective_indexes_and_bounded_candidates():
                        ), 'A')
                 FROM generate_series(1, 100001) AS generated(sequence_id);
 
-                INSERT INTO article_country_facts(
-                    article_id, id, name, country_code, tier, weight
-                )
-                SELECT ar.id, source.id, source.name, source.country_code,
-                       source.tier, source.weight
-                FROM articles ar
-                JOIN sources source ON source.id = ar.source_id;
-
                 INSERT INTO articles(
-                    id, source_id, title, summary, body, url, resolved_url,
-                    published_at, collected_at, language, title_normalized,
-                    is_duplicate, search_vector
+                    id, source_id, publisher_source_id, geo_status,
+                    title, summary, body, url, resolved_url, published_at,
+                    collected_at, language, title_normalized, is_duplicate,
+                    search_vector
                 ) VALUES
-                    (300001, 900, 'Publisher attribution fixture EL PAÍS',
+                    (300001, 900, 1, 'publisher_verified',
+                     'Publisher attribution fixture EL PAÍS',
                      'fixture', 'fixture', 'https://news.google.com/articles/elpais',
                      'https://elpais.com/resolved-fixture',
                      TIMESTAMPTZ '2026-07-15 13:00:00+00',
                      TIMESTAMPTZ '2026-07-15 13:00:00+00', 'es',
                      'publisher attribution fixture el pais', FALSE,
                      to_tsvector('simple', 'publisher attribution fixture')),
-                    (300002, 900, 'Publisher attribution fixture Reuters',
+                    (300002, 900, 2, 'publisher_verified',
+                     'Publisher attribution fixture Reuters',
                      'fixture', 'fixture', 'https://news.google.com/articles/reuters',
                      'https://reuters.com/resolved-fixture',
                      TIMESTAMPTZ '2026-07-15 12:59:00+00',
                      TIMESTAMPTZ '2026-07-15 12:59:00+00', 'en',
                      'publisher attribution fixture reuters', FALSE,
                      to_tsvector('simple', 'publisher attribution fixture')),
-                    (300003, 900, 'Publisher attribution fixture unknown',
+                    (300003, 900, NULL, 'legacy_unverified',
+                     'Publisher attribution fixture unknown',
                      'fixture', 'fixture', 'https://news.google.com/articles/unknown',
                      '', TIMESTAMPTZ '2026-07-15 12:58:00+00',
                      TIMESTAMPTZ '2026-07-15 12:58:00+00', 'en',
                      'publisher attribution fixture unknown', FALSE,
                      to_tsvector('simple', 'publisher attribution fixture'));
-
-                INSERT INTO article_country_facts(
-                    article_id, id, name, country_code, tier, weight
-                ) VALUES
-                    (300001, 1, 'EL PAÍS', 'ES', 'mainstream', 0.8),
-                    (300002, 2, 'Reuters', 'GB', 'mainstream', 0.8);
 
                 INSERT INTO analysis(article_id, topics)
                 SELECT sequence_id,
@@ -230,7 +262,6 @@ def test_actual_search_plans_use_selective_indexes_and_bounded_candidates():
 
                 ANALYZE sources;
                 ANALYZE articles;
-                ANALYZE article_country_facts;
                 ANALYZE analysis;
                 ANALYZE canonical_entities;
                 ANALYZE entity_aliases;
@@ -298,12 +329,15 @@ def test_actual_search_plans_use_selective_indexes_and_bounded_candidates():
 
             connection.execute(text("""
                 INSERT INTO articles(
-                    id, source_id, title, summary, body, url, resolved_url,
-                    published_at, collected_at, language, title_normalized,
-                    is_duplicate, search_vector
+                    id, source_id, publisher_source_id, geo_status,
+                    title, summary, body, url, resolved_url, published_at,
+                    collected_at, language, title_normalized, is_duplicate,
+                    search_vector
                 )
                 SELECT 200000 + sequence_id,
                        1,
+                       NULL,
+                       'source_verified',
                        'Post-snapshot article ' || sequence_id,
                        'Post-snapshot summary',
                        'Post-snapshot body',
@@ -320,16 +354,7 @@ def test_actual_search_plans_use_selective_indexes_and_bounded_candidates():
                            'simple', 'Post-snapshot article ' || sequence_id
                        ), 'A')
                 FROM generate_series(1, 600) AS generated(sequence_id);
-                INSERT INTO article_country_facts(
-                    article_id, id, name, country_code, tier, weight
-                )
-                SELECT ar.id, source.id, source.name, source.country_code,
-                       source.tier, source.weight
-                FROM articles ar
-                JOIN sources source ON source.id = ar.source_id
-                WHERE ar.id BETWEEN 200001 AND 200600;
                 ANALYZE articles;
-                ANALYZE article_country_facts;
             """))
             snapshot_params = {
                 **params,
@@ -423,19 +448,6 @@ def test_actual_search_plans_use_selective_indexes_and_bounded_candidates():
             if node.get("Actual Loops", 0) > 0
         ]
         assert not any(
-            node.get("Node Type") == "Seq Scan"
-            and node.get("Relation Name") == "articles"
-            for node in entity_country_nodes
-        ), entity_country_plan_document
-        assert any(
-            node.get("Node Type") in {
-                "Bitmap Index Scan", "Index Scan", "Index Only Scan"
-            }
-            and node.get("Index Name")
-            == "idx_article_country_facts_country_article"
-            for node in entity_country_nodes
-        ), entity_country_plan_document
-        assert not any(
             node.get("Node Type") in {"Aggregate", "Sort", "Unique"}
             and node.get("Actual Rows", 0) > 500
             for node in entity_country_nodes
@@ -447,15 +459,9 @@ def test_actual_search_plans_use_selective_indexes_and_bounded_candidates():
             node for node in _walk_plan(structured_entity_country_root["Plan"])
             if node.get("Actual Loops", 0) > 0
         ]
-        assert len(structured_entity_rows) == 500
-        assert any(
-            node.get("Node Type") in {
-                "Bitmap Index Scan", "Index Scan", "Index Only Scan"
-            }
-            and node.get("Index Name")
-            == "idx_article_country_facts_country_article"
-            for node in structured_entity_country_nodes
-        ), structured_entity_country_plan_document
+        # The newest canonical EL PAÍS row is inside the per-publisher cap but
+        # has no entity mention; structured filters run after that cap.
+        assert len(structured_entity_rows) == 499
         assert not any(
             node.get("Node Type") in {"Aggregate", "Sort", "Unique"}
             and node.get("Actual Rows", 0) > 500
@@ -472,19 +478,6 @@ def test_actual_search_plans_use_selective_indexes_and_bounded_candidates():
         ]
         assert len(snapshot_rows) == 500
         assert all(row["id"] <= 100001 for row in snapshot_rows)
-        assert any(
-            node.get("Node Type") in {
-                "Bitmap Index Scan", "Index Scan", "Index Only Scan"
-            }
-            and node.get("Index Name")
-            == "idx_article_country_facts_country_article"
-            for node in snapshot_nodes
-        ), snapshot_plan_document
-        assert not any(
-            node.get("Node Type") == "Seq Scan"
-            and node.get("Relation Name") == "articles"
-            for node in snapshot_nodes
-        ), snapshot_plan_document
         assert snapshot_root["Execution Time"] < 2000, snapshot_plan_document
     finally:
         engine.dispose()

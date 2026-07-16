@@ -519,11 +519,73 @@ def test_full_text_ranking_avoids_loading_stored_body_vectors():
 def test_search_sql_uses_verified_publishers_and_resolved_article_urls():
     compact_sql = " ".join(ARTICLE_SEARCH_SQL.split())
 
+    assert "matching_sources AS NOT MATERIALIZED" in compact_sql
     assert "FROM article_country_facts s" in compact_sql
     assert "JOIN article_country_facts s ON s.article_id = a.id" in compact_sql
     assert "JOIN sources s ON s.id = a.source_id" not in compact_sql
     assert "JOIN matching_sources s ON s.article_id = a.id" in compact_sql
     assert "COALESCE(NULLIF(a.resolved_url, ''), a.url) AS url" in compact_sql
+
+
+def test_country_candidates_keep_per_publisher_cap_before_structured_filters():
+    publisher_candidates_sql = ARTICLE_SEARCH_SQL[
+        ARTICLE_SEARCH_SQL.index("publisher_article_candidates AS"):
+        ARTICLE_SEARCH_SQL.index("matching_sources AS")
+    ]
+    ranked_sql = ARTICLE_SEARCH_SQL[
+        ARTICLE_SEARCH_SQL.index("source_ranked_articles AS"):
+        ARTICLE_SEARCH_SQL.index("source_filtered_articles AS")
+    ]
+    filtered_sql = ARTICLE_SEARCH_SQL[
+        ARTICLE_SEARCH_SQL.index("source_filtered_articles AS"):
+        ARTICLE_SEARCH_SQL.index("matching_entity_ids AS")
+    ]
+    compact_ranked_sql = " ".join(ranked_sql.split())
+
+    assert (
+        "ROW_NUMBER() OVER ( PARTITION BY s.id ORDER BY "
+        "candidate.published_at DESC, candidate.id DESC ) AS publisher_rank"
+        in compact_ranked_sql
+    )
+    assert "candidate.source_id = publisher_filter.id" in publisher_candidates_sql
+    assert (
+        "candidate.publisher_source_id = publisher_filter.id"
+        in publisher_candidates_sql
+    )
+    assert "JOIN LATERAL" in publisher_candidates_sql
+    assert (
+        "JOIN article_country_facts canonical_source "
+        "ON canonical_source.article_id = candidate.id"
+        in " ".join(publisher_candidates_sql.split())
+    )
+    assert "AND canonical_source.id = publisher_filter.id" in (
+        publisher_candidates_sql
+    )
+    assert "ORDER BY candidate.published_at DESC, candidate.id DESC" in (
+        publisher_candidates_sql
+    )
+    assert "LIMIT :candidate_limit" in publisher_candidates_sql
+    assert "snapshot_state.snapshot_collected_at IS NULL" in (
+        publisher_candidates_sql
+    )
+    assert "candidate.id <= snapshot_state.snapshot_max_article_id" in (
+        publisher_candidates_sql
+    )
+    assert "FROM publisher_article_candidates publisher_candidate" in ranked_sql
+    assert "JOIN article_country_facts s ON s.article_id = candidate.id" in ranked_sql
+    assert "AND s.id = publisher_candidate.publisher_id" in ranked_sql
+    assert "candidate.is_duplicate = FALSE" in publisher_candidates_sql
+    assert ":topic" not in ranked_sql
+    assert ":entity_id" not in ranked_sql
+    assert ":date_from" not in ranked_sql
+    assert ":date_to" not in ranked_sql
+    assert ":language" not in ranked_sql
+    assert "candidate.publisher_rank <= :candidate_limit" in filtered_sql
+    assert ":topic" in filtered_sql
+    assert ":entity_id" in filtered_sql
+    assert ":date_from" in filtered_sql
+    assert ":date_to" in filtered_sql
+    assert ":language" in filtered_sql
 
 
 def test_search_service_uses_parameterized_hybrid_candidates_and_deterministic_ranking():
@@ -677,16 +739,22 @@ def test_search_service_uses_parameterized_hybrid_candidates_and_deterministic_r
     ]
     assert "ORDER BY a.published_at DESC, a.id DESC" in language_candidates_sql
     assert "LIMIT :candidate_limit" in language_candidates_sql
-    source_candidates_sql = sql[
+    publisher_candidates_sql = sql[
+        sql.index("publisher_article_candidates AS"):
+        sql.index("matching_sources AS")
+    ]
+    source_filtered_sql = sql[
         sql.index("source_filtered_articles AS"):
         sql.index("matching_entity_ids AS")
     ]
-    assert source_candidates_sql.index(
-        "snapshot_state.snapshot_collected_at IS NULL"
-    ) < source_candidates_sql.index("LIMIT :candidate_limit")
-    assert source_candidates_sql.index(
-        "candidate.id <= snapshot_state.snapshot_max_article_id"
-    ) < source_candidates_sql.index("LIMIT :candidate_limit")
+    assert "snapshot_state.snapshot_collected_at IS NULL" in (
+        publisher_candidates_sql
+    )
+    assert "candidate.id <= snapshot_state.snapshot_max_article_id" in (
+        publisher_candidates_sql
+    )
+    assert "PARTITION BY s.id" in sql
+    assert "candidate.publisher_rank <= :candidate_limit" in source_filtered_sql
     structured_entity_sql = sql[
         sql.index("structured_entity_candidates AS"):
         sql.index("structured_topic_candidates AS")
