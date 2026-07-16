@@ -490,7 +490,53 @@ class ProjectionSession:
         return ScalarResult(True)
 
 
-def test_article_success_projects_1536_vector_from_authoritative_store_in_same_statement():
+def test_article_projection_matches_physical_column_to_persisted_profile_dimensions():
+    profile = EmbeddingProfile(
+        id=4,
+        profile_key="openrouter-profile",
+        provider="openrouter",
+        model="openai/text-embedding-3-small",
+        dimensions=1024,
+        task="text-matching",
+        version="v1",
+        active=True,
+    )
+    job = EmbeddingJob(
+        id=11,
+        profile_id=4,
+        object_type="article",
+        object_id="42",
+        content_hash="a" * 64,
+        attempts=1,
+    )
+    session = ProjectionSession()
+
+    assert EmbeddingStore().record_success(
+        session,
+        job=job,
+        profile=profile,
+        embedding=[0.25] * 1024,
+    )
+
+    assert "INSERT INTO content_embeddings" in session.statement
+    assert "UPDATE public.analysis AS legacy_analysis" in session.statement
+    assert "FROM stored" in session.statement
+    assert "RETURNING profile_id, object_type, object_id, embedding" in session.statement
+    assert "SET embedding = stored.embedding" in session.statement
+    assert "JOIN embedding_profiles" in session.statement
+    assert "JOIN pg_catalog.pg_attribute" in session.statement
+    assert "attrelid = 'public.analysis'::regclass" in session.statement
+    assert "attname = 'embedding'" in session.statement
+    assert "atttypmod = ep.dimensions" in session.statement
+    assert "active = TRUE" in session.statement
+    assert "1536" not in session.statement
+    assert ":dimensions" not in session.statement
+    assert "stored.object_type = 'article'" in session.statement
+    assert "legacy_analysis.article_id::text = stored.object_id" in session.statement
+    assert "dimensions" not in session.params
+
+
+def test_dimension_mismatch_keeps_authoritative_store_but_skips_legacy_projection():
     profile = EmbeddingProfile(
         id=4,
         profile_key="openrouter-profile",
@@ -518,18 +564,14 @@ def test_article_success_projects_1536_vector_from_authoritative_store_in_same_s
         embedding=[0.25] * 1536,
     )
 
-    assert "INSERT INTO content_embeddings" in session.statement
-    assert "UPDATE analysis" in session.statement
-    assert "FROM stored" in session.statement
-    assert "RETURNING profile_id, object_type, object_id, embedding" in session.statement
-    assert "SET embedding = stored.embedding" in session.statement
-    assert "JOIN embedding_profiles" in session.statement
-    assert "dimensions = 1536" in session.statement
-    assert "active = TRUE" in session.statement
-    assert ":dimensions" not in session.statement
-    assert "stored.object_type = 'article'" in session.statement
-    assert "analysis.article_id::text = stored.object_id" in session.statement
-    assert "dimensions" not in session.params
+    stored_end = session.statement.index("), projected AS")
+    stored_sql = session.statement[:stored_end]
+    projected_sql = session.statement[stored_end:]
+    assert "INSERT INTO content_embeddings" in stored_sql
+    assert "atttypmod = ep.dimensions" in projected_sql
+    assert "CAST(stored.embedding" not in projected_sql
+    assert "CAST(:embedding" not in projected_sql
+    assert "SELECT EXISTS(SELECT 1 FROM stored)" in projected_sql
 
 
 def test_prepare_embedding_jobs_command_exists():
@@ -1019,6 +1061,19 @@ def test_openrouter_workers_accept_https_proxy_without_exposing_public_api():
     for service_name in ("analyzer", "briefs", "threads"):
         assert services[service_name]["environment"]["HTTPS_PROXY"] == "${HTTPS_PROXY:-}"
     assert "HTTPS_PROXY" not in services["api"]["environment"]
+
+
+def test_embedding_workers_receive_openrouter_dimension_override_without_public_api():
+    import yaml
+
+    root = Path(__file__).resolve().parents[1]
+    for filename in ("docker-compose.yml", "docker-compose.v2-dev.yml"):
+        services = yaml.safe_load((root / filename).read_text())["services"]
+        for service_name in ("analyzer", "threads"):
+            assert services[service_name]["environment"][
+                "OPENROUTER_EMBEDDING_DIMENSIONS"
+            ] == "${OPENROUTER_EMBEDDING_DIMENSIONS:-1536}"
+        assert "OPENROUTER_EMBEDDING_DIMENSIONS" not in services["api"]["environment"]
 
 
 def test_embedding_indexer_is_not_scheduled_in_compose():

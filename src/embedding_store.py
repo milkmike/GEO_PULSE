@@ -490,16 +490,20 @@ class EmbeddingStore:
                             updated_at = now()
                         RETURNING profile_id, object_type, object_id, embedding
                     ), projected AS (
-                        UPDATE analysis
+                        UPDATE public.analysis AS legacy_analysis
                         SET embedding = stored.embedding
                         FROM stored
                         JOIN embedding_profiles ep
                           ON ep.id = stored.profile_id
-                         AND ep.dimensions = 1536
                          AND ep.active = TRUE
+                        JOIN pg_catalog.pg_attribute legacy_embedding
+                          ON legacy_embedding.attrelid = 'public.analysis'::regclass
+                         AND legacy_embedding.attname = 'embedding'
+                         AND legacy_embedding.atttypmod = ep.dimensions
+                         AND legacy_embedding.attisdropped = FALSE
                         WHERE stored.object_type = 'article'
-                          AND analysis.article_id::text = stored.object_id
-                        RETURNING analysis.article_id
+                          AND legacy_analysis.article_id::text = stored.object_id
+                        RETURNING legacy_analysis.article_id
                     )
                     SELECT EXISTS(SELECT 1 FROM stored),
                            (SELECT COUNT(*) FROM projected) AS projected_count

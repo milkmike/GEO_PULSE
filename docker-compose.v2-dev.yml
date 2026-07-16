@@ -38,6 +38,7 @@ services:
     environment:
       DATABASE_URL: postgresql://thermo:${DB_PASSWORD}@db:5432/cis_thermometer
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      OPENROUTER_EMBEDDING_DIMENSIONS: ${OPENROUTER_EMBEDDING_DIMENSIONS:-1536}
       REDIS_URL: redis://redis:6379/0
     depends_on:
       redis:
@@ -67,6 +68,7 @@ services:
     environment:
       DATABASE_URL: postgresql://thermo:${DB_PASSWORD}@db:5432/cis_thermometer
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      OPENROUTER_EMBEDDING_DIMENSIONS: ${OPENROUTER_EMBEDDING_DIMENSIONS:-1536}
     restart: unless-stopped
     networks:
       - v2
