@@ -1527,15 +1527,29 @@ def build_threads():
     logger.info("═══ Threads v2 build complete ═══")
 
 
-def main():
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="GeoPulse — Narrative Threads v2")
     parser.add_argument("--loop", action="store_true")
     parser.add_argument("--interval", type=int, default=3600)
+    parser.add_argument(
+        "--recent-days",
+        type=int,
+        help="Run only the additive bounded recent thread/story rebuild",
+    )
+    return parser
+
+
+def main():
+    parser = build_parser()
     args = parser.parse_args()
+    if args.loop and args.recent_days is not None:
+        parser.error("--loop and --recent-days cannot be used together")
 
     wait_for_db()
 
-    if args.loop:
+    if args.recent_days is not None:
+        rebuild_recent_threads_and_stories(args.recent_days)
+    elif args.loop:
         logger.info(f"Starting threads v2 (interval: {args.interval}s)")
         build_threads()
         while True:

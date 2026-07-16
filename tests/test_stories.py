@@ -809,6 +809,124 @@ def test_scoped_story_build_excludes_pre_window_article_memberships(monkeypatch)
     assert observed["kwargs"]["non_destructive"] is True
 
 
+def test_build_threads_recent_days_routes_only_to_bounded_rebuild(monkeypatch):
+    import scripts.build_threads as build_threads_script
+
+    calls = []
+    monkeypatch.setattr(build_threads_script, "wait_for_db", lambda: calls.append("wait"))
+    monkeypatch.setattr(
+        build_threads_script,
+        "rebuild_recent_threads_and_stories",
+        lambda days: calls.append(("recent", days)),
+    )
+    monkeypatch.setattr(
+        build_threads_script,
+        "build_threads",
+        lambda: calls.append("unbounded"),
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        ["build_threads.py", "--recent-days", "30"],
+    )
+
+    build_threads_script.main()
+
+    assert calls == ["wait", ("recent", 30)]
+
+
+def test_story_pipeline_audit_is_read_only_and_has_stable_json_keys(monkeypatch):
+    import scripts.audit_story_pipeline as audit
+
+    left_article = StoryArticle(
+        1,
+        "AZ",
+        "AZ event",
+        None,
+        NOW,
+        "AZ source",
+        entity_ids=frozenset({"entity-route"}),
+    )
+    right_article = StoryArticle(
+        2,
+        "KZ",
+        "KZ event",
+        None,
+        NOW,
+        "KZ source",
+        entity_ids=frozenset({"entity-route"}),
+    )
+    candidates = [
+        replace(candidate("AZ"), articles=(left_article,)),
+        replace(candidate("KZ"), articles=(right_article,)),
+    ]
+
+    class ReadOnlyAuditSession:
+        def __init__(self):
+            self.statements = []
+
+        def execute(self, statement, params=None):
+            sql = str(statement)
+            self.statements.append(sql)
+            assert sql.lstrip().upper().startswith(("SELECT", "WITH", "/*"))
+            assert not any(
+                token in sql.upper()
+                for token in ("INSERT ", "UPDATE ", "DELETE ", "MERGE ", "CALL ")
+            )
+            if "audit_embedding_coverage" in sql:
+                return FakeResult(row=SimpleNamespace(embedded_articles=1))
+            if "audit_country_mismatches" in sql:
+                return FakeResult(rows=[SimpleNamespace(
+                    thread_id=99,
+                    article_id=199,
+                    thread_country="AZ",
+                    article_country="GB",
+                )])
+            if "lifecycle = 'resolved'" in sql:
+                return FakeResult(rows=[])
+            raise AssertionError(f"Unexpected audit query: {sql}")
+
+        def commit(self):
+            raise AssertionError("read-only audit must not commit")
+
+    session = ReadOnlyAuditSession()
+    monkeypatch.setattr(audit, "fetch_story_candidates", lambda active: candidates)
+
+    report = audit.run_audit(session, recent_days=30, now=NOW)
+
+    assert set(report) == {
+        "candidate_totals",
+        "canonical_entity_coverage",
+        "embedding_coverage",
+        "pair_rejection_reasons",
+        "proposed_clusters",
+        "same_thread_defects",
+        "country_mismatches",
+    }
+    assert report["candidate_totals"] == {
+        "scope_days": 30,
+        "candidates": 2,
+        "threads": 2,
+        "countries": 2,
+        "articles": 2,
+    }
+    assert report["canonical_entity_coverage"]["articles_with_entities"] == 2
+    assert report["embedding_coverage"]["articles_with_embeddings"] == 1
+    assert report["pair_rejection_reasons"]["accepted"] == 1
+    assert report["proposed_clusters"] == [{
+        "thread_ids": [1, 2],
+        "countries": ["AZ", "KZ"],
+        "article_ids": [1, 2],
+    }]
+    assert report["same_thread_defects"] == []
+    assert report["country_mismatches"] == [{
+        "thread_id": 99,
+        "article_id": 199,
+        "thread_country": "AZ",
+        "article_country": "GB",
+    }]
+    assert session.statements
+
+
 class UnchangedPersistenceSession(PersistenceSession):
     def __init__(self, cluster):
         super().__init__()
