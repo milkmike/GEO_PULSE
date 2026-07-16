@@ -907,6 +907,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_CHECKPOINT,
         help="Durable JSON checkpoint path used only in --apply mode",
     )
+    parser.add_argument(
+        "--stage",
+        action="append",
+        choices=tuple(DEFAULT_STAGES),
+        help="Run only this stage; repeat to select multiple stages",
+    )
     return parser
 
 
@@ -917,10 +923,16 @@ def main() -> None:
     )
     args = build_parser().parse_args()
     wait_for_db()
+    selected_stages = (
+        {stage_name: DEFAULT_STAGES[stage_name] for stage_name in args.stage}
+        if args.stage
+        else None
+    )
     summary = run_backfill(
         apply=args.apply,
         batch_size=args.batch_size,
         checkpoint_path=args.checkpoint,
+        stages=selected_stages,
     )
     print(json.dumps(summary, ensure_ascii=False, sort_keys=True, default=_json_default))
 

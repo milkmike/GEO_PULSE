@@ -18,6 +18,7 @@ from src.knowledge import (
     registry_entity,
     resolve_alias,
     stable_node_id,
+    upsert_analysis_mentions,
 )
 from scripts.backfill_knowledge import run_backfill
 from src.api.routes.entities import (
@@ -685,6 +686,49 @@ def test_registry_seed_upserts_by_deterministic_id():
     ]
     assert canonical_upserts
     assert all("ON CONFLICT (id)" in statement for statement in canonical_upserts)
+
+
+class MentionUpsertSession:
+    def __init__(self):
+        self.calls = []
+
+    def execute(self, statement, params):
+        sql = str(statement)
+        self.calls.append((sql, params))
+        if "INSERT INTO canonical_entities" in sql:
+            return ScalarResult(params["id"])
+        return ScalarResult(None)
+
+
+def test_analysis_mentions_normalize_through_registry_and_repeat_idempotently():
+    session = MentionUpsertSession()
+
+    first = upsert_analysis_mentions(
+        session,
+        analysis_id=77,
+        article_id=42,
+        entities={"entities": ["PUTIN", "unknown", "putin"]},
+    )
+    second = upsert_analysis_mentions(
+        session,
+        analysis_id=77,
+        article_id=42,
+        entities=["putin"],
+    )
+
+    mention_calls = [
+        (sql, params)
+        for sql, params in session.calls
+        if "INSERT INTO article_entity_mentions" in sql
+    ]
+    assert first == 1
+    assert second == 1
+    assert len(mention_calls) == 2
+    assert all("ON CONFLICT (article_id, entity_id, extractor)" in sql for sql, _ in mention_calls)
+    assert {params["entity_id"] for _, params in mention_calls} == {
+        registry_entity("putin").id
+    }
+    assert all('"analysis_id": 77' in params["evidence"] for _, params in mention_calls)
 
 
 def test_main_app_registers_entity_routes():

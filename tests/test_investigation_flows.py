@@ -364,6 +364,88 @@ def test_backfill_cli_is_dry_run_by_default_and_apply_is_explicit():
     assert build_parser().parse_args(["--apply"]).apply is True
 
 
+def test_analysis_live_write_flushes_id_before_canonical_mentions(monkeypatch):
+    import scripts.analyze as analyze
+
+    article = SimpleNamespace(id=501)
+
+    class QueryResult:
+        def fetchone(self):
+            return article
+
+    class QuerySession:
+        def execute(self, statement, params):
+            return QueryResult()
+
+    events = []
+
+    class SaveSession:
+        def add(self, analysis):
+            self.analysis = analysis
+            events.append(("add", analysis.id))
+
+        def flush(self):
+            self.analysis.id = 91
+            events.append(("flush", self.analysis.id))
+
+    sessions = iter([QuerySession(), SaveSession()])
+
+    @contextmanager
+    def session_factory():
+        yield next(sessions)
+
+    def record_mentions(session, analysis_id, article_id, entities):
+        events.append(("mentions", analysis_id, article_id, entities))
+        return 1
+
+    monkeypatch.setattr(analyze, "get_session", session_factory)
+    monkeypatch.setattr(
+        analyze,
+        "_analyze_one",
+        lambda row: {
+            "article_id": row.id,
+            "is_relevant": True,
+            "entities": ["putin"],
+        },
+    )
+    monkeypatch.setattr(analyze, "upsert_analysis_mentions", record_mentions)
+
+    assert analyze._analyze_article_by_id(501) is True
+    assert events == [
+        ("add", None),
+        ("flush", 91),
+        ("mentions", 91, 501, ["putin"]),
+    ]
+
+
+def test_backfill_cli_routes_only_repeated_selected_stages(monkeypatch, tmp_path):
+    import scripts.backfill_investigation_data as backfill
+
+    captured = {}
+    monkeypatch.setattr(backfill, "wait_for_db", lambda: None)
+    monkeypatch.setattr(
+        backfill,
+        "run_backfill",
+        lambda **kwargs: captured.update(kwargs) or {"ok": True},
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "backfill_investigation_data.py",
+            "--stage",
+            "knowledge_mentions",
+            "--stage",
+            "signal_evidence",
+            "--checkpoint",
+            str(tmp_path / "checkpoint.json"),
+        ],
+    )
+
+    backfill.main()
+
+    assert list(captured["stages"]) == ["knowledge_mentions", "signal_evidence"]
+
+
 def test_backfill_command_is_packaged_in_the_analyzer_image():
     dockerfile = (ROOT / "Dockerfile.analyzer").read_text(encoding="utf-8")
 

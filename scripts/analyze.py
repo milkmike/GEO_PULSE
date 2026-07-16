@@ -11,6 +11,7 @@ from src.config import OPENROUTER_API_KEY
 from src.db import get_session, wait_for_db, Analysis
 from src.embeddings import generate_embeddings_batch, prepare_embedding_text
 from src.entities import match_entities
+from src.knowledge import upsert_analysis_mentions
 from src.pipeline.filter import is_relevant
 from src.pipeline.sentiment import analyze_sentiment
 
@@ -29,6 +30,31 @@ try:
     _redis_available = True
 except ImportError:
     logger.info("Redis queue module not available, running without queue")
+
+
+def _save_analysis(session, result: dict) -> Analysis:
+    """Flush one analysis and dual-write mentions in the same transaction."""
+
+    analysis = Analysis(**result)
+    session.add(analysis)
+    session.flush()
+    try:
+        upsert_analysis_mentions(
+            session,
+            analysis.id,
+            analysis.article_id,
+            analysis.entities,
+        )
+    except Exception:
+        logger.exception(
+            "Canonical mention live-write failed",
+            extra={
+                "analysis_id": analysis.id,
+                "article_id": analysis.article_id,
+            },
+        )
+        raise
+    return analysis
 
 
 def _analyze_one(row) -> dict | None:
@@ -123,8 +149,7 @@ def _analyze_article_by_id(article_id: int) -> bool:
     result = _analyze_one(row)
     if result:
         with get_session() as session:
-            analysis = Analysis(**result)
-            session.add(analysis)
+            _save_analysis(session, result)
         return True
     return False
 
@@ -204,13 +229,13 @@ def analyze_new_articles(batch_size: int = 100):
     with get_session() as session:
         for r in results:
             try:
-                analysis = Analysis(**r)
-                session.add(analysis)
+                _save_analysis(session, r)
                 saved += 1
                 if r.get("is_relevant"):
                     saved_article_ids.append(r["article_id"])
             except Exception as e:
                 logger.error(f"  Save error for article {r['article_id']}: {e}")
+                raise
 
     logger.info(f"Analyzed {saved}/{len(rows)} articles")
 
