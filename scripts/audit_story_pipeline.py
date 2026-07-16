@@ -14,6 +14,7 @@ from sqlalchemy import text
 
 from src.db import SessionLocal, wait_for_db
 from src.stories import (
+    _filter_candidate_event_articles,
     _scope_candidate_articles,
     cluster_story_candidates,
     derive_reactivation_pairs,
@@ -76,7 +77,9 @@ def run_audit(
             published_after=scope_start,
         )
         if scoped is not None:
-            candidates.append(scoped)
+            filtered = _filter_candidate_event_articles(scoped)
+            if filtered is not None:
+                candidates.append(filtered)
 
     article_ids = sorted({
         article_id

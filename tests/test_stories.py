@@ -27,6 +27,7 @@ from src.stories import (
     score_story_match,
     should_merge,
     transition_lifecycle,
+    _filter_candidate_event_articles,
     _story_slug,
 )
 
@@ -227,6 +228,80 @@ def test_concrete_event_gate_keeps_existing_fourteen_day_time_window():
     assert similarity.gap_days > 14
     assert not should_merge(similarity)
     assert "time_window_exceeded" in merge_rejection_reasons(similarity)
+
+
+def test_dirty_thread_retains_only_articles_confirming_candidate_event():
+    event_key = "заседание совета консульских служб снг"
+    matching = StoryArticle(
+        101,
+        "TJ",
+        "Совет консульских служб провёл заседание",
+        None,
+        NOW,
+        "Asia Plus",
+        action_level=4,
+        event_key=event_key,
+        entity_ids=frozenset({"entity-cis"}),
+        topics=frozenset({"diplomacy"}),
+        source_id=11,
+    )
+    unrelated = StoryArticle(
+        102,
+        "TJ",
+        "Поставки пиломатериалов временно ограничены",
+        None,
+        NOW - timedelta(hours=1),
+        "Other source",
+        action_level=6,
+        event_key="ограничение поставок пиломатериалов из россии",
+        entity_ids=frozenset({"entity-russia"}),
+        topics=frozenset({"trade"}),
+        source_id=12,
+    )
+    dirty = replace(
+        candidate("TJ", event_key=event_key),
+        thread_id=501,
+        article_ids=(101, 102),
+        articles=(matching, unrelated),
+        entities=matching.entity_ids | unrelated.entity_ids,
+        topics=matching.topics | unrelated.topics,
+        sources=frozenset({matching.source_name, unrelated.source_name}),
+        source_ids=frozenset({11, 12}),
+        first_seen=unrelated.published_at,
+        last_seen=matching.published_at,
+        highest_action_level=6,
+    )
+
+    filtered = _filter_candidate_event_articles(dirty)
+
+    assert filtered is not None
+    assert filtered.article_ids == (101,)
+    assert filtered.articles == (matching,)
+    assert filtered.entities == frozenset({"entity-cis"})
+    assert filtered.topics == frozenset({"diplomacy"})
+    assert filtered.sources == frozenset({"Asia Plus"})
+    assert filtered.source_ids == frozenset({11})
+    assert filtered.first_seen == NOW
+    assert filtered.last_seen == NOW
+    assert filtered.highest_action_level == 4
+
+
+def test_candidate_without_confirming_article_event_is_dropped():
+    dirty = replace(
+        candidate("TJ", event_key="заседание совета консульских служб снг"),
+        articles=(StoryArticle(
+            102,
+            "TJ",
+            "Поставки пиломатериалов временно ограничены",
+            None,
+            NOW,
+            "Other source",
+            event_key="ограничение поставок пиломатериалов из россии",
+            source_id=12,
+        ),),
+    )
+
+    assert _filter_candidate_event_articles(dirty) is None
 
 
 def test_identical_event_key_does_not_double_count_title_similarity():
@@ -979,8 +1054,10 @@ def test_scoped_story_build_excludes_pre_window_article_memberships(monkeypatch)
             url=None,
             published_at=scope_start - timedelta(seconds=1),
             source_name="Old source",
+            event_key="переговоры о транскаспийском маршруте",
             entity_ids=frozenset({"old-entity"}),
             topics=frozenset({"old-topic"}),
+            source_id=1,
         )
         recent_article = StoryArticle(
             article_id=article_id,
@@ -989,8 +1066,10 @@ def test_scoped_story_build_excludes_pre_window_article_memberships(monkeypatch)
             url=None,
             published_at=scope_start,
             source_name="Recent source",
+            event_key="переговоры о транскаспийском маршруте",
             entity_ids=frozenset({"recent-entity"}),
             topics=frozenset({"recent-topic"}),
+            source_id=2,
         )
         return replace(
             candidate(country),
@@ -1006,6 +1085,7 @@ def test_scoped_story_build_excludes_pre_window_article_memberships(monkeypatch)
     candidates = [
         scoped_candidate("AZ", 41, 141),
         scoped_candidate("KZ", 42, 142),
+        scoped_candidate("UZ", 43, 143),
     ]
     observed = {}
 
@@ -1040,26 +1120,30 @@ def test_scoped_story_build_excludes_pre_window_article_memberships(monkeypatch)
     result = build_stories(
         object(),
         now=NOW,
-        candidate_thread_ids=frozenset({41, 42}),
+        candidate_thread_ids=frozenset({41, 42, 43}),
         candidate_article_start=scope_start,
         refresh_lifecycles=False,
         minimum_existing_last_seen=scope_start,
         non_destructive=True,
     )
 
-    assert result.article_memberships == 2
-    assert [item.article_ids for item in observed["candidates"]] == [(141,), (142,)]
+    assert result.article_memberships == 3
+    assert [item.article_ids for item in observed["candidates"]] == [
+        (141,),
+        (142,),
+        (143,),
+    ]
     assert all(
         item.entities == frozenset({"recent-entity"})
         and item.topics == frozenset({"recent-topic"})
         and item.sources == frozenset({"Recent source"})
-        and item.source_ids == frozenset()
+        and item.source_ids == frozenset({2})
         for item in observed["candidates"]
     )
     assert observed["kwargs"]["minimum_existing_last_seen"] == scope_start
     assert observed["kwargs"]["non_destructive"] is True
     assert observed["fetch_kwargs"] == {
-        "thread_ids": frozenset({41, 42}),
+        "thread_ids": frozenset({41, 42, 43}),
         "published_after": scope_start,
     }
 
@@ -1106,6 +1190,7 @@ def test_story_pipeline_audit_is_read_only_and_has_stable_json_keys(monkeypatch)
         None,
         NOW,
         "AZ source",
+        event_key="переговоры о транскаспийском маршруте",
         entity_ids=frozenset({"entity-route"}),
     )
     right_article = StoryArticle(
@@ -1115,6 +1200,7 @@ def test_story_pipeline_audit_is_read_only_and_has_stable_json_keys(monkeypatch)
         None,
         NOW,
         "KZ source",
+        event_key="переговоры о транскаспийском маршруте",
         entity_ids=frozenset({"entity-route"}),
     )
     candidates = [
@@ -3153,12 +3239,36 @@ def test_denied_reactivation_uses_new_activity_epoch_and_is_idempotent():
 def test_background_builder_derives_reactivation_pairs_from_resolved_story(monkeypatch):
     import src.stories as stories_module
 
-    old = candidate(
-        "AZ",
-        first_seen=NOW - timedelta(days=20),
-        last_seen=NOW - timedelta(days=15),
+    old = replace(
+        candidate(
+            "AZ",
+            first_seen=NOW - timedelta(days=20),
+            last_seen=NOW - timedelta(days=15),
+        ),
+        articles=(StoryArticle(
+            1,
+            "AZ",
+            "Переговоры о транскаспийском маршруте",
+            None,
+            NOW - timedelta(days=15),
+            "AZ source",
+            event_key="переговоры о транскаспийском маршруте",
+            entity_ids=frozenset({"entity-route"}),
+        ),),
     )
-    new = candidate("KZ", first_seen=NOW, last_seen=NOW)
+    new = replace(
+        candidate("KZ", first_seen=NOW, last_seen=NOW),
+        articles=(StoryArticle(
+            2,
+            "KZ",
+            "Переговоры о транскаспийском маршруте",
+            None,
+            NOW,
+            "KZ source",
+            event_key="переговоры о транскаспийском маршруте",
+            entity_ids=frozenset({"entity-route"}),
+        ),),
+    )
     observed = {}
 
     class ResolvedPairSession:

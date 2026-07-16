@@ -68,6 +68,7 @@ class StoryArticle:
     event_key: str | None = None
     entity_ids: frozenset[str] = field(default_factory=frozenset)
     topics: frozenset[str] = field(default_factory=frozenset)
+    source_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -884,6 +885,7 @@ def fetch_story_candidates(
                 event_key=article_event_key,
                 entity_ids=article_entities,
                 topics=article_topics,
+                source_id=int(_value(row, "publisher_source_id")),
             ))
         first_row = thread_rows[0]
         dates = [article.published_at for article in articles if article.published_at]
@@ -1876,6 +1878,64 @@ def _scope_candidate_articles(
     )
 
 
+def _filter_candidate_event_articles(
+    candidate: StoryCandidate,
+) -> StoryCandidate | None:
+    """Keep only articles that confirm the candidate's concrete event."""
+
+    confirming_articles = tuple(
+        article
+        for article in candidate.articles
+        if _specific_event_key(article.event_key)
+        and trigram_similarity(article.event_key, candidate.event_key)
+        >= CONCRETE_EVENT_MATCH_THRESHOLD
+    )
+    if not confirming_articles:
+        return None
+    activity_dates = [
+        _as_utc(article.published_at)
+        for article in confirming_articles
+        if article.published_at is not None
+    ]
+    if not activity_dates:
+        return None
+    return replace(
+        candidate,
+        article_ids=tuple(sorted({
+            article.article_id for article in confirming_articles
+        })),
+        entities=frozenset(
+            entity_id
+            for article in confirming_articles
+            for entity_id in article.entity_ids
+        ),
+        topics=frozenset(
+            topic
+            for article in confirming_articles
+            for topic in article.topics
+        ),
+        sources=frozenset(
+            article.source_name for article in confirming_articles
+        ),
+        source_ids=frozenset(
+            article.source_id
+            for article in confirming_articles
+            if article.source_id is not None
+        ),
+        first_seen=min(activity_dates),
+        last_seen=max(activity_dates),
+        highest_action_level=max(
+            article.action_level for article in confirming_articles
+        ),
+        articles=confirming_articles,
+        semantic_matches=(
+            candidate.semantic_matches
+            if len(confirming_articles) == len(candidate.articles)
+            else ()
+        ),
+    )
+
+
 def build_stories(
     session: Any,
     *,
@@ -1916,6 +1976,11 @@ def build_stories(
                 )
             ) is not None
         ]
+    candidates = [
+        filtered
+        for candidate in candidates
+        if (filtered := _filter_candidate_event_articles(candidate)) is not None
+    ]
     effective_reactivation_pairs = frozenset(
         set(reactivation_pairs) | set(derive_reactivation_pairs(session, candidates))
     )

@@ -1329,6 +1329,11 @@ def test_scoped_story_build_filters_candidates_and_skips_global_lifecycle(monkey
         return [old, recent]
 
     monkeypatch.setattr(stories, "fetch_story_candidates", fake_fetch)
+    monkeypatch.setattr(
+        stories,
+        "_filter_candidate_event_articles",
+        lambda candidate: candidate,
+    )
 
     def fake_pairs(session, candidates):
         observed["pair_candidates"] = list(candidates)

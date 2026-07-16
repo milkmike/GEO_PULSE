@@ -28,6 +28,7 @@ from src.engine.explanations import (
 )
 from src.knowledge import KnowledgeBackfillService
 from src.stories import (
+    _filter_candidate_event_articles,
     cluster_story_candidates,
     derive_reactivation_pairs,
     fetch_story_candidates,
@@ -279,7 +280,11 @@ def _load_story_candidates(
     session: Any,
     snapshot_max_thread_id: int | None = None,
 ) -> tuple[list[Any], frozenset[tuple[int, int]], str, int]:
-    candidates = fetch_story_candidates(session)
+    candidates = [
+        filtered
+        for candidate in fetch_story_candidates(session)
+        if (filtered := _filter_candidate_event_articles(candidate)) is not None
+    ]
     if snapshot_max_thread_id is None:
         snapshot_max_thread_id = max(
             (int(item.thread_id) for item in candidates),
