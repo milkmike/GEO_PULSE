@@ -103,7 +103,12 @@ def load_story_candidate_articles(
                        COUNT(*) AS candidate_count,
                        COUNT(*) FILTER (WHERE has_active_ready) AS ready_count,
                        COUNT(*) FILTER (WHERE has_active_ready)::numeric
-                           / NULLIF(COUNT(*), 0) AS coverage_ratio
+                           / NULLIF(COUNT(*), 0) AS coverage_ratio,
+                       GREATEST(
+                           CEIL(0.30 * COUNT(*))::integer
+                               - COUNT(*) FILTER (WHERE has_active_ready)::integer,
+                           0
+                       ) AS needed_count
                 FROM candidate_articles
                 GROUP BY thread_id
             ), thread_events AS (
@@ -137,24 +142,30 @@ def load_story_candidate_articles(
                        COUNT(DISTINCT right_thread_id) AS cross_country_peer_count
                 FROM cross_country_pairs
                 GROUP BY left_thread_id
-            ), ranked AS (
+            ), missing_candidates AS (
                 SELECT candidate.*,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY candidate.thread_id
+                           ORDER BY candidate.published_at DESC,
+                                    candidate.id DESC
+                       ) AS missing_rank
+                FROM candidate_articles candidate
+                WHERE candidate.has_active_ready = FALSE
+            ), ranked AS (
+                SELECT missing.*,
                        coverage.candidate_count,
                        coverage.ready_count,
                        coverage.coverage_ratio,
+                       coverage.needed_count,
                        COALESCE(peers.cross_country_peer_count, 0)
-                           AS cross_country_peer_count,
-                       ROW_NUMBER() OVER (
-                           PARTITION BY candidate.thread_id
-                           ORDER BY candidate.has_active_ready ASC,
-                                    candidate.published_at DESC,
-                                    candidate.id DESC
-                       ) AS article_rank
-                FROM candidate_articles candidate
+                           AS cross_country_peer_count
+                FROM missing_candidates missing
                 JOIN thread_coverage coverage
-                  ON coverage.thread_id = candidate.thread_id
+                  ON coverage.thread_id = missing.thread_id
                 LEFT JOIN peer_counts peers
-                  ON peers.thread_id = candidate.thread_id
+                  ON peers.thread_id = missing.thread_id
+                WHERE coverage.needed_count > 0
+                  AND missing.missing_rank <= coverage.needed_count
             )
             SELECT ranked.id, ranked.title, ranked.body, ranked.summary,
                    ranked.thread_id, ranked.country_code,
@@ -172,12 +183,12 @@ def load_story_candidate_articles(
                    ) AS ready_content_hashes
             FROM ranked
             ORDER BY (ranked.cross_country_peer_count > 0) DESC,
-                     ranked.coverage_ratio ASC,
+                     ranked.needed_count ASC,
                      ranked.cross_country_peer_count DESC,
-                     ranked.article_rank ASC,
+                     ranked.thread_id ASC,
+                     ranked.missing_rank ASC,
                      ranked.published_at DESC,
-                     ranked.id DESC,
-                     ranked.thread_id ASC
+                     ranked.id DESC
             LIMIT :limit
             """
         ),

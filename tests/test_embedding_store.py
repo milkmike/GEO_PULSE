@@ -715,12 +715,23 @@ def test_story_candidate_loader_uses_canonical_country_and_bounded_priority():
     assert "t.article_count > 0" in session.statement
     assert "a.published_at >= now() - make_interval(days => :days)" in session.statement
     assert "cross_country_peer_count > 0" in session.statement
-    assert "coverage_ratio ASC" in session.statement
+    assert "CEIL(0.30 * COUNT(*))" in session.statement
+    assert "AS needed_count" in session.statement
+    assert "WHERE candidate.has_active_ready = FALSE" in session.statement
+    assert "missing.missing_rank <= coverage.needed_count" in session.statement
     assert "cross_country_peer_count DESC" in session.statement
-    assert "article_rank ASC" in session.statement
+    assert "needed_count ASC" in session.statement
+    assert "missing_rank ASC" in session.statement
     assert "LIMIT :limit" in session.statement
     assert "SELECT ce.embedding" not in session.statement
     assert session.params == {"days": 14, "limit": 8000, "profile_id": 4}
+
+    useful = session.statement.index("cross_country_peer_count > 0")
+    cheapest = session.statement.index("needed_count ASC")
+    peers = session.statement.index("cross_country_peer_count DESC")
+    thread = session.statement.index("thread_id ASC")
+    article = session.statement.index("missing_rank ASC")
+    assert useful < cheapest < peers < thread < article
 
 
 def test_prepare_embedding_jobs_dry_run_does_not_mutate_profiles_or_jobs():
