@@ -100,6 +100,37 @@ removed afterward. The post-fix Task 6 + stories/search integration run reports
 `140 passed, 2 opt-in PostgreSQL cases skipped, 2 pre-existing warnings in
 1.47s`.
 
+### Live-writer invariant fix
+
+A production dry-run exposed that the original final invariant compared full
+database counts and full-article provenance with strict equality. Collector,
+analyzer, and story writers can legitimately append rows while this long
+backfill runs, so those appends caused a false failure after otherwise
+successful work.
+
+The new regressions were run against the old invariant implementation. The
+same-run append case failed with
+`backfill changed protected row counts or provenance`, and the checkpoint
+resume case failed because checkpoint v2 had no `max_article_id`; the four
+negative controls still passed. Result: `2 failed, 4 passed`.
+
+The starting snapshot now captures an article-ID high-water mark, total row
+counts, the protected-prefix row count, and a provenance digest restricted to
+`id <= max_article_id`. The final snapshot reuses that original high-water,
+including after checkpoint resume. Article, analysis, and story-membership
+totals may grow but may not decrease. Protected-prefix deletion still fails
+even when a new article compensates the total count, and any `source_id`,
+`external_id`, or `url` rewrite in the protected prefix still changes the
+digest and fails closed.
+
+Post-fix focused concurrency result: `6 passed, 10 deselected in 0.15s`.
+Full Task 6 result: `14 passed, 2 opt-in PostgreSQL cases skipped in 0.14s`.
+The existing real PostgreSQL 16 partial-unique-index gate also exercised the
+new high-water/count/provenance queries successfully: `2 passed, 14 deselected
+in 0.35s`. Its disposable container was removed afterward.
+The final Task 6 + stories/search integration run reports `148 passed, 2
+opt-in PostgreSQL cases skipped, 2 pre-existing warnings in 0.76s`.
+
 ## Files changed
 
 - `scripts/backfill_google_news_attribution.py`
@@ -136,10 +167,12 @@ removed afterward. The post-fix Task 6 + stories/search integration run reports
   marked `legacy_unverified`, and is reconciled into the duplicate family,
   avoiding the non-deferrable partial unique-index violation.
 - Reports include discovery-country, publisher-country, status, and domain
-  counts plus protected before/after invariants.
-- The script never deletes or enqueues rows. It verifies unchanged article,
-  analysis, and story-membership row counts and hashes every
-  `(id, source_id, external_id, url)` tuple before returning success.
+  counts plus explicit protected before/after checks.
+- The script never deletes or enqueues rows. It protects the starting article
+  high-water prefix with an unchanged row count and a hash of every
+  `(id, source_id, external_id, url)` tuple in that prefix. Global article,
+  analysis, and story-membership counts may grow under live writers but may
+  never decrease.
 - The CLI exposes only `--apply`, `--since-days`, `--batch-size`,
   `--checkpoint`, and `--report` beyond standard help.
 
@@ -158,6 +191,11 @@ removed afterward. The post-fix Task 6 + stories/search integration run reports
 - duplicate parent selection, external-ID matching, title/window matching, and
   canonical-country-scoped reprint-count recomputation;
 - immutable provenance and row-count invariants;
+- concurrent article/analysis/story appends during one run and between a
+  committed checkpoint and resume, retaining checkpoint v2's original
+  high-water snapshot;
+- negative controls for protected-prefix deletion with a compensating append,
+  provenance rewrite, and analysis/story-membership count decreases;
 - required keyset SQL, absence of deletes/protected-column writes, and the
   constrained CLI/report surface.
 
@@ -169,4 +207,6 @@ use a transactional in-memory backend for commit/rollback and checkpoint
 ordering; the unique-index safety path additionally runs as an opt-in test
 against explicitly disposable PostgreSQL. Checkpoint version 1 files are
 rejected intentionally because they do not contain the cumulative audit state
-required for a trustworthy resumed report.
+required for a trustworthy resumed report. A pre-fix version 2 checkpoint also
+lacks the high-water fields and is rejected rather than reconstructing an
+unsafe starting snapshot; dry-runs do not create checkpoints.

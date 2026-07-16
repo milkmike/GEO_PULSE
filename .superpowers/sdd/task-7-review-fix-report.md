@@ -51,12 +51,12 @@ tests/test_methodology.py
 
 Python compilation and `git diff --check` passed.
 
-The full shared-checkout run reached `471 passed, 7 skipped` with two failures
-in the concurrently edited Google News attribution-backfill checkpoint tests.
-Those failures reproduce in isolation against the concurrent changes in
-`scripts/backfill_google_news_attribution.py` and
-`tests/test_google_news_attribution_backfill.py`; neither file is part of this
-fix commit.
+The first full shared-checkout run reached `471 passed, 7 skipped` while the
+concurrent Google News attribution-backfill checkpoint fixtures were still
+being edited. After those independent changes stabilized, their module passed
+`14 passed, 2 skipped`, and the complete backend suite passed
+`476 passed, 7 skipped, 2 pre-existing deprecation warnings in 5.07s`.
+Neither concurrent backfill file is part of this fix commit.
 
 ## Files in this fix
 

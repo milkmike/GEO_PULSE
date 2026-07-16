@@ -119,9 +119,17 @@ UNCLASSIFIED_UPDATE_SQL = """
       AND geo_status IS DISTINCT FROM 'legacy_unverified'
 """
 
+ARTICLE_HIGH_WATER_SQL = """
+    /* gnews-backfill:article-high-water */
+    SELECT COALESCE(MAX(id), 0) AS max_article_id
+    FROM articles
+"""
+
 INVARIANT_COUNTS_SQL = """
     /* gnews-backfill:invariant-counts */
     SELECT (SELECT COUNT(*) FROM articles) AS article_rows,
+           (SELECT COUNT(*) FROM articles WHERE id <= :max_article_id)
+               AS protected_article_rows,
            (SELECT COUNT(*) FROM analysis) AS analysis_rows,
            (SELECT COUNT(*) FROM story_articles) AS story_article_rows
 """
@@ -130,6 +138,7 @@ PROVENANCE_SQL = """
     /* gnews-backfill:provenance */
     SELECT id, source_id, external_id, url
     FROM articles
+    WHERE id <= :max_article_id
     ORDER BY id
 """
 
@@ -433,10 +442,25 @@ def _classify(row: Mapping[str, Any], publishers: Mapping[str, _Publisher]) -> (
     )
 
 
-def _snapshot_invariants(session: Any) -> dict[str, Any]:
-    counts = _mapping_rows(session.execute(text(INVARIANT_COUNTS_SQL)))[0]
+def _snapshot_invariants(
+    session: Any,
+    *,
+    max_article_id: int | None = None,
+) -> dict[str, Any]:
+    if max_article_id is None:
+        high_water = _mapping_rows(
+            session.execute(text(ARTICLE_HIGH_WATER_SQL))
+        )[0]
+        max_article_id = int(_value(high_water, "max_article_id", 0))
+    counts = _mapping_rows(session.execute(
+        text(INVARIANT_COUNTS_SQL),
+        {"max_article_id": max_article_id},
+    ))[0]
     digest = hashlib.sha256()
-    for row in _mapping_rows(session.execute(text(PROVENANCE_SQL))):
+    for row in _mapping_rows(session.execute(
+        text(PROVENANCE_SQL),
+        {"max_article_id": max_article_id},
+    )):
         payload = [
             int(_value(row, "id")),
             int(_value(row, "source_id")),
@@ -450,10 +474,42 @@ def _snapshot_invariants(session: Any) -> dict[str, Any]:
         )
         digest.update(b"\n")
     return {
+        "max_article_id": max_article_id,
         "article_rows": int(_value(counts, "article_rows", 0)),
+        "protected_article_rows": int(
+            _value(counts, "protected_article_rows", 0)
+        ),
         "analysis_rows": int(_value(counts, "analysis_rows", 0)),
         "story_article_rows": int(_value(counts, "story_article_rows", 0)),
         "provenance_sha256": digest.hexdigest(),
+    }
+
+
+def _invariant_checks(
+    before: Mapping[str, Any],
+    after: Mapping[str, Any],
+) -> dict[str, bool]:
+    return {
+        "high_water_unchanged": (
+            int(after["max_article_id"]) == int(before["max_article_id"])
+        ),
+        "protected_article_rows_unchanged": (
+            int(after["protected_article_rows"])
+            == int(before["protected_article_rows"])
+        ),
+        "provenance_unchanged": (
+            after["provenance_sha256"] == before["provenance_sha256"]
+        ),
+        "article_rows_non_decreasing": (
+            int(after["article_rows"]) >= int(before["article_rows"])
+        ),
+        "analysis_rows_non_decreasing": (
+            int(after["analysis_rows"]) >= int(before["analysis_rows"])
+        ),
+        "story_article_rows_non_decreasing": (
+            int(after["story_article_rows"])
+            >= int(before["story_article_rows"])
+        ),
     }
 
 
@@ -652,6 +708,22 @@ def _validated_state(
         raise ValueError("checkpoint since_days does not match this run")
     if not isinstance(state.get("before_invariants"), Mapping):
         raise ValueError("checkpoint is missing before_invariants")
+    required_invariants = {
+        "max_article_id",
+        "article_rows",
+        "protected_article_rows",
+        "analysis_rows",
+        "story_article_rows",
+        "provenance_sha256",
+    }
+    missing_invariants = required_invariants.difference(
+        state["before_invariants"]
+    )
+    if missing_invariants:
+        missing = ", ".join(sorted(missing_invariants))
+        raise ValueError(
+            f"checkpoint before_invariants is missing: {missing}"
+        )
     if not isinstance(state.get("audit"), Mapping):
         raise ValueError("checkpoint is missing cumulative audit state")
     return dict(state)
@@ -875,11 +947,16 @@ def run_backfill(
             store.save(state)
 
     with get_session() as session:
-        after = _snapshot_invariants(session)
+        after = _snapshot_invariants(
+            session,
+            max_article_id=int(before["max_article_id"]),
+        )
+    checks = _invariant_checks(before, after)
     invariants = {
         "before": before,
         "after": after,
-        "passed": before == after,
+        "checks": checks,
+        "passed": all(checks.values()),
     }
     if not invariants["passed"]:
         raise RuntimeError("backfill changed protected row counts or provenance")

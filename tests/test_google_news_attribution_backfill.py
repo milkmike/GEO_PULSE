@@ -65,9 +65,27 @@ class MemorySession:
                 })
             return MemoryResult(rows)
 
+        if "gnews-backfill:article-high-water" in sql:
+            return MemoryResult([{
+                "max_article_id": max(
+                    (article["id"] for article in self.articles),
+                    default=0,
+                ),
+            }])
+
         if "gnews-backfill:invariant-counts" in sql:
+            self.backend.invariant_snapshot_count += 1
+            if self.backend.invariant_snapshot_hook is not None:
+                self.backend.invariant_snapshot_hook(
+                    self,
+                    self.backend.invariant_snapshot_count,
+                )
             return MemoryResult([{
                 "article_rows": len(self.articles),
+                "protected_article_rows": sum(
+                    article["id"] <= params["max_article_id"]
+                    for article in self.articles
+                ),
                 "analysis_rows": self.backend.analysis_rows,
                 "story_article_rows": self.backend.story_article_rows,
             }])
@@ -81,6 +99,7 @@ class MemorySession:
                     "url": article["url"],
                 }
                 for article in sorted(self.articles, key=lambda item: item["id"])
+                if article["id"] <= params["max_article_id"]
             ])
 
         if "gnews-backfill:batch" in sql:
@@ -311,6 +330,8 @@ class MemoryBackend:
         ]
         self.analysis_rows = 5
         self.story_article_rows = 4
+        self.invariant_snapshot_count = 0
+        self.invariant_snapshot_hook = None
         self.mutation_sql = []
 
     @staticmethod
@@ -422,6 +443,129 @@ def test_dry_run_is_default_read_only_and_reports_exact_classification(
         "reuters.com": 1,
     }
     assert report.invariants["passed"] is True
+
+
+def test_invariants_allow_concurrent_appends_after_starting_high_water(monkeypatch):
+    backend = MemoryBackend()
+
+    def append_live_rows(session, snapshot_number):
+        if snapshot_number != 2:
+            return
+        session.articles.append(backend._article(
+            999, 2, "live-999", "https://elpais.com/live-999",
+            "Live article", "live article", NOW,
+            geo_status="source_verified",
+        ))
+        backend.analysis_rows += 1
+        backend.story_article_rows += 1
+
+    backend.invariant_snapshot_hook = append_live_rows
+    monkeypatch.setattr(backfill, "get_session", backend.session_factory)
+
+    report = backfill.run_backfill(apply=False, since_days=104, batch_size=2)
+
+    assert report.invariants["passed"] is True
+    assert report.invariants["before"]["max_article_id"] == 103
+    assert report.invariants["before"]["article_rows"] == 5
+    assert report.invariants["before"]["protected_article_rows"] == 5
+    assert report.invariants["after"]["article_rows"] == 6
+    assert report.invariants["after"]["protected_article_rows"] == 5
+    assert report.invariants["after"]["analysis_rows"] == 6
+    assert report.invariants["after"]["story_article_rows"] == 5
+    assert (
+        report.invariants["after"]["provenance_sha256"]
+        == report.invariants["before"]["provenance_sha256"]
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "delete_and_replace",
+        "rewrite_provenance",
+        "analysis_decrease",
+        "story_article_decrease",
+    ],
+)
+def test_invariants_still_reject_protected_mutations_and_count_decreases(
+    monkeypatch, mutation,
+):
+    backend = MemoryBackend()
+
+    def mutate_live_rows(session, snapshot_number):
+        if snapshot_number != 2:
+            return
+        if mutation == "delete_and_replace":
+            session.articles[:] = [
+                article for article in session.articles if article["id"] != 50
+            ]
+            session.articles.append(backend._article(
+                999, 2, "replacement-999", "https://elpais.com/replacement-999",
+                "Replacement", "replacement", NOW,
+                geo_status="source_verified",
+            ))
+        elif mutation == "rewrite_provenance":
+            article = session._article(50)
+            article.update({
+                "source_id": 3,
+                "external_id": "rewritten-50",
+                "url": "https://reuters.com/rewritten-50",
+            })
+        elif mutation == "analysis_decrease":
+            backend.analysis_rows -= 1
+        else:
+            backend.story_article_rows -= 1
+
+    backend.invariant_snapshot_hook = mutate_live_rows
+    monkeypatch.setattr(backfill, "get_session", backend.session_factory)
+
+    with pytest.raises(
+        RuntimeError,
+        match="backfill changed protected row counts or provenance",
+    ):
+        backfill.run_backfill(apply=False, since_days=104, batch_size=2)
+
+
+def test_checkpoint_resume_keeps_original_high_water_while_rows_append(monkeypatch):
+    backend = MemoryBackend()
+    checkpoint = InterruptingCheckpoint()
+    monkeypatch.setattr(backfill, "get_session", backend.session_factory)
+
+    with pytest.raises(RuntimeError, match="simulated interruption"):
+        backfill.run_backfill(
+            apply=True,
+            since_days=104,
+            batch_size=2,
+            checkpoint=checkpoint,
+        )
+
+    original_before = deepcopy(checkpoint.state["before_invariants"])
+    assert checkpoint.state["version"] == 2
+    assert original_before["max_article_id"] == 103
+
+    _append_article(
+        backend, 999, 2, "live-999", "https://elpais.com/live-999",
+        "Live article", "live article", NOW,
+        geo_status="source_verified",
+    )
+    backend.analysis_rows += 1
+    backend.story_article_rows += 1
+    checkpoint.interrupt = False
+
+    resumed = backfill.run_backfill(
+        apply=True,
+        since_days=104,
+        batch_size=2,
+        checkpoint=checkpoint,
+    )
+
+    assert resumed.invariants["passed"] is True
+    assert resumed.invariants["before"] == original_before
+    assert resumed.invariants["after"]["max_article_id"] == 103
+    assert resumed.invariants["after"]["article_rows"] == 6
+    assert resumed.invariants["after"]["protected_article_rows"] == 5
+    assert resumed.invariants["after"]["analysis_rows"] == 6
+    assert resumed.invariants["after"]["story_article_rows"] == 5
 
 
 def test_apply_resumes_after_committed_batch_and_reruns_are_idempotent(monkeypatch):
@@ -712,6 +856,11 @@ def test_batch_sql_is_keyset_bounded_and_mutations_preserve_provenance():
     assert "'source_verified', 'unverified', 'legacy_unverified'" in compact
     dedup_compact = " ".join(backfill.DEDUP_CANDIDATES_SQL.split())
     assert "candidate_publisher.country_code = affected.country_code" in dedup_compact
+    assert "MAX(id)" in backfill.ARTICLE_HIGH_WATER_SQL
+    invariant_compact = " ".join(backfill.INVARIANT_COUNTS_SQL.split())
+    provenance_compact = " ".join(backfill.PROVENANCE_SQL.split())
+    assert "articles WHERE id <= :max_article_id" in invariant_compact
+    assert "WHERE id <= :max_article_id" in provenance_compact
     mutation_sql = " ".join(
         (backfill.CLASSIFIED_UPDATE_SQL, backfill.UNCLASSIFIED_UPDATE_SQL)
     ).upper()
