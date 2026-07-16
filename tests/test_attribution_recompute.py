@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import importlib
 import json
+import math
+from collections import deque as real_deque
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -61,6 +63,8 @@ class AsOfTemperatureSession:
         self.calls.append((sql, params))
         if "FROM analysis a" in sql:
             return FakeResult(rows=[SimpleNamespace(
+                analysis_id=101,
+                article_id=201,
                 sentiment=2.0,
                 event_type="diplomatic",
                 sentiment_confidence=1.0,
@@ -71,17 +75,42 @@ class AsOfTemperatureSession:
                 source_id=11,
                 reprint_count=0,
             )])
-        if "ORDER BY time DESC LIMIT 3" in sql:
+        if "ORDER BY time DESC LIMIT 30" in sql:
             return FakeResult(rows=[
                 SimpleNamespace(temperature=20.0),
                 SimpleNamespace(temperature=25.0),
             ])
-        if "ORDER BY time DESC LIMIT 30" in sql:
+        if "ORDER BY time DESC LIMIT 3" in sql:
             return FakeResult(rows=[])
         raise AssertionError(sql)
 
     def add(self, item):
         raise AssertionError("as-of calculation must not emit persisted alerts")
+
+
+class ParityTemperatureSession:
+    def __init__(self, article_rows):
+        self.article_rows = list(article_rows)
+        self.calls = []
+
+    def execute(self, statement, params=None):
+        sql = str(statement)
+        self.calls.append((sql, params or {}))
+        if "FROM analysis a" in sql:
+            return FakeResult(rows=self.article_rows)
+        if "ORDER BY time DESC LIMIT 30" in sql:
+            return FakeResult(rows=[
+                SimpleNamespace(temperature=value)
+                for value in (10.0, 15.0, 20.0, 25.0, 30.0)
+            ])
+        if "ORDER BY time DESC LIMIT 3" in sql:
+            return FakeResult(rows=[
+                SimpleNamespace(temperature=value) for value in (10.0, 15.0, 20.0)
+            ])
+        raise AssertionError(sql)
+
+    def add(self, item):
+        raise AssertionError("parity calculation must not emit persisted alerts")
 
 
 class FixedDateTime:
@@ -150,6 +179,26 @@ class RecomputeSession:
             ]
             rows.sort(key=lambda row: (row.time, row.country_code))
             return FakeResult(rows=rows)
+        if "attribution_recompute:article_inputs" in sql:
+            rows = []
+            for (at, country_code), _ in self.values.items():
+                if (
+                    country_code == params["cc"]
+                    and params["input_start"] < at <= params["window_end"]
+                ):
+                    rows.append(SimpleNamespace(
+                        sentiment=0.3,
+                        event_type="diplomatic",
+                        sentiment_confidence=1.0,
+                        action_level=2,
+                        event_key=f"recent-event-{at.isoformat()}",
+                        published_at=at,
+                        weight=1.0,
+                        source_id=11,
+                        reprint_count=0,
+                    ))
+            rows.sort(key=lambda row: row.published_at)
+            return FakeResult(rows=rows)
         if "INSERT INTO temperature" in sql:
             batch = params if isinstance(params, list) else [params]
             for item in batch:
@@ -171,8 +220,8 @@ class RecomputeSession:
 
 
 def _calculator_for(session: RecomputeSession, calls: list[tuple[str, datetime]]):
-    def calculate(country_code, as_of, *, exclude_backfill=True):
-        assert exclude_backfill is True
+    def calculate(country_code, as_of, rows, *, history=()):
+        assert rows
         calls.append((country_code, as_of))
         old = session.values[(as_of, country_code)]
         result = {
@@ -223,9 +272,156 @@ def test_calculate_temperature_at_uses_exact_v1_with_bounded_as_of_sql(monkeypat
         "as_of": NOW,
     }
     history_calls = [call for call in session.calls if "FROM temperature" in call[0]]
-    assert len(history_calls) == 2
+    assert len(history_calls) == 1
+    assert "ORDER BY time DESC LIMIT 30" in history_calls[0][0]
     assert all("time < :as_of" in sql for sql, _ in history_calls)
     assert all(params["as_of"] == NOW for _, params in history_calls)
+
+
+def test_calculate_temperature_from_rows_has_exact_wrapper_parity(monkeypatch):
+    calculator = getattr(index, "calculate_temperature_from_rows", None)
+    assert callable(calculator), "calculate_temperature_from_rows is missing"
+    article_rows = [
+        SimpleNamespace(
+            analysis_id=101,
+            article_id=201,
+            sentiment=2.0,
+            event_type="diplomatic",
+            sentiment_confidence=1.0,
+            action_level=2,
+            event_key="green corridor agreement",
+            published_at=NOW - timedelta(days=1),
+            weight=1.5,
+            source_id=11,
+            reprint_count=0,
+        ),
+        SimpleNamespace(
+            analysis_id=102,
+            article_id=202,
+            sentiment=-1.0,
+            event_type="diplomatic",
+            sentiment_confidence=0.8,
+            action_level=3,
+            event_key="green corridor agreement",
+            published_at=NOW - timedelta(days=2),
+            weight=0.7,
+            source_id=12,
+            reprint_count=2,
+        ),
+        SimpleNamespace(
+            analysis_id=103,
+            article_id=203,
+            sentiment=0.5,
+            event_type="economic",
+            sentiment_confidence=0.9,
+            action_level=1,
+            event_key=None,
+            published_at=NOW - timedelta(hours=6),
+            weight=1.1,
+            source_id=13,
+            reprint_count=0,
+        ),
+    ]
+    wrapper_session = ParityTemperatureSession(article_rows)
+    monkeypatch.setattr(index, "get_session", lambda: SessionContext(wrapper_session))
+
+    with index.suppress_temperature_alerts():
+        wrapped = index.calculate_temperature_at("ES", NOW)
+    pure = calculator(
+        "ES",
+        NOW,
+        article_rows,
+        history=(10.0, 15.0, 20.0, 25.0, 30.0),
+    )
+
+    assert pure == wrapped
+
+
+def test_calculate_temperature_from_rows_default_is_database_free():
+    row = SimpleNamespace(
+        analysis_id=101,
+        article_id=201,
+        sentiment=0.5,
+        event_type="economic",
+        sentiment_confidence=1.0,
+        action_level=1,
+        event_key=None,
+        published_at=NOW - timedelta(hours=1),
+        weight=1.0,
+        source_id=11,
+        reprint_count=0,
+    )
+
+    result = index.calculate_temperature_from_rows("ES", NOW, [row])
+
+    assert result is not None
+    assert result["trend"] == "stable"
+    assert result["anomaly_score"] is None
+
+
+def test_equal_weight_cluster_order_is_deterministic(monkeypatch):
+    earlier = SimpleNamespace(
+        analysis_id=101,
+        article_id=201,
+        sentiment=2.0,
+        event_type="diplomatic",
+        sentiment_confidence=1.0,
+        action_level=1,
+        event_key="equal weight event",
+        published_at=NOW - timedelta(days=2),
+        weight=1.0,
+        source_id=11,
+        reprint_count=0,
+    )
+    later = SimpleNamespace(
+        analysis_id=102,
+        article_id=202,
+        sentiment=-2.0,
+        event_type="diplomatic",
+        sentiment_confidence=1.0,
+        action_level=1,
+        event_key="equal weight event",
+        published_at=NOW - timedelta(days=1),
+        weight=1.0,
+        source_id=12,
+        reprint_count=0,
+    )
+
+    forward = index.calculate_temperature_from_rows(
+        "ES", NOW, [earlier, later], history=(),
+    )
+    reverse = index.calculate_temperature_from_rows(
+        "ES", NOW, [later, earlier], history=(),
+    )
+
+    assert forward == reverse
+
+    session = ParityTemperatureSession([earlier, later])
+    monkeypatch.setattr(index, "get_session", lambda: SessionContext(session))
+    with index.suppress_temperature_alerts():
+        index.calculate_temperature_at("ES", NOW)
+    article_sql = next(sql for sql, _ in session.calls if "FROM analysis a" in sql)
+    assert "a.id AS analysis_id" in article_sql
+    assert "ar.id AS article_id" in article_sql
+    assert "ORDER BY ar.published_at, ar.id, a.id" in article_sql
+
+
+def test_preloaded_article_window_is_lower_exclusive_and_upper_inclusive():
+    recompute = _load_task7_module("scripts.recompute_attribution_window")
+    selector = getattr(recompute, "_article_rows_for_as_of", None)
+    assert callable(selector), "_article_rows_for_as_of is missing"
+    lower = NOW - timedelta(days=14)
+    rows = [
+        SimpleNamespace(article_id=1, published_at=lower - timedelta(microseconds=1)),
+        SimpleNamespace(article_id=2, published_at=lower),
+        SimpleNamespace(article_id=3, published_at=lower + timedelta(microseconds=1)),
+        SimpleNamespace(article_id=4, published_at=NOW),
+        SimpleNamespace(article_id=5, published_at=NOW + timedelta(microseconds=1)),
+    ]
+
+    selected = selector(rows, NOW)
+
+    assert [row.article_id for row in selected] == [3, 4]
 
 
 def test_current_temperature_delegates_to_the_as_of_implementation(monkeypatch):
@@ -258,8 +454,15 @@ def test_recompute_window_dry_run_reads_104_days_and_writes_nothing(monkeypatch)
     monkeypatch.setattr(recompute, "_utc_now", lambda: NOW)
     monkeypatch.setattr(
         recompute,
-        "calculate_temperature_at",
+        "calculate_temperature_from_rows",
         _calculator_for(session, calculator_calls),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        recompute,
+        "calculate_temperature_at",
+        lambda *args, **kwargs: pytest.fail("recompute used per-key DB calculator"),
+        raising=False,
     )
     monkeypatch.setattr(
         recompute,
@@ -286,6 +489,8 @@ def test_recompute_window_dry_run_reads_104_days_and_writes_nothing(monkeypatch)
     assert post_apply_calls == []
     assert not any("INSERT INTO" in sql or "DELETE FROM" in sql for sql, _ in session.calls)
     assert len(report.deltas) == 2
+    assert report.delta_total == 2
+    assert report.deltas_omitted == 0
     assert report.deltas[0].before["temperature"] == 2.0
     assert report.deltas[0].after["temperature"] == 12.0
     json.dumps(asdict(report), default=str)
@@ -301,8 +506,15 @@ def test_recompute_window_apply_upserts_only_existing_90_day_keys(monkeypatch):
     monkeypatch.setattr(recompute, "_utc_now", lambda: NOW)
     monkeypatch.setattr(
         recompute,
-        "calculate_temperature_at",
+        "calculate_temperature_from_rows",
         _calculator_for(session, calculator_calls),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        recompute,
+        "calculate_temperature_at",
+        lambda *args, **kwargs: pytest.fail("recompute used per-key DB calculator"),
+        raising=False,
     )
     monkeypatch.setattr(
         recompute,
@@ -345,19 +557,9 @@ class RollingRecomputeSession(RecomputeSession):
         self.upserted_keys = []
 
 
-class HistoryQueryForbiddenSession:
-    def execute(self, statement, params=None):
-        raise AssertionError(
-            "rolling recompute must provide repaired in-memory temperature history"
-        )
-
-    def add(self, item):
-        raise AssertionError("historical recompute must not emit alerts")
-
-
 def _rolling_calculator(session: RollingRecomputeSession):
-    def calculate(country_code, as_of, *, exclude_backfill=True):
-        assert exclude_backfill is True
+    def calculate(country_code, as_of, rows, *, history=()):
+        assert rows
         current = 30.0 if as_of == NOW - timedelta(days=2) else 20.0
         old = session.values[(as_of, country_code)]
         result = {
@@ -365,20 +567,18 @@ def _rolling_calculator(session: RollingRecomputeSession):
             for key, value in old.items()
             if key != "pattern_type"
         }
-        history_session = HistoryQueryForbiddenSession()
         result["temperature"] = current
         result["raw_sentiment"] = round(current / (100 / 3), 2)
-        result["trend"] = index.detect_trend(
-            history_session,
-            country_code,
+        result["trend"] = index._trend_from_history(
             current,
-            as_of=as_of,
+            history[:index.TEMPERATURE_METHODOLOGY.trend_history_points],
         )
-        result["anomaly_score"] = index.detect_anomaly(
-            history_session,
-            country_code,
+        anomaly_statistics = index._anomaly_statistics(
             current,
-            as_of=as_of,
+            history[:index.TEMPERATURE_METHODOLOGY.anomaly_history_points],
+        )
+        result["anomaly_score"] = (
+            anomaly_statistics[0] if anomaly_statistics is not None else None
         )
         return result
 
@@ -397,8 +597,15 @@ def test_recompute_rolls_repaired_history_forward_and_dry_run_matches_apply(
         monkeypatch.setattr(recompute, "_utc_now", lambda: NOW)
         monkeypatch.setattr(
             recompute,
-            "calculate_temperature_at",
+            "calculate_temperature_from_rows",
             _rolling_calculator(session),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            recompute,
+            "calculate_temperature_at",
+            lambda *args, **kwargs: pytest.fail("recompute used per-key DB calculator"),
+            raising=False,
         )
         monkeypatch.setattr(recompute, "_run_post_apply_jobs", lambda: None)
         report = recompute.recompute_window(days=90, apply=apply, batch_size=1)
@@ -418,6 +625,205 @@ def test_recompute_rolls_repaired_history_forward_and_dry_run_matches_apply(
         apply_session.values[(NOW - timedelta(days=2), "ES")]["temperature"],
         apply_session.values[(NOW - timedelta(days=1), "ES")]["temperature"],
     ] == [30.0, 20.0]
+
+
+class PerformanceRecomputeSession:
+    def __init__(self, *, keys_per_country=501):
+        self.country_codes = ("ES", "GB")
+        self.values = {}
+        first = NOW - timedelta(hours=keys_per_country - 1)
+        for offset in range(keys_per_country):
+            at = first + timedelta(hours=offset)
+            for country_code in reversed(self.country_codes):
+                row = _temperature_row(at, country_code, 10.0)
+                self.values[(at, country_code)] = row
+        self.calls = []
+        self.upserted_keys = []
+
+    def execute(self, statement, params=None):
+        sql = str(statement)
+        params = params or {}
+        self.calls.append((sql, params))
+        if "attribution_recompute:existing_keys" in sql:
+            rows = [SimpleNamespace(**row) for row in self.values.values()]
+            rows.sort(key=lambda row: (row.time, row.country_code))
+            return FakeResult(rows=rows)
+        if "attribution_recompute:history_seeds" in sql:
+            rows = []
+            for country_code in self.country_codes:
+                for position in range(30, 0, -1):
+                    rows.append(SimpleNamespace(
+                        time=NOW - timedelta(days=90, hours=position),
+                        country_code=country_code,
+                        temperature=10.0,
+                    ))
+            rows.sort(key=lambda row: (row.time, row.country_code))
+            return FakeResult(rows=rows)
+        if "attribution_recompute:article_inputs" in sql:
+            assert params["cc"] in self.country_codes
+            assert params["input_start"] == NOW - timedelta(days=104)
+            assert params["window_end"] == NOW
+            return FakeResult(rows=[SimpleNamespace(
+                article_id=11 if params["cc"] == "ES" else 12,
+                sentiment=0.3,
+                event_type="diplomatic",
+                sentiment_confidence=1.0,
+                action_level=2,
+                event_key="recent-event",
+                published_at=NOW - timedelta(days=1),
+                weight=1.0,
+                source_id=11,
+                reprint_count=0,
+            )])
+        if "INSERT INTO temperature" in sql:
+            batch = params if isinstance(params, list) else [params]
+            for item in batch:
+                key = (item["time"], item["country_code"])
+                assert key in self.values
+                self.upserted_keys.append(key)
+            return FakeResult()
+        raise AssertionError(sql)
+
+
+class TrackingDeque(real_deque):
+    instances = []
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.max_observed = len(self)
+        self.__class__.instances.append(self)
+
+    def append(self, value):
+        super().append(value)
+        self.max_observed = max(self.max_observed, len(self))
+
+
+def _scaled_calculator(country_code, as_of, rows, *, history=()):
+    assert len(rows) <= 1
+    current = 20.0
+    anomaly_statistics = index._anomaly_statistics(
+        current,
+        history[:index.TEMPERATURE_METHODOLOGY.anomaly_history_points],
+    )
+    return {
+        "time": as_of,
+        "country_code": country_code,
+        "temperature": current,
+        "raw_sentiment": 0.6,
+        "diplomatic": 0.3,
+        "military": None,
+        "economic": None,
+        "cultural": None,
+        "security": None,
+        "article_count": len(rows),
+        "source_count": len(rows),
+        "trend": index._trend_from_history(
+            current,
+            history[:index.TEMPERATURE_METHODOLOGY.trend_history_points],
+        ),
+        "anomaly_score": (
+            anomaly_statistics[0] if anomaly_statistics is not None else None
+        ),
+    }
+
+
+def _run_scaled_recompute(monkeypatch, *, apply, delta_limit=7, batch_size=128):
+    recompute = _load_task7_module("scripts.recompute_attribution_window")
+    session = PerformanceRecomputeSession()
+    TrackingDeque.instances = []
+    monkeypatch.setattr(recompute, "get_session", lambda: SessionContext(session))
+    monkeypatch.setattr(recompute, "_utc_now", lambda: NOW)
+    monkeypatch.setattr(
+        recompute,
+        "calculate_temperature_from_rows",
+        _scaled_calculator,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        recompute,
+        "calculate_temperature_at",
+        lambda *args, **kwargs: pytest.fail("recompute used per-key DB calculator"),
+        raising=False,
+    )
+    real_delta = recompute.TemperatureDelta
+    created_deltas = []
+
+    def tracked_delta(**kwargs):
+        delta = real_delta(**kwargs)
+        created_deltas.append(delta)
+        return delta
+
+    monkeypatch.setattr(recompute, "TemperatureDelta", tracked_delta)
+    monkeypatch.setattr(recompute, "deque", TrackingDeque, raising=False)
+    monkeypatch.setattr(recompute, "_run_post_apply_jobs", lambda: None)
+    report = recompute.recompute_window(
+        days=90,
+        apply=apply,
+        batch_size=batch_size,
+        delta_limit=delta_limit,
+    )
+    return session, report, created_deltas
+
+
+def test_scaled_recompute_reads_once_per_country_bounds_history_and_report(monkeypatch):
+    session, report, created_deltas = _run_scaled_recompute(
+        monkeypatch,
+        apply=False,
+    )
+
+    read_calls = [
+        sql for sql, _ in session.calls
+        if "INSERT INTO temperature" not in sql
+    ]
+    article_reads = [
+        sql for sql in read_calls if "attribution_recompute:article_inputs" in sql
+    ]
+    assert report.keys_read == 1002
+    assert len(read_calls) == len(session.country_codes) + 2
+    assert len(article_reads) == len(session.country_codes)
+    assert report.delta_total == 1002
+    assert len(report.deltas) == 7
+    assert report.deltas_omitted == 995
+    assert len(created_deltas) <= len(session.country_codes) * 7
+    assert [
+        (delta.time, delta.country_code) for delta in report.deltas
+    ] == sorted((delta.time, delta.country_code) for delta in report.deltas)
+    assert TrackingDeque.instances
+    assert all(
+        history.maxlen == 30 and history.max_observed <= 30
+        for history in TrackingDeque.instances
+    )
+    assert not session.upserted_keys
+
+
+def test_scaled_apply_matches_dry_samples_and_batches_exactly(monkeypatch):
+    _, dry_report, _ = _run_scaled_recompute(monkeypatch, apply=False)
+    apply_session, apply_report, _ = _run_scaled_recompute(
+        monkeypatch,
+        apply=True,
+    )
+
+    assert apply_report.deltas == dry_report.deltas
+    assert apply_report.changed == dry_report.changed
+    assert apply_report.upserted == 1002
+    writes = [
+        sql for sql, _ in apply_session.calls if "INSERT INTO temperature" in sql
+    ]
+    reads = [
+        sql for sql, _ in apply_session.calls if "INSERT INTO temperature" not in sql
+    ]
+    assert len(reads) == len(apply_session.country_codes) + 2
+    assert len(writes) == math.ceil(1002 / 128)
+    assert apply_session.upserted_keys == sorted(apply_session.upserted_keys)
+
+
+def test_delta_limit_parser_and_validation():
+    recompute = _load_task7_module("scripts.recompute_attribution_window")
+    args = recompute.build_parser().parse_args(["--delta-limit", "17"])
+
+    assert args.delta_limit == 17
+    with pytest.raises(ValueError, match="delta_limit"):
+        recompute.recompute_window(delta_limit=-1)
 
 
 class AuditSession:

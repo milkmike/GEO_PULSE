@@ -9,9 +9,12 @@ trend/anomaly behavior, or dry-run/apply equivalence.
 ## Approved architecture
 
 `src/engine/index.py` will expose a pure `calculate_temperature_from_rows()`
-entry point containing the existing v1 arithmetic. The current
+entry point containing the existing v1 arithmetic and accepting explicit
+newest-first temperature history. The current
 `calculate_temperature_at()` API will keep its canonical database query and
-delegate to the pure function, preserving live behavior.
+delegate to the pure function; history reads and anomaly-alert persistence stay
+in that wrapper, preserving live behavior while the row calculator remains
+database-free.
 
 `scripts/recompute_attribution_window.py` will group existing temperature keys
 by country. It will load the canonical, relevant, non-backfill article inputs
@@ -20,6 +23,11 @@ time, and use binary search to select the exact
 `as_of - 14 days < published_at <= as_of` slice for each key. This bounds
 read queries to `countries + 2` instead of `keys + 2` and avoids retaining all
 countries' article rows simultaneously.
+
+Both canonical queries include article/analysis identifiers and the same total
+publication/identifier order. Equal-weight rows within an event cluster use
+that order as their deterministic tie-breaker, so live and preloaded paths
+assign the same diminishing factors.
 
 Each country will be processed chronologically with a `deque(maxlen=30)` seeded
 from persisted pre-window history. A recalculated point is appended before the

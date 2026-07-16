@@ -160,15 +160,17 @@ docker compose run --rm -v "$PWD:/app" analyzer \
 
 docker compose run --rm -v "$PWD:/app" analyzer \
   python scripts/recompute_attribution_window.py \
-  --days 90 --batch-size 100 \
+  --days 90 --batch-size 100 --delta-limit 100 \
   --report backups/google-news-recompute-dry-run.json
 ```
 
-Review the attribution matrix and every temperature delta before applying. The
-recompute command reads only existing `(time, country_code)` keys in the 90-day
-output window. Dry-run performs no writes. Apply mode never deletes points,
-never creates an older key, and leaves `pattern_type` and every point before the
-window byte-for-byte unchanged.
+Review the attribution matrix, `delta_total`, the deterministic temperature-delta
+sample, and `deltas_omitted` before applying. The report keeps at most
+`--delta-limit` changed points in memory; raise the limit or run a narrower window
+when more point-level inspection is required. The recompute command reads only
+existing `(time, country_code)` keys in the 90-day output window. Dry-run performs
+no writes. Apply mode never deletes points, never creates an older key, and leaves
+`pattern_type` and every point before the window byte-for-byte unchanged.
 
 Apply the attribution backfill with its durable checkpoint, audit after each
 batch group, and only then apply temperature recomputation:
@@ -188,7 +190,7 @@ docker compose run --rm -v "$PWD:/app" analyzer \
 
 docker compose run --rm -v "$PWD:/app" analyzer \
   python scripts/recompute_attribution_window.py \
-  --apply --days 90 --batch-size 100 \
+  --apply --days 90 --batch-size 100 --delta-limit 100 \
   --report backups/google-news-recompute-applied.json
 ```
 
@@ -200,6 +202,11 @@ thread/story conflicts and pre-window story evidence are excluded by the same
 30-day cutoff. The command does not invoke either legacy temperature backfill
 or the destructive investigation backfill path. Run the audit once more after
 these jobs and stop on any non-zero exit; do not roll back by deleting rows.
+
+For the calculation itself, canonical article inputs are read once per country.
+Only the latest 30 chronological temperatures per country are retained for
+trend/anomaly cascading, and apply rows are spooled to disk-backed temporary storage
+until every calculation has completed and writing can begin.
 
 ## Data and product gates
 

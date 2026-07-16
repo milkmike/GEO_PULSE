@@ -24,12 +24,12 @@
 - Test: `tests/test_attribution_recompute.py`
 
 **Interfaces:**
-- Produces: `calculate_temperature_from_rows(country_code, as_of, rows, *, history_session=None) -> dict | None`
+- Produces: `calculate_temperature_from_rows(country_code, as_of, rows, *, history=()) -> dict | None`
 - Preserves: `calculate_temperature_at(country_code, as_of, *, exclude_backfill=True) -> dict | None`
 
-- [ ] Write a parity test that runs the database wrapper and pure entry point on identical article/history fixtures and compares their complete dictionaries.
+- [ ] Write parity tests that run the database wrapper and pure entry point on identical article/history fixtures, compare their complete dictionaries, and cover equal-weight cluster ordering.
 - [ ] Run the parity test and verify it fails because the pure entry point is absent.
-- [ ] Move the existing formula without changing weights, decay, grouping, components, rounding, trend, or anomaly behavior; make the wrapper query and delegate.
+- [ ] Move the existing formula without changing weights, decay, grouping, components, rounding, trend, or anomaly behavior; pass explicit history into the pure function and leave history reads/alert persistence in the wrapper.
 - [ ] Run the parity and current-calculator tests and verify they pass.
 
 ### Task 2: Per-country canonical preload and bounded chronological history

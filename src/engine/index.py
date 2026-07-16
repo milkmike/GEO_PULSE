@@ -100,10 +100,10 @@ def calculate_temperature_at(
     backfill_clause = "AND ar.is_backfill = false" if exclude_backfill else ""
 
     with get_session() as session:
-        # Get analyzed articles with sentiment from last WINDOW_DAYS
         rows = session.execute(
             text(f"""
-                SELECT a.sentiment, a.event_type, a.sentiment_confidence,
+                SELECT a.id AS analysis_id, ar.id AS article_id,
+                       a.sentiment, a.event_type, a.sentiment_confidence,
                        a.action_level, a.event_key,
                        ar.published_at, s.weight, s.id as source_id,
                        COALESCE(ar.reprint_count, 0) as reprint_count
@@ -116,6 +116,7 @@ def calculate_temperature_at(
                   {backfill_clause}
                   AND ar.published_at > :window_start
                   AND ar.published_at <= :as_of
+                ORDER BY ar.published_at, ar.id, a.id
             """),
             {
                 "cc": country_code,
@@ -126,133 +127,258 @@ def calculate_temperature_at(
 
         if not rows:
             return None
-
-        numerator = 0.0
-        denominator = 0.0
-        type_sums = {
-            event_type: 0.0
-            for event_type in TEMPERATURE_METHODOLOGY.component_event_types
-        }
-        type_counts = {t: 0 for t in type_sums}
-        source_ids = set()
-
-        # Phase 1: Group articles by event_key to prevent one story from dominating
-        event_clusters = {}  # event_key -> list of rows
-        unclustered = []     # articles without event_key
-        
-        for row in rows:
-            ek = getattr(row, 'event_key', None)
-            if ek and len(str(ek)) >= TEMPERATURE_METHODOLOGY.event_key_min_length:
-                event_clusters.setdefault(str(ek).lower().strip(), []).append(row)
-            else:
-                unclustered.append(row)
-        
-        # Phase 2: For each cluster, sort by source weight (best source first)
-        # Apply diminishing returns: 1st article full weight, each next 20%
-        clustered_rows = []
-        for ek, cluster in event_clusters.items():
-            cluster.sort(
-                key=lambda r: float(
-                    r.weight or TEMPERATURE_METHODOLOGY.source_weight_default
-                ),
-                reverse=True,
-            )
-            for i, row in enumerate(cluster):
-                clustered_rows.append((
-                    row,
-                    TEMPERATURE_METHODOLOGY.cluster_diminishing_base ** i,
-                ))
-        
-        # Unclustered articles get full weight
-        for row in unclustered:
-            clustered_rows.append((row, TEMPERATURE_METHODOLOGY.unclustered_weight))
-        
-        for row, cluster_decay in clustered_rows:
-            sentiment = float(row.sentiment)
-            published_at = row.published_at
-            if published_at.tzinfo is None:
-                published_at = published_at.replace(tzinfo=timezone.utc)
-            
-            age = (as_of - published_at).total_seconds()
-            decay = math.exp(-age / TAU)
-            
-            w_source = float(
-                row.weight or TEMPERATURE_METHODOLOGY.source_weight_default
-            )
-            event_type = row.event_type
-            w_type = EVENT_TYPE_WEIGHTS.get(event_type, EVENT_TYPE_WEIGHTS[None])
-            
-            importance = (
-                TEMPERATURE_METHODOLOGY.reprint_importance_base
-                + math.log1p(row.reprint_count)
-            )
-            
-            # Action level multiplier
-            action_mult = ACTION_MULTIPLIERS.get(
-                row.action_level or 1,
-                ACTION_MULTIPLIERS[1],
-            )
-            
-            # cluster_decay: 1.0 for first/unique article, 0.2^n for same-event dupes
-            weight = w_source * w_type * decay * importance * action_mult * cluster_decay
-            numerator += sentiment * weight
-            denominator += abs(weight)
-            
-            if event_type in type_sums:
-                type_sums[event_type] += sentiment * cluster_decay
-                type_counts[event_type] += cluster_decay
-            
-            source_ids.add(row.source_id)
-
-        if denominator == 0:
-            return None
-
-        raw_sentiment = numerator / denominator
-        temperature = round(
-            raw_sentiment * TEMPERATURE_METHODOLOGY.normalization_factor,
-            TEMPERATURE_METHODOLOGY.temperature_round_digits,
-        )
-
-        # Component averages
-        components = {}
-        for t in type_sums:
-            if type_counts[t] > 0:
-                components[t] = round(
-                    type_sums[t] / type_counts[t],
-                    TEMPERATURE_METHODOLOGY.component_round_digits,
-                )
-            else:
-                components[t] = None
-
-        # Trend detection
-        trend = detect_trend(session, country_code, temperature, as_of=as_of)
-        
-        # Anomaly detection
-        anomaly_score = detect_anomaly(
+        history = _temperature_history(
             session,
             country_code,
-            temperature,
             as_of=as_of,
-        )
-
-        return {
-            "time": as_of,
-            "country_code": country_code,
-            "temperature": temperature,
-            "raw_sentiment": round(
-                raw_sentiment,
-                TEMPERATURE_METHODOLOGY.raw_sentiment_round_digits,
+            limit=max(
+                TEMPERATURE_METHODOLOGY.trend_history_points,
+                TEMPERATURE_METHODOLOGY.anomaly_history_points,
             ),
-            "diplomatic": components.get("diplomatic"),
-            "military": components.get("military"),
-            "economic": components.get("economic"),
-            "cultural": components.get("cultural"),
-            "security": components.get("security"),
-            "article_count": len(rows),
-            "source_count": len(source_ids),
-            "trend": trend,
-            "anomaly_score": anomaly_score,
-        }
+        )
+        calculation = calculate_temperature_from_rows(
+            country_code,
+            as_of,
+            rows,
+            history=history,
+        )
+        if calculation is None:
+            return None
+        _add_anomaly_alert(
+            session,
+            country_code,
+            calculation["temperature"],
+            _anomaly_statistics(
+                calculation["temperature"],
+                history[:TEMPERATURE_METHODOLOGY.anomaly_history_points],
+            ),
+        )
+        return calculation
+
+
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _article_order(row: object) -> tuple[datetime, str, str, str]:
+    """Return a stable total order for equal-weight event-cluster rows."""
+
+    return (
+        _as_utc(row.published_at),
+        str(getattr(row, "article_id", "")),
+        str(getattr(row, "analysis_id", "")),
+        str(getattr(row, "source_id", "")),
+    )
+
+
+def calculate_temperature_from_rows(
+    country_code: str,
+    as_of: datetime,
+    rows: Sequence[object],
+    *,
+    history: Sequence[float] = (),
+) -> dict | None:
+    """Calculate Thermometer v1 from bounded rows and caller-owned history."""
+
+    if as_of.tzinfo is None:
+        as_of = as_of.replace(tzinfo=timezone.utc)
+    else:
+        as_of = as_of.astimezone(timezone.utc)
+
+    if not rows:
+        return None
+
+    numerator = 0.0
+    denominator = 0.0
+    type_sums = {
+        event_type: 0.0
+        for event_type in TEMPERATURE_METHODOLOGY.component_event_types
+    }
+    type_counts = {t: 0 for t in type_sums}
+    source_ids = set()
+
+    # Phase 1: Group articles by event_key to prevent one story from dominating
+    event_clusters = {}  # event_key -> list of rows
+    unclustered = []     # articles without event_key
+        
+    for row in rows:
+        ek = getattr(row, 'event_key', None)
+        if ek and len(str(ek)) >= TEMPERATURE_METHODOLOGY.event_key_min_length:
+            event_clusters.setdefault(str(ek).lower().strip(), []).append(row)
+        else:
+            unclustered.append(row)
+        
+    # Phase 2: For each cluster, sort by source weight (best source first)
+    # Apply diminishing returns: 1st article full weight, each next 20%
+    clustered_rows = []
+    for cluster in event_clusters.values():
+        cluster.sort(
+            key=lambda row: (
+                -float(
+                    row.weight or TEMPERATURE_METHODOLOGY.source_weight_default
+                ),
+                _article_order(row),
+            ),
+        )
+        for index, row in enumerate(cluster):
+            clustered_rows.append((
+                row,
+                TEMPERATURE_METHODOLOGY.cluster_diminishing_base ** index,
+            ))
+        
+    # Unclustered articles get full weight
+    for row in unclustered:
+        clustered_rows.append((row, TEMPERATURE_METHODOLOGY.unclustered_weight))
+        
+    for row, cluster_decay in clustered_rows:
+        sentiment = float(row.sentiment)
+        published_at = row.published_at
+        if published_at.tzinfo is None:
+            published_at = published_at.replace(tzinfo=timezone.utc)
+            
+        age = (as_of - published_at).total_seconds()
+        decay = math.exp(-age / TAU)
+            
+        w_source = float(
+            row.weight or TEMPERATURE_METHODOLOGY.source_weight_default
+        )
+        event_type = row.event_type
+        w_type = EVENT_TYPE_WEIGHTS.get(event_type, EVENT_TYPE_WEIGHTS[None])
+            
+        importance = (
+            TEMPERATURE_METHODOLOGY.reprint_importance_base
+            + math.log1p(row.reprint_count)
+        )
+            
+        # Action level multiplier
+        action_mult = ACTION_MULTIPLIERS.get(
+            row.action_level or 1,
+            ACTION_MULTIPLIERS[1],
+        )
+            
+        # cluster_decay: 1.0 for first/unique article, 0.2^n for same-event dupes
+        weight = w_source * w_type * decay * importance * action_mult * cluster_decay
+        numerator += sentiment * weight
+        denominator += abs(weight)
+            
+        if event_type in type_sums:
+            type_sums[event_type] += sentiment * cluster_decay
+            type_counts[event_type] += cluster_decay
+            
+        source_ids.add(row.source_id)
+
+    if denominator == 0:
+        return None
+
+    raw_sentiment = numerator / denominator
+    temperature = round(
+        raw_sentiment * TEMPERATURE_METHODOLOGY.normalization_factor,
+        TEMPERATURE_METHODOLOGY.temperature_round_digits,
+    )
+
+    # Component averages
+    components = {}
+    for event_type in type_sums:
+        if type_counts[event_type] > 0:
+            components[event_type] = round(
+                type_sums[event_type] / type_counts[event_type],
+                TEMPERATURE_METHODOLOGY.component_round_digits,
+            )
+        else:
+            components[event_type] = None
+
+    bounded_history = [float(value) for value in history]
+    trend = _trend_from_history(
+        temperature,
+        bounded_history[:TEMPERATURE_METHODOLOGY.trend_history_points],
+    )
+    anomaly_statistics = _anomaly_statistics(
+        temperature,
+        bounded_history[:TEMPERATURE_METHODOLOGY.anomaly_history_points],
+    )
+    anomaly_score = anomaly_statistics[0] if anomaly_statistics is not None else None
+
+    return {
+        "time": as_of,
+        "country_code": country_code,
+        "temperature": temperature,
+        "raw_sentiment": round(
+            raw_sentiment,
+            TEMPERATURE_METHODOLOGY.raw_sentiment_round_digits,
+        ),
+        "diplomatic": components.get("diplomatic"),
+        "military": components.get("military"),
+        "economic": components.get("economic"),
+        "cultural": components.get("cultural"),
+        "security": components.get("security"),
+        "article_count": len(rows),
+        "source_count": len(source_ids),
+        "trend": trend,
+        "anomaly_score": anomaly_score,
+    }
+
+
+def _trend_from_history(current: float, history: Sequence[float]) -> str:
+    if len(history) < TEMPERATURE_METHODOLOGY.trend_minimum_samples:
+        return "stable"
+
+    diff = current - statistics.mean(history)
+    if diff > TEMPERATURE_METHODOLOGY.trend_threshold:
+        return "rising"
+    if diff < -TEMPERATURE_METHODOLOGY.trend_threshold:
+        return "falling"
+    return "stable"
+
+
+def _anomaly_statistics(
+    current: float,
+    history: Sequence[float],
+) -> tuple[float, float, float] | None:
+    if len(history) < TEMPERATURE_METHODOLOGY.anomaly_minimum_samples:
+        return None
+
+    mean = statistics.mean(history)
+    std = (
+        statistics.stdev(history)
+        if len(history) > 1
+        else TEMPERATURE_METHODOLOGY.anomaly_zero_std_fallback
+    )
+    if std == 0:
+        std = TEMPERATURE_METHODOLOGY.anomaly_zero_std_fallback
+    z_score = round(
+        (current - mean) / std,
+        TEMPERATURE_METHODOLOGY.anomaly_round_digits,
+    )
+    return z_score, mean, std
+
+
+def _add_anomaly_alert(
+    session,
+    country_code: str,
+    current: float,
+    anomaly_statistics: tuple[float, float, float] | None,
+) -> None:
+    if anomaly_statistics is None or not _TEMPERATURE_ALERTS_ENABLED.get():
+        return
+
+    z_score, mean, std = anomaly_statistics
+    if abs(z_score) <= TEMPERATURE_METHODOLOGY.anomaly_warning_threshold:
+        return
+    severity = (
+        "critical"
+        if abs(z_score) > TEMPERATURE_METHODOLOGY.anomaly_critical_threshold
+        else "warning"
+    )
+    session.add(Alert(
+        country_code=country_code,
+        alert_type="anomaly",
+        severity=severity,
+        title=f"Anomaly detected for {COUNTRY_NAMES.get(country_code, country_code)}",
+        description=f"Z-score: {z_score}, current temp: {current}",
+        data={"z_score": z_score, "temperature": current, "mean": mean, "std": std},
+    ))
 
 
 def detect_trend(
@@ -270,17 +396,7 @@ def detect_trend(
         limit=TEMPERATURE_METHODOLOGY.trend_history_points,
     )
 
-    if len(prev_temps) < TEMPERATURE_METHODOLOGY.trend_minimum_samples:
-        return "stable"
-
-    avg_prev = statistics.mean(prev_temps)
-    diff = current - avg_prev
-    
-    if diff > TEMPERATURE_METHODOLOGY.trend_threshold:
-        return "rising"
-    elif diff < -TEMPERATURE_METHODOLOGY.trend_threshold:
-        return "falling"
-    return "stable"
+    return _trend_from_history(current, prev_temps)
 
 
 def detect_anomaly(
@@ -298,44 +414,9 @@ def detect_anomaly(
         limit=TEMPERATURE_METHODOLOGY.anomaly_history_points,
     )
 
-    if len(temps) < TEMPERATURE_METHODOLOGY.anomaly_minimum_samples:
-        return None
-
-    mean = statistics.mean(temps)
-    std = (
-        statistics.stdev(temps)
-        if len(temps) > 1
-        else TEMPERATURE_METHODOLOGY.anomaly_zero_std_fallback
-    )
-    if std == 0:
-        std = TEMPERATURE_METHODOLOGY.anomaly_zero_std_fallback
-
-    z_score = round(
-        (current - mean) / std,
-        TEMPERATURE_METHODOLOGY.anomaly_round_digits,
-    )
-    
-    # Create alert if anomalous
-    if (
-        _TEMPERATURE_ALERTS_ENABLED.get()
-        and abs(z_score) > TEMPERATURE_METHODOLOGY.anomaly_warning_threshold
-    ):
-        severity = (
-            "critical"
-            if abs(z_score) > TEMPERATURE_METHODOLOGY.anomaly_critical_threshold
-            else "warning"
-        )
-        alert = Alert(
-            country_code=country_code,
-            alert_type="anomaly",
-            severity=severity,
-            title=f"Anomaly detected for {COUNTRY_NAMES.get(country_code, country_code)}",
-            description=f"Z-score: {z_score}, current temp: {current}",
-            data={"z_score": z_score, "temperature": current, "mean": mean, "std": std},
-        )
-        session.add(alert)
-    
-    return z_score
+    anomaly_statistics = _anomaly_statistics(current, temps)
+    _add_anomaly_alert(session, country_code, current, anomaly_statistics)
+    return anomaly_statistics[0] if anomaly_statistics is not None else None
 
 
 def save_temperature(data: dict):
