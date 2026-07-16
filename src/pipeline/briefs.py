@@ -427,6 +427,36 @@ def read_cached_brief(code: str) -> dict | None:
                 "citations": (last.meta or {}).get("citations", [])}
 
 
+def read_cached_topic_brief(topic: str) -> dict | None:
+    """Return the latest cached topic brief without generating it."""
+    scope = f"topic:{topic}"
+    with get_session() as session:
+        last = _last_brief(session, scope)
+    if not last:
+        return None
+    return {
+        "content": last.content,
+        "model": last.model,
+        "created_at": last.created_at.isoformat(),
+        "cached": True,
+        "citations": (last.meta or {}).get("citations", []),
+    }
+
+
+def topic_has_inputs(topic: str) -> bool:
+    """Return whether a topic has recent relevant analysis inputs."""
+    with get_session() as session:
+        count = session.execute(text("""
+            SELECT COUNT(*)
+            FROM analysis a
+            JOIN articles ar ON ar.id = a.article_id
+            WHERE a.is_relevant = TRUE
+              AND :topic = ANY(a.topics)
+              AND ar.published_at > NOW() - INTERVAL '14 days'
+        """), {"topic": topic}).scalar_one()
+    return int(count or 0) > 0
+
+
 
 def gather_topic_inputs(session, topic: str) -> dict:
     """Headlines and country stats for a topic-lens brief."""
