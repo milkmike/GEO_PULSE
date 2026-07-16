@@ -650,6 +650,17 @@ def test_prepare_embedding_jobs_cli_defaults():
     assert args.days == 30
     assert args.limit == 500
     assert args.dry_run is False
+    assert args.story_candidates is False
+
+
+def test_prepare_embedding_jobs_cli_enables_story_candidate_mode():
+    args = _preparation_module().build_parser().parse_args(
+        ["--story-candidates", "--days", "14", "--limit", "8000"]
+    )
+
+    assert args.story_candidates is True
+    assert args.days == 14
+    assert args.limit == 8000
 
 
 def test_article_loader_excludes_irrelevant_duplicates_and_old_articles():
@@ -673,6 +684,43 @@ def test_article_loader_excludes_irrelevant_duplicates_and_old_articles():
     assert "a.is_duplicate = FALSE" in session.statement
     assert "a.published_at >= now() - make_interval(days => :days)" in session.statement
     assert session.params == {"days": 30, "limit": 500}
+
+
+def test_story_candidate_loader_uses_canonical_country_and_bounded_priority():
+    expected = {
+        "id": 42,
+        "title": "Eligible story article",
+        "body": "Body",
+        "summary": "Summary",
+        "thread_id": 7,
+        "country_code": "ES",
+        "cross_country_peer_count": 3,
+        "candidate_count": 5,
+        "ready_count": 1,
+        "ready_content_hashes": [],
+    }
+    session = ArticleRowsSession([expected])
+
+    rows = _preparation_module().load_story_candidate_articles(
+        session,
+        days=14,
+        limit=8000,
+        profile_id=4,
+    )
+
+    assert rows == [expected]
+    assert "JOIN thread_articles ta ON ta.thread_id = t.id" in session.statement
+    assert "JOIN article_country_facts country_fact" in session.statement
+    assert "TRIM(country_fact.country_code) = TRIM(t.country_code)" in session.statement
+    assert "t.article_count > 0" in session.statement
+    assert "a.published_at >= now() - make_interval(days => :days)" in session.statement
+    assert "cross_country_peer_count > 0" in session.statement
+    assert "coverage_ratio ASC" in session.statement
+    assert "cross_country_peer_count DESC" in session.statement
+    assert "article_rank ASC" in session.statement
+    assert "LIMIT :limit" in session.statement
+    assert "SELECT ce.embedding" not in session.statement
+    assert session.params == {"days": 14, "limit": 8000, "profile_id": 4}
 
 
 def test_prepare_embedding_jobs_dry_run_does_not_mutate_profiles_or_jobs():
@@ -707,6 +755,65 @@ def test_prepare_embedding_jobs_dry_run_does_not_mutate_profiles_or_jobs():
     assert store.ensure_calls == 0
     assert store.enqueue_calls == 0
     assert store.jobs == {}
+
+
+def test_story_candidate_dry_run_skips_current_ready_and_reports_coverage():
+    module = _preparation_module()
+    profile = configured_preparation_profile()
+    ready_content = "Ready\nSummary"
+    rows = [
+        {
+            "id": 42,
+            "title": "Ready",
+            "body": "Body",
+            "summary": "Summary",
+            "thread_id": 7,
+            "country_code": "ES",
+            "cross_country_peer_count": 2,
+            "candidate_count": 3,
+            "ready_count": 1,
+            "ready_content_hashes": [content_hash(ready_content)],
+        },
+        {
+            "id": 43,
+            "title": "Missing",
+            "body": "Body",
+            "summary": "Summary",
+            "thread_id": 8,
+            "country_code": "FR",
+            "cross_country_peer_count": 1,
+            "candidate_count": 2,
+            "ready_count": 0,
+            "ready_content_hashes": [],
+        },
+    ]
+    store = PreparationStore(profile, allow_mutation=False)
+
+    result = module.prepare_jobs(
+        days=30,
+        limit=8000,
+        dry_run=True,
+        story_candidates=True,
+        store=store,
+        session_factory=PreparationSessionFactory(),
+        profile_factory=lambda: profile,
+        article_loader=lambda session, **kwargs: rows,
+    )
+
+    assert result == {
+        "eligible": 1,
+        "enqueued": 0,
+        "profile": profile.profile_key,
+        "dry_run": True,
+        "mode": "story_candidates",
+        "candidate_articles": 2,
+        "candidate_threads": 2,
+        "cross_country_threads": 2,
+        "ready_current": 1,
+        "missing_current": 1,
+    }
+    assert store.ensure_calls == 0
+    assert store.enqueue_calls == 0
 
 
 def test_repeat_preparation_reuses_profile_and_does_not_duplicate_ready_job():
