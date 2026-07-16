@@ -45,9 +45,10 @@ def test_stories_only_recent_rebuild_queries_canonical_bounded_threads(monkeypat
     monkeypatch.setattr(
         build_threads,
         "run_scoped_story_builder",
-        lambda thread_ids, *, scope_start: observed.update(
+        lambda thread_ids, *, scope_start, raise_on_error=False: observed.update(
             thread_ids=set(thread_ids),
             scope_start=scope_start,
+            raise_on_error=raise_on_error,
         ),
     )
     for forbidden in (
@@ -88,7 +89,68 @@ def test_stories_only_recent_rebuild_queries_canonical_bounded_threads(monkeypat
     assert observed == {
         "thread_ids": {41, 42},
         "scope_start": scope_start,
+        "raise_on_error": True,
     }
+
+
+def test_scoped_story_runner_swallows_failures_by_default(monkeypatch):
+    import scripts.build_threads as build_threads
+
+    failure = RuntimeError("story persistence failed")
+    tracked = []
+    monkeypatch.setattr(
+        build_threads,
+        "get_session",
+        lambda: _session_context(object()),
+    )
+    monkeypatch.setattr(
+        build_threads,
+        "build_global_stories",
+        lambda *args, **kwargs: (_ for _ in ()).throw(failure),
+    )
+    monkeypatch.setattr(
+        build_threads,
+        "track_api_call",
+        lambda **kwargs: tracked.append(kwargs),
+    )
+
+    build_threads.run_scoped_story_builder(
+        {41, 42},
+        scope_start=NOW - timedelta(days=7),
+    )
+
+    assert tracked[-1]["status"] == "error"
+
+
+def test_scoped_story_runner_propagates_failures_when_requested(monkeypatch):
+    import scripts.build_threads as build_threads
+
+    failure = RuntimeError("story persistence failed")
+    tracked = []
+    monkeypatch.setattr(
+        build_threads,
+        "get_session",
+        lambda: _session_context(object()),
+    )
+    monkeypatch.setattr(
+        build_threads,
+        "build_global_stories",
+        lambda *args, **kwargs: (_ for _ in ()).throw(failure),
+    )
+    monkeypatch.setattr(
+        build_threads,
+        "track_api_call",
+        lambda **kwargs: tracked.append(kwargs),
+    )
+
+    with pytest.raises(RuntimeError, match="story persistence failed"):
+        build_threads.run_scoped_story_builder(
+            {41, 42},
+            scope_start=NOW - timedelta(days=7),
+            raise_on_error=True,
+        )
+
+    assert tracked[-1]["status"] == "error"
 
 
 def test_stories_only_recent_cli_routes_only_to_story_refresh(monkeypatch):
@@ -120,6 +182,24 @@ def test_stories_only_recent_cli_routes_only_to_story_refresh(monkeypatch):
     build_threads.main()
 
     assert calls == ["wait", ("stories-only", 7)]
+
+
+def test_stories_only_recent_cli_does_not_hide_rebuild_failure(monkeypatch):
+    import scripts.build_threads as build_threads
+
+    monkeypatch.setattr(build_threads, "wait_for_db", lambda: None)
+    monkeypatch.setattr(
+        build_threads,
+        "rebuild_recent_stories",
+        lambda days: (_ for _ in ()).throw(RuntimeError("story rebuild failed")),
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        ["build_threads.py", "--stories-only-recent-days", "7"],
+    )
+
+    with pytest.raises(RuntimeError, match="story rebuild failed"):
+        build_threads.main()
 
 
 @pytest.mark.parametrize(

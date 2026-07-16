@@ -204,6 +204,7 @@ def run_scoped_story_builder(
     thread_ids: set[int],
     *,
     scope_start: datetime,
+    raise_on_error: bool = False,
 ) -> None:
     """Refresh only recent story candidates without cleanup or replacement."""
 
@@ -237,6 +238,8 @@ def run_scoped_story_builder(
             service="story-builder", endpoint="/build-scoped",
             script="build_threads.py", status="error", error=str(exc)[:500],
         )
+        if raise_on_error:
+            raise
 
 
 # ── Step 1: Fetch articles ──────────────────────────────
@@ -1473,7 +1476,11 @@ def rebuild_recent_stories(
         """), {"scope_start": scope_start}).fetchall()
         thread_ids = {int(row.thread_id) for row in rows}
 
-    run_scoped_story_builder(thread_ids, scope_start=scope_start)
+    run_scoped_story_builder(
+        thread_ids,
+        scope_start=scope_start,
+        raise_on_error=True,
+    )
 
 
 def rebuild_recent_threads_and_stories(
