@@ -604,6 +604,42 @@ def test_exact_publisher_external_collision_fails_closed_before_update(monkeypat
     assert backend.article(parent["id"])["reprint_count"] == 2
 
 
+def test_empty_publisher_external_collision_is_not_treated_as_missing(monkeypatch):
+    backend = MemoryBackend()
+    backend.sources[6] = {
+        "id": 6,
+        "name": "Google News (GB) — Россия",
+        "url": "https://news.google.com/rss/search?q=Russia&hl=en-GB",
+        "country_code": "GB",
+        "config": {"feed_mode": "publisher_discovery"},
+    }
+    first = _append_article(
+        backend, 104, 6, "", "https://news.google.com/empty-104",
+        "First empty ID - Reuters", "first empty id",
+        NOW - timedelta(minutes=30),
+    )
+    second = _append_article(
+        backend, 105, 1, "", "https://news.google.com/empty-105",
+        "Second empty ID - Reuters", "second empty id",
+        NOW - timedelta(minutes=20),
+    )
+    checkpoint = InterruptingCheckpoint()
+    checkpoint.interrupt = False
+    monkeypatch.setattr(backfill, "get_session", backend.session_factory)
+
+    report = backfill.run_backfill(
+        apply=True, since_days=104, batch_size=20, checkpoint=checkpoint,
+    )
+
+    assert report.done is True
+    assert backend.article(first["id"])["publisher_source_id"] == 3
+    assert backend.article(second["id"])["publisher_source_id"] is None
+    assert backend.article(second["id"])["geo_status"] == "legacy_unverified"
+    assert backend.article(second["id"])["is_duplicate"] is True
+    assert backend.article(second["id"])["duplicate_of"] == first["id"]
+    assert backend.article(first["id"])["reprint_count"] == 1
+
+
 def test_title_duplicate_reconciliation_stays_in_canonical_country(monkeypatch):
     backend = MemoryBackend()
     foreign = _append_article(
@@ -685,8 +721,9 @@ def test_batch_sql_is_keyset_bounded_and_mutations_preserve_provenance():
         assert f", {column}" not in mutation_sql
 
 
+@pytest.mark.parametrize("external_id", ["shared", ""])
 def test_postgres_unique_publisher_external_collision_is_reconciled_safely(
-    monkeypatch, tmp_path,
+    monkeypatch, tmp_path, external_id,
 ):
     dsn = os.getenv("GEO_PULSE_TEST_DATABASE_URL")
     if not dsn or os.getenv("GEO_PULSE_TEST_DATABASE_RESET") != "1":
@@ -778,11 +815,11 @@ def test_postgres_unique_publisher_external_collision_is_reconciled_safely(
                     id,source_id,external_id,title,url,published_at,
                     title_normalized,geo_status
                 ) VALUES
-                  (101,1,'shared','First - Reuters','https://news.google.com/101',
+                  (101,1,:external_id,'First - Reuters','https://news.google.com/101',
                    NOW(),'first','unverified'),
-                  (102,2,'shared','Second - Reuters','https://news.google.com/102',
+                  (102,2,:external_id,'Second - Reuters','https://news.google.com/102',
                    NOW(),'second','unverified')
-            """))
+            """), {"external_id": external_id})
 
         monkeypatch.setattr(backfill, "get_session", postgres_session)
         report = backfill.run_backfill(

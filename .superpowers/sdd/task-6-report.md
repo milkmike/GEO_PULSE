@@ -85,6 +85,21 @@ Final result after the reconciliation-order fix: `1 passed in 0.55s`. The
 disposable container was removed after the
 test.
 
+### Empty external-ID rereview fix
+
+Rereview found that `_claim_publisher_external_id` treated `external_id=''` as
+missing even though PostgreSQL's partial unique index includes empty strings.
+A new in-memory regression failed with the expected simulated unique violation
+before the fix. The claim path now skips only SQL `NULL`; empty strings use the
+same preflight and fail-closed duplicate reconciliation as every other exact
+external ID.
+
+The real PostgreSQL regression is now parameterized for both `shared` and `''`.
+Final disposable PostgreSQL 16 result: `2 passed in 0.31s`; the container was
+removed afterward. The post-fix Task 6 + stories/search integration run reports
+`140 passed, 2 opt-in PostgreSQL cases skipped, 2 pre-existing warnings in
+1.47s`.
+
 ## Files changed
 
 - `scripts/backfill_google_news_attribution.py`

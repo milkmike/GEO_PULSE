@@ -495,8 +495,9 @@ def _claim_publisher_external_id(
     claims: dict[tuple[int, str], int],
 ) -> int | None:
     external_id = _value(row, "external_id")
-    if not isinstance(external_id, str) or not external_id:
+    if external_id is None:
         return None
+    external_id = str(external_id)
     article_id = int(_value(row, "id"))
     key = (classification.publisher_source_id, external_id)
     claimed_id = claims.get(key)
