@@ -153,12 +153,14 @@ class FixedDateTime:
 class CanonicalPublisherTemperatureSession(TemperatureSession):
     def __init__(self):
         super().__init__([])
+        self.article_sql = []
         self.selected_article_ids = {}
         self.selected_publisher_names = {}
         self.selected_source_ids = {}
-        self.triplet = (
+        self.discovery_articles = (
             SimpleNamespace(
                 article_id=101,
+                discovery_source_id=900,
                 publisher_name="EL PAÍS",
                 publisher_country_code="ES",
                 publisher_source_id=11,
@@ -168,6 +170,7 @@ class CanonicalPublisherTemperatureSession(TemperatureSession):
             ),
             SimpleNamespace(
                 article_id=102,
+                discovery_source_id=900,
                 publisher_name="Reuters",
                 publisher_country_code="GB",
                 publisher_source_id=22,
@@ -177,12 +180,23 @@ class CanonicalPublisherTemperatureSession(TemperatureSession):
             ),
             SimpleNamespace(
                 article_id=103,
+                discovery_source_id=900,
                 publisher_name=None,
                 publisher_country_code=None,
                 publisher_source_id=None,
                 publisher_weight=None,
                 sentiment=1.0,
                 event_type="cultural",
+            ),
+            SimpleNamespace(
+                article_id=104,
+                discovery_source_id=900,
+                publisher_name="Agencia EFE",
+                publisher_country_code="ES",
+                publisher_source_id=12,
+                publisher_weight=1.0,
+                sentiment=3.0,
+                event_type="military",
             ),
         )
 
@@ -207,11 +221,12 @@ class CanonicalPublisherTemperatureSession(TemperatureSession):
         if "FROM analysis a" not in sql:
             return super().execute(statement, params)
 
+        self.article_sql.append(sql)
         country_code = params["cc"]
         if "JOIN article_country_facts s ON s.article_id = ar.id" in sql:
             matched = [
                 item
-                for item in self.triplet
+                for item in self.discovery_articles
                 if item.publisher_country_code == country_code
                 and item.publisher_source_id is not None
             ]
@@ -224,7 +239,11 @@ class CanonicalPublisherTemperatureSession(TemperatureSession):
                 for item in matched
             ]
         else:
-            matched = list(self.triplet) if country_code == "ES" else []
+            matched = (
+                list(self.discovery_articles)
+                if country_code == "ES"
+                else []
+            )
             rows = [
                 self._temperature_row(item, source_id=900, weight=0.5)
                 for item in matched
@@ -306,17 +325,24 @@ def test_temperature_uses_verified_publisher_country_weight_and_source_id(monkey
     britain = index.calculate_temperature("GB")
 
     assert spain["temperature"] == 100.0
-    assert spain["article_count"] == 1
-    assert spain["source_count"] == 1
+    assert spain["article_count"] == 2
+    assert spain["source_count"] == 2
     assert britain["temperature"] == -100.0
     assert britain["article_count"] == 1
     assert britain["source_count"] == 1
-    assert session.selected_article_ids == {"ES": [101], "GB": [102]}
+    assert session.selected_article_ids == {"ES": [101, 104], "GB": [102]}
     assert session.selected_publisher_names == {
-        "ES": ["EL PAÍS"],
+        "ES": ["EL PAÍS", "Agencia EFE"],
         "GB": ["Reuters"],
     }
-    assert session.selected_source_ids == {"ES": [11], "GB": [22]}
+    assert session.selected_source_ids == {"ES": [11, 12], "GB": [22]}
+    assert set(session.selected_source_ids["ES"]) == {11, 12}
+    assert {
+        item.discovery_source_id for item in session.discovery_articles
+    } == {900}
+    for sql in session.article_sql:
+        assert "s.id as source_id" in sql
+        assert "s.weight" in sql
     assert 103 not in session.selected_article_ids["ES"]
     assert 900 not in session.selected_source_ids["ES"]
 

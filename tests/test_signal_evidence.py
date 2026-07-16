@@ -615,6 +615,9 @@ def test_tier_convergence_uses_verified_publisher_tiers_and_article_evidence(
     session = CanonicalPublisherTierSession()
 
     assert signals.detect_tier_convergence(session) == 1
+    tier_sql = session.calls[0][0]
+    assert "COUNT(DISTINCT s.tier)" in tier_sql
+    assert "ARRAY_AGG(DISTINCT s.tier)" in tier_sql
     assert {item.discovery_source_id for item in session.discovery_articles} == {900}
     assert {
         item.publisher_source_id
