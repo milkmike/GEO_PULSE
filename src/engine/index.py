@@ -2,7 +2,9 @@
 import logging
 import math
 import statistics
-from datetime import datetime, timezone
+from contextlib import contextmanager
+from contextvars import ContextVar
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from sqlalchemy import text
@@ -17,16 +19,51 @@ WINDOW_DAYS = TEMPERATURE_METHODOLOGY.window_days
 TAU = TEMPERATURE_METHODOLOGY.time_decay_tau_seconds
 EVENT_TYPE_WEIGHTS = TEMPERATURE_METHODOLOGY.event_type_weights
 ACTION_MULTIPLIERS = TEMPERATURE_METHODOLOGY.action_level_weights
+_TEMPERATURE_ALERTS_ENABLED: ContextVar[bool] = ContextVar(
+    "temperature_alerts_enabled",
+    default=True,
+)
+
+
+@contextmanager
+def suppress_temperature_alerts():
+    """Keep historical recomputation read-only outside temperature upserts."""
+
+    token = _TEMPERATURE_ALERTS_ENABLED.set(False)
+    try:
+        yield
+    finally:
+        _TEMPERATURE_ALERTS_ENABLED.reset(token)
 
 
 def calculate_temperature(country_code: str) -> dict | None:
     """Calculate current temperature for a country based on analyzed articles."""
-    now = datetime.now(timezone.utc)
+    return calculate_temperature_at(
+        country_code,
+        datetime.now(timezone.utc),
+        exclude_backfill=True,
+    )
+
+
+def calculate_temperature_at(
+    country_code: str,
+    as_of: datetime,
+    *,
+    exclude_backfill: bool = True,
+) -> dict | None:
+    """Calculate Thermometer v1 at one bounded historical instant."""
+
+    if as_of.tzinfo is None:
+        as_of = as_of.replace(tzinfo=timezone.utc)
+    else:
+        as_of = as_of.astimezone(timezone.utc)
+    window_start = as_of - timedelta(days=WINDOW_DAYS)
+    backfill_clause = "AND ar.is_backfill = false" if exclude_backfill else ""
 
     with get_session() as session:
         # Get analyzed articles with sentiment from last WINDOW_DAYS
         rows = session.execute(
-            text("""
+            text(f"""
                 SELECT a.sentiment, a.event_type, a.sentiment_confidence,
                        a.action_level, a.event_key,
                        ar.published_at, s.weight, s.id as source_id,
@@ -37,10 +74,15 @@ def calculate_temperature(country_code: str) -> dict | None:
                 WHERE s.country_code = :cc
                   AND a.is_relevant = true
                   AND a.sentiment IS NOT NULL
-                  AND ar.is_backfill = false
-                  AND ar.published_at > NOW() - INTERVAL ':days days'
-            """.replace(":days", str(WINDOW_DAYS))),
-            {"cc": country_code},
+                  {backfill_clause}
+                  AND ar.published_at > :window_start
+                  AND ar.published_at <= :as_of
+            """),
+            {
+                "cc": country_code,
+                "window_start": window_start,
+                "as_of": as_of,
+            },
         ).fetchall()
 
         if not rows:
@@ -92,7 +134,7 @@ def calculate_temperature(country_code: str) -> dict | None:
             if published_at.tzinfo is None:
                 published_at = published_at.replace(tzinfo=timezone.utc)
             
-            age = (now - published_at).total_seconds()
+            age = (as_of - published_at).total_seconds()
             decay = math.exp(-age / TAU)
             
             w_source = float(
@@ -144,13 +186,18 @@ def calculate_temperature(country_code: str) -> dict | None:
                 components[t] = None
 
         # Trend detection
-        trend = detect_trend(session, country_code, temperature)
+        trend = detect_trend(session, country_code, temperature, as_of=as_of)
         
         # Anomaly detection
-        anomaly_score = detect_anomaly(session, country_code, temperature)
+        anomaly_score = detect_anomaly(
+            session,
+            country_code,
+            temperature,
+            as_of=as_of,
+        )
 
         return {
-            "time": now,
+            "time": as_of,
             "country_code": country_code,
             "temperature": temperature,
             "raw_sentiment": round(
@@ -169,15 +216,22 @@ def calculate_temperature(country_code: str) -> dict | None:
         }
 
 
-def detect_trend(session, country_code: str, current: float) -> str:
+def detect_trend(
+    session,
+    country_code: str,
+    current: float,
+    *,
+    as_of: datetime,
+) -> str:
     """Simple trend detection based on last 3 readings."""
     rows = session.execute(
         text(f"""
             SELECT temperature FROM temperature
             WHERE country_code = :cc
+              AND time < :as_of
             ORDER BY time DESC LIMIT {TEMPERATURE_METHODOLOGY.trend_history_points}
         """),
-        {"cc": country_code},
+        {"cc": country_code, "as_of": as_of},
     ).fetchall()
 
     if len(rows) < TEMPERATURE_METHODOLOGY.trend_minimum_samples:
@@ -194,15 +248,22 @@ def detect_trend(session, country_code: str, current: float) -> str:
     return "stable"
 
 
-def detect_anomaly(session, country_code: str, current: float) -> float | None:
+def detect_anomaly(
+    session,
+    country_code: str,
+    current: float,
+    *,
+    as_of: datetime,
+) -> float | None:
     """Z-score based anomaly detection."""
     rows = session.execute(
         text(f"""
             SELECT temperature FROM temperature
             WHERE country_code = :cc
+              AND time < :as_of
             ORDER BY time DESC LIMIT {TEMPERATURE_METHODOLOGY.anomaly_history_points}
         """),
-        {"cc": country_code},
+        {"cc": country_code, "as_of": as_of},
     ).fetchall()
 
     if len(rows) < TEMPERATURE_METHODOLOGY.anomaly_minimum_samples:
@@ -224,7 +285,10 @@ def detect_anomaly(session, country_code: str, current: float) -> float | None:
     )
     
     # Create alert if anomalous
-    if abs(z_score) > TEMPERATURE_METHODOLOGY.anomaly_warning_threshold:
+    if (
+        _TEMPERATURE_ALERTS_ENABLED.get()
+        and abs(z_score) > TEMPERATURE_METHODOLOGY.anomaly_warning_threshold
+    ):
         severity = (
             "critical"
             if abs(z_score) > TEMPERATURE_METHODOLOGY.anomaly_critical_threshold

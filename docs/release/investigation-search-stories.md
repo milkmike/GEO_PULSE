@@ -119,6 +119,85 @@ stage instead of silently changing its membership plan. Investigate the change,
 then either restore the frozen inputs or start an explicitly new rollout with a
 new checkpoint path. All database upserts remain idempotent.
 
+## Google News attribution repair and monitoring
+
+Capture immutable pre-deploy counts before the attribution backfill. Use the
+same values for every audit in one rollout:
+
+```sql
+SELECT COUNT(*) AS article_baseline FROM articles;
+SELECT COUNT(*) AS temperature_baseline FROM temperature;
+```
+
+Run the read-only audit before changing data and save its JSON output:
+
+```bash
+docker compose run --rm -v "$PWD:/app" analyzer \
+  python scripts/audit_google_news_attribution.py \
+  --article-baseline "$ARTICLE_BASELINE" \
+  --temperature-baseline "$TEMPERATURE_BASELINE" \
+  --report backups/google-news-attribution-before.json
+```
+
+The audit exits non-zero if a verified Russian publisher domain appears under a
+foreign country, an unverified or legacy row leaks into
+`article_country_facts`, or article/temperature counts fall below the captured
+baselines. The report also records publisher-metadata extraction coverage,
+verified/reassigned/unknown counts, the discovery-country to publisher-country
+matrix, and old/new analytics count deltas. Unknown quarantined discoveries may
+be non-zero; they must remain outside `article_country_facts`.
+
+Run both historical repair commands without `--apply` first. The attribution
+scan needs 104 days because the first output point in the 90-day Thermometer
+window consumes a 14-day input lookback:
+
+```bash
+docker compose run --rm -v "$PWD:/app" analyzer \
+  python scripts/backfill_google_news_attribution.py \
+  --since-days 104 --batch-size 500 \
+  --checkpoint backups/google-news-attribution-checkpoint.json \
+  --report backups/google-news-attribution-dry-run.json
+
+docker compose run --rm -v "$PWD:/app" analyzer \
+  python scripts/recompute_attribution_window.py \
+  --days 90 --batch-size 100 \
+  --report backups/google-news-recompute-dry-run.json
+```
+
+Review the attribution matrix and every temperature delta before applying. The
+recompute command reads only existing `(time, country_code)` keys in the 90-day
+output window. Dry-run performs no writes. Apply mode never deletes points,
+never creates an older key, and leaves `pattern_type` and every point before the
+window byte-for-byte unchanged.
+
+Apply the attribution backfill with its durable checkpoint, audit after each
+batch group, and only then apply temperature recomputation:
+
+```bash
+docker compose run --rm -v "$PWD:/app" analyzer \
+  python scripts/backfill_google_news_attribution.py \
+  --apply --since-days 104 --batch-size 500 \
+  --checkpoint backups/google-news-attribution-checkpoint.json \
+  --report backups/google-news-attribution-applied.json
+
+docker compose run --rm -v "$PWD:/app" analyzer \
+  python scripts/audit_google_news_attribution.py \
+  --article-baseline "$ARTICLE_BASELINE" \
+  --temperature-baseline "$TEMPERATURE_BASELINE" \
+  --report backups/google-news-attribution-after-backfill.json
+
+docker compose run --rm -v "$PWD:/app" analyzer \
+  python scripts/recompute_attribution_window.py \
+  --apply --days 90 --batch-size 100 \
+  --report backups/google-news-recompute-applied.json
+```
+
+After the bounded temperature upserts commit, the recompute command invokes the
+existing current RRI, signal, and brief jobs, then the normal 30-day
+thread/story builder. It does not invoke either legacy temperature backfill or
+the destructive investigation backfill path. Run the audit once more after
+these jobs and stop on any non-zero exit; do not roll back by deleting rows.
+
 ## Data and product gates
 
 Capture each result before enabling a flag.
