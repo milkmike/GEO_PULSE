@@ -982,6 +982,9 @@ def test_batch_sql_is_keyset_bounded_and_mutations_preserve_provenance():
     assert dedup_compact.count(
         ") <> 'publisher_discovery'"
     ) == 2
+    assert dedup_compact.count(
+        "candidate.publisher_source_id IS NULL"
+    ) == 2
     assert (
         "candidate.publisher_source_id = affected.publisher_id "
         "AND candidate.external_id = affected.external_id"
@@ -1086,7 +1089,9 @@ def test_postgres_split_dedup_candidates_are_exactly_legacy_equivalent():
     pytest.importorskip("psycopg2")
     engine = create_engine(dsn)
 
-    affected_ids = [104, 100, 100, 101, 102, 103, 104, 105, 999_999]
+    affected_ids = [
+        104, 100, 100, 101, 102, 103, 104, 105, 106, 999_999,
+    ]
     try:
         _reset_postgres_backfill_schema(engine)
         with engine.begin() as connection:
@@ -1119,6 +1124,8 @@ def test_postgres_split_dedup_candidates_are_exactly_legacy_equivalent():
                    'source_verified',FALSE,NULL,0),
                   (105,2,'invalid-affected',:now,'boundary-title',NULL,
                    'legacy_unverified',FALSE,NULL,0),
+                  (106,1,'shadow-ext',:now,'shadow-title',4,
+                   'publisher_reassigned',FALSE,NULL,0),
 
                   (200,2,'shared-ext',:now,'different-title',NULL,
                    'source_verified',FALSE,NULL,0),
@@ -1151,7 +1158,9 @@ def test_postgres_split_dedup_candidates_are_exactly_legacy_equivalent():
                   (213,2,NULL,:now,NULL,NULL,
                    'source_verified',FALSE,NULL,0),
                   (214,4,'',:now,'',NULL,
-                   'source_verified',FALSE,NULL,0)
+                   'source_verified',FALSE,NULL,0),
+                  (215,4,'shadow-ext',:now,'shadow-title',3,
+                   'publisher_verified',FALSE,NULL,0)
             """), {"now": NOW})
 
         with engine.connect() as connection:
@@ -1172,7 +1181,7 @@ def test_postgres_split_dedup_candidates_are_exactly_legacy_equivalent():
 
         assert split == legacy
         assert [row["id"] for row in split] == [
-            100, 101, 102, 103, 104, 200, 201, 202, 203, 210, 211,
+            100, 101, 102, 103, 104, 106, 200, 201, 202, 203, 210, 211,
         ]
     finally:
         engine.dispose()
