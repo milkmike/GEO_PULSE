@@ -107,8 +107,12 @@ CLASSIFIED_UPDATE_SQL = """
 
 UNCLASSIFIED_UPDATE_SQL = """
     /* gnews-backfill:update-unclassified */
+    WITH wal_settings AS MATERIALIZED (
+        SELECT set_config('wal_compression', 'lz4', true)
+    )
     UPDATE articles
     SET geo_status = 'legacy_unverified'
+    FROM wal_settings
     WHERE id = ANY(CAST(:article_ids AS INTEGER[]))
       AND publisher_source_id IS NULL
       AND geo_method IS NULL
