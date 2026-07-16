@@ -43,6 +43,105 @@ CREATE TABLE articles (
     UNIQUE(source_id, external_id)
 );
 
+-- === Publisher attribution and discovery quarantine (migration 024) ===
+
+ALTER TABLE articles
+  ADD COLUMN IF NOT EXISTS publisher_source_id INTEGER,
+  ADD COLUMN IF NOT EXISTS publisher_name TEXT,
+  ADD COLUMN IF NOT EXISTS publisher_url TEXT,
+  ADD COLUMN IF NOT EXISTS publisher_domain TEXT,
+  ADD COLUMN IF NOT EXISTS geo_country_code CHAR(2),
+  ADD COLUMN IF NOT EXISTS geo_status VARCHAR(24) NOT NULL DEFAULT 'source_verified',
+  ADD COLUMN IF NOT EXISTS geo_method VARCHAR(40),
+  ADD COLUMN IF NOT EXISTS geo_confidence NUMERIC(4,3),
+  ADD COLUMN IF NOT EXISTS geo_verified_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS resolved_url TEXT;
+
+ALTER TABLE articles DROP CONSTRAINT IF EXISTS articles_geo_status_check;
+ALTER TABLE articles ADD CONSTRAINT articles_geo_status_check CHECK (
+  geo_status IN (
+    'source_verified', 'publisher_verified', 'publisher_reassigned',
+    'unverified', 'legacy_unverified'
+  )
+);
+
+CREATE TABLE IF NOT EXISTS publisher_domains (
+  domain TEXT PRIMARY KEY,
+  publisher_source_id INTEGER NOT NULL REFERENCES sources(id),
+  country_code CHAR(2) NOT NULL,
+  status VARCHAR(16) NOT NULL CHECK (status IN ('verified', 'blocked')),
+  method VARCHAR(32) NOT NULL,
+  confidence NUMERIC(4,3) NOT NULL CHECK (confidence BETWEEN 0 AND 1),
+  evidence JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS article_discoveries (
+  id BIGSERIAL PRIMARY KEY,
+  discovery_source_id INTEGER NOT NULL REFERENCES sources(id),
+  external_id TEXT NOT NULL,
+  title TEXT,
+  body TEXT,
+  google_url TEXT,
+  published_at TIMESTAMPTZ NOT NULL,
+  feed_country_code CHAR(2) NOT NULL,
+  publisher_name TEXT,
+  publisher_url TEXT,
+  publisher_domain TEXT,
+  geo_status VARCHAR(24) NOT NULL DEFAULT 'unverified',
+  reason TEXT,
+  raw_metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  discovered_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  promoted_article_id INTEGER,
+  UNIQUE (discovery_source_id, external_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_articles_publisher_source_id
+  ON articles (publisher_source_id)
+  WHERE publisher_source_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_article_discoveries_quarantine_keyset
+  ON article_discoveries (discovered_at, id)
+  WHERE promoted_article_id IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_articles_publisher_external_id
+  ON articles (publisher_source_id, external_id)
+  WHERE publisher_source_id IS NOT NULL;
+
+UPDATE sources
+SET config = COALESCE(config, '{}'::jsonb) ||
+  jsonb_build_object('feed_mode', 'publisher_discovery')
+WHERE url ILIKE 'https://news.google.com/rss/search%'
+  AND POSITION('site:' IN LOWER(url)) = 0
+  AND name LIKE 'Google News (%) — Россия';
+
+CREATE OR REPLACE VIEW article_country_facts AS
+SELECT
+  article.id AS article_id,
+  publisher.id,
+  publisher.name,
+  publisher.url,
+  publisher.country_code,
+  publisher.source_type,
+  publisher.weight,
+  publisher.language,
+  publisher.tier,
+  publisher.state_affiliated,
+  publisher.propaganda_risk
+FROM articles article
+JOIN sources discovery ON discovery.id = article.source_id
+JOIN sources publisher ON publisher.id = CASE
+  WHEN COALESCE(discovery.config->>'feed_mode', 'publisher') = 'publisher_discovery'
+    THEN article.publisher_source_id
+  ELSE COALESCE(article.publisher_source_id, article.source_id)
+END
+WHERE article.geo_status IN (
+  'source_verified', 'publisher_verified', 'publisher_reassigned'
+)
+AND (
+  COALESCE(discovery.config->>'feed_mode', 'publisher') <> 'publisher_discovery'
+  OR article.publisher_source_id IS NOT NULL
+);
+
 CREATE TABLE analysis (
     id SERIAL PRIMARY KEY,
     article_id INTEGER REFERENCES articles(id) UNIQUE,

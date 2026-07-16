@@ -132,6 +132,28 @@ def test_actual_runner_bootstraps_twice_and_story_resolution_is_safe():
     try:
         with connection.cursor() as cursor:
             _reset(cursor, initialize=True)
+            cursor.execute("""
+                INSERT INTO sources(
+                    id,name,url,country_code,source_type,weight,language,tier
+                ) VALUES
+                  (901,'Direct Publisher','https://direct.example','FI','rss',1,
+                   'fi','mainstream'),
+                  (902,'Google News (FI) — Россия',
+                   'https://news.google.com/rss/search?q=Russia&hl=fi',
+                   'FI','rss',1,'fi','mainstream')
+            """)
+            cursor.execute("""
+                INSERT INTO articles(
+                    id,source_id,external_id,title,url,published_at,collected_at,
+                    language,title_normalized,is_duplicate,is_backfill
+                ) VALUES
+                  (901,901,'direct-before-024','Direct before migration',
+                   'https://direct.example/story',NOW(),NOW(),'fi',
+                   'direct before migration',FALSE,FALSE),
+                  (902,902,'discovery-before-024','Discovery before migration',
+                   'https://news.google.com/articles/discovery',NOW(),NOW(),'fi',
+                   'discovery before migration',FALSE,FALSE)
+            """)
 
         first = _run_migrations(dsn)
         _assert_success(first)
@@ -171,6 +193,52 @@ def test_actual_runner_bootstraps_twice_and_story_resolution_is_safe():
             ]
             cursor.execute("SELECT count(*) FROM schema_migrations")
             assert cursor.fetchone()[0] == len(list(MIGRATIONS.glob("*.sql")))
+            cursor.execute("""
+                SELECT config->>'feed_mode'
+                FROM sources
+                WHERE id = 902
+            """)
+            assert cursor.fetchone()[0] == "publisher_discovery"
+            cursor.execute("""
+                SELECT cls.relname, idx.indisvalid, idx.indisready
+                FROM pg_class cls
+                JOIN pg_namespace ns ON ns.oid = cls.relnamespace
+                JOIN pg_index idx ON idx.indexrelid = cls.oid
+                WHERE ns.nspname = 'public'
+                  AND cls.relname IN (
+                    'idx_articles_publisher_source_id',
+                    'idx_article_discoveries_quarantine_keyset',
+                    'uq_articles_publisher_external_id'
+                  )
+                ORDER BY cls.relname
+            """)
+            assert cursor.fetchall() == [
+                ("idx_article_discoveries_quarantine_keyset", True, True),
+                ("idx_articles_publisher_source_id", True, True),
+                ("uq_articles_publisher_external_id", True, True),
+            ]
+            cursor.execute("""
+                SELECT id, source_id, external_id, url
+                FROM articles
+                WHERE id IN (901, 902)
+                ORDER BY id
+            """)
+            assert cursor.fetchall() == [
+                (901, 901, "direct-before-024", "https://direct.example/story"),
+                (
+                    902,
+                    902,
+                    "discovery-before-024",
+                    "https://news.google.com/articles/discovery",
+                ),
+            ]
+            cursor.execute("""
+                SELECT article_id, id, country_code
+                FROM article_country_facts
+                WHERE article_id IN (901, 902)
+                ORDER BY article_id
+            """)
+            assert cursor.fetchall() == [(901, 901, "FI")]
 
         engine = create_engine(dsn)
         Session = sessionmaker(bind=engine, expire_on_commit=False)

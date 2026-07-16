@@ -45,6 +45,48 @@ class Source(Base):
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
 
 
+class PublisherDomain(Base):
+    __tablename__ = "publisher_domains"
+    domain = Column(Text, primary_key=True)
+    publisher_source_id = Column(
+        Integer,
+        ForeignKey("sources.id"),
+        nullable=False,
+    )
+    country_code = Column(String(2), nullable=False)
+    status = Column(String(16), nullable=False)
+    method = Column(String(32), nullable=False)
+    confidence = Column(Numeric(4, 3), nullable=False)
+    evidence = Column(
+        JSONB,
+        nullable=False,
+        default=dict,
+        server_default=text("'{}'::jsonb"),
+    )
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=datetime.utcnow,
+        server_default=text("NOW()"),
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=datetime.utcnow,
+        server_default=text("NOW()"),
+    )
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('verified','blocked')",
+            name="publisher_domains_status_check",
+        ),
+        CheckConstraint(
+            "confidence BETWEEN 0 AND 1",
+            name="publisher_domains_confidence_check",
+        ),
+    )
+
+
 class Article(Base):
     __tablename__ = "articles"
     id = Column(Integer, primary_key=True)
@@ -62,7 +104,62 @@ class Article(Base):
     duplicate_of = Column(Integer)
     reprint_count = Column(Integer, default=0)
     is_backfill = Column(Boolean, default=False)
+    publisher_source_id = Column(Integer)
+    publisher_name = Column(Text)
+    publisher_url = Column(Text)
+    publisher_domain = Column(Text)
+    geo_country_code = Column(String(2))
+    geo_status = Column(
+        String(24),
+        nullable=False,
+        default="source_verified",
+        server_default=text("'source_verified'"),
+    )
+    geo_method = Column(String(40))
+    geo_confidence = Column(Numeric(4, 3))
+    geo_verified_at = Column(DateTime(timezone=True))
+    resolved_url = Column(Text)
     __table_args__ = (UniqueConstraint("source_id", "external_id"),)
+
+
+class ArticleDiscovery(Base):
+    __tablename__ = "article_discoveries"
+    id = Column(BigInteger, primary_key=True)
+    discovery_source_id = Column(
+        Integer,
+        ForeignKey("sources.id"),
+        nullable=False,
+    )
+    external_id = Column(Text, nullable=False)
+    title = Column(Text)
+    body = Column(Text)
+    google_url = Column(Text)
+    published_at = Column(DateTime(timezone=True), nullable=False)
+    feed_country_code = Column(String(2), nullable=False)
+    publisher_name = Column(Text)
+    publisher_url = Column(Text)
+    publisher_domain = Column(Text)
+    geo_status = Column(
+        String(24),
+        nullable=False,
+        default="unverified",
+        server_default=text("'unverified'"),
+    )
+    reason = Column(Text)
+    raw_metadata = Column(
+        JSONB,
+        nullable=False,
+        default=dict,
+        server_default=text("'{}'::jsonb"),
+    )
+    discovered_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=datetime.utcnow,
+        server_default=text("NOW()"),
+    )
+    promoted_article_id = Column(Integer)
+    __table_args__ = (UniqueConstraint("discovery_source_id", "external_id"),)
 
 
 class Analysis(Base):

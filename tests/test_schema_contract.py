@@ -157,6 +157,56 @@ def test_signal_evidence_array_indexes_are_present_for_new_and_existing_installs
     assert "story_events_action_level_range" in migration_sql
 
 
+def test_google_news_publisher_attribution_schema_contract():
+    migration_sql = migration("024_google_news_publisher_attribution.sql")
+    init_sql = (ROOT / "data" / "init.sql").read_text()
+    for fragment in (
+        "CREATE TABLE IF NOT EXISTS public.publisher_domains",
+        "CREATE TABLE IF NOT EXISTS public.article_discoveries",
+        "ADD COLUMN IF NOT EXISTS publisher_source_id INTEGER",
+        "ADD COLUMN IF NOT EXISTS publisher_domain TEXT",
+        "ADD COLUMN IF NOT EXISTS geo_country_code CHAR(2)",
+        "ADD COLUMN IF NOT EXISTS geo_status VARCHAR(24)",
+        "CREATE OR REPLACE VIEW public.article_country_facts",
+        "publisher_reassigned",
+        "legacy_unverified",
+    ):
+        assert fragment in migration_sql
+        assert fragment.replace("public.", "") in init_sql
+
+    assert "UPDATE articles SET source_id" not in migration_sql
+    assert "DELETE FROM articles" not in migration_sql
+    assert "indisvalid AND idx.indisready" in migration_sql
+    for index_name in (
+        "idx_articles_publisher_source_id",
+        "idx_article_discoveries_quarantine_keyset",
+        "uq_articles_publisher_external_id",
+    ):
+        assert index_name in migration_sql
+        assert index_name in init_sql
+
+
+def test_google_news_publisher_attribution_orm_contract():
+    from src.db import Article, ArticleDiscovery, PublisherDomain
+
+    for column in (
+        "publisher_source_id",
+        "publisher_name",
+        "publisher_url",
+        "publisher_domain",
+        "geo_country_code",
+        "geo_status",
+        "geo_method",
+        "geo_confidence",
+        "geo_verified_at",
+        "resolved_url",
+    ):
+        assert column in Article.__table__.c
+
+    assert PublisherDomain.__tablename__ == "publisher_domains"
+    assert ArticleDiscovery.__tablename__ == "article_discoveries"
+
+
 def test_search_candidate_indexes_are_present_for_new_and_existing_installs():
     migration_sql = migration("023_signal_evidence_array_indexes.sql")
     init_sql = (ROOT / "data" / "init.sql").read_text()
