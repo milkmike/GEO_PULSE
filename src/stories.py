@@ -1881,18 +1881,13 @@ def _scope_candidate_articles(
     )
 
 
-def _filter_candidate_event_articles(
+def _project_candidate_articles(
     candidate: StoryCandidate,
+    confirming_articles: Sequence[StoryArticle],
 ) -> StoryCandidate | None:
-    """Keep only articles that confirm the candidate's concrete event."""
+    """Recompute one candidate from an explicit, evidence-backed article set."""
 
-    confirming_articles = tuple(
-        article
-        for article in candidate.articles
-        if _specific_event_key(article.event_key)
-        and trigram_similarity(article.event_key, candidate.event_key)
-        >= CONCRETE_EVENT_MATCH_THRESHOLD
-    )
+    confirming_articles = tuple(confirming_articles)
     if not confirming_articles:
         return None
     activity_dates = [
@@ -1939,6 +1934,68 @@ def _filter_candidate_event_articles(
     )
 
 
+def _filter_story_cluster_articles(
+    cluster: Sequence[StoryCandidate],
+) -> tuple[StoryCandidate, ...] | None:
+    """Retain only articles supported by a concrete cross-country event pair."""
+
+    supported_ids: dict[int, set[int]] = {}
+    for left_index, left in enumerate(cluster):
+        for right in cluster[left_index + 1:]:
+            if left.country_code == right.country_code:
+                continue
+            for left_article in left.articles:
+                if (
+                    left_article.country_code != left.country_code
+                    or left_article.published_at is None
+                    or not _specific_event_key(left_article.event_key)
+                ):
+                    continue
+                for right_article in right.articles:
+                    if (
+                        right_article.country_code != right.country_code
+                        or right_article.published_at is None
+                        or not _specific_event_key(right_article.event_key)
+                    ):
+                        continue
+                    gap_days = abs(
+                        (
+                            _as_utc(left_article.published_at)
+                            - _as_utc(right_article.published_at)
+                        ).total_seconds()
+                    ) / 86400.0
+                    if (
+                        gap_days <= MAX_MERGE_GAP_DAYS
+                        and trigram_similarity(
+                            left_article.event_key,
+                            right_article.event_key,
+                        ) >= CONCRETE_EVENT_MATCH_THRESHOLD
+                    ):
+                        supported_ids.setdefault(left.thread_id, set()).add(
+                            left_article.article_id
+                        )
+                        supported_ids.setdefault(right.thread_id, set()).add(
+                            right_article.article_id
+                        )
+
+    filtered = []
+    for candidate in cluster:
+        candidate_supported_ids = supported_ids.get(candidate.thread_id, set())
+        projected = _project_candidate_articles(
+            candidate,
+            tuple(
+                article
+                for article in candidate.articles
+                if article.article_id in candidate_supported_ids
+            ),
+        )
+        if projected is not None:
+            filtered.append(projected)
+    if len({candidate.country_code for candidate in filtered}) < 2:
+        return None
+    return tuple(filtered)
+
+
 def build_stories(
     session: Any,
     *,
@@ -1979,17 +2036,17 @@ def build_stories(
                 )
             ) is not None
         ]
-    candidates = [
-        filtered
-        for candidate in candidates
-        if (filtered := _filter_candidate_event_articles(candidate)) is not None
-    ]
     effective_reactivation_pairs = frozenset(
         set(reactivation_pairs) | set(derive_reactivation_pairs(session, candidates))
     )
     clusters = cluster_story_candidates(
         candidates, reactivation_pairs=effective_reactivation_pairs
     )
+    clusters = [
+        filtered
+        for cluster in clusters
+        if (filtered := _filter_story_cluster_articles(cluster)) is not None
+    ]
     membership_generation = (
         allocate_story_membership_generation(session) if clusters else None
     )

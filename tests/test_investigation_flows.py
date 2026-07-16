@@ -876,6 +876,11 @@ def test_story_resume_fails_closed_when_the_frozen_candidate_snapshot_changes(
         return 71, 2
 
     monkeypatch.setattr(backfill, "persist_story_cluster", persist)
+    monkeypatch.setattr(
+        backfill,
+        "_filter_story_cluster_articles",
+        lambda cluster: tuple(cluster),
+    )
 
     @contextmanager
     def session_factory():

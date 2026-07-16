@@ -28,7 +28,7 @@ from src.engine.explanations import (
 )
 from src.knowledge import KnowledgeBackfillService
 from src.stories import (
-    _filter_candidate_event_articles,
+    _filter_story_cluster_articles,
     cluster_story_candidates,
     derive_reactivation_pairs,
     fetch_story_candidates,
@@ -280,11 +280,7 @@ def _load_story_candidates(
     session: Any,
     snapshot_max_thread_id: int | None = None,
 ) -> tuple[list[Any], frozenset[tuple[int, int]], str, int]:
-    candidates = [
-        filtered
-        for candidate in fetch_story_candidates(session)
-        if (filtered := _filter_candidate_event_articles(candidate)) is not None
-    ]
+    candidates = fetch_story_candidates(session)
     if snapshot_max_thread_id is None:
         snapshot_max_thread_id = max(
             (int(item.thread_id) for item in candidates),
@@ -353,10 +349,15 @@ def backfill_story_membership(context: StageContext, cursor: Any) -> StageReport
         )
         next_cluster_index = int(frozen.get("next_cluster_index", 0))
     else:
-        clusters = cluster_story_candidates(
+        raw_clusters = cluster_story_candidates(
             candidates,
             reactivation_pairs=derived_pairs,
         )
+        clusters = [
+            filtered
+            for cluster in raw_clusters
+            if (filtered := _filter_story_cluster_articles(cluster)) is not None
+        ]
         plan = _frozen_cluster_plan(clusters)
         reactivation_pairs = derived_pairs
         next_cluster_index = 0
@@ -370,7 +371,11 @@ def backfill_story_membership(context: StageContext, cursor: Any) -> StageReport
         if context.apply:
             context.save_cursor(frozen, done=False)
 
-    clusters = _clusters_from_plan(candidates, plan)
+    clusters = [
+        filtered
+        for cluster in _clusters_from_plan(candidates, plan)
+        if (filtered := _filter_story_cluster_articles(cluster)) is not None
+    ]
     if not 0 <= next_cluster_index <= len(clusters):
         raise ValueError("story checkpoint next_cluster_index is out of bounds")
     pending = clusters[next_cluster_index:]

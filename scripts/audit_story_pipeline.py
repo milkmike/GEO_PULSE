@@ -14,7 +14,7 @@ from sqlalchemy import text
 
 from src.db import SessionLocal, wait_for_db
 from src.stories import (
-    _filter_candidate_event_articles,
+    _filter_story_cluster_articles,
     _scope_candidate_articles,
     cluster_story_candidates,
     derive_reactivation_pairs,
@@ -77,9 +77,7 @@ def run_audit(
             published_after=scope_start,
         )
         if scoped is not None:
-            filtered = _filter_candidate_event_articles(scoped)
-            if filtered is not None:
-                candidates.append(filtered)
+            candidates.append(scoped)
 
     article_ids = sorted({
         article_id
@@ -159,10 +157,15 @@ def run_audit(
         for reason in reasons:
             reason_counts[reason] += 1
 
-    clusters = cluster_story_candidates(
+    raw_clusters = cluster_story_candidates(
         candidates,
         reactivation_pairs=reactivation_pairs,
     )
+    clusters = [
+        filtered
+        for cluster in raw_clusters
+        if (filtered := _filter_story_cluster_articles(cluster)) is not None
+    ]
     proposed_clusters = [{
         "thread_ids": sorted(item.thread_id for item in cluster),
         "countries": sorted({item.country_code for item in cluster}),

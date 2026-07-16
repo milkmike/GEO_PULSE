@@ -27,7 +27,7 @@ from src.stories import (
     score_story_match,
     should_merge,
     transition_lifecycle,
-    _filter_candidate_event_articles,
+    _filter_story_cluster_articles,
     _story_slug,
 )
 
@@ -230,78 +230,101 @@ def test_concrete_event_gate_keeps_existing_fourteen_day_time_window():
     assert "time_window_exceeded" in merge_rejection_reasons(similarity)
 
 
-def test_dirty_thread_retains_only_articles_confirming_candidate_event():
-    event_key = "заседание совета консульских служб снг"
-    matching = StoryArticle(
-        101,
+def test_dirty_cluster_keeps_only_cross_country_supported_articles():
+    thread_event = "заседание консульского совета стран снг"
+    supported_event = "заседание совета консульских служб снг"
+
+    def article(article_id, country, event_key, source_id, *, hours=0):
+        return StoryArticle(
+            article_id,
+            country,
+            f"Article {article_id}",
+            None,
+            NOW - timedelta(hours=hours),
+            f"Source {source_id}",
+            action_level=article_id % 6 + 1,
+            event_key=event_key,
+            entity_ids=frozenset({f"entity-{article_id}"}),
+            topics=frozenset({f"topic-{article_id}"}),
+            source_id=source_id,
+        )
+
+    left_supported = article(201, "TJ", supported_event, 21)
+    left_dirty = article(
+        202,
         "TJ",
-        "Совет консульских служб провёл заседание",
-        None,
-        NOW,
-        "Asia Plus",
-        action_level=4,
-        event_key=event_key,
-        entity_ids=frozenset({"entity-cis"}),
-        topics=frozenset({"diplomacy"}),
-        source_id=11,
+        "форум креативной молодежи центральной азии",
+        22,
     )
-    unrelated = StoryArticle(
-        102,
-        "TJ",
-        "Поставки пиломатериалов временно ограничены",
-        None,
-        NOW - timedelta(hours=1),
-        "Other source",
-        action_level=6,
-        event_key="ограничение поставок пиломатериалов из россии",
-        entity_ids=frozenset({"entity-russia"}),
-        topics=frozenset({"trade"}),
-        source_id=12,
+    right_supported = article(301, "KG", supported_event, 31, hours=2)
+    right_supported_2 = article(302, "KG", supported_event, 32, hours=3)
+    right_dirty = article(
+        303,
+        "KG",
+        "заседание совета глав правительств шос",
+        33,
     )
-    dirty = replace(
-        candidate("TJ", event_key=event_key),
-        thread_id=501,
-        article_ids=(101, 102),
-        articles=(matching, unrelated),
-        entities=matching.entity_ids | unrelated.entity_ids,
-        topics=matching.topics | unrelated.topics,
-        sources=frozenset({matching.source_name, unrelated.source_name}),
-        source_ids=frozenset({11, 12}),
-        first_seen=unrelated.published_at,
-        last_seen=matching.published_at,
-        highest_action_level=6,
+    left = replace(
+        candidate("TJ", event_key=thread_event),
+        thread_id=9201,
+        article_ids=(201, 202),
+        articles=(left_supported, left_dirty),
+    )
+    right = replace(
+        candidate("KG", event_key=thread_event),
+        thread_id=9202,
+        article_ids=(301, 302, 303),
+        articles=(right_supported, right_supported_2, right_dirty),
     )
 
-    filtered = _filter_candidate_event_articles(dirty)
+    filtered = _filter_story_cluster_articles((left, right))
 
     assert filtered is not None
-    assert filtered.article_ids == (101,)
-    assert filtered.articles == (matching,)
-    assert filtered.entities == frozenset({"entity-cis"})
-    assert filtered.topics == frozenset({"diplomacy"})
-    assert filtered.sources == frozenset({"Asia Plus"})
-    assert filtered.source_ids == frozenset({11})
-    assert filtered.first_seen == NOW
-    assert filtered.last_seen == NOW
-    assert filtered.highest_action_level == 4
+    assert [item.article_ids for item in filtered] == [(201,), (301, 302)]
+    assert [item.source_ids for item in filtered] == [
+        frozenset({21}),
+        frozenset({31, 32}),
+    ]
+    assert all(
+        article.event_key == supported_event
+        for item in filtered
+        for article in item.articles
+    )
 
 
-def test_candidate_without_confirming_article_event_is_dropped():
-    dirty = replace(
-        candidate("TJ", event_key="заседание совета консульских служб снг"),
+def test_thread_pair_drops_when_own_article_events_are_different():
+    thread_event = "заседание консульского совета стран снг"
+    left = replace(
+        candidate("TJ", event_key=thread_event),
+        thread_id=9301,
         articles=(StoryArticle(
-            102,
+            401,
             "TJ",
-            "Поставки пиломатериалов временно ограничены",
+            "Молодёжный форум",
             None,
             NOW,
-            "Other source",
-            event_key="ограничение поставок пиломатериалов из россии",
-            source_id=12,
+            "TJ source",
+            event_key="форум креативной молодежи центральной азии",
+            source_id=41,
+        ),),
+    )
+    right = replace(
+        candidate("KG", event_key=thread_event),
+        thread_id=9302,
+        articles=(StoryArticle(
+            501,
+            "KG",
+            "Совет ШОС",
+            None,
+            NOW,
+            "KG source",
+            event_key="заседание совета глав правительств шос",
+            source_id=51,
         ),),
     )
 
-    assert _filter_candidate_event_articles(dirty) is None
+    assert should_merge(score_story_match(left, right))
+    assert _filter_story_cluster_articles((left, right)) is None
 
 
 def test_identical_event_key_does_not_double_count_title_similarity():
@@ -921,13 +944,29 @@ def test_article_event_key_uses_only_own_analysis_or_raw_response_key():
 
     candidates = fetch_story_candidates(OwnEventKeySession())
     by_thread = {item.thread_id: item for item in candidates}
+    peer = replace(
+        candidate("KG", event_key=event_key),
+        thread_id=9200,
+        articles=(StoryArticle(
+            202,
+            "KG",
+            "Подтверждённый ключ",
+            None,
+            NOW,
+            "KG source",
+            event_key=event_key,
+            source_id=22,
+        ),),
+    )
 
     assert by_thread[9101].articles[0].event_key is None
-    assert _filter_candidate_event_articles(by_thread[9101]) is None
+    assert _filter_story_cluster_articles((by_thread[9101], peer)) is None
     assert by_thread[9102].articles[0].event_key == event_key
-    assert _filter_candidate_event_articles(by_thread[9102]).article_ids == (102,)
+    supported = _filter_story_cluster_articles((by_thread[9102], peer))
+    assert supported is not None
+    assert [item.article_ids for item in supported] == [(102,), (202,)]
     assert by_thread[9103].articles[0].event_key is None
-    assert _filter_candidate_event_articles(by_thread[9103]) is None
+    assert _filter_story_cluster_articles((by_thread[9103], peer)) is None
 
 
 def test_mixed_legacy_thread_uses_one_canonical_thread_country_candidate():
@@ -3363,6 +3402,11 @@ def test_background_builder_derives_reactivation_pairs_from_resolved_story(monke
 
     monkeypatch.setattr(stories_module, "persist_story_cluster", fake_persist)
     monkeypatch.setattr(stories_module, "refresh_story_lifecycles", lambda session, now: None)
+    monkeypatch.setattr(
+        stories_module,
+        "_filter_story_cluster_articles",
+        lambda cluster: tuple(cluster),
+    )
 
     result = build_stories(ResolvedPairSession(), now=NOW)
 
@@ -3466,6 +3510,11 @@ def test_background_builder_allocates_one_generation_for_the_whole_transaction(m
 
     monkeypatch.setattr(stories_module, "persist_story_cluster", fake_persist)
     monkeypatch.setattr(stories_module, "refresh_story_lifecycles", lambda session, now: None)
+    monkeypatch.setattr(
+        stories_module,
+        "_filter_story_cluster_articles",
+        lambda cluster: tuple(cluster),
+    )
 
     result = build_stories(GenerationSession(), now=NOW)
 
@@ -3505,6 +3554,11 @@ def test_background_builder_wires_explicit_reactivation_pairs(monkeypatch):
     monkeypatch.setattr(stories_module, "cluster_story_candidates", fake_cluster)
     monkeypatch.setattr(stories_module, "persist_story_cluster", fake_persist)
     monkeypatch.setattr(stories_module, "refresh_story_lifecycles", lambda session, now: None)
+    monkeypatch.setattr(
+        stories_module,
+        "_filter_story_cluster_articles",
+        lambda cluster: tuple(cluster),
+    )
     monkeypatch.setattr(
         stories_module,
         "allocate_story_membership_generation",
