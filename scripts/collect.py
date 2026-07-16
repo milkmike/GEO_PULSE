@@ -277,6 +277,22 @@ def _save_source(source, articles: list[dict]) -> tuple[int, int, int]:
                     "source_id": source.id,
                     "external_id": art["external_id"],
                 }
+            elif match.publisher_source_id == source.id:
+                # A verified site-wrapper is its own canonical publisher.  Rows
+                # collected before publisher attribution have the same
+                # source_id/external_id but a NULL publisher_source_id, so the
+                # canonical-only lookup below would miss them and hit the
+                # immutable provenance uniqueness constraint on insert.
+                exact_sql = (
+                    "SELECT id FROM articles "
+                    "WHERE external_id = :external_id "
+                    "AND (publisher_source_id = :publisher_source_id "
+                    "OR (publisher_source_id IS NULL AND source_id = :publisher_source_id))"
+                )
+                exact_params = {
+                    "publisher_source_id": match.publisher_source_id,
+                    "external_id": art["external_id"],
+                }
             else:
                 exact_sql = (
                     "SELECT id FROM articles "

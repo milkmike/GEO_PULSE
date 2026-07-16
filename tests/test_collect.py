@@ -332,6 +332,87 @@ def test_site_wrapper_publisher_mismatch_is_quarantined(monkeypatch):
     engine.dispose()
 
 
+def test_site_wrapper_skips_legacy_exact_article_before_dedup(monkeypatch):
+    engine, SessionLocal = _database()
+    _seed(SessionLocal)
+    source = SimpleNamespace(
+        id=4,
+        name="Wrapper Example",
+        url=(
+            "https://news.google.com/rss/search?"
+            "q=site:wrapper.example+Russia&gl=US&ceid=US:en"
+        ),
+        country_code="US",
+        source_type="rss",
+        weight=0.9,
+        config={"feed_mode": "site_wrapper"},
+    )
+    with SessionLocal.begin() as session:
+        session.add(Source(
+            id=4,
+            name=source.name,
+            url=source.url,
+            country_code="US",
+            source_type="rss",
+            weight=0.9,
+            config=source.config,
+        ))
+        session.add(PublisherDomain(
+            domain="wrapper.example",
+            publisher_source_id=4,
+            country_code="US",
+            status="verified",
+            method="site_wrapper",
+            confidence=1.0,
+            evidence={},
+        ))
+        session.add(Article(
+            source_id=4,
+            external_id="legacy-wrapper",
+            title="Legacy site wrapper article with a long title",
+            body="Russia",
+            url="https://news.google.com/rss/articles/legacy-wrapper",
+            published_at=PUBLISHED_AT,
+            publisher_source_id=None,
+            geo_status="source_verified",
+        ))
+
+    @contextmanager
+    def session_context():
+        with SessionLocal.begin() as session:
+            yield session
+
+    dedup_calls = []
+    queued = []
+    monkeypatch.setattr(collect, "get_session", session_context)
+    monkeypatch.setattr(
+        collect,
+        "find_duplicate",
+        lambda *args, **kwargs: dedup_calls.append((args, kwargs)),
+    )
+    monkeypatch.setattr(collect, "_enqueue_article", lambda *args: queued.append(args))
+
+    result = collect._save_source(
+        source,
+        [_article(
+            "legacy-wrapper",
+            "Wrapper Example",
+            "https://wrapper.example",
+            "wrapper.example",
+        )],
+    )
+
+    with SessionLocal() as session:
+        saved = session.scalars(select(Article)).all()
+        assert len(saved) == 1
+        assert saved[0].publisher_source_id is None
+        assert saved[0].geo_status == "source_verified"
+    assert result == (0, 0, 1)
+    assert dedup_calls == []
+    assert queued == []
+    engine.dispose()
+
+
 def test_collect_all_selects_source_config():
     statements = []
 
