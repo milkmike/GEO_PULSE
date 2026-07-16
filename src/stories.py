@@ -728,7 +728,10 @@ def fetch_story_candidates(
                ar.published_at, s.id AS publisher_source_id,
                s.name AS source_name,
                an.sentiment, COALESCE(an.action_level, 1) AS action_level,
-               COALESCE(NULLIF(an.event_key, ''), t.thread_key) AS article_event_key,
+               COALESCE(
+                   NULLIF(an.event_key, ''),
+                   NULLIF(an.raw_response->>'event_key', '')
+               ) AS article_event_key,
                COALESCE(an.topics, ARRAY[]::text[]) AS topics
         FROM threads t
         JOIN thread_articles ta ON ta.thread_id = t.id

@@ -864,6 +864,72 @@ def test_ready_active_semantic_pairs_are_attached_symmetrically():
     ]
 
 
+def test_article_event_key_uses_only_own_analysis_or_raw_response_key():
+    event_key = "заседание совета консульских служб снг"
+
+    class OwnEventKeySession:
+        def execute(self, statement, params=None):
+            sql = str(statement)
+            if "FROM threads t" in sql:
+                normalized_sql = " ".join(sql.split())
+                assert "NULLIF(an.event_key, '')" in normalized_sql
+                assert "NULLIF(an.raw_response->>'event_key', '')" in normalized_sql
+                assert ") AS article_event_key" in normalized_sql
+                assert "t.thread_key) AS article_event_key" not in normalized_sql
+                common = dict(
+                    country_code="TJ",
+                    thread_key=event_key,
+                    thread_title="Консульский совет СНГ",
+                    first_seen=NOW,
+                    last_seen=NOW,
+                    url=None,
+                    published_at=NOW,
+                    publisher_source_id=11,
+                    source_name="Asia Plus",
+                    sentiment=0.1,
+                    action_level=3,
+                    topics=["diplomacy"],
+                )
+                return FakeResult(rows=[
+                    SimpleNamespace(
+                        **common,
+                        thread_id=9101,
+                        article_id=101,
+                        article_title="Без собственного ключа",
+                        article_event_key=None,
+                    ),
+                    SimpleNamespace(
+                        **common,
+                        thread_id=9102,
+                        article_id=102,
+                        article_title="Ключ восстановлен из raw response",
+                        article_event_key=event_key,
+                    ),
+                    SimpleNamespace(
+                        **common,
+                        thread_id=9103,
+                        article_id=103,
+                        article_title="Пустые собственные ключи",
+                        article_event_key=None,
+                    ),
+                ])
+            if "FROM article_entity_mentions" in sql:
+                return FakeResult(rows=[])
+            if "semantic_story_pairs" in sql:
+                return FakeResult(rows=[])
+            raise AssertionError(f"Unexpected SQL: {sql}")
+
+    candidates = fetch_story_candidates(OwnEventKeySession())
+    by_thread = {item.thread_id: item for item in candidates}
+
+    assert by_thread[9101].articles[0].event_key is None
+    assert _filter_candidate_event_articles(by_thread[9101]) is None
+    assert by_thread[9102].articles[0].event_key == event_key
+    assert _filter_candidate_event_articles(by_thread[9102]).article_ids == (102,)
+    assert by_thread[9103].articles[0].event_key is None
+    assert _filter_candidate_event_articles(by_thread[9103]) is None
+
+
 def test_mixed_legacy_thread_uses_one_canonical_thread_country_candidate():
     session = MixedLegacyThreadFixtureSession()
     candidates = fetch_story_candidates(session)
