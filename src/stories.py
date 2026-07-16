@@ -27,6 +27,20 @@ MERGE_THRESHOLD = 0.65
 MAX_MERGE_GAP_DAYS = 14.0
 MIN_MEANINGFUL_OVERLAP = 0.20
 TITLE_FALLBACK_EVENT_CEILING = 0.85
+CONCRETE_EVENT_MATCH_THRESHOLD = 0.65
+MIN_CONCRETE_EVENT_CHARS = 12
+MIN_CONCRETE_EVENT_TOKENS = 3
+GENERIC_EVENT_KEY_PHRASES = frozenset({
+    "архив сайта",
+    "главные новости",
+    "лента новостей",
+    "новости дня",
+    "новости мира",
+    "обзор прессы",
+    "последние новости",
+    "поиск на сайте",
+    "прогноз погоды",
+})
 STORY_COMPONENT_WEIGHTS = {
     "event_key": 0.35,
     "entities": 0.25,
@@ -196,11 +210,33 @@ def _semantic_similarity(left: StoryCandidate, right: StoryCandidate) -> float:
     return 0.0
 
 
+def _specific_event_key(value: object) -> bool:
+    normalized = _normalized_text(str(value or ""))
+    tokens = normalized.split()
+    return (
+        len(normalized.replace(" ", "")) >= MIN_CONCRETE_EVENT_CHARS
+        and len(tokens) >= MIN_CONCRETE_EVENT_TOKENS
+        and not any(
+            generic_phrase in normalized
+            for generic_phrase in GENERIC_EVENT_KEY_PHRASES
+        )
+    )
+
+
+def _has_specific_event_evidence(similarity: StorySimilarity) -> bool:
+    event_keys = similarity.evidence.get("event_keys", ())
+    return (
+        isinstance(event_keys, (list, tuple))
+        and len(event_keys) >= 2
+        and all(_specific_event_key(event_key) for event_key in event_keys)
+    )
+
+
 def score_story_match(left: StoryCandidate, right: StoryCandidate) -> StorySimilarity:
     """Score whether two country threads describe one concrete global story.
 
-    The weighted total is deliberately insufficient on its own: ``should_merge``
-    also requires two independent semantic features and the fourteen-day gate.
+    The weighted total remains ranking evidence only. ``should_merge`` admits
+    pairs through a specific event-key anchor and the fourteen-day gate.
     """
 
     gap_days = _gap_days(left, right)
@@ -273,23 +309,16 @@ def score_story_match(left: StoryCandidate, right: StoryCandidate) -> StorySimil
         "effective_components": effective_components,
         "weights": STORY_COMPONENT_WEIGHTS,
         "score": total,
-        "non_merge_reasons": [
-            reason
-            for condition, reason in (
-                (total < MERGE_THRESHOLD, "score_below_threshold"),
-                (len(matched_features) < 2, "insufficient_independent_features"),
-                (gap_days > MAX_MERGE_GAP_DAYS, "time_window_exceeded"),
-            )
-            if condition
-        ],
     }
-    return StorySimilarity(
+    similarity = StorySimilarity(
         total=total,
         components=components,
         matched_features=frozenset(matched_features),
         gap_days=gap_days,
         evidence=evidence,
     )
+    evidence["non_merge_reasons"] = list(merge_rejection_reasons(similarity))
+    return similarity
 
 
 def merge_rejection_reasons(
@@ -300,14 +329,25 @@ def merge_rejection_reasons(
     """Return stable, explainable reasons a pair cannot merge."""
 
     reasons = []
-    if similarity.total < MERGE_THRESHOLD:
-        reasons.append("score_below_threshold")
-    if len(similarity.matched_features) < 2:
-        reasons.append("insufficient_independent_features")
+    countries = similarity.evidence.get("countries", ())
+    if not isinstance(countries, (list, tuple)) or len(set(countries)) < 2:
+        reasons.append("same_country_pair")
+    concrete_event_match = (
+        similarity.components.get("event_key", 0.0)
+        >= CONCRETE_EVENT_MATCH_THRESHOLD
+    )
+    if not concrete_event_match:
+        reasons.append("missing_concrete_event_anchor")
+    elif not _has_specific_event_evidence(similarity):
+        reasons.append("generic_event_key")
     if similarity.gap_days > MAX_MERGE_GAP_DAYS:
         if not explicit_reactivation:
             reasons.append("time_window_exceeded")
-        elif not {"event_key", "entities"}.issubset(similarity.matched_features):
+        elif not (
+            concrete_event_match
+            and _has_specific_event_evidence(similarity)
+            and "entities" in similarity.matched_features
+        ):
             reasons.append("reactivation_requires_event_and_entity")
     return tuple(reasons)
 
@@ -317,7 +357,7 @@ def should_merge(
     *,
     explicit_reactivation: bool = False,
 ) -> bool:
-    """Apply threshold, independent-evidence, and time-window merge gates."""
+    """Apply concrete-event, cross-country, and time-window merge gates."""
 
     return not merge_rejection_reasons(
         similarity, explicit_reactivation=explicit_reactivation

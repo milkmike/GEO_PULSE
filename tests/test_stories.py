@@ -89,7 +89,7 @@ def test_title_only_similarity_does_not_merge():
     assert not should_merge(similarity)
 
 
-def test_strong_cross_language_semantics_plus_entity_evidence_merge():
+def test_strong_cross_language_semantics_plus_entity_evidence_does_not_admit_story():
     left = replace(
         candidate(
             "AZ",
@@ -113,7 +113,8 @@ def test_strong_cross_language_semantics_plus_entity_evidence_merge():
     assert similarity.components["semantic"] == pytest.approx(0.82)
     assert {"semantic", "entities"}.issubset(similarity.matched_features)
     assert similarity.total >= 0.65
-    assert should_merge(similarity)
+    assert not should_merge(similarity)
+    assert "missing_concrete_event_anchor" in merge_rejection_reasons(similarity)
 
 
 def test_embedding_similarity_alone_cannot_merge():
@@ -142,16 +143,90 @@ def test_embedding_similarity_alone_cannot_merge():
     assert not should_merge(similarity)
 
 
-def test_merge_threshold_is_inclusive_and_requires_two_features():
+def test_concrete_event_threshold_is_inclusive_even_below_legacy_weighted_total():
     baseline = score_story_match(candidate("AZ"), candidate("KZ"))
+    similarity = replace(
+        baseline,
+        total=0.20,
+        components={**baseline.components, "event_key": 0.65},
+        matched_features=frozenset({"event_key"}),
+    )
 
-    assert not should_merge(replace(baseline, total=0.64))
-    assert should_merge(
-        replace(baseline, total=0.65, matched_features=frozenset({"event_key", "entities"}))
+    assert should_merge(similarity)
+    assert "score_below_threshold" not in merge_rejection_reasons(similarity)
+
+
+def test_concrete_event_threshold_rejects_point_649_even_with_high_legacy_score():
+    baseline = score_story_match(candidate("AZ"), candidate("KZ"))
+    similarity = replace(
+        baseline,
+        total=1.0,
+        components={**baseline.components, "event_key": 0.649},
+        matched_features=frozenset({"semantic", "entities", "topics", "title"}),
     )
-    assert not should_merge(
-        replace(baseline, total=0.90, matched_features=frozenset({"event_key"}))
+
+    assert not should_merge(similarity)
+    assert merge_rejection_reasons(similarity) == ("missing_concrete_event_anchor",)
+
+
+def test_semantic_entities_and_topics_cannot_admit_without_concrete_event():
+    left = replace(
+        candidate(
+            "KZ",
+            event_key="сравнение цен на продукты в еаэс",
+            title="Суд разрешил взыскать средства Газпрома в пользу Нафтогаза",
+            entities=frozenset({f"entity-{index}" for index in range(9)}),
+            topics=frozenset({f"topic-{index}" for index in range(13)}),
+        ),
+        semantic_matches=((2, 0.99),),
     )
+    right = candidate(
+        "KG",
+        event_key="запрет на ввоз продукции из армении",
+        title="В Кыргызстан не пропустили пиломатериалы из России",
+        entities=left.entities,
+        topics=left.topics,
+    )
+
+    similarity = score_story_match(left, right)
+
+    assert similarity.total >= 0.65
+    assert {"semantic", "entities", "topics"}.issubset(similarity.matched_features)
+    assert not should_merge(similarity)
+    assert "missing_concrete_event_anchor" in merge_rejection_reasons(similarity)
+
+
+def test_generic_event_key_cannot_admit_even_with_identical_keys():
+    similarity = score_story_match(
+        candidate("AZ", event_key="главные новости дня"),
+        candidate("KZ", event_key="главные новости дня"),
+    )
+
+    assert similarity.components["event_key"] == 1.0
+    assert not should_merge(similarity)
+    assert "generic_event_key" in merge_rejection_reasons(similarity)
+
+
+def test_concrete_event_gate_keeps_existing_fourteen_day_time_window():
+    old = candidate(
+        "AZ",
+        event_key="заседание совета консульских служб снг",
+        first_seen=NOW - timedelta(days=20),
+        last_seen=NOW - timedelta(days=15, seconds=1),
+    )
+    new = candidate(
+        "KZ",
+        event_key="заседание совета консульских служб снг",
+        first_seen=NOW,
+        last_seen=NOW,
+    )
+
+    similarity = score_story_match(old, new)
+
+    assert similarity.components["event_key"] == 1.0
+    assert similarity.gap_days > 14
+    assert not should_merge(similarity)
+    assert "time_window_exceeded" in merge_rejection_reasons(similarity)
 
 
 def test_identical_event_key_does_not_double_count_title_similarity():
@@ -1104,6 +1179,17 @@ def test_story_pipeline_audit_is_read_only_and_has_stable_json_keys(monkeypatch)
     }
     assert report["canonical_entity_coverage"]["articles_with_entities"] == 2
     assert report["embedding_coverage"]["articles_with_embeddings"] == 1
+    assert set(report["pair_rejection_reasons"]) == {
+        "pairs_total",
+        "pairs_scored",
+        "accepted",
+        "same_thread",
+        "same_country_pair",
+        "missing_concrete_event_anchor",
+        "generic_event_key",
+        "time_window_exceeded",
+        "reactivation_requires_event_and_entity",
+    }
     assert report["pair_rejection_reasons"]["accepted"] == 1
     assert report["proposed_clusters"] == [{
         "thread_ids": [1, 2],

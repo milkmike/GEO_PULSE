@@ -809,7 +809,7 @@ def test_story_resume_fails_closed_when_the_frozen_candidate_snapshot_changes(
         StoryCandidate(
             thread_id=1,
             country_code="ES",
-            event_key="переговоры",
+            event_key="встреча путина с премьер министром",
             title="Переговоры",
             article_ids=(1,),
             entities=frozenset({"putin"}),
@@ -822,7 +822,7 @@ def test_story_resume_fails_closed_when_the_frozen_candidate_snapshot_changes(
         StoryCandidate(
             thread_id=2,
             country_code="RU",
-            event_key="переговоры",
+            event_key="встреча путина с премьер министром",
             title="Переговоры",
             article_ids=(2,),
             entities=frozenset({"putin"}),
@@ -837,7 +837,7 @@ def test_story_resume_fails_closed_when_the_frozen_candidate_snapshot_changes(
         StoryCandidate(
             thread_id=item.thread_id + 2,
             country_code=item.country_code,
-            event_key="другой сюжет",
+            event_key="выступление лаврова на международном форуме",
             title="Другой сюжет",
             article_ids=(item.thread_id + 2,),
             entities=frozenset({"lavrov"}),

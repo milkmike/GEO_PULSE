@@ -28,8 +28,9 @@ PAIR_REASON_KEYS = (
     "pairs_scored",
     "accepted",
     "same_thread",
-    "score_below_threshold",
-    "insufficient_independent_features",
+    "same_country_pair",
+    "missing_concrete_event_anchor",
+    "generic_event_key",
     "time_window_exceeded",
     "reactivation_requires_event_and_entity",
 )
