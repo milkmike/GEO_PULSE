@@ -25,9 +25,12 @@ class FakeSession:
     def __init__(self, *, row=None, topic_count=0):
         self.row = row
         self.topic_count = topic_count
+        self.statements = []
 
     def execute(self, statement, params=None):
-        if "FROM briefs" in str(statement):
+        sql = str(statement)
+        self.statements.append(sql)
+        if "FROM briefs" in sql:
             return FakeResult(row=self.row)
         return FakeResult(count=self.topic_count)
 
@@ -78,6 +81,39 @@ def test_topic_has_inputs_distinguishes_empty_topic(monkeypatch):
     assert briefs.topic_has_inputs("culture_sport") is True
 
 
+@pytest.mark.parametrize("topic_count", [0, None])
+def test_topic_has_inputs_normalizes_empty_counts_to_false(monkeypatch, topic_count):
+    monkeypatch.setattr(
+        briefs,
+        "get_session",
+        lambda: FakeSessionContext(topic_count=topic_count),
+    )
+
+    assert briefs.topic_has_inputs("culture_sport") is False
+
+
+@pytest.mark.parametrize(
+    ("scenario", "required_clause"),
+    [
+        ("duplicate-only", "ar.is_duplicate = FALSE"),
+        (
+            "missing-country-facts",
+            "JOIN article_country_facts s ON s.article_id = ar.id",
+        ),
+    ],
+)
+def test_topic_has_inputs_excludes_ineligible_topic_rows(
+    monkeypatch,
+    scenario,
+    required_clause,
+):
+    context = FakeSessionContext(topic_count=0)
+    monkeypatch.setattr(briefs, "get_session", lambda: context)
+
+    assert briefs.topic_has_inputs("culture_sport") is False, scenario
+    assert required_clause in context.session.statements[0]
+
+
 def test_generate_topic_briefs_isolates_one_failure(monkeypatch):
     calls = []
     monkeypatch.setattr(generate_briefs, "TOPICS", {"a": "A", "b": "B", "c": "C"}, raising=False)
@@ -97,6 +133,62 @@ def test_generate_topic_briefs_isolates_one_failure(monkeypatch):
         "failed": 1,
     }
     assert calls == [("a", True), ("b", True), ("c", True)]
+
+
+def test_generate_topic_briefs_counts_real_llm_error_as_failed(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        generate_briefs,
+        "TOPICS",
+        {"culture_sport": "Культура и спорт", "diplomacy": "Дипломатия"},
+    )
+    monkeypatch.setattr(briefs, "get_session", lambda: FakeSessionContext())
+    monkeypatch.setattr(
+        briefs,
+        "gather_topic_inputs",
+        lambda session, topic: {
+            "topic": topic,
+            "label": topic,
+            "headlines": [{"title": topic}],
+            "country_stats": [],
+            "citations": [],
+        },
+    )
+
+    def real_chat_contract(*args, **kwargs):
+        calls.append(args[0])
+        if len(calls) == 1:
+            raise briefs.LLMError("all providers failed")
+        return "generated topic brief", "qwen"
+
+    monkeypatch.setattr(briefs, "chat", real_chat_contract)
+    monkeypatch.setattr(generate_briefs.time, "sleep", lambda _seconds: None)
+
+    assert generate_briefs.generate_topic_briefs(force=True) == {
+        "generated": 1,
+        "empty": 0,
+        "failed": 1,
+    }
+    assert len(calls) == 2
+
+
+def test_generate_topic_briefs_visits_every_registered_topic(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        generate_briefs,
+        "generate_topic_brief",
+        lambda topic, force=False: calls.append((topic, force)) or {"content": topic},
+    )
+    monkeypatch.setattr(generate_briefs.time, "sleep", lambda _seconds: None)
+
+    result = generate_briefs.generate_topic_briefs(force=True)
+
+    assert calls == [(topic, True) for topic in generate_briefs.TOPICS]
+    assert result == {
+        "generated": len(generate_briefs.TOPICS),
+        "empty": 0,
+        "failed": 0,
+    }
 
 
 def test_run_pass_orders_world_topics_then_countries(monkeypatch):

@@ -450,7 +450,9 @@ def topic_has_inputs(topic: str) -> bool:
             SELECT COUNT(*)
             FROM analysis a
             JOIN articles ar ON ar.id = a.article_id
+            JOIN article_country_facts s ON s.article_id = ar.id
             WHERE a.is_relevant = TRUE
+              AND ar.is_duplicate = FALSE
               AND :topic = ANY(a.topics)
               AND ar.published_at > NOW() - INTERVAL '14 days'
         """), {"topic": topic}).scalar_one()
@@ -564,11 +566,13 @@ def generate_topic_brief(topic: str, max_age_hours: float = 6.0,
             data=json.dumps(inputs, ensure_ascii=False, indent=1)[:12000],
         )
 
-    try:
-        content, model = chat(prompt, max_tokens=2000, temperature=0.3, script="briefs.py", models=_BRIEFS_CHAIN)
-    except LLMError as e:
-        logger.error(f"Topic brief LLM failed for {topic}: {e}")
-        return None
+    content, model = chat(
+        prompt,
+        max_tokens=2000,
+        temperature=0.3,
+        script="briefs.py",
+        models=_BRIEFS_CHAIN,
+    )
 
     from src.pipeline.citations import apply_citations
     content, used = apply_citations(content, {c["n"] for c in citations})
