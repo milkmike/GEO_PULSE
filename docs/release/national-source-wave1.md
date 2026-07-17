@@ -14,6 +14,9 @@ git status --short
 git push origin main
 
 # Production baseline; read-only
+# Run this production section as one shell block. Any failed export, promotion
+# preflight, or baseline audit stops the block before services can start.
+set -euo pipefail
 ssh geopulse-prod "cd /opt/geopulse && git pull --ff-only"
 ssh geopulse-prod "cd /opt/geopulse && docker compose build api collector"
 

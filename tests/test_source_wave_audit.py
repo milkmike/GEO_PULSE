@@ -153,11 +153,17 @@ def test_production_audits_and_startup_do_not_start_dependencies():
 def test_production_promotion_preflight_uses_read_only_inventory():
     runbook = (REPO_ROOT / "docs/release/national-source-wave1.md").read_text()
 
+    production = runbook.split("# Production baseline; read-only", 1)[1]
     assert "SELECT json_build_object" in runbook
     assert "> backups/production-source-inventory.json" in runbook
     assert "--promotion-preflight" in runbook
     assert "--production-inventory /app/backups/production-source-inventory.json" in runbook
     assert "docker compose run --rm --no-deps" in runbook
+    assert "set -euo pipefail" in production
+    assert production.index("--promotion-preflight") < production.index("--baseline-only")
+    assert production.index("--baseline-only") < production.index(
+        "docker compose up -d --no-deps api collector"
+    )
 
 
 def test_cli_fails_closed_when_wave_has_no_sources(monkeypatch):
