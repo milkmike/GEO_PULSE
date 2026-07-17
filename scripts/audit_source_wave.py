@@ -29,6 +29,47 @@ PROTECTED_TABLES = (
 )
 
 
+def validate_protected_counts(protected_counts, baseline_counts=None):
+    """Return fail-closed validation errors for protected count snapshots."""
+    errors = []
+    for name in PROTECTED_TABLES:
+        if name not in protected_counts:
+            errors.append(
+                f"snapshot_missing_protected_count:{name}; check the audit "
+                "snapshot and database schema before continuing"
+            )
+        elif type(protected_counts[name]) is not int or protected_counts[name] < 0:
+            errors.append(
+                f"snapshot_invalid_protected_count:{name}; expected a "
+                "non-negative integer"
+            )
+
+    if baseline_counts is None:
+        return errors
+
+    for name in PROTECTED_TABLES:
+        if name not in baseline_counts:
+            errors.append(
+                "baseline_missing_protected_counts:"
+                f"{name}; refresh baseline with the current audit before continuing"
+            )
+        elif type(baseline_counts[name]) is not int or baseline_counts[name] < 0:
+            errors.append(
+                f"baseline_invalid_protected_count:{name}; refresh baseline "
+                "with the current audit before continuing"
+            )
+        elif (
+            name in protected_counts
+            and type(protected_counts[name]) is int
+            and protected_counts[name] < baseline_counts[name]
+        ):
+            errors.append(
+                f"protected_count_decreased:{name}:"
+                f"{protected_counts[name]}<{baseline_counts[name]}"
+            )
+    return errors
+
+
 def evaluate_wave(rows, protected_counts, baseline_counts=None):
     """Evaluate one source wave without mutating source or article records."""
     evaluated = []
@@ -48,31 +89,10 @@ def evaluate_wave(rows, protected_counts, baseline_counts=None):
         evaluated.append({**row, "ok": not reasons, "reasons": reasons})
 
     passed = sum(item["ok"] for item in evaluated)
-    protected_count_errors = []
-    if baseline_counts is not None:
-        missing_baseline_counts = [
-            name for name in PROTECTED_TABLES if name not in baseline_counts
-        ]
-        if missing_baseline_counts:
-            protected_count_errors.append(
-                "baseline_missing_protected_counts:"
-                f"{','.join(missing_baseline_counts)}; refresh baseline with the "
-                "current audit before continuing"
-            )
-        for name in PROTECTED_TABLES:
-            if name not in protected_counts:
-                protected_count_errors.append(
-                    f"snapshot_missing_protected_count:{name}; check the audit "
-                    "snapshot and database schema before continuing"
-                )
-            elif (
-                name in baseline_counts
-                and protected_counts[name] < baseline_counts[name]
-            ):
-                protected_count_errors.append(
-                    f"protected_count_decreased:{name}:"
-                    f"{protected_counts[name]}<{baseline_counts[name]}"
-                )
+    protected_count_errors = validate_protected_counts(
+        protected_counts,
+        baseline_counts,
+    )
     protected_ok = not protected_count_errors
     return {
         "checked_at": datetime.now(timezone.utc).isoformat(),
@@ -154,7 +174,9 @@ def load_snapshot(wave):
 def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--wave", required=True)
-    parser.add_argument("--baseline", type=Path)
+    baseline_mode = parser.add_mutually_exclusive_group()
+    baseline_mode.add_argument("--baseline", type=Path)
+    baseline_mode.add_argument("--baseline-only", action="store_true")
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--out", type=Path)
     args = parser.parse_args(argv)
@@ -169,6 +191,8 @@ def main(argv=None):
     if args.out:
         args.out.write_text(output)
     print(output)
+    if args.baseline_only:
+        return 0 if report["protected_counts_ok"] else 1
     return 0 if (
         report["wave_has_sources"]
         and report["summary"]["failed"] == 0

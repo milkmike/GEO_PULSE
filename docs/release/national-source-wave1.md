@@ -13,7 +13,7 @@ git push origin main
 # Production baseline; read-only
 ssh geopulse-prod "cd /opt/geopulse && git pull --ff-only"
 ssh geopulse-prod "cd /opt/geopulse && docker compose build api collector"
-ssh geopulse-prod "cd /opt/geopulse && docker compose run --rm --no-deps -v /opt/geopulse/backups:/app/backups collector python scripts/audit_source_wave.py --wave 2026-07-17-rss-1 --json --out /app/backups/source-wave1-baseline.json"
+ssh geopulse-prod "cd /opt/geopulse && docker compose run --rm --no-deps -v /opt/geopulse/backups:/app/backups collector python scripts/audit_source_wave.py --wave 2026-07-17-rss-1 --baseline-only --json --out /app/backups/source-wave1-baseline.json"
 
 # Start only the two newly built services; db and redis are untouched
 ssh geopulse-prod "cd /opt/geopulse && docker compose up -d --no-deps api collector"

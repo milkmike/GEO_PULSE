@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -88,6 +89,7 @@ def test_production_audits_and_startup_do_not_start_dependencies():
         "docker compose run --rm --no-deps -v" in command
         for command in audit_commands
     )
+    assert "--baseline-only" in audit_commands[0]
     assert "docker compose up -d --no-deps api collector" in runbook
 
 
@@ -108,6 +110,74 @@ def test_cli_fails_closed_when_wave_has_no_sources(monkeypatch):
     report = evaluate_wave([], protected_counts)
     assert report["wave_has_sources"] is False
     assert audit_source_wave.main(["--wave", "missing", "--json"]) == 1
+
+
+def test_baseline_only_succeeds_without_wave_sources_and_writes_snapshot(
+    monkeypatch, tmp_path
+):
+    protected_counts = dict.fromkeys(EXPECTED_PROTECTED_TABLES, 10)
+    monkeypatch.setattr(
+        audit_source_wave,
+        "load_snapshot",
+        lambda wave: ([], protected_counts),
+    )
+    output_path = tmp_path / "baseline.json"
+
+    exit_code = audit_source_wave.main([
+        "--wave", "not-synced-yet",
+        "--baseline-only",
+        "--json",
+        "--out", str(output_path),
+    ])
+
+    report = json.loads(output_path.read_text())
+    assert exit_code == 0
+    assert report["wave_has_sources"] is False
+    assert report["protected_counts"] == protected_counts
+    assert report["protected_counts_ok"] is True
+
+
+@pytest.mark.parametrize(
+    "protected_counts",
+    [
+        pytest.param(
+            {name: 10 for name in EXPECTED_PROTECTED_TABLES if name != "briefs"},
+            id="incomplete",
+        ),
+        pytest.param(
+            {**dict.fromkeys(EXPECTED_PROTECTED_TABLES, 10), "briefs": "10"},
+            id="malformed",
+        ),
+    ],
+)
+def test_baseline_only_fails_closed_on_invalid_protected_counts(
+    monkeypatch, protected_counts
+):
+    monkeypatch.setattr(
+        audit_source_wave,
+        "load_snapshot",
+        lambda wave: ([], protected_counts),
+    )
+
+    assert audit_source_wave.main([
+        "--wave", "not-synced-yet",
+        "--baseline-only",
+        "--json",
+    ]) == 1
+
+
+def test_baseline_only_and_comparison_baseline_are_mutually_exclusive(tmp_path):
+    baseline = tmp_path / "baseline.json"
+    baseline.write_text("{}")
+
+    with pytest.raises(SystemExit) as error:
+        audit_source_wave.main([
+            "--wave", "wave",
+            "--baseline-only",
+            "--baseline", str(baseline),
+        ])
+
+    assert error.value.code == 2
 
 
 def test_canary_rejects_fetch_timestamp_in_the_future():
