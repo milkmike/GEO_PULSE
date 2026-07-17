@@ -83,6 +83,9 @@ _LANGUAGE_MARKERS = {
     "en": frozenset(
         {"after", "and", "as", "at", "by", "for", "from", "has", "have", "in", "is", "more", "new", "of", "on", "the", "to", "will", "with"}
     ),
+    "fr": frozenset(
+        {"au", "aux", "avec", "ce", "centre", "citoyens", "de", "des", "du", "et", "gouvernement", "la", "le", "les", "nouvelle", "pour", "société", "une"}
+    ),
     "pt": frozenset(
         {"ao", "com", "da", "das", "de", "do", "dos", "e", "em", "na", "nas", "no", "nos", "para", "por", "que", "se", "um", "uma"}
     ),
@@ -427,9 +430,12 @@ def load_production_source_inventory(
             raw_aliases = (raw_aliases,)
         if not isinstance(raw_aliases, (list, tuple, set)):
             raise ValueError(f"{label} publisher_domain_aliases must be a list")
+        site_domain = (
+            expected_site_domain(source_url) if mode == "site_wrapper" else None
+        )
         family = {
             normalized
-            for value in (domain, *raw_aliases)
+            for value in (domain, site_domain, *raw_aliases)
             if isinstance(value, str)
             for normalized in (normalize_publisher_domain(value),)
             if normalized and not is_aggregator_domain(normalized)
@@ -601,7 +607,10 @@ def _declared_language_matches(expected: str, declared: str | None) -> bool:
     return declared in accepted
 
 
-def _content_supports_language(expected: str, entries: list[Mapping]) -> bool:
+def _content_language_signal(
+    expected: str,
+    entries: list[Mapping],
+) -> bool | None:
     text = " ".join(
         re.sub(r"<[^>]*>", " ", value)
         for entry in entries
@@ -611,16 +620,20 @@ def _content_supports_language(expected: str, entries: list[Mapping]) -> bool:
     ).casefold()
     letters = [character for character in text if character.isalpha()]
     if len(letters) < 12:
-        return False
+        return None
     greek_ratio = sum("\u0370" <= char <= "\u03ff" for char in letters) / len(letters)
     cyrillic_ratio = sum("\u0400" <= char <= "\u052f" for char in letters) / len(letters)
     if expected == "el":
-        return greek_ratio >= 0.5
+        if greek_ratio >= 0.5:
+            return True
+        if cyrillic_ratio >= 0.35:
+            return False
     tokens = re.findall(r"[^\W\d_]+", text, flags=re.UNICODE)
     if expected == "mk":
         marker_count = sum(token in _MACEDONIAN_MARKERS for token in tokens)
         has_distinctive_letter = any(char in text for char in "ѓќѕљњјџ")
-        return cyrillic_ratio >= 0.5 and (has_distinctive_letter or marker_count >= 2)
+        if cyrillic_ratio >= 0.5:
+            return has_distinctive_letter or marker_count >= 2
     if greek_ratio + cyrillic_ratio >= 0.35:
         return False
     scores = {
@@ -628,7 +641,10 @@ def _content_supports_language(expected: str, entries: list[Mapping]) -> bool:
         for language, markers in _LANGUAGE_MARKERS.items()
     }
     expected_score = scores.get(expected, 0)
-    return expected_score >= 2 and expected_score == max(scores.values(), default=0)
+    best_score = max(scores.values(), default=0)
+    if best_score < 2:
+        return None
+    return expected_score >= 2 and expected_score == best_score
 
 
 def _feed_language_agrees(
@@ -640,9 +656,10 @@ def _feed_language_agrees(
     if expected is None:
         return False
     declared = _base_language(parsed.get("language"))
-    if _declared_language_matches(expected, declared):
-        return True
-    return _content_supports_language(expected, entries)
+    content_signal = _content_language_signal(expected, entries)
+    if content_signal is not None:
+        return content_signal
+    return _declared_language_matches(expected, declared)
 
 
 def validate_feed_document(

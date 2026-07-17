@@ -717,6 +717,30 @@ def test_production_inventory_extracts_site_wrapper_identity(tmp_path):
     }
 
 
+def test_production_inventory_keeps_site_wrapper_domain_with_explicit_domain(
+    tmp_path,
+):
+    wrapper_url = (
+        "https://news.google.com/rss/search?"
+        "q=site:wrapper.example&hl=en&gl=IE&ceid=IE:en"
+    )
+    inventory = load_production_source_inventory(
+        _write_production_inventory(
+            tmp_path,
+            {
+                "country_code": "IE",
+                "url": wrapper_url,
+                "config": {"publisher_domain": "other.example"},
+            },
+        )
+    )
+
+    assert inventory == {
+        "other.example": {("IE", wrapper_url, None)},
+        "wrapper.example": {("IE", wrapper_url, None)},
+    }
+
+
 def test_production_inventory_merges_verified_domain_registry_alias(tmp_path):
     inventory = load_production_source_inventory(
         _write_production_inventory(
@@ -880,6 +904,30 @@ def test_feed_validation_rejects_generic_wrong_language_content():
     body = (
         "<rss version='2.0'><channel><title>Actualités</title>"
         f"<language>fr</language>{items}</channel></rss>"
+    ).encode()
+
+    result = validate_feed_document(candidate, body, now=NOW)
+
+    assert "content_language_mismatch" in result.reasons
+    assert result.language_agreement == 0.0
+
+
+def test_feed_validation_rejects_declared_language_contradicted_by_content():
+    candidate = next(
+        candidate
+        for candidate in load_source_candidates(config.SOURCE_CANDIDATES_PATH)
+        if candidate.name == "The Irish Times"
+    )
+    items = "".join(
+        f"<item><title>La politique et la société sont au centre du débat {index}</title>"
+        f"<link>https://irishtimes.com/{index}</link><guid>declared-en-{index}</guid>"
+        "<description>Le gouvernement présente une nouvelle réforme pour les citoyens.</description>"
+        "<pubDate>Thu, 16 Jul 2026 10:00:00 GMT</pubDate></item>"
+        for index in range(3)
+    )
+    body = (
+        "<rss version='2.0'><channel><title>Actualités</title>"
+        f"<language>en</language>{items}</channel></rss>"
     ).encode()
 
     result = validate_feed_document(candidate, body, now=NOW)
