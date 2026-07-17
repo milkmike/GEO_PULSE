@@ -296,23 +296,56 @@ def test_configured_publishers_preserve_country_and_feed_identity():
     )
 
 
-def test_promoted_wave1_catalog_contains_exactly_17_direct_publishers():
-    candidates = load_source_candidates(config.SOURCE_CANDIDATES_PATH)
+def _assert_promoted_wave1_catalog(candidates, loaded):
     promoted = [item for item in candidates if item.status == "promoted"]
     assert len(promoted) == 17
+    promoted_waves = {item.wave for item in promoted}
+    assert len(promoted_waves) == 1
+    promoted_wave = next(iter(promoted_waves))
 
-    loaded = config.load_sources()["countries"]
-    by_url = {
-        source["url"]: (code, source)
+    wave_sources = [
+        (code, source)
         for code, country in loaded.items()
         for source in country.get("sources", [])
-    }
+        if (source.get("config") or {}).get("source_expansion_wave")
+        == promoted_wave
+    ]
+    promoted_urls = {candidate.feed_url for candidate in promoted}
+    assert len(wave_sources) == 17
+    assert {source["url"] for _, source in wave_sources} == promoted_urls
+
+    by_url = {source["url"]: (code, source) for code, source in wave_sources}
     for candidate in promoted:
         code, source = by_url[candidate.feed_url]
         assert code == candidate.country_code
-        assert source["config"]["publisher_domain"] == candidate.canonical_domain
-        assert source["config"]["source_expansion_wave"] == candidate.wave
+        assert source == candidate_to_catalog_source(candidate)
         assert "news.google.com" not in source["url"]
+
+
+def test_promoted_wave1_catalog_contract_rejects_duplicate_wave_entry():
+    candidates = load_source_candidates(config.SOURCE_CANDIDATES_PATH)
+    loaded = config.load_sources()["countries"]
+    first = candidates[0]
+    duplicate_loaded = {
+        **loaded,
+        first.country_code: {
+            **loaded[first.country_code],
+            "sources": [
+                *loaded[first.country_code]["sources"],
+                candidate_to_catalog_source(first),
+            ],
+        },
+    }
+
+    with pytest.raises(AssertionError):
+        _assert_promoted_wave1_catalog(candidates, duplicate_loaded)
+
+
+def test_promoted_wave1_catalog_contains_exactly_17_direct_publishers():
+    candidates = load_source_candidates(config.SOURCE_CANDIDATES_PATH)
+    loaded = config.load_sources()["countries"]
+
+    _assert_promoted_wave1_catalog(candidates, loaded)
 
 
 def test_configured_publishers_normalize_domains_and_exclude_discovery_feeds():
