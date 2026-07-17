@@ -1016,6 +1016,22 @@ countries:
         language: en
         tier: mainstream
 
+  SG:
+    name: Сингапур
+    sources:
+      - name: CNA Singapore
+        type: rss
+        url: https://www.channelnewsasia.com/api/v1/rss-outbound-feed?_format=xml&category=10416
+        weight: 1.0
+        language: en
+        tier: official
+        state_affiliated: true
+        propaganda_risk: medium
+        config:
+          publisher_domain: channelnewsasia.com
+          publisher_domain_aliases: []
+          source_expansion_wave: 2026-07-17-rss-1
+
   PH:
     name: Филиппины
     sources:
@@ -1214,6 +1230,30 @@ countries:
         weight: 1.2
         language: da
         tier: official
+      - name: Politiken
+        type: rss
+        url: https://politiken.dk/rss/senestenyt.rss
+        weight: 1.0
+        language: da
+        tier: mainstream
+        state_affiliated: false
+        propaganda_risk: low
+        config:
+          publisher_domain: politiken.dk
+          publisher_domain_aliases: []
+          source_expansion_wave: 2026-07-17-rss-1
+      - name: Information
+        type: rss
+        url: https://www.information.dk/feed
+        weight: 1.0
+        language: da
+        tier: independent
+        state_affiliated: false
+        propaganda_risk: low
+        config:
+          publisher_domain: information.dk
+          publisher_domain_aliases: []
+          source_expansion_wave: 2026-07-17-rss-1
 
   GR:
     name: Греция
@@ -1234,6 +1274,30 @@ countries:
         weight: 1.0
         language: en
         tier: mainstream
+      - name: Philenews
+        type: rss
+        url: https://www.philenews.com/feed/
+        weight: 1.0
+        language: el
+        tier: mainstream
+        state_affiliated: false
+        propaganda_risk: low
+        config:
+          publisher_domain: philenews.com
+          publisher_domain_aliases: []
+          source_expansion_wave: 2026-07-17-rss-1
+      - name: Politis
+        type: rss
+        url: https://www.politis.com.cy/feed/
+        weight: 1.0
+        language: el
+        tier: independent
+        state_affiliated: false
+        propaganda_risk: low
+        config:
+          publisher_domain: politis.com.cy
+          publisher_domain_aliases: []
+          source_expansion_wave: 2026-07-17-rss-1
 
   RO:
     name: Румыния
@@ -1301,6 +1365,118 @@ countries:
         language: en
         tier: mainstream
 
+  AL:
+    name: Албания
+    sources:
+      - name: RTSH
+        type: rss
+        url: https://rtsh.al/feed/
+        weight: 1.0
+        language: sq
+        tier: official
+        state_affiliated: true
+        propaganda_risk: medium
+        config:
+          publisher_domain: rtsh.al
+          publisher_domain_aliases: []
+          source_expansion_wave: 2026-07-17-rss-1
+      - name: Reporter.al
+        type: rss
+        url: https://reporter.al/feed/
+        weight: 1.0
+        language: sq
+        tier: independent
+        state_affiliated: false
+        propaganda_risk: low
+        config:
+          publisher_domain: reporter.al
+          publisher_domain_aliases: []
+          source_expansion_wave: 2026-07-17-rss-1
+
+  ME:
+    name: Черногория
+    sources:
+      - name: RTCG
+        type: rss
+        url: https://rtcg.me/vijesti/rss.html
+        weight: 1.0
+        language: sr
+        tier: official
+        state_affiliated: true
+        propaganda_risk: medium
+        config:
+          publisher_domain: rtcg.me
+          publisher_domain_aliases: []
+          source_expansion_wave: 2026-07-17-rss-1
+      - name: Vijesti
+        type: rss
+        url: https://www.vijesti.me/rss
+        weight: 1.0
+        language: sr
+        tier: mainstream
+        state_affiliated: false
+        propaganda_risk: low
+        config:
+          publisher_domain: vijesti.me
+          publisher_domain_aliases: []
+          source_expansion_wave: 2026-07-17-rss-1
+
+  MK:
+    name: Северная Македония
+    sources:
+      - name: MRT
+        type: rss
+        url: https://www.mrt.com.mk/rss.xml
+        weight: 1.0
+        language: mk
+        tier: official
+        state_affiliated: true
+        propaganda_risk: medium
+        config:
+          publisher_domain: mrt.com.mk
+          publisher_domain_aliases: []
+          source_expansion_wave: 2026-07-17-rss-1
+      - name: Meta.mk
+        type: rss
+        url: https://meta.mk/feed/
+        weight: 1.0
+        language: mk
+        tier: independent
+        state_affiliated: false
+        propaganda_risk: low
+        config:
+          publisher_domain: meta.mk
+          publisher_domain_aliases: []
+          source_expansion_wave: 2026-07-17-rss-1
+
+  SI:
+    name: Словения
+    sources:
+      - name: RTV Slovenija
+        type: rss
+        url: https://www.rtvslo.si/feeds/01.xml
+        weight: 1.0
+        language: sl
+        tier: official
+        state_affiliated: true
+        propaganda_risk: medium
+        config:
+          publisher_domain: rtvslo.si
+          publisher_domain_aliases: []
+          source_expansion_wave: 2026-07-17-rss-1
+      - name: N1 Slovenija
+        type: rss
+        url: https://n1info.si/feed/
+        weight: 1.0
+        language: sl
+        tier: mainstream
+        state_affiliated: false
+        propaganda_risk: low
+        config:
+          publisher_domain: n1info.si
+          publisher_domain_aliases: []
+          source_expansion_wave: 2026-07-17-rss-1
+
   EE:
     name: Эстония
     sources:
@@ -1340,6 +1516,30 @@ countries:
         weight: 1.1
         language: en
         tier: official
+      - name: The Irish Times
+        type: rss
+        url: https://www.irishtimes.com/arc/outboundfeeds/rss/category/ireland/?outputType=xml
+        weight: 1.0
+        language: en
+        tier: mainstream
+        state_affiliated: false
+        propaganda_risk: low
+        config:
+          publisher_domain: irishtimes.com
+          publisher_domain_aliases: []
+          source_expansion_wave: 2026-07-17-rss-1
+      - name: TheJournal.ie
+        type: rss
+        url: https://www.thejournal.ie/feed/
+        weight: 1.0
+        language: en
+        tier: independent
+        state_affiliated: false
+        propaganda_risk: low
+        config:
+          publisher_domain: thejournal.ie
+          publisher_domain_aliases: []
+          source_expansion_wave: 2026-07-17-rss-1
 
   PT:
     name: Португалия
@@ -1350,6 +1550,30 @@ countries:
         weight: 1.0
         language: en
         tier: mainstream
+      - name: Diário de Notícias
+        type: rss
+        url: https://www.dn.pt/api/v1/collections/ultimas.rss
+        weight: 1.0
+        language: pt
+        tier: mainstream
+        state_affiliated: false
+        propaganda_risk: low
+        config:
+          publisher_domain: dn.pt
+          publisher_domain_aliases: []
+          source_expansion_wave: 2026-07-17-rss-1
+      - name: Observador
+        type: rss
+        url: https://observador.pt/feed/
+        weight: 1.0
+        language: pt
+        tier: independent
+        state_affiliated: false
+        propaganda_risk: low
+        config:
+          publisher_domain: observador.pt
+          publisher_domain_aliases: []
+          source_expansion_wave: 2026-07-17-rss-1
 
   IS:
     name: Исландия

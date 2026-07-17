@@ -296,6 +296,25 @@ def test_configured_publishers_preserve_country_and_feed_identity():
     )
 
 
+def test_promoted_wave1_catalog_contains_exactly_17_direct_publishers():
+    candidates = load_source_candidates(config.SOURCE_CANDIDATES_PATH)
+    promoted = [item for item in candidates if item.status == "promoted"]
+    assert len(promoted) == 17
+
+    loaded = config.load_sources()["countries"]
+    by_url = {
+        source["url"]: (code, source)
+        for code, country in loaded.items()
+        for source in country.get("sources", [])
+    }
+    for candidate in promoted:
+        code, source = by_url[candidate.feed_url]
+        assert code == candidate.country_code
+        assert source["config"]["publisher_domain"] == candidate.canonical_domain
+        assert source["config"]["source_expansion_wave"] == candidate.wave
+        assert "news.google.com" not in source["url"]
+
+
 def test_configured_publishers_normalize_domains_and_exclude_discovery_feeds():
     publishers = configured_publisher_sources(
         {
@@ -641,17 +660,17 @@ def test_feed_validation_requires_dates_on_at_least_80_percent_of_entries():
     assert "entry_date_ratio_below_0_8" in result.reasons
 
 
-def test_feed_validation_accepts_rtp_like_52_minute_clock_skew():
+def test_feed_validation_accepts_sub_two_hour_clock_skew():
     candidate = next(
         candidate
         for candidate in load_source_candidates(config.SOURCE_CANDIDATES_PATH)
-        if candidate.name == "RTP Noticias"
+        if candidate.name == "Diário de Notícias"
     )
     now = datetime(2026, 7, 17, 8, 0, tzinfo=timezone.utc)
     body = _feed(
-        "https://rtp.pt/a",
-        "https://rtp.pt/b",
-        "https://rtp.pt/c",
+        "https://dn.pt/a",
+        "https://dn.pt/b",
+        "https://dn.pt/c",
         published="Fri, 17 Jul 2026 08:52:00 GMT",
     )
 
@@ -773,20 +792,21 @@ def test_feed_validation_uses_longer_freshness_window_for_independent_sources():
     assert independent.ok is True
 
 
-def test_wave1_candidate_registry_is_complete_and_not_loaded():
+def test_wave1_candidate_registry_is_complete_and_promoted():
     candidates = load_source_candidates(config.SOURCE_CANDIDATES_PATH)
     assert len(candidates) == 17
     assert len({item.feed_url for item in candidates}) == 17
     assert {item.country_code for item in candidates} == {
         "AL", "CY", "DK", "IE", "ME", "MK", "PT", "SI", "SG",
     }
+    assert {item.status for item in candidates} == {"promoted"}
 
     production_urls = {
         source["url"]
         for country in config.load_sources()["countries"].values()
         for source in country.get("sources", [])
     }
-    assert production_urls.isdisjoint({item.feed_url for item in candidates})
+    assert {item.feed_url for item in candidates} <= production_urls
 
 
 def test_candidate_conversion_preserves_curated_domain_evidence():
