@@ -102,6 +102,9 @@ _LANGUAGE_MARKERS = {
 _MACEDONIAN_MARKERS = frozenset(
     {"владата", "граѓаните", "за", "и", "мерки", "на", "најави"}
 )
+_SERBIAN_CYRILLIC_MARKERS = frozenset(
+    {"влада", "горе", "грађане", "је", "мјере", "најавила", "није", "црне"}
+)
 
 
 @dataclass(frozen=True)
@@ -634,6 +637,12 @@ def _content_language_signal(
         has_distinctive_letter = any(char in text for char in "ѓќѕљњјџ")
         if cyrillic_ratio >= 0.5:
             return has_distinctive_letter or marker_count >= 2
+    if expected == "sr" and cyrillic_ratio >= 0.5:
+        marker_count = sum(
+            token in _SERBIAN_CYRILLIC_MARKERS for token in tokens
+        )
+        has_distinctive_letter = any(char in text for char in "ђћ")
+        return has_distinctive_letter or marker_count >= 2
     if greek_ratio + cyrillic_ratio >= 0.35:
         return False
     scores = {

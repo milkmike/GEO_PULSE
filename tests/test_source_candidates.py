@@ -959,6 +959,52 @@ def test_feed_validation_uses_content_when_declared_language_is_wrong():
     assert result.language_agreement == 1.0
 
 
+def test_feed_validation_accepts_serbian_cyrillic_content():
+    candidate = next(
+        candidate
+        for candidate in load_source_candidates(config.SOURCE_CANDIDATES_PATH)
+        if candidate.name == "RTCG"
+    )
+    items = "".join(
+        f"<item><title>Влада Црне Горе најавила је нове мјере за грађане {index}</title>"
+        f"<link>https://rtcg.me/vijesti/{index}</link><guid>sr-cyrl-{index}</guid>"
+        "<pubDate>17.07.2026T08:24:02 +0100</pubDate></item>"
+        for index in range(3)
+    )
+    body = (
+        "<rss version='2.0'><channel><title>РТЦГ</title>"
+        f"<language>me</language>{items}</channel></rss>"
+    ).encode()
+
+    result = validate_feed_document(candidate, body, now=NOW)
+
+    assert result.ok is True
+    assert result.language_agreement == 1.0
+
+
+def test_feed_validation_rejects_russian_cyrillic_for_serbian_source():
+    candidate = next(
+        candidate
+        for candidate in load_source_candidates(config.SOURCE_CANDIDATES_PATH)
+        if candidate.name == "RTCG"
+    )
+    items = "".join(
+        f"<item><title>Правительство России объявило новые меры для граждан {index}</title>"
+        f"<link>https://rtcg.me/vijesti/{index}</link><guid>ru-cyrl-{index}</guid>"
+        "<pubDate>17.07.2026T08:24:02 +0100</pubDate></item>"
+        for index in range(3)
+    )
+    body = (
+        "<rss version='2.0'><channel><title>РТЦГ</title>"
+        f"<language>me</language>{items}</channel></rss>"
+    ).encode()
+
+    result = validate_feed_document(candidate, body, now=NOW)
+
+    assert "content_language_mismatch" in result.reasons
+    assert result.language_agreement == 0.0
+
+
 def test_feed_language_detection_ignores_markup_attributes():
     candidate = next(
         candidate
