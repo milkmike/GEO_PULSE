@@ -25,6 +25,7 @@ from src.collectors.source_candidates import (
 
 NOW = datetime(2026, 7, 17, 12, 0, tzinfo=timezone.utc)
 REPO_ROOT = Path(__file__).resolve().parents[1]
+TARGET_WAVE = "2026-07-17-rss-1"
 
 
 class StubClient:
@@ -297,18 +298,19 @@ def test_configured_publishers_preserve_country_and_feed_identity():
 
 
 def _assert_promoted_wave1_catalog(candidates, loaded):
-    promoted = [item for item in candidates if item.status == "promoted"]
+    promoted = [
+        item
+        for item in candidates
+        if item.status == "promoted" and item.wave == TARGET_WAVE
+    ]
     assert len(promoted) == 17
-    promoted_waves = {item.wave for item in promoted}
-    assert len(promoted_waves) == 1
-    promoted_wave = next(iter(promoted_waves))
 
     wave_sources = [
         (code, source)
         for code, country in loaded.items()
         for source in country.get("sources", [])
         if (source.get("config") or {}).get("source_expansion_wave")
-        == promoted_wave
+        == TARGET_WAVE
     ]
     promoted_urls = {candidate.feed_url for candidate in promoted}
     assert len(wave_sources) == 17
@@ -339,6 +341,38 @@ def test_promoted_wave1_catalog_contract_rejects_duplicate_wave_entry():
 
     with pytest.raises(AssertionError):
         _assert_promoted_wave1_catalog(candidates, duplicate_loaded)
+
+
+def test_promoted_wave1_catalog_contract_rejects_coordinated_wrong_wave_retag():
+    candidates = load_source_candidates(config.SOURCE_CANDIDATES_PATH)
+    loaded = config.load_sources()["countries"]
+    original_wave = candidates[0].wave
+    wrong_wave = "2026-07-18-rss-2"
+    retagged_candidates = [
+        replace(candidate, wave=wrong_wave) for candidate in candidates
+    ]
+    retagged_loaded = {
+        code: {
+            **country,
+            "sources": [
+                {
+                    **source,
+                    "config": {
+                        **source["config"],
+                        "source_expansion_wave": wrong_wave,
+                    },
+                }
+                if (source.get("config") or {}).get("source_expansion_wave")
+                == original_wave
+                else source
+                for source in country.get("sources", [])
+            ],
+        }
+        for code, country in loaded.items()
+    }
+
+    with pytest.raises(AssertionError):
+        _assert_promoted_wave1_catalog(retagged_candidates, retagged_loaded)
 
 
 def test_promoted_wave1_catalog_contains_exactly_17_direct_publishers():
