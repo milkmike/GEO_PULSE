@@ -2,12 +2,18 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import parse_qsl, urlsplit
+from urllib.parse import parse_qsl, urlparse, urlsplit
 
+import feedparser
 import yaml
 
-from src.collectors.publisher_attribution import normalize_publisher_domain
+from src.collectors.publisher_attribution import (
+    feed_mode,
+    is_aggregator_domain,
+    normalize_publisher_domain,
+)
 from src.countries import COUNTRIES
 
 
@@ -48,6 +54,15 @@ _STRING_FIELDS = (
     "status",
     "wave",
 )
+_ALLOWED_TIERS = {
+    "official",
+    "mainstream",
+    "independent",
+    "domestic_opposition",
+    "analytics",
+}
+_ALLOWED_RISKS = {"low", "medium", "high"}
+_ALLOWED_STATUSES = {"researched", "promoted", "rejected", "adapter_required"}
 
 
 @dataclass(frozen=True)
@@ -68,6 +83,17 @@ class SourceCandidate:
     research_date: str
     status: str
     wave: str
+
+
+@dataclass(frozen=True)
+class CandidateValidation:
+    name: str
+    country_code: str
+    ok: bool
+    reasons: tuple[str, ...]
+    item_count: int = 0
+    newest_age_days: float | None = None
+    domain_ratio: float | None = None
 
 
 def _require_exact_fields(
@@ -231,3 +257,150 @@ def candidate_to_catalog_source(candidate: SourceCandidate) -> dict:
             "source_expansion_wave": candidate.wave,
         },
     }
+
+
+def configured_publisher_sources(
+    config: dict,
+) -> dict[str, set[tuple[str, str]]]:
+    publishers: dict[str, set[tuple[str, str]]] = {}
+    for country_code, country in config.get("countries", {}).items():
+        for source in country.get("sources", []):
+            source_config = source.get("config") or {}
+            source_url = source.get("url")
+            if feed_mode(source_url, source_config) == "publisher_discovery":
+                continue
+            domain = normalize_publisher_domain(
+                source_config.get("publisher_domain") or source_url
+            )
+            if domain and not is_aggregator_domain(domain):
+                publishers.setdefault(domain, set()).add(
+                    (str(country_code).upper(), source_url)
+                )
+    return publishers
+
+
+def validate_candidate_metadata(
+    candidate: SourceCandidate,
+    *,
+    configured_publishers: dict[str, set[tuple[str, str]]],
+) -> CandidateValidation:
+    reasons: list[str] = []
+    canonical = normalize_publisher_domain(candidate.canonical_domain)
+    feed_domain = normalize_publisher_domain(candidate.feed_url)
+
+    if candidate.country_code not in COUNTRIES:
+        reasons.append("unknown_country")
+    if candidate.source_type != "rss":
+        reasons.append("wave1_requires_rss")
+    if (
+        not canonical
+        or is_aggregator_domain(canonical)
+        or is_aggregator_domain(feed_domain)
+    ):
+        reasons.append("aggregator_domain")
+
+    existing = configured_publishers.get(canonical or "", set())
+    promoted_self = (
+        {(candidate.country_code, candidate.feed_url)}
+        if candidate.status == "promoted"
+        else set()
+    )
+    if existing and existing != promoted_self:
+        reasons.append("duplicate_publisher_domain")
+
+    if candidate.tier not in _ALLOWED_TIERS:
+        reasons.append("invalid_tier")
+    if candidate.propaganda_risk not in _ALLOWED_RISKS:
+        reasons.append("invalid_propaganda_risk")
+    if candidate.syndication_risk not in _ALLOWED_RISKS:
+        reasons.append("invalid_syndication_risk")
+    if candidate.status not in _ALLOWED_STATUSES:
+        reasons.append("invalid_status")
+
+    try:
+        evidence = urlparse(candidate.ownership_evidence_url)
+    except ValueError:
+        evidence = None
+    if evidence is None or evidence.scheme.lower() != "https":
+        reasons.append("ownership_evidence_must_be_https")
+
+    return CandidateValidation(
+        name=candidate.name,
+        country_code=candidate.country_code,
+        ok=not reasons,
+        reasons=tuple(reasons),
+    )
+
+
+def _domain_matches(actual: str | None, expected: set[str]) -> bool:
+    return bool(actual) and any(
+        actual == domain or actual.endswith(f".{domain}") for domain in expected
+    )
+
+
+def _utc_datetime(stamp: object) -> datetime | None:
+    try:
+        parts = stamp[:6]  # type: ignore[index]
+        return datetime(*parts, tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return None
+
+
+def validate_feed_document(
+    candidate: SourceCandidate,
+    body: bytes,
+    *,
+    now: datetime | None = None,
+) -> CandidateValidation:
+    if now is None:
+        now = datetime.now(timezone.utc)
+    elif now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    else:
+        now = now.astimezone(timezone.utc)
+
+    parsed = feedparser.parse(body)
+    entries = list(parsed.entries)
+    reasons: list[str] = []
+    if not parsed.version or (parsed.bozo and not entries):
+        reasons.append("malformed_feed")
+    if len(entries) < 3:
+        reasons.append("fewer_than_3_entries")
+
+    expected = {
+        domain
+        for value in (candidate.canonical_domain, *candidate.domain_aliases)
+        for domain in (normalize_publisher_domain(value),)
+        if domain
+    }
+    domains = [normalize_publisher_domain(entry.get("link")) for entry in entries]
+    matched = sum(_domain_matches(domain, expected) for domain in domains)
+    ratio = matched / len(domains) if domains else 0.0
+    if ratio < 0.8:
+        reasons.append("publisher_domain_ratio_below_0_8")
+
+    dated: list[datetime] = []
+    for entry in entries:
+        stamp = entry.get("published_parsed") or entry.get("updated_parsed")
+        parsed_date = _utc_datetime(stamp) if stamp else None
+        if parsed_date is not None:
+            dated.append(parsed_date)
+
+    newest_age = None
+    if not dated:
+        reasons.append("missing_entry_dates")
+    else:
+        newest_age = (now - max(dated)).total_seconds() / 86400
+        max_age = 30 if candidate.tier in {"independent", "analytics"} else 14
+        if newest_age > max_age:
+            reasons.append("stale_feed")
+
+    return CandidateValidation(
+        name=candidate.name,
+        country_code=candidate.country_code,
+        ok=not reasons,
+        reasons=tuple(reasons),
+        item_count=len(entries),
+        newest_age_days=round(newest_age, 1) if newest_age is not None else None,
+        domain_ratio=round(ratio, 3),
+    )
