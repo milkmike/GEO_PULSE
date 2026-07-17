@@ -107,10 +107,11 @@ def test_canary_fails_closed_with_action_when_baseline_is_from_older_audit():
     assert "refresh baseline" in " ".join(report["protected_count_errors"])
 
 
-def test_collector_image_contains_source_wave_audit_script():
+def test_collector_image_contains_source_wave_release_scripts():
     dockerfile = (REPO_ROOT / "Dockerfile.collector").read_text()
 
     assert "scripts/audit_source_wave.py" in dockerfile
+    assert "scripts/validate_source_candidates.py" in dockerfile
 
 
 def test_rollback_verifies_returned_row_count_before_commit():
@@ -147,6 +148,16 @@ def test_production_audits_and_startup_do_not_start_dependencies():
     )
     assert "--baseline-only" in audit_commands[0]
     assert "docker compose up -d --no-deps api collector" in runbook
+
+
+def test_production_promotion_preflight_uses_read_only_inventory():
+    runbook = (REPO_ROOT / "docs/release/national-source-wave1.md").read_text()
+
+    assert "SELECT json_build_object" in runbook
+    assert "> backups/production-source-inventory.json" in runbook
+    assert "--promotion-preflight" in runbook
+    assert "--production-inventory /app/backups/production-source-inventory.json" in runbook
+    assert "docker compose run --rm --no-deps" in runbook
 
 
 def test_cli_fails_closed_when_wave_has_no_sources(monkeypatch):

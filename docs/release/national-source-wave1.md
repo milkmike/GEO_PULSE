@@ -16,6 +16,12 @@ git push origin main
 # Production baseline; read-only
 ssh geopulse-prod "cd /opt/geopulse && git pull --ff-only"
 ssh geopulse-prod "cd /opt/geopulse && docker compose build api collector"
+
+# Export the live source identities with one SELECT-only query, then fail closed
+# if any Wave 1 publisher overlaps a different production source family.
+ssh geopulse-prod "cd /opt/geopulse && mkdir -p backups && docker compose exec -T db psql -U thermo -d cis_thermometer -X -q -t -A -c \"SELECT json_build_object('version',1,'sources',COALESCE((SELECT json_agg(json_build_object('country_code',country_code,'url',url,'config',COALESCE(config,'{}'::jsonb)) ORDER BY id) FROM sources),'[]'::json),'publisher_domains',COALESCE((SELECT json_agg(json_build_object('domain',pd.domain,'country_code',pd.country_code,'url',s.url,'source_expansion_wave',s.config->>'source_expansion_wave') ORDER BY pd.domain) FROM publisher_domains pd JOIN sources s ON s.id=pd.publisher_source_id),'[]'::json));\" > backups/production-source-inventory.json"
+ssh geopulse-prod "cd /opt/geopulse && docker compose run --rm --no-deps -v /opt/geopulse/backups:/app/backups:ro collector python scripts/validate_source_candidates.py --promotion-preflight --production-inventory /app/backups/production-source-inventory.json --json > backups/source-promotion-preflight.json"
+
 ssh geopulse-prod "cd /opt/geopulse && docker compose run --rm --no-deps -v /opt/geopulse/backups:/app/backups collector python scripts/audit_source_wave.py --wave 2026-07-17-rss-1 --baseline-only --json --out /app/backups/source-wave1-baseline.json"
 
 # Start only the two newly built services; db and redis are untouched
