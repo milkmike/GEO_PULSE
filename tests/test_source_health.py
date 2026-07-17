@@ -28,6 +28,14 @@ def _site_wrapper_source(name, domain, tier, *, status="ok"):
     return source
 
 
+def _with_publisher_family(source, canonical, *aliases):
+    source["config"].update({
+        "publisher_domain": canonical,
+        "publisher_domain_aliases": list(aliases),
+    })
+    return source
+
+
 def test_source_coverage_counts_domains_not_rows_or_discovery():
     result = source_coverage([
         _source("Official one", "official.example", "official", state=True),
@@ -60,6 +68,57 @@ def test_source_coverage_attributes_site_wrappers_to_distinct_publishers():
     assert country["mix"] == {"official": 0, "mainstream": 1, "independent": 1}
     assert country["duplicate_families"] == ["first.example"]
     assert country["target_state"] == "thin"
+
+
+def test_source_coverage_excludes_centralized_aggregator_families():
+    result = source_coverage([
+        _source("AllAfrica", "allafrica.com", "mainstream"),
+        _source("National publisher", "national.example", "independent"),
+    ])
+
+    country = next(country for country in result["countries"] if country["country_code"] == "AL")
+    assert country["configured"] == 2
+    assert country["direct_publishers"] == 1
+    assert country["working_direct_publishers"] == 1
+    assert country["mix"] == {"official": 0, "mainstream": 0, "independent": 1}
+
+
+def test_source_coverage_merges_publisher_families_with_overlapping_aliases():
+    result = source_coverage([
+        _with_publisher_family(
+            _source("First feed", "feeds.first.example", "mainstream"),
+            "first.example",
+            "zz-shared.example",
+        ),
+        _with_publisher_family(
+            _source("Second feed", "feeds.second.example", "independent"),
+            "second.example",
+            "zz-shared.example",
+        ),
+    ])
+
+    country = next(country for country in result["countries"] if country["country_code"] == "AL")
+    assert country["direct_publishers"] == 1
+    assert country["working_direct_publishers"] == 1
+    assert country["mix"] == {"official": 0, "mainstream": 1, "independent": 1}
+    assert country["duplicate_families"] == ["first.example"]
+
+
+def test_source_coverage_uses_site_wrapper_domain_as_family_membership():
+    wrapper = _with_publisher_family(
+        _site_wrapper_source("Publisher wrapper", "publisher-alias.example", "mainstream"),
+        "publisher.example",
+    )
+    result = source_coverage([
+        wrapper,
+        _source("Publisher direct feed", "publisher-alias.example", "independent"),
+    ])
+
+    country = next(country for country in result["countries"] if country["country_code"] == "AL")
+    assert country["direct_publishers"] == 1
+    assert country["working_direct_publishers"] == 1
+    assert country["mix"] == {"official": 0, "mainstream": 1, "independent": 1}
+    assert country["duplicate_families"] == ["publisher-alias.example"]
 
 
 def test_source_coverage_states_are_uncovered_thin_and_baseline():

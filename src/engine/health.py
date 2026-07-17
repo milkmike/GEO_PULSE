@@ -14,6 +14,7 @@ HEALTHY / WARNING / DEGRADED / UNHEALTHY.
 """
 import logging
 from collections import Counter, defaultdict
+from collections.abc import Mapping
 from datetime import datetime, timezone
 
 from sqlalchemy import text
@@ -21,6 +22,7 @@ from sqlalchemy import text
 from src.collectors.publisher_attribution import (
     expected_site_domain,
     feed_mode,
+    is_aggregator_domain,
     normalize_publisher_domain,
 )
 from src.countries import COUNTRIES, country_name_ru
@@ -133,6 +135,69 @@ def source_health() -> list[dict]:
 INDEPENDENT_TIERS = {"independent", "domestic_opposition"}
 
 
+def _publisher_family_identities(source: dict) -> set[str]:
+    """Return the curated identities which connect one publisher source."""
+    config = source.get("config")
+    config = config if isinstance(config, Mapping) else {}
+    mode = feed_mode(source.get("url"), config)
+
+    canonical = normalize_publisher_domain(config.get("publisher_domain"))
+    raw_aliases = config.get("publisher_domain_aliases", config.get("publisher_aliases", ()))
+    if isinstance(raw_aliases, str):
+        raw_aliases = (raw_aliases,)
+    if not isinstance(raw_aliases, (list, tuple, set)):
+        raw_aliases = ()
+
+    site_domain = expected_site_domain(source.get("url"))
+    fallback_domain = None
+    if canonical is None and site_domain is None:
+        fallback_domain = normalize_publisher_domain(source.get("url"))
+
+    identities = {
+        domain
+        for value in (canonical, *raw_aliases, site_domain, fallback_domain)
+        if isinstance(value, str)
+        for domain in (normalize_publisher_domain(value),)
+        if domain
+    }
+    feed_domain = normalize_publisher_domain(source.get("url"))
+    if (
+        any(is_aggregator_domain(domain) for domain in identities)
+        or (mode == "publisher" and is_aggregator_domain(feed_domain))
+    ):
+        return set()
+    return identities
+
+
+def _publisher_families(sources: list[dict]) -> dict[str, list[dict]]:
+    """Build connected publisher families from overlapping domain identities."""
+    families: list[dict] = []
+    for source in sources:
+        identities = _publisher_family_identities(source)
+        if not identities:
+            continue
+        matching = [family for family in families if family["identities"] & identities]
+        if not matching:
+            families.append({"identities": identities, "sources": [source]})
+            continue
+
+        combined_identities = set(identities)
+        combined_sources = [source]
+        for family in matching:
+            combined_identities.update(family["identities"])
+            combined_sources.extend(family["sources"])
+            families.remove(family)
+        families.append({
+            "identities": combined_identities,
+            "sources": combined_sources,
+        })
+
+    return {
+        min(family["identities"]): family["sources"]
+        for family in families
+    }
+
+
 def source_coverage(sources: list[dict] | None = None) -> dict:
     """Report distinct, working direct-publisher coverage by country."""
     sources = source_health() if sources is None else sources
@@ -152,16 +217,7 @@ def source_coverage(sources: list[dict] | None = None) -> dict:
             row for row in rows
             if row not in discovery and row.get("type") in {"rss", "web"}
         ]
-        by_domain = defaultdict(list)
-        for row in direct:
-            config = row.get("config") or {}
-            domain = normalize_publisher_domain(
-                config.get("publisher_domain")
-                or expected_site_domain(row.get("url"))
-                or row.get("url")
-            )
-            if domain:
-                by_domain[domain].append(row)
+        by_domain = _publisher_families(direct)
         working = {
             domain: family for domain, family in by_domain.items()
             if any(row.get("last_status") == "ok" for row in family)
