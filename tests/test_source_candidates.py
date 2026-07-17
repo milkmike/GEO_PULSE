@@ -16,6 +16,7 @@ from src.collectors.source_candidates import (
     configured_publisher_sources,
     fetch_and_validate_candidate,
     load_source_candidates,
+    load_production_source_inventory,
     render_validation_markdown,
     validate_candidate_metadata,
     validate_feed_document,
@@ -67,38 +68,53 @@ def _load_document(tmp_path, document):
     return load_source_candidates(path)
 
 
-def _feed(*links: str, published="Thu, 16 Jul 2026 10:00:00 GMT") -> bytes:
+def _feed(
+    *links: str,
+    published="Thu, 16 Jul 2026 10:00:00 GMT",
+    language="sq",
+) -> bytes:
     items = "".join(
         f"<item><title>Story {index}</title><link>{link}</link>"
-        f"<pubDate>{published}</pubDate></item>"
+        f"<guid>story-{index}</guid><pubDate>{published}</pubDate></item>"
         for index, link in enumerate(links)
     )
     return (
-        f"<rss version='2.0'><channel><title>News</title>{items}</channel></rss>"
+        f"<rss version='2.0'><channel><title>News</title>"
+        f"<language>{language}</language>{items}</channel></rss>"
     ).encode()
 
 
-def _atom(*links: str, published="2026-07-16T10:00:00Z") -> bytes:
+def _atom(
+    *links: str,
+    published="2026-07-16T10:00:00Z",
+    language="sq",
+) -> bytes:
     entries = "".join(
         f"<entry><title>Story {index}</title><link href='{link}'/>"
-        f"<updated>{published}</updated></entry>"
+        f"<id>story-{index}</id><updated>{published}</updated></entry>"
         for index, link in enumerate(links)
     )
     return (
-        "<feed xmlns='http://www.w3.org/2005/Atom'><title>News</title>"
+        f"<feed xmlns='http://www.w3.org/2005/Atom' xml:lang='{language}'>"
+        "<title>News</title>"
         f"<updated>{published}</updated>{entries}</feed>"
     ).encode()
 
 
-def _feed_with_dates(domain: str, *published_values: str) -> bytes:
+def _feed_with_dates(
+    domain: str,
+    *published_values: str,
+    language="sq",
+) -> bytes:
     items = "".join(
         f"<item><title>Story {index}</title>"
         f"<link>https://{domain}/{index}</link>"
-        f"<pubDate>{published}</pubDate></item>"
+        f"<guid>story-{index}</guid><pubDate>{published}</pubDate></item>"
         for index, published in enumerate(published_values)
     )
     return (
-        f"<rss version='2.0'><channel><title>News</title>{items}</channel></rss>"
+        f"<rss version='2.0'><channel><title>News</title>"
+        f"<language>{language}</language>{items}</channel></rss>"
     ).encode()
 
 
@@ -262,6 +278,59 @@ def test_cli_rejects_an_empty_candidate_registry(tmp_path, capsys):
     payload = json.loads(capsys.readouterr().out)
     assert payload["summary"] == {"total": 0, "passed": 0, "failed": 0}
     assert exit_code == 1
+
+
+def test_promotion_preflight_cli_uses_production_inventory_fail_closed(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    from scripts import validate_source_candidates as cli
+
+    registry = tmp_path / "candidate.yaml"
+    registry.write_text(
+        yaml.safe_dump(
+            {
+                "version": 1,
+                "candidates": [_candidate(status="promoted")],
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    inventory_path = _write_production_inventory(
+        tmp_path,
+        {
+            "country_code": "IE",
+            "url": "https://publisher.example/other.xml",
+            "config": {"publisher_domain": "publisher.example"},
+        },
+    )
+
+    class ForbiddenClient:
+        def __init__(self):
+            raise AssertionError("preflight must not fetch after inventory collision")
+
+    monkeypatch.setattr(cli.httpx, "Client", ForbiddenClient)
+
+    exit_code = cli.main(
+        [
+            "--candidate-file",
+            str(registry),
+            "--promotion-preflight",
+            "--production-inventory",
+            str(inventory_path),
+            "--json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 1
+    assert payload["mode"] == "promotion_preflight"
+    assert payload["summary"] == {"total": 1, "passed": 0, "failed": 1}
+    assert payload["results"][0]["reasons"] == [
+        "duplicate_production_publisher_domain"
+    ]
 
 
 def test_metadata_rejects_loaded_duplicate_and_google_news():
@@ -532,6 +601,153 @@ def test_promoted_candidate_allows_exact_self_identity_across_domain_family():
     assert result.ok is True
 
 
+def _write_production_inventory(tmp_path, *sources, publisher_domains=()):
+    path = tmp_path / "production-source-inventory.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "sources": list(sources),
+                "publisher_domains": list(publisher_domains),
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_production_inventory_collision_blocks_promotion(tmp_path):
+    candidate = load_source_candidates(config.SOURCE_CANDIDATES_PATH)[0]
+    inventory = load_production_source_inventory(
+        _write_production_inventory(
+            tmp_path,
+            {
+                "country_code": "AL",
+                "url": "https://rtsh.al/another-feed.xml",
+                "config": {"publisher_domain": "rtsh.al"},
+            },
+        )
+    )
+
+    result = validate_candidate_metadata(
+        candidate,
+        configured_publishers={},
+        production_publishers=inventory,
+    )
+
+    assert result.ok is False
+    assert result.reasons == ("duplicate_production_publisher_domain",)
+
+
+def test_production_inventory_alias_collision_blocks_promotion(tmp_path):
+    candidate = replace(
+        load_source_candidates(config.SOURCE_CANDIDATES_PATH)[0],
+        domain_aliases=("rtsh-news.example",),
+    )
+    inventory = load_production_source_inventory(
+        _write_production_inventory(
+            tmp_path,
+            {
+                "country_code": "IE",
+                "url": "https://unrelated.example/feed.xml",
+                "config": {
+                    "publisher_domain": "unrelated.example",
+                    "publisher_domain_aliases": ["WWW.RTSH-NEWS.EXAMPLE"],
+                },
+            },
+        )
+    )
+
+    result = validate_candidate_metadata(
+        candidate,
+        configured_publishers={},
+        production_publishers=inventory,
+    )
+
+    assert "duplicate_production_publisher_domain" in result.reasons
+
+
+def test_production_inventory_allows_only_exact_post_sync_wave_identity(tmp_path):
+    candidate = load_source_candidates(config.SOURCE_CANDIDATES_PATH)[0]
+
+    def inventory_with_wave(wave):
+        source_config = {"publisher_domain": candidate.canonical_domain}
+        if wave is not None:
+            source_config["source_expansion_wave"] = wave
+        return load_production_source_inventory(
+            _write_production_inventory(
+                tmp_path,
+                {
+                    "country_code": candidate.country_code,
+                    "url": candidate.feed_url,
+                    "config": source_config,
+                },
+            )
+        )
+
+    pre_sync_collision = validate_candidate_metadata(
+        candidate,
+        configured_publishers={},
+        production_publishers=inventory_with_wave(None),
+    )
+    post_sync_self = validate_candidate_metadata(
+        candidate,
+        configured_publishers={},
+        production_publishers=inventory_with_wave(candidate.wave),
+    )
+
+    assert "duplicate_production_publisher_domain" in pre_sync_collision.reasons
+    assert post_sync_self.ok is True
+
+
+def test_production_inventory_extracts_site_wrapper_identity(tmp_path):
+    wrapper_url = (
+        "https://news.google.com/rss/search?"
+        "q=site:wrapper.example&hl=en&gl=IE&ceid=IE:en"
+    )
+    inventory = load_production_source_inventory(
+        _write_production_inventory(
+            tmp_path,
+            {"country_code": "IE", "url": wrapper_url, "config": {}},
+        )
+    )
+
+    assert inventory == {
+        "wrapper.example": {("IE", wrapper_url, None)},
+    }
+
+
+def test_production_inventory_merges_verified_domain_registry_alias(tmp_path):
+    inventory = load_production_source_inventory(
+        _write_production_inventory(
+            tmp_path,
+            publisher_domains=(
+                {
+                    "domain": "WWW.RTSH-NEWS.EXAMPLE",
+                    "country_code": "AL",
+                    "url": "https://existing.example/feed.xml",
+                    "source_expansion_wave": None,
+                },
+            ),
+        )
+    )
+    candidate = replace(
+        load_source_candidates(config.SOURCE_CANDIDATES_PATH)[0],
+        domain_aliases=("rtsh-news.example",),
+    )
+
+    result = validate_candidate_metadata(
+        candidate,
+        configured_publishers={},
+        production_publishers=inventory,
+    )
+
+    assert inventory["rtsh-news.example"] == {
+        ("AL", "https://existing.example/feed.xml", None)
+    }
+    assert "duplicate_production_publisher_domain" in result.reasons
+
+
 @pytest.mark.parametrize(
     ("overrides", "reason"),
     [
@@ -626,6 +842,101 @@ def test_feed_validation_accepts_valid_xml_even_with_html_content_type():
     assert result.item_count == 3
     assert result.newest_age_days == 1.1
     assert result.domain_ratio == 1.0
+    assert result.language_agreement == 1.0
+    assert result.stable_identity_ratio == 1.0
+
+
+def test_feed_validation_rejects_missing_stable_guids():
+    candidate = load_source_candidates(config.SOURCE_CANDIDATES_PATH)[0]
+    body = (
+        "<rss version='2.0'><channel><title>News</title><language>sq</language>"
+        "<item><title>Lajmi i parë në Shqipëri</title><link>https://rtsh.al/a</link>"
+        "<pubDate>Thu, 16 Jul 2026 10:00:00 GMT</pubDate></item>"
+        "<item><title>Lajmi i dytë në Shqipëri</title><link>https://rtsh.al/b</link>"
+        "<pubDate>Thu, 16 Jul 2026 10:00:00 GMT</pubDate></item>"
+        "<item><title>Lajmi i tretë në Shqipëri</title><link>https://rtsh.al/c</link>"
+        "<pubDate>Thu, 16 Jul 2026 10:00:00 GMT</pubDate></item>"
+        "</channel></rss>"
+    ).encode()
+
+    result = validate_feed_document(candidate, body, now=NOW)
+
+    assert "stable_identity_ratio_below_0_8" in result.reasons
+    assert result.stable_identity_ratio == 0.0
+
+
+def test_feed_validation_rejects_generic_wrong_language_content():
+    candidate = next(
+        candidate
+        for candidate in load_source_candidates(config.SOURCE_CANDIDATES_PATH)
+        if candidate.name == "The Irish Times"
+    )
+    items = "".join(
+        f"<item><title>La politique et la société sont au centre du débat {index}</title>"
+        f"<link>https://irishtimes.com/{index}</link><guid>fr-{index}</guid>"
+        "<pubDate>Thu, 16 Jul 2026 10:00:00 GMT</pubDate></item>"
+        for index in range(3)
+    )
+    body = (
+        "<rss version='2.0'><channel><title>Actualités</title>"
+        f"<language>fr</language>{items}</channel></rss>"
+    ).encode()
+
+    result = validate_feed_document(candidate, body, now=NOW)
+
+    assert "content_language_mismatch" in result.reasons
+    assert result.language_agreement == 0.0
+
+
+def test_feed_validation_uses_content_when_declared_language_is_wrong():
+    candidate = next(
+        candidate
+        for candidate in load_source_candidates(config.SOURCE_CANDIDATES_PATH)
+        if candidate.name == "MRT"
+    )
+    items = "".join(
+        f"<item><title>Владата најави нови мерки за граѓаните {index}</title>"
+        f"<link>https://mrt.com.mk/node/{index}</link><guid>mk-{index}</guid>"
+        "<pubDate>Thu, 16 Jul 2026 10:00:00 GMT</pubDate></item>"
+        for index in range(3)
+    )
+    body = (
+        "<rss version='2.0'><channel><title>МРТ</title>"
+        f"<language>en</language>{items}</channel></rss>"
+    ).encode()
+
+    result = validate_feed_document(candidate, body, now=NOW)
+
+    assert result.ok is True
+    assert result.language_agreement == 1.0
+
+
+def test_feed_language_detection_ignores_markup_attributes():
+    candidate = next(
+        candidate
+        for candidate in load_source_candidates(config.SOURCE_CANDIDATES_PATH)
+        if candidate.name == "MRT"
+    )
+    noisy_markup = "".join(
+        "<img class='field-image responsive-image' src='https://cdn.example/image.jpg'/>"
+        for _ in range(20)
+    )
+    items = "".join(
+        f"<item><title>Владата најави нови мерки за граѓаните {index}</title>"
+        f"<link>https://mrt.com.mk/node/{index}</link><guid>mk-html-{index}</guid>"
+        f"<description><![CDATA[{noisy_markup}<p>Вестите се објавени на македонски јазик.</p>]]></description>"
+        "<pubDate>Thu, 16 Jul 2026 10:00:00 GMT</pubDate></item>"
+        for index in range(3)
+    )
+    body = (
+        "<rss version='2.0'><channel><title>МРТ</title>"
+        f"<language>en</language>{items}</channel></rss>"
+    ).encode()
+
+    result = validate_feed_document(candidate, body, now=NOW)
+
+    assert result.ok is True
+    assert result.language_agreement == 1.0
 
 
 def test_feed_validation_rejects_stale_and_off_domain_entries():
@@ -739,6 +1050,7 @@ def test_feed_validation_accepts_sub_two_hour_clock_skew():
         "https://dn.pt/b",
         "https://dn.pt/c",
         published="Fri, 17 Jul 2026 08:52:00 GMT",
+        language="pt",
     )
 
     result = validate_feed_document(candidate, body, now=now)
@@ -786,6 +1098,7 @@ def test_feed_validation_parses_only_exact_rtcg_raw_date_forms(published, now):
         "https://rtcg.me/b",
         "https://rtcg.me/c",
         published=published,
+        language="me",
     )
 
     result = validate_feed_document(candidate, body, now=now)
@@ -804,6 +1117,7 @@ def test_feed_validation_does_not_guess_other_rtcg_date_shapes():
         "https://rtcg.me/b",
         "https://rtcg.me/c",
         published="17.07.2026 06:47",
+        language="me",
     )
 
     result = validate_feed_document(
@@ -828,6 +1142,7 @@ def test_feed_validation_accepts_current_thejournal_items_among_old_promos():
         "Wed, 03 Jan 2024 10:00:00 GMT",
         "Thu, 04 Jan 2024 10:00:00 GMT",
         "Fri, 17 Jul 2026 09:00:00 GMT",
+        language="en",
     )
 
     result = validate_feed_document(candidate, body, now=NOW)

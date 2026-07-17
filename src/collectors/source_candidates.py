@@ -3,7 +3,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
+import json
 from pathlib import Path
+import re
 from urllib.parse import parse_qsl, urlsplit
 
 import feedparser
@@ -71,6 +73,32 @@ _RTCG_RAW_DATE_FORMATS = (
     ("%d.%m.%YT%H:%M:%S %z", False),
     ("%d.%m.%Y. %H:%M", True),
 )
+_LANGUAGE_EQUIVALENTS = {
+    "sr": frozenset({"bs", "hr", "me", "sh", "sr"}),
+}
+_LANGUAGE_MARKERS = {
+    "da": frozenset(
+        {"af", "at", "der", "det", "en", "er", "et", "for", "fra", "har", "ikke", "med", "og", "på", "som", "til"}
+    ),
+    "en": frozenset(
+        {"after", "and", "as", "at", "by", "for", "from", "has", "have", "in", "is", "more", "new", "of", "on", "the", "to", "will", "with"}
+    ),
+    "pt": frozenset(
+        {"ao", "com", "da", "das", "de", "do", "dos", "e", "em", "na", "nas", "no", "nos", "para", "por", "que", "se", "um", "uma"}
+    ),
+    "sl": frozenset(
+        {"bo", "bodo", "da", "do", "in", "iz", "je", "ki", "na", "od", "pa", "po", "s", "se", "slovenija", "slovenijo", "so", "za", "zda", "že"}
+    ),
+    "sq": frozenset(
+        {"dhe", "është", "me", "nga", "një", "në", "për", "që", "shqipëri", "shqipërisë", "të"}
+    ),
+    "sr": frozenset(
+        {"crnoj", "da", "do", "gori", "i", "iz", "je", "kako", "koji", "na", "od", "pa", "sa", "se", "su", "u", "vlada", "za"}
+    ),
+}
+_MACEDONIAN_MARKERS = frozenset(
+    {"владата", "граѓаните", "за", "и", "мерки", "на", "најави"}
+)
 
 
 @dataclass(frozen=True)
@@ -102,6 +130,8 @@ class CandidateValidation:
     item_count: int = 0
     newest_age_days: float | None = None
     domain_ratio: float | None = None
+    language_agreement: float | None = None
+    stable_identity_ratio: float | None = None
 
 
 def _require_exact_fields(
@@ -337,10 +367,115 @@ def configured_publisher_sources(
     return publishers
 
 
+def load_production_source_inventory(
+    path: Path,
+) -> dict[str, set[tuple[str, str, str | None]]]:
+    """Load a reviewed, read-only export of production source identities."""
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("production source inventory must be valid JSON") from exc
+    if not isinstance(raw, Mapping):
+        raise ValueError("production source inventory root must be a mapping")
+    _require_exact_fields(
+        raw,
+        frozenset({"version", "sources", "publisher_domains"}),
+        "inventory",
+    )
+    if type(raw["version"]) is not int or raw["version"] != 1:
+        raise ValueError("production source inventory version must be integer 1")
+    records = raw["sources"]
+    if not isinstance(records, list):
+        raise ValueError("production source inventory sources must be a list")
+    domain_records = raw["publisher_domains"]
+    if not isinstance(domain_records, list):
+        raise ValueError(
+            "production source inventory publisher_domains must be a list"
+        )
+
+    publishers: dict[str, set[tuple[str, str, str | None]]] = {}
+    expected_fields = frozenset({"country_code", "url", "config"})
+    for index, record in enumerate(records, start=1):
+        label = f"inventory source {index}"
+        if not isinstance(record, Mapping):
+            raise ValueError(f"{label} must be a mapping")
+        _require_exact_fields(record, expected_fields, label)
+        country_code = _require_non_empty_string(
+            record["country_code"], f"{label} country_code"
+        ).strip().upper()
+        if country_code not in COUNTRIES:
+            raise ValueError(f"{label} country_code is not supported")
+        source_url = _require_non_empty_string(record["url"], f"{label} url")
+        _feed_url_identity(source_url, f"{label} url")
+        source_config = record["config"]
+        if not isinstance(source_config, Mapping):
+            raise ValueError(f"{label} config must be a mapping")
+
+        mode = feed_mode(source_url, source_config)
+        if mode == "publisher_discovery":
+            continue
+        domain = normalize_publisher_domain(source_config.get("publisher_domain"))
+        if domain is None and mode == "site_wrapper":
+            domain = expected_site_domain(source_url)
+        if domain is None:
+            domain = normalize_publisher_domain(source_url)
+        if domain is None or is_aggregator_domain(domain):
+            continue
+
+        raw_aliases = source_config.get("publisher_domain_aliases") or ()
+        if isinstance(raw_aliases, str):
+            raw_aliases = (raw_aliases,)
+        if not isinstance(raw_aliases, (list, tuple, set)):
+            raise ValueError(f"{label} publisher_domain_aliases must be a list")
+        family = {
+            normalized
+            for value in (domain, *raw_aliases)
+            if isinstance(value, str)
+            for normalized in (normalize_publisher_domain(value),)
+            if normalized and not is_aggregator_domain(normalized)
+        }
+        wave = source_config.get("source_expansion_wave")
+        if wave is not None and (not isinstance(wave, str) or not wave.strip()):
+            raise ValueError(f"{label} source_expansion_wave must be a string")
+        identity = (country_code, source_url, wave)
+        for family_domain in family:
+            publishers.setdefault(family_domain, set()).add(identity)
+
+    domain_fields = frozenset(
+        {"domain", "country_code", "url", "source_expansion_wave"}
+    )
+    for index, record in enumerate(domain_records, start=1):
+        label = f"inventory publisher_domain {index}"
+        if not isinstance(record, Mapping):
+            raise ValueError(f"{label} must be a mapping")
+        _require_exact_fields(record, domain_fields, label)
+        domain = _normalize_domain(
+            _require_non_empty_string(record["domain"], f"{label} domain"),
+            f"{label} domain",
+        )
+        country_code = _require_non_empty_string(
+            record["country_code"], f"{label} country_code"
+        ).strip().upper()
+        if country_code not in COUNTRIES:
+            raise ValueError(f"{label} country_code is not supported")
+        source_url = _require_non_empty_string(record["url"], f"{label} url")
+        _feed_url_identity(source_url, f"{label} url")
+        wave = record["source_expansion_wave"]
+        if wave is not None and (not isinstance(wave, str) or not wave.strip()):
+            raise ValueError(f"{label} source_expansion_wave must be a string")
+        publishers.setdefault(domain, set()).add(
+            (country_code, source_url, wave)
+        )
+    return publishers
+
+
 def validate_candidate_metadata(
     candidate: SourceCandidate,
     *,
     configured_publishers: dict[str, set[tuple[str, str]]],
+    production_publishers: (
+        dict[str, set[tuple[str, str, str | None]]] | None
+    ) = None,
 ) -> CandidateValidation:
     reasons: list[str] = []
     canonical = normalize_publisher_domain(candidate.canonical_domain)
@@ -375,6 +510,19 @@ def validate_candidate_metadata(
     )
     if existing and existing != promoted_self:
         reasons.append("duplicate_publisher_domain")
+
+    production_existing = {
+        identity
+        for domain in candidate_family
+        for identity in (production_publishers or {}).get(domain, set())
+    }
+    synced_self = (
+        {(candidate.country_code, candidate.feed_url, candidate.wave)}
+        if candidate.status == "promoted"
+        else set()
+    )
+    if production_existing and production_existing != synced_self:
+        reasons.append("duplicate_production_publisher_domain")
 
     if candidate.tier not in _ALLOWED_TIERS:
         reasons.append("invalid_tier")
@@ -442,6 +590,61 @@ def _entry_datetime(entry: Mapping, *, allow_rtcg_fallback: bool) -> datetime | 
     )
 
 
+def _base_language(value: object) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return re.split(r"[-_]", value.strip().casefold(), maxsplit=1)[0]
+
+
+def _declared_language_matches(expected: str, declared: str | None) -> bool:
+    accepted = _LANGUAGE_EQUIVALENTS.get(expected, frozenset({expected}))
+    return declared in accepted
+
+
+def _content_supports_language(expected: str, entries: list[Mapping]) -> bool:
+    text = " ".join(
+        re.sub(r"<[^>]*>", " ", value)
+        for entry in entries
+        for field in ("title", "summary", "description")
+        for value in (entry.get(field),)
+        if isinstance(value, str) and value.strip()
+    ).casefold()
+    letters = [character for character in text if character.isalpha()]
+    if len(letters) < 12:
+        return False
+    greek_ratio = sum("\u0370" <= char <= "\u03ff" for char in letters) / len(letters)
+    cyrillic_ratio = sum("\u0400" <= char <= "\u052f" for char in letters) / len(letters)
+    if expected == "el":
+        return greek_ratio >= 0.5
+    tokens = re.findall(r"[^\W\d_]+", text, flags=re.UNICODE)
+    if expected == "mk":
+        marker_count = sum(token in _MACEDONIAN_MARKERS for token in tokens)
+        has_distinctive_letter = any(char in text for char in "ѓќѕљњјџ")
+        return cyrillic_ratio >= 0.5 and (has_distinctive_letter or marker_count >= 2)
+    if greek_ratio + cyrillic_ratio >= 0.35:
+        return False
+    scores = {
+        language: sum(token in markers for token in tokens)
+        for language, markers in _LANGUAGE_MARKERS.items()
+    }
+    expected_score = scores.get(expected, 0)
+    return expected_score >= 2 and expected_score == max(scores.values(), default=0)
+
+
+def _feed_language_agrees(
+    candidate: SourceCandidate,
+    parsed: Mapping,
+    entries: list[Mapping],
+) -> bool:
+    expected = _base_language(candidate.language)
+    if expected is None:
+        return False
+    declared = _base_language(parsed.get("language"))
+    if _declared_language_matches(expected, declared):
+        return True
+    return _content_supports_language(expected, entries)
+
+
 def validate_feed_document(
     candidate: SourceCandidate,
     body: bytes,
@@ -462,6 +665,26 @@ def validate_feed_document(
         reasons.append("malformed_feed")
     if len(entries) < 3:
         reasons.append("fewer_than_3_entries")
+
+    stable_identities = {
+        str(identity).strip()
+        for entry in entries
+        for identity in (entry.get("id") or entry.get("guid"),)
+        if identity is not None and str(identity).strip()
+    }
+    stable_identity_ratio = (
+        len(stable_identities) / len(entries) if entries else 0.0
+    )
+    if stable_identity_ratio < 0.8:
+        reasons.append("stable_identity_ratio_below_0_8")
+
+    language_agreement = 1.0 if _feed_language_agrees(
+        candidate,
+        parsed.feed,
+        entries,
+    ) else 0.0
+    if language_agreement < 1.0:
+        reasons.append("content_language_mismatch")
 
     expected = {
         domain
@@ -508,6 +731,8 @@ def validate_feed_document(
         item_count=len(entries),
         newest_age_days=round(newest_age, 1) if newest_age is not None else None,
         domain_ratio=round(ratio, 3),
+        language_agreement=language_agreement,
+        stable_identity_ratio=round(stable_identity_ratio, 3),
     )
 
 
@@ -554,13 +779,14 @@ def render_validation_markdown(results: list[CandidateValidation]) -> str:
     lines = [
         "# Source candidate validation",
         "",
-        "| Country | Publisher | Result | Items | Newest age | Domain ratio | Reasons |",
-        "|---|---|---|---:|---:|---:|---|",
+        "| Country | Publisher | Result | Items | Newest age | Domain ratio | Language | Stable IDs | Reasons |",
+        "|---|---|---|---:|---:|---:|---:|---:|---|",
     ]
     for item in results:
         lines.append(
             f"| {item.country_code} | {item.name} | {'PASS' if item.ok else 'FAIL'} | "
             f"{item.item_count} | {item.newest_age_days} | {item.domain_ratio} | "
+            f"{item.language_agreement} | {item.stable_identity_ratio} | "
             f"{', '.join(item.reasons)} |"
         )
     return "\n".join(lines) + "\n"
