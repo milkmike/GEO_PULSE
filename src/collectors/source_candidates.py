@@ -7,6 +7,7 @@ from pathlib import Path
 from urllib.parse import parse_qsl, urlsplit
 
 import feedparser
+import httpx
 import yaml
 
 from src.collectors.publisher_attribution import (
@@ -508,3 +509,58 @@ def validate_feed_document(
         newest_age_days=round(newest_age, 1) if newest_age is not None else None,
         domain_ratio=round(ratio, 3),
     )
+
+
+def fetch_and_validate_candidate(
+    candidate: SourceCandidate,
+    *,
+    client: httpx.Client,
+    now: datetime | None = None,
+) -> CandidateValidation:
+    try:
+        response = client.get(
+            candidate.feed_url,
+            timeout=20,
+            follow_redirects=True,
+            headers={"User-Agent": "GEO-PULSE source validator/1.0"},
+        )
+    except httpx.HTTPError as exc:
+        return CandidateValidation(
+            name=candidate.name,
+            country_code=candidate.country_code,
+            ok=False,
+            reasons=(f"fetch_error:{type(exc).__name__}",),
+        )
+    if response.status_code != 200:
+        return CandidateValidation(
+            name=candidate.name,
+            country_code=candidate.country_code,
+            ok=False,
+            reasons=(f"http_status:{response.status_code}",),
+        )
+    return validate_feed_document(candidate, response.content, now=now)
+
+
+def validation_summary(results: list[CandidateValidation]) -> dict[str, int]:
+    passed = sum(item.ok for item in results)
+    return {
+        "total": len(results),
+        "passed": passed,
+        "failed": len(results) - passed,
+    }
+
+
+def render_validation_markdown(results: list[CandidateValidation]) -> str:
+    lines = [
+        "# Source candidate validation",
+        "",
+        "| Country | Publisher | Result | Items | Newest age | Domain ratio | Reasons |",
+        "|---|---|---|---:|---:|---:|---|",
+    ]
+    for item in results:
+        lines.append(
+            f"| {item.country_code} | {item.name} | {'PASS' if item.ok else 'FAIL'} | "
+            f"{item.item_count} | {item.newest_age_days} | {item.domain_ratio} | "
+            f"{', '.join(item.reasons)} |"
+        )
+    return "\n".join(lines) + "\n"

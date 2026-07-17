@@ -1,6 +1,12 @@
 from dataclasses import replace
 from datetime import datetime, timezone
+import json
+from pathlib import Path
+import subprocess
+import sys
+from types import SimpleNamespace
 
+import httpx
 import pytest
 import yaml
 
@@ -8,13 +14,27 @@ from src import config
 from src.collectors.source_candidates import (
     candidate_to_catalog_source,
     configured_publisher_sources,
+    fetch_and_validate_candidate,
     load_source_candidates,
+    render_validation_markdown,
     validate_candidate_metadata,
     validate_feed_document,
+    validation_summary,
 )
 
 
 NOW = datetime(2026, 7, 17, 12, 0, tzinfo=timezone.utc)
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+class StubClient:
+    def __init__(self, body: bytes, status_code: int = 200):
+        self.response = SimpleNamespace(content=body, status_code=status_code)
+        self.calls = []
+
+    def get(self, *args, **kwargs):
+        self.calls.append((args, kwargs))
+        return self.response
 
 
 def _candidate(**overrides):
@@ -79,6 +99,168 @@ def _feed_with_dates(domain: str, *published_values: str) -> bytes:
     return (
         f"<rss version='2.0'><channel><title>News</title>{items}</channel></rss>"
     ).encode()
+
+
+def test_fetch_and_report_are_machine_and_human_readable():
+    candidate = load_source_candidates(config.SOURCE_CANDIDATES_PATH)[0]
+    client = StubClient(
+        _feed("https://rtsh.al/a", "https://rtsh.al/b", "https://rtsh.al/c")
+    )
+
+    result = fetch_and_validate_candidate(candidate, client=client, now=NOW)
+
+    assert result.ok is True
+    assert validation_summary([result]) == {"total": 1, "passed": 1, "failed": 0}
+    markdown = render_validation_markdown([result])
+    assert "| AL | RTSH | PASS |" in markdown
+    assert client.calls == [
+        (
+            (candidate.feed_url,),
+            {
+                "timeout": 20,
+                "follow_redirects": True,
+                "headers": {"User-Agent": "GEO-PULSE source validator/1.0"},
+            },
+        )
+    ]
+
+
+def test_fetch_fails_closed_on_non_200_response():
+    candidate = load_source_candidates(config.SOURCE_CANDIDATES_PATH)[0]
+
+    result = fetch_and_validate_candidate(
+        candidate,
+        client=StubClient(b"temporarily unavailable", status_code=503),
+        now=NOW,
+    )
+
+    assert result.ok is False
+    assert result.reasons == ("http_status:503",)
+    assert result.item_count == 0
+
+
+def test_fetch_fails_closed_on_httpx_network_error():
+    candidate = load_source_candidates(config.SOURCE_CANDIDATES_PATH)[0]
+    request = httpx.Request("GET", candidate.feed_url)
+
+    class FailingClient:
+        def get(self, *args, **kwargs):
+            raise httpx.ConnectError("network unavailable", request=request)
+
+    result = fetch_and_validate_candidate(candidate, client=FailingClient(), now=NOW)
+
+    assert result.ok is False
+    assert result.reasons == ("fetch_error:ConnectError",)
+    assert result.item_count == 0
+
+
+def test_catalog_cli_runs_directly_from_repo_root_and_emits_json():
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "scripts/validate_source_candidates.py",
+            "--catalog-only",
+            "--json",
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    payload = json.loads(completed.stdout)
+    assert payload["summary"] == {"total": 17, "passed": 17, "failed": 0}
+    assert len(payload["results"]) == 17
+
+
+def test_cli_out_matches_stable_json_stdout(tmp_path, capsys):
+    from scripts import validate_source_candidates as cli
+
+    output_path = tmp_path / "candidate-validation.json"
+
+    first_exit = cli.main(
+        ["--catalog-only", "--json", "--out", str(output_path)]
+    )
+    first_stdout = capsys.readouterr().out
+    second_exit = cli.main(["--catalog-only", "--json"])
+    second_stdout = capsys.readouterr().out
+
+    assert first_exit == second_exit == 0
+    assert first_stdout == second_stdout == output_path.read_text(encoding="utf-8")
+    assert json.loads(first_stdout)["summary"] == {
+        "total": 17,
+        "passed": 17,
+        "failed": 0,
+    }
+
+
+def test_cli_fetches_every_candidate_only_after_clean_metadata(monkeypatch, capsys):
+    from scripts import validate_source_candidates as cli
+
+    fetched = []
+
+    class ClientContext:
+        def __enter__(self):
+            return object()
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return False
+
+    def fake_fetch(candidate, *, client):
+        fetched.append((candidate, client))
+        return validate_candidate_metadata(candidate, configured_publishers={})
+
+    monkeypatch.setattr(cli, "fetch_and_validate_candidate", fake_fetch, raising=False)
+    monkeypatch.setattr(
+        cli,
+        "httpx",
+        SimpleNamespace(Client=ClientContext),
+        raising=False,
+    )
+
+    exit_code = cli.main(["--json"])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert payload["summary"] == {"total": 17, "passed": 17, "failed": 0}
+    assert len(fetched) == 17
+
+
+def test_cli_does_not_fetch_when_any_candidate_metadata_fails(monkeypatch, capsys):
+    from scripts import validate_source_candidates as cli
+
+    candidate = load_source_candidates(config.SOURCE_CANDIDATES_PATH)[0]
+    duplicate = {candidate.canonical_domain: {("ZZ", "https://duplicate.test/rss")}}
+    monkeypatch.setattr(cli, "configured_publisher_sources", lambda loaded: duplicate)
+
+    class ForbiddenClient:
+        def __init__(self):
+            raise AssertionError("HTTP client must not be created after metadata failure")
+
+    monkeypatch.setattr(cli.httpx, "Client", ForbiddenClient)
+
+    exit_code = cli.main(["--json"])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 1
+    assert payload["summary"] == {"total": 17, "passed": 16, "failed": 1}
+    assert payload["results"][0]["reasons"] == ["duplicate_publisher_domain"]
+
+
+def test_cli_rejects_an_empty_candidate_registry(tmp_path, capsys):
+    from scripts import validate_source_candidates as cli
+
+    registry = tmp_path / "empty-candidates.yaml"
+    registry.write_text("version: 1\ncandidates: []\n", encoding="utf-8")
+
+    exit_code = cli.main(
+        ["--candidate-file", str(registry), "--catalog-only", "--json"]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["summary"] == {"total": 0, "passed": 0, "failed": 0}
+    assert exit_code == 1
 
 
 def test_metadata_rejects_loaded_duplicate_and_google_news():
