@@ -1,3 +1,7 @@
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from src.api.routes import world
 from src.engine.health import source_coverage
 
 
@@ -12,6 +16,16 @@ def _source(name, domain, tier, *, status="ok", discovery=False, state=False):
         "state_affiliated": state,
         "last_status": status,
     }
+
+
+def _site_wrapper_source(name, domain, tier, *, status="ok"):
+    source = _source(name, "news.google.com", tier, status=status)
+    source["url"] = (
+        "https://news.google.com/rss/search"
+        f"?q=site%3A{domain}&hl=en&gl=US&ceid=US%3Aen"
+    )
+    source["config"] = {"feed_mode": "site_wrapper"}
+    return source
 
 
 def test_source_coverage_counts_domains_not_rows_or_discovery():
@@ -31,6 +45,23 @@ def test_source_coverage_counts_domains_not_rows_or_discovery():
     assert country["target_state"] == "balanced"
 
 
+def test_source_coverage_attributes_site_wrappers_to_distinct_publishers():
+    result = source_coverage([
+        _site_wrapper_source("First publisher RSS", "first.example", "mainstream"),
+        _site_wrapper_source("First publisher alias", "first.example", "mainstream"),
+        _site_wrapper_source("Second publisher", "second.example", "independent"),
+    ])
+
+    country = next(country for country in result["countries"] if country["country_code"] == "AL")
+    assert country["configured"] == 3
+    assert country["discovery"] == 0
+    assert country["direct_publishers"] == 2
+    assert country["working_direct_publishers"] == 2
+    assert country["mix"] == {"official": 0, "mainstream": 1, "independent": 1}
+    assert country["duplicate_families"] == ["first.example"]
+    assert country["target_state"] == "thin"
+
+
 def test_source_coverage_states_are_uncovered_thin_and_baseline():
     assert source_coverage([])["summary"]["uncovered"] == 99
     thin = source_coverage([_source("One", "one.example", "mainstream")])
@@ -41,3 +72,18 @@ def test_source_coverage_states_are_uncovered_thin_and_baseline():
         _source("Three", "three.example", "mainstream"),
     ])
     assert next(country for country in baseline["countries"] if country["country_code"] == "AL")["target_state"] == "baseline"
+
+
+def test_source_coverage_api_route_returns_coverage_shape(monkeypatch):
+    coverage = {
+        "summary": {"uncovered": 99},
+        "countries": [],
+    }
+    monkeypatch.setattr(world, "source_coverage", lambda: coverage)
+    app = FastAPI()
+    app.include_router(world.router)
+
+    response = TestClient(app).get("/api/v2/health/source-coverage")
+
+    assert response.status_code == 200
+    assert response.json() == coverage

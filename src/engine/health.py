@@ -18,7 +18,11 @@ from datetime import datetime, timezone
 
 from sqlalchemy import text
 
-from src.collectors.publisher_attribution import feed_mode, normalize_publisher_domain
+from src.collectors.publisher_attribution import (
+    expected_site_domain,
+    feed_mode,
+    normalize_publisher_domain,
+)
 from src.countries import COUNTRIES, country_name_ru
 from src.db import get_session
 
@@ -151,7 +155,11 @@ def source_coverage(sources: list[dict] | None = None) -> dict:
         by_domain = defaultdict(list)
         for row in direct:
             config = row.get("config") or {}
-            domain = normalize_publisher_domain(config.get("publisher_domain") or row.get("url"))
+            domain = normalize_publisher_domain(
+                config.get("publisher_domain")
+                or expected_site_domain(row.get("url"))
+                or row.get("url")
+            )
             if domain:
                 by_domain[domain].append(row)
         working = {
