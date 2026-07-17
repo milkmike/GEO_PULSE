@@ -21,7 +21,10 @@ def evaluate_wave(rows, protected_counts, baseline_counts=None):
         reasons = []
         if row["last_status"] != "ok":
             reasons.append("last_status_not_ok")
-        if row["last_fetch_age_minutes"] is None or row["last_fetch_age_minutes"] > 60:
+        if (
+            row["last_fetch_age_minutes"] is None
+            or not 0 <= row["last_fetch_age_minutes"] <= 60
+        ):
             reasons.append("fetch_not_recent")
         if row["foreign_url_count"]:
             reasons.append("foreign_article_url")
@@ -40,6 +43,7 @@ def evaluate_wave(rows, protected_counts, baseline_counts=None):
             "passed": passed,
             "failed": len(evaluated) - passed,
         },
+        "wave_has_sources": bool(evaluated),
         "protected_counts": protected_counts,
         "protected_counts_ok": protected_ok,
         "sources": evaluated,
@@ -126,7 +130,11 @@ def main(argv=None):
     if args.out:
         args.out.write_text(output)
     print(output)
-    return 0 if report["summary"]["failed"] == 0 and report["protected_counts_ok"] else 1
+    return 0 if (
+        report["wave_has_sources"]
+        and report["summary"]["failed"] == 0
+        and report["protected_counts_ok"]
+    ) else 1
 
 
 if __name__ == "__main__":
