@@ -69,6 +69,18 @@ def _atom(*links: str, published="2026-07-16T10:00:00Z") -> bytes:
     ).encode()
 
 
+def _feed_with_dates(domain: str, *published_values: str) -> bytes:
+    items = "".join(
+        f"<item><title>Story {index}</title>"
+        f"<link>https://{domain}/{index}</link>"
+        f"<pubDate>{published}</pubDate></item>"
+        for index, published in enumerate(published_values)
+    )
+    return (
+        f"<rss version='2.0'><channel><title>News</title>{items}</channel></rss>"
+    ).encode()
+
+
 def test_metadata_rejects_loaded_duplicate_and_google_news():
     candidate = load_source_candidates(config.SOURCE_CANDIDATES_PATH)[0]
     duplicate = validate_candidate_metadata(
@@ -132,6 +144,66 @@ def test_configured_publishers_normalize_domains_and_exclude_discovery_feeds():
     }
 
 
+def test_configured_publishers_register_explicit_wrapper_and_alias_families():
+    direct_url = "https://feeds.example.test/latest.xml"
+    wrapper_url = (
+        "https://news.google.com/rss/search?"
+        "q=site:wrapper.example&hl=en&gl=IE&ceid=IE:en"
+    )
+    fallback_url = "https://news.fallback.example/rss"
+    publishers = configured_publisher_sources(
+        {
+            "countries": {
+                "ie": {
+                    "sources": [
+                        {
+                            "url": direct_url,
+                            "config": {
+                                "publisher_domain": "WWW.PUBLISHER.EXAMPLE",
+                                "publisher_domain_aliases": [
+                                    "RSS.ALIAS.EXAMPLE",
+                                    "https://m.second-alias.example/about",
+                                ],
+                            },
+                        },
+                        {
+                            "url": wrapper_url,
+                            "config": {
+                                "publisher_domain_aliases": ["AMP.WRAPPER-ALIAS.EXAMPLE"],
+                            },
+                        },
+                        {"url": fallback_url, "config": {}},
+                        {
+                            "url": "https://feeds.example.test/disallowed.xml",
+                            "config": {
+                                "publisher_domain": "allafrica.com",
+                                "publisher_domain_aliases": ["hidden-wire.example"],
+                            },
+                        },
+                        {
+                            "url": "https://news.google.com/rss/search?q=Ireland",
+                            "config": {
+                                "feed_mode": "publisher_discovery",
+                                "publisher_domain": "discovery.example",
+                                "publisher_domain_aliases": ["discovery-alias.example"],
+                            },
+                        },
+                    ],
+                }
+            }
+        }
+    )
+
+    assert publishers == {
+        "publisher.example": {("IE", direct_url)},
+        "alias.example": {("IE", direct_url)},
+        "second-alias.example": {("IE", direct_url)},
+        "wrapper.example": {("IE", wrapper_url)},
+        "wrapper-alias.example": {("IE", wrapper_url)},
+        "news.fallback.example": {("IE", fallback_url)},
+    }
+
+
 def test_promoted_candidate_allows_only_its_exact_catalog_identity():
     candidate = replace(
         load_source_candidates(config.SOURCE_CANDIDATES_PATH)[0],
@@ -157,6 +229,41 @@ def test_promoted_candidate_allows_only_its_exact_catalog_identity():
     assert "duplicate_publisher_domain" in conflicting.reasons
 
 
+def test_candidate_duplicate_check_uses_canonical_and_every_alias():
+    candidate = replace(
+        load_source_candidates(config.SOURCE_CANDIDATES_PATH)[0],
+        domain_aliases=("alias.rtsh.example", "other.rtsh.example"),
+    )
+
+    result = validate_candidate_metadata(
+        candidate,
+        configured_publishers={
+            "other.rtsh.example": {("ZZ", "https://duplicate.example/feed")},
+        },
+    )
+
+    assert "duplicate_publisher_domain" in result.reasons
+
+
+def test_promoted_candidate_allows_exact_self_identity_across_domain_family():
+    candidate = replace(
+        load_source_candidates(config.SOURCE_CANDIDATES_PATH)[0],
+        status="promoted",
+        domain_aliases=("alias.rtsh.example",),
+    )
+    identity = (candidate.country_code, candidate.feed_url)
+
+    result = validate_candidate_metadata(
+        candidate,
+        configured_publishers={
+            candidate.canonical_domain: {identity},
+            candidate.domain_aliases[0]: {identity},
+        },
+    )
+
+    assert result.ok is True
+
+
 @pytest.mark.parametrize(
     ("overrides", "reason"),
     [
@@ -170,6 +277,16 @@ def test_promoted_candidate_allows_only_its_exact_catalog_identity():
             {"ownership_evidence_url": "http://publisher.example/about"},
             "ownership_evidence_must_be_https",
         ),
+        (
+            {"ownership_evidence_url": "https:///missing-host"},
+            "ownership_evidence_must_be_https",
+        ),
+        (
+            {"publisher_url": "http://publisher.example"},
+            "publisher_url_must_be_https",
+        ),
+        ({"publisher_url": "https:///missing-host"}, "publisher_url_must_be_https"),
+        ({"research_date": "17-07-2026"}, "invalid_research_date"),
     ],
 )
 def test_metadata_rejects_invalid_curated_values(overrides, reason):
@@ -192,6 +309,41 @@ def test_metadata_rejects_aggregator_feed_even_with_publisher_canonical_domain()
     result = validate_candidate_metadata(candidate, configured_publishers={})
 
     assert result.ok is False
+    assert "aggregator_domain" in result.reasons
+
+
+@pytest.mark.parametrize(
+    "domain",
+    [
+        "allafrica.com",
+        "tass.com",
+        "tass.ru",
+        "rt.com",
+        "sputnikglobe.com",
+        "sputniknews.com",
+        "ria.ru",
+    ],
+)
+def test_metadata_rejects_disallowed_aggregator_and_wire_families(domain):
+    candidate = replace(
+        load_source_candidates(config.SOURCE_CANDIDATES_PATH)[0],
+        canonical_domain=domain,
+        feed_url=f"https://{domain}/rss",
+    )
+
+    result = validate_candidate_metadata(candidate, configured_publishers={})
+
+    assert "aggregator_domain" in result.reasons
+
+
+def test_metadata_rejects_disallowed_domain_hidden_in_alias_family():
+    candidate = replace(
+        load_source_candidates(config.SOURCE_CANDIDATES_PATH)[0],
+        domain_aliases=("updates.allafrica.com",),
+    )
+
+    result = validate_candidate_metadata(candidate, configured_publishers={})
+
     assert "aggregator_domain" in result.reasons
 
 
@@ -275,6 +427,144 @@ def test_feed_validation_requires_entries_and_publication_dates():
     assert "malformed_feed" in malformed.reasons
     assert "fewer_than_3_entries" in malformed.reasons
     assert "missing_entry_dates" in undated.reasons
+
+
+def test_feed_validation_rejects_bozo_parse_even_with_recovered_entries():
+    candidate = load_source_candidates(config.SOURCE_CANDIDATES_PATH)[0]
+    truncated = _feed(
+        "https://rtsh.al/a",
+        "https://rtsh.al/b",
+        "https://rtsh.al/c",
+    ).replace(b"</channel></rss>", b"")
+
+    result = validate_feed_document(candidate, truncated, now=NOW)
+
+    assert result.item_count == 3
+    assert "malformed_feed" in result.reasons
+
+
+def test_feed_validation_requires_dates_on_at_least_80_percent_of_entries():
+    candidate = load_source_candidates(config.SOURCE_CANDIDATES_PATH)[0]
+    body = _feed_with_dates(
+        "rtsh.al",
+        "Thu, 16 Jul 2026 10:00:00 GMT",
+        "not-a-date",
+        "still-not-a-date",
+        "missing-date-value",
+        "invalid",
+    )
+
+    result = validate_feed_document(candidate, body, now=NOW)
+
+    assert "entry_date_ratio_below_0_8" in result.reasons
+
+
+def test_feed_validation_accepts_rtp_like_52_minute_clock_skew():
+    candidate = next(
+        candidate
+        for candidate in load_source_candidates(config.SOURCE_CANDIDATES_PATH)
+        if candidate.name == "RTP Noticias"
+    )
+    now = datetime(2026, 7, 17, 8, 0, tzinfo=timezone.utc)
+    body = _feed(
+        "https://rtp.pt/a",
+        "https://rtp.pt/b",
+        "https://rtp.pt/c",
+        published="Fri, 17 Jul 2026 08:52:00 GMT",
+    )
+
+    result = validate_feed_document(candidate, body, now=now)
+
+    assert result.ok is True
+
+
+def test_feed_validation_rejects_materially_future_timestamps():
+    candidate = load_source_candidates(config.SOURCE_CANDIDATES_PATH)[0]
+    body = _feed(
+        "https://rtsh.al/a",
+        "https://rtsh.al/b",
+        "https://rtsh.al/c",
+        published="Thu, 01 Jan 2099 10:00:00 GMT",
+    )
+
+    result = validate_feed_document(candidate, body, now=NOW)
+
+    assert "future_entry_date" in result.reasons
+
+
+@pytest.mark.parametrize(
+    ("published", "now"),
+    [
+        pytest.param(
+            "17.07.2026T08:24:02 +0100",
+            datetime(2026, 7, 17, 8, 0, tzinfo=timezone.utc),
+            id="live-offset-form",
+        ),
+        pytest.param(
+            "17.07.2026. 06:47",
+            datetime(2026, 7, 17, 7, 0, tzinfo=timezone.utc),
+            id="legacy-dot-form",
+        ),
+    ],
+)
+def test_feed_validation_parses_only_exact_rtcg_raw_date_forms(published, now):
+    candidate = next(
+        candidate
+        for candidate in load_source_candidates(config.SOURCE_CANDIDATES_PATH)
+        if candidate.name == "RTCG"
+    )
+    body = _feed(
+        "https://rtcg.me/a",
+        "https://rtcg.me/b",
+        "https://rtcg.me/c",
+        published=published,
+    )
+
+    result = validate_feed_document(candidate, body, now=now)
+
+    assert result.ok is True
+
+
+def test_feed_validation_does_not_guess_other_rtcg_date_shapes():
+    candidate = next(
+        candidate
+        for candidate in load_source_candidates(config.SOURCE_CANDIDATES_PATH)
+        if candidate.name == "RTCG"
+    )
+    body = _feed(
+        "https://rtcg.me/a",
+        "https://rtcg.me/b",
+        "https://rtcg.me/c",
+        published="17.07.2026 06:47",
+    )
+
+    result = validate_feed_document(
+        candidate,
+        body,
+        now=datetime(2026, 7, 17, 7, 0, tzinfo=timezone.utc),
+    )
+
+    assert "missing_entry_dates" in result.reasons
+
+
+def test_feed_validation_accepts_current_thejournal_items_among_old_promos():
+    candidate = next(
+        candidate
+        for candidate in load_source_candidates(config.SOURCE_CANDIDATES_PATH)
+        if candidate.name == "TheJournal.ie"
+    )
+    body = _feed_with_dates(
+        "thejournal.ie",
+        "Mon, 01 Jan 2024 10:00:00 GMT",
+        "Tue, 02 Jan 2024 10:00:00 GMT",
+        "Wed, 03 Jan 2024 10:00:00 GMT",
+        "Thu, 04 Jan 2024 10:00:00 GMT",
+        "Fri, 17 Jul 2026 09:00:00 GMT",
+    )
+
+    result = validate_feed_document(candidate, body, now=NOW)
+
+    assert result.ok is True
 
 
 def test_feed_validation_uses_longer_freshness_window_for_independent_sources():
@@ -511,3 +801,36 @@ def test_loader_rejects_overlapping_canonical_and_alias_domain_families(tmp_path
         match="candidate 2 publisher domain shared.example overlaps candidate 1",
     ):
         _load_document(tmp_path, {"version": 1, "candidates": [first, second]})
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        (
+            {"publisher_url": "http://publisher.example"},
+            "publisher_url must be an absolute HTTPS URL with a hostname",
+        ),
+        (
+            {"publisher_url": "https:///missing-host"},
+            "publisher_url must be an absolute HTTPS URL with a hostname",
+        ),
+        (
+            {"ownership_evidence_url": "https:///missing-host"},
+            "ownership_evidence_url must be an absolute HTTPS URL with a hostname",
+        ),
+        (
+            {"research_date": "20260717"},
+            r"research_date must be an ISO date \(YYYY-MM-DD\)",
+        ),
+    ],
+)
+def test_loader_validates_https_metadata_urls_and_iso_research_date(
+    tmp_path,
+    overrides,
+    message,
+):
+    with pytest.raises(ValueError, match=message):
+        _load_document(
+            tmp_path,
+            {"version": 1, "candidates": [_candidate(**overrides)]},
+        )

@@ -12,6 +12,7 @@ from src.collectors.publisher_attribution import (
     candidate_country_from_domain,
     expected_site_domain,
     feed_mode,
+    is_aggregator_domain,
     normalize_publisher_domain,
 )
 
@@ -99,6 +100,30 @@ def test_country_code_tld_does_not_create_verified_registry_entry():
     assert candidate_country_from_domain("example.me") is None
     assert candidate_country_from_domain("example.es") is None
     assert candidate_country_from_domain("example.ru") is None
+
+
+@pytest.mark.parametrize(
+    "domain",
+    [
+        "allafrica.com",
+        "updates.allafrica.com",
+        "tass.com",
+        "tass.ru",
+        "en.tass.ru",
+        "rt.com",
+        "arabic.rt.com",
+        "sputnikglobe.com",
+        "sputniknews.com",
+        "ria.ru",
+    ],
+)
+def test_disallowed_aggregator_and_wire_domain_families_are_centralized(domain):
+    assert is_aggregator_domain(domain) is True
+
+
+def test_russian_country_suffix_alone_is_not_disallowed_or_country_evidence():
+    assert is_aggregator_domain("independent.example.ru") is False
+    assert candidate_country_from_domain("independent.example.ru") is None
 
 
 def test_attribution_value_objects_are_frozen():

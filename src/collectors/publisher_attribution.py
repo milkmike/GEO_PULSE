@@ -23,11 +23,18 @@ FeedMode = Literal["publisher", "site_wrapper", "publisher_discovery"]
 _FEED_MODES = {"publisher", "site_wrapper", "publisher_discovery"}
 _PRESENTATION_PREFIXES = ("www.", "rss.", "feeds.", "feed.", "amp.", "m.")
 _GOOGLE_NEWS_DOMAIN = "news.google.com"
-_AGGREGATOR_DOMAINS = {
+_DISALLOWED_PUBLISHER_DOMAIN_FAMILIES = {
     _GOOGLE_NEWS_DOMAIN,
+    "allafrica.com",
     "feedburner.com",
     "feedly.com",
     "news.yahoo.com",
+    "ria.ru",
+    "rt.com",
+    "sputnikglobe.com",
+    "sputniknews.com",
+    "tass.com",
+    "tass.ru",
 }
 _SITE_FILTER_RE = re.compile(r"(?<![-\w])site:([^\s+]+)", re.IGNORECASE)
 _DNS_LABEL_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z")
@@ -144,7 +151,10 @@ def direct_source_domain(url: str | None) -> str | None:
 
 def is_aggregator_domain(domain: str | None) -> bool:
     normalized = normalize_publisher_domain(domain)
-    return normalized in _AGGREGATOR_DOMAINS
+    return bool(normalized) and any(
+        normalized == blocked or normalized.endswith(f".{blocked}")
+        for blocked in _DISALLOWED_PUBLISHER_DOMAIN_FAMILIES
+    )
 
 
 def _source_config(value) -> dict:
