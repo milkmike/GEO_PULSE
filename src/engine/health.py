@@ -161,9 +161,13 @@ def _publisher_family_identities(source: dict) -> set[str]:
         if domain
     }
     feed_domain = normalize_publisher_domain(source.get("url"))
+    valid_google_site_wrapper = mode == "site_wrapper" and site_domain is not None
     if (
         any(is_aggregator_domain(domain) for domain in identities)
-        or (mode == "publisher" and is_aggregator_domain(feed_domain))
+        or (
+            is_aggregator_domain(feed_domain)
+            and not valid_google_site_wrapper
+        )
     ):
         return set()
     return identities

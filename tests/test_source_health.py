@@ -83,6 +83,23 @@ def test_source_coverage_excludes_centralized_aggregator_families():
     assert country["mix"] == {"official": 0, "mainstream": 0, "independent": 1}
 
 
+def test_source_coverage_rejects_aggregator_feed_disguised_as_site_wrapper():
+    source = _with_publisher_family(
+        _source("AllAfrica wrapper", "allafrica.com", "mainstream"),
+        "national.example",
+    )
+    source["config"]["feed_mode"] = "site_wrapper"
+
+    result = source_coverage([source])
+
+    country = next(country for country in result["countries"] if country["country_code"] == "AL")
+    assert country["configured"] == 1
+    assert country["discovery"] == 0
+    assert country["direct_publishers"] == 0
+    assert country["working_direct_publishers"] == 0
+    assert country["target_state"] == "uncovered"
+
+
 def test_source_coverage_merges_publisher_families_with_overlapping_aliases():
     result = source_coverage([
         _with_publisher_family(
