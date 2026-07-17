@@ -13,11 +13,13 @@ summary therefore reports per-country tier coverage and an overall verdict:
 HEALTHY / WARNING / DEGRADED / UNHEALTHY.
 """
 import logging
+from collections import Counter, defaultdict
 from datetime import datetime, timezone
 
 from sqlalchemy import text
 
-from src.countries import country_name_ru
+from src.collectors.publisher_attribution import feed_mode, normalize_publisher_domain
+from src.countries import COUNTRIES, country_name_ru
 from src.db import get_session
 
 logger = logging.getLogger(__name__)
@@ -72,6 +74,7 @@ def source_health() -> list[dict]:
                     GROUP BY source_id
                 )
                 SELECT s.id, s.name, s.country_code, s.tier, s.source_type, s.active,
+                       s.url, s.config, s.state_affiliated,
                        {fetch_cols},
                        ls.last_at, ls.n30, c.median_gap_sec
                 FROM sources s
@@ -106,6 +109,9 @@ def source_health() -> list[dict]:
             "country_code": r.country_code,
             "tier": r.tier,
             "type": r.source_type,
+            "url": r.url,
+            "config": r.config or {},
+            "state_affiliated": bool(r.state_affiliated),
             "status": status,
             "last_article_at": r.last_at.isoformat() if r.last_at else None,
             "silent_hours": round(silent_h, 1) if silent_h is not None else None,
@@ -118,6 +124,71 @@ def source_health() -> list[dict]:
             "last_fetch_at": r.last_fetch_at.isoformat() if r.last_fetch_at else None,
         })
     return result
+
+
+INDEPENDENT_TIERS = {"independent", "domestic_opposition"}
+
+
+def source_coverage(sources: list[dict] | None = None) -> dict:
+    """Report distinct, working direct-publisher coverage by country."""
+    sources = source_health() if sources is None else sources
+    grouped = defaultdict(list)
+    for source in sources:
+        grouped[str(source["country_code"]).strip().upper()].append(source)
+
+    countries = []
+    states = Counter()
+    for code in sorted(COUNTRIES):
+        rows = grouped.get(code, [])
+        discovery = [
+            row for row in rows
+            if feed_mode(row.get("url"), row.get("config") or {}) == "publisher_discovery"
+        ]
+        direct = [
+            row for row in rows
+            if row not in discovery and row.get("type") in {"rss", "web"}
+        ]
+        by_domain = defaultdict(list)
+        for row in direct:
+            config = row.get("config") or {}
+            domain = normalize_publisher_domain(config.get("publisher_domain") or row.get("url"))
+            if domain:
+                by_domain[domain].append(row)
+        working = {
+            domain: family for domain, family in by_domain.items()
+            if any(row.get("last_status") == "ok" for row in family)
+        }
+        mix = {"official": 0, "mainstream": 0, "independent": 0}
+        for family in working.values():
+            tiers = {row.get("tier") for row in family}
+            if any(row.get("state_affiliated") for row in family) or "official" in tiers:
+                mix["official"] += 1
+            if "mainstream" in tiers:
+                mix["mainstream"] += 1
+            if tiers & INDEPENDENT_TIERS:
+                mix["independent"] += 1
+        count = len(working)
+        state = (
+            "uncovered" if count == 0 else
+            "thin" if count < 3 else
+            "balanced" if all(mix.values()) else
+            "baseline"
+        )
+        states[state] += 1
+        countries.append({
+            "country_code": code,
+            "country_name": country_name_ru(code),
+            "configured": len(rows),
+            "discovery": len(discovery),
+            "direct_publishers": len(by_domain),
+            "working_direct_publishers": count,
+            "mix": mix,
+            "duplicate_families": sorted(
+                domain for domain, family in by_domain.items() if len(family) > 1
+            ),
+            "target_state": state,
+        })
+    return {"summary": dict(states), "countries": countries}
 
 
 def gdelt_health() -> dict:

@@ -17,7 +17,7 @@ from src.api.public_urls import safe_public_url
 from src.api.signal_article_context import load_signal_article_previews
 from src.countries import COUNTRIES, REGIONS, country_name_ru
 from src.db import get_session
-from src.engine.health import health_summary, source_health
+from src.engine.health import health_summary, source_coverage, source_health
 from src.entities import CATEGORIES as ENTITY_CATEGORIES, ENTITIES, get_entity
 from src.pipeline.agreements import group_agreements
 from src.pipeline.topics import TOPICS
@@ -1008,6 +1008,12 @@ def entity_mentions(key: str, days: int = Query(30, ge=1, le=180),
 def world_health():
     """Overall data-freshness verdict (HEALTHY/WARNING/DEGRADED/UNHEALTHY)."""
     return health_summary()
+
+
+@router.get("/health/source-coverage")
+def world_source_coverage():
+    """Distinct direct-publisher coverage and editorial mix for all 99 countries."""
+    return source_coverage()
 
 
 @router.get("/health/sources")

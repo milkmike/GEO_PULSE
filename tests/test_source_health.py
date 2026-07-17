@@ -1,0 +1,43 @@
+from src.engine.health import source_coverage
+
+
+def _source(name, domain, tier, *, status="ok", discovery=False, state=False):
+    return {
+        "name": name,
+        "country_code": "AL",
+        "tier": tier,
+        "type": "rss",
+        "url": f"https://{domain}/feed",
+        "config": {"feed_mode": "publisher_discovery"} if discovery else {},
+        "state_affiliated": state,
+        "last_status": status,
+    }
+
+
+def test_source_coverage_counts_domains_not_rows_or_discovery():
+    result = source_coverage([
+        _source("Official one", "official.example", "official", state=True),
+        _source("Official alias", "official.example", "official", state=True),
+        _source("Mainstream", "mainstream.example", "mainstream"),
+        _source("Independent", "independent.example", "independent"),
+        _source("Google", "news.google.com", "mainstream", discovery=True),
+    ])
+    country = next(country for country in result["countries"] if country["country_code"] == "AL")
+    assert country["configured"] == 5
+    assert country["discovery"] == 1
+    assert country["direct_publishers"] == 3
+    assert country["working_direct_publishers"] == 3
+    assert country["mix"] == {"official": 1, "mainstream": 1, "independent": 1}
+    assert country["target_state"] == "balanced"
+
+
+def test_source_coverage_states_are_uncovered_thin_and_baseline():
+    assert source_coverage([])["summary"]["uncovered"] == 99
+    thin = source_coverage([_source("One", "one.example", "mainstream")])
+    assert next(country for country in thin["countries"] if country["country_code"] == "AL")["target_state"] == "thin"
+    baseline = source_coverage([
+        _source("One", "one.example", "mainstream"),
+        _source("Two", "two.example", "mainstream"),
+        _source("Three", "three.example", "mainstream"),
+    ])
+    assert next(country for country in baseline["countries"] if country["country_code"] == "AL")["target_state"] == "baseline"
