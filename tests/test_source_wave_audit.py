@@ -24,10 +24,59 @@ EXPECTED_PROTECTED_TABLES = (
     "story_events",
     "content_embeddings",
 )
+WAVE1 = "2026-07-17-rss-1"
+EXPECTED_WAVE1_IDENTITIES = (
+    ("AL", "RTSH", "https://rtsh.al/feed/", "rtsh.al"),
+    ("AL", "Reporter.al", "https://reporter.al/feed/", "reporter.al"),
+    ("CY", "Philenews", "https://www.philenews.com/feed/", "philenews.com"),
+    ("CY", "Politis", "https://www.politis.com.cy/feed/", "politis.com.cy"),
+    ("DK", "Politiken", "https://politiken.dk/rss/senestenyt.rss", "politiken.dk"),
+    ("DK", "Information", "https://www.information.dk/feed", "information.dk"),
+    ("IE", "The Irish Times", "https://www.irishtimes.com/arc/outboundfeeds/rss/category/ireland/?outputType=xml", "irishtimes.com"),
+    ("IE", "TheJournal.ie", "https://www.thejournal.ie/feed/", "thejournal.ie"),
+    ("ME", "RTCG", "https://rtcg.me/vijesti/rss.html", "rtcg.me"),
+    ("ME", "Vijesti", "https://www.vijesti.me/rss", "vijesti.me"),
+    ("MK", "MRT", "https://www.mrt.com.mk/rss.xml", "mrt.com.mk"),
+    ("MK", "Meta.mk", "https://meta.mk/feed/", "meta.mk"),
+    ("PT", "Diário de Notícias", "https://www.dn.pt/api/v1/collections/ultimas.rss", "dn.pt"),
+    ("PT", "Observador", "https://observador.pt/feed/", "observador.pt"),
+    ("SG", "CNA Singapore", "https://www.channelnewsasia.com/api/v1/rss-outbound-feed?_format=xml&category=10416", "channelnewsasia.com"),
+    ("SI", "RTV Slovenija", "https://www.rtvslo.si/feeds/01.xml", "rtvslo.si"),
+    ("SI", "N1 Slovenija", "https://n1info.si/feed/", "n1info.si"),
+)
+
+
+def _healthy_row(identity, source_id):
+    country_code, name, url, publisher_domain = identity
+    return {
+        "source_id": source_id,
+        "name": name,
+        "country_code": country_code,
+        "url": url,
+        "publisher_domain": publisher_domain,
+        "last_status": "ok",
+        "last_fetch_age_minutes": 20,
+        "article_count": 4,
+        "foreign_url_count": 0,
+        "unsafe_geo_count": 0,
+    }
+
+
+def _healthy_wave_rows():
+    return [
+        _healthy_row(identity, source_id)
+        for source_id, identity in enumerate(EXPECTED_WAVE1_IDENTITIES, start=1)
+    ]
 
 
 def test_audit_protects_all_persistent_user_and_global_data():
     assert audit_source_wave.PROTECTED_TABLES == EXPECTED_PROTECTED_TABLES
+
+
+def test_wave1_audit_contract_pins_exact_17_source_identities():
+    assert audit_source_wave.WAVE_SOURCE_IDENTITIES == {
+        WAVE1: EXPECTED_WAVE1_IDENTITIES,
+    }
 
 
 @pytest.mark.parametrize("decreased_table", EXPECTED_PROTECTED_TABLES)
@@ -74,7 +123,14 @@ def test_rollback_verifies_returned_row_count_before_commit():
     assert rollback.index(assertion) < rollback.index("COMMIT;")
     assert "\\if :exactly_one" in rollback
     assert "ROLLBACK;" in rollback
-    assert "  \\quit\n" in rollback
+    assert "  \\quit 1\n" in rollback
+
+
+def test_local_release_gate_uses_worktree_safe_interpreter():
+    runbook = (REPO_ROOT / "docs/release/national-source-wave1.md").read_text()
+
+    assert "git rev-parse --path-format=absolute --git-common-dir" in runbook
+    assert '"$PYTHON" -m pytest -q' in runbook
 
 
 def test_production_audits_and_startup_do_not_start_dependencies():
@@ -124,7 +180,7 @@ def test_baseline_only_succeeds_without_wave_sources_and_writes_snapshot(
     output_path = tmp_path / "baseline.json"
 
     exit_code = audit_source_wave.main([
-        "--wave", "not-synced-yet",
+        "--wave", WAVE1,
         "--baseline-only",
         "--json",
         "--out", str(output_path),
@@ -132,6 +188,18 @@ def test_baseline_only_succeeds_without_wave_sources_and_writes_snapshot(
 
     report = json.loads(output_path.read_text())
     assert exit_code == 0
+    assert report["schema_version"] == 1
+    assert report["wave"] == WAVE1
+    assert report["expected_source_identities"] == [
+        {
+            "country_code": country_code,
+            "name": name,
+            "url": url,
+            "publisher_domain": publisher_domain,
+        }
+        for country_code, name, url, publisher_domain
+        in EXPECTED_WAVE1_IDENTITIES
+    ]
     assert report["wave_has_sources"] is False
     assert report["protected_counts"] == protected_counts
     assert report["protected_counts_ok"] is True
@@ -160,7 +228,7 @@ def test_baseline_only_fails_closed_on_invalid_protected_counts(
     )
 
     assert audit_source_wave.main([
-        "--wave", "not-synced-yet",
+        "--wave", WAVE1,
         "--baseline-only",
         "--json",
     ]) == 1
@@ -178,6 +246,95 @@ def test_baseline_only_and_comparison_baseline_are_mutually_exclusive(tmp_path):
         ])
 
     assert error.value.code == 2
+
+
+@pytest.mark.parametrize(
+    "mutate_rows",
+    [
+        pytest.param(lambda rows: rows[:1], id="one-of-seventeen"),
+        pytest.param(lambda rows: rows[:-1], id="sixteen-of-seventeen"),
+        pytest.param(
+            lambda rows: rows + [{**rows[0], "source_id": 99}],
+            id="extra-duplicate",
+        ),
+        pytest.param(
+            lambda rows: [{**rows[0], "url": "https://wrong.example/feed"}, *rows[1:]],
+            id="wrong-identity",
+        ),
+    ],
+)
+def test_normal_canary_requires_exact_wave1_rows(monkeypatch, mutate_rows):
+    protected_counts = dict.fromkeys(EXPECTED_PROTECTED_TABLES, 10)
+    rows = mutate_rows(_healthy_wave_rows())
+    monkeypatch.setattr(
+        audit_source_wave,
+        "load_snapshot",
+        lambda wave: (rows, protected_counts),
+    )
+
+    assert audit_source_wave.main(["--wave", WAVE1, "--json"]) == 1
+
+
+def test_normal_canary_accepts_exact_wave1_rows(monkeypatch):
+    protected_counts = dict.fromkeys(EXPECTED_PROTECTED_TABLES, 10)
+    monkeypatch.setattr(
+        audit_source_wave,
+        "load_snapshot",
+        lambda wave: (_healthy_wave_rows(), protected_counts),
+    )
+
+    assert audit_source_wave.main(["--wave", WAVE1, "--json"]) == 0
+
+
+@pytest.mark.parametrize(
+    ("baseline_patch", "expected_error"),
+    [
+        pytest.param({"schema_version": 999}, "baseline_schema_version", id="schema"),
+        pytest.param({"wave": "2026-07-18-rss-2"}, "baseline_wave_mismatch", id="cross-wave"),
+        pytest.param(
+            {"expected_source_identities": []},
+            "baseline_expected_source_identities_mismatch",
+            id="identity-contract",
+        ),
+    ],
+)
+def test_comparison_baseline_validates_schema_wave_and_identity_contract(
+    monkeypatch, tmp_path, capsys, baseline_patch, expected_error
+):
+    protected_counts = dict.fromkeys(EXPECTED_PROTECTED_TABLES, 10)
+    monkeypatch.setattr(
+        audit_source_wave,
+        "load_snapshot",
+        lambda wave: (_healthy_wave_rows(), protected_counts),
+    )
+    baseline_path = tmp_path / "baseline.json"
+    baseline = {
+        "schema_version": 1,
+        "wave": WAVE1,
+        "expected_source_identities": [
+            {
+                "country_code": country_code,
+                "name": name,
+                "url": url,
+                "publisher_domain": publisher_domain,
+            }
+            for country_code, name, url, publisher_domain
+            in EXPECTED_WAVE1_IDENTITIES
+        ],
+        "protected_counts": protected_counts,
+    }
+    baseline.update(baseline_patch)
+    baseline_path.write_text(json.dumps(baseline))
+
+    assert audit_source_wave.main([
+        "--wave", WAVE1,
+        "--baseline", str(baseline_path),
+        "--json",
+    ]) == 1
+    report = json.loads(capsys.readouterr().out)
+    assert any(
+        expected_error in error for error in report["baseline_errors"]
+    )
 
 
 def test_canary_rejects_fetch_timestamp_in_the_future():

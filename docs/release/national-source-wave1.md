@@ -5,8 +5,11 @@ read-only: they only query the configured wave and protected table counts.
 
 ```bash
 # Local release gate
-.venv/bin/python scripts/validate_source_candidates.py --json
-.venv/bin/pytest -q
+# Resolve the main checkout's virtualenv from either the main checkout or a
+# linked worktree, where .venv itself is intentionally not duplicated.
+PYTHON="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")/.venv/bin/python"
+"$PYTHON" scripts/validate_source_candidates.py --json
+"$PYTHON" -m pytest -q
 git status --short
 git push origin main
 
@@ -53,7 +56,7 @@ SELECT :ROW_COUNT::integer = 1 AS exactly_one \gset
 \else
   ROLLBACK;
   \echo 'Expected exactly one Wave 1 row; transaction rolled back.'
-  \quit
+  \quit 1
 \endif
 ```
 
