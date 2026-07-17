@@ -11,7 +11,22 @@ from src.collectors.publisher_attribution import normalize_publisher_domain
 from src.db import get_session
 
 
-PROTECTED_TABLES = ("articles", "analysis", "temperature", "signals", "stories")
+PROTECTED_TABLES = (
+    "articles",
+    "article_discoveries",
+    "publisher_domains",
+    "analysis",
+    "temperature",
+    "signals",
+    "signal_evidence",
+    "briefs",
+    "stories",
+    "story_articles",
+    "story_countries",
+    "story_entities",
+    "story_events",
+    "content_embeddings",
+)
 
 
 def evaluate_wave(rows, protected_counts, baseline_counts=None):
@@ -33,9 +48,32 @@ def evaluate_wave(rows, protected_counts, baseline_counts=None):
         evaluated.append({**row, "ok": not reasons, "reasons": reasons})
 
     passed = sum(item["ok"] for item in evaluated)
-    protected_ok = baseline_counts is None or all(
-        protected_counts[name] >= baseline_counts[name] for name in PROTECTED_TABLES
-    )
+    protected_count_errors = []
+    if baseline_counts is not None:
+        missing_baseline_counts = [
+            name for name in PROTECTED_TABLES if name not in baseline_counts
+        ]
+        if missing_baseline_counts:
+            protected_count_errors.append(
+                "baseline_missing_protected_counts:"
+                f"{','.join(missing_baseline_counts)}; refresh baseline with the "
+                "current audit before continuing"
+            )
+        for name in PROTECTED_TABLES:
+            if name not in protected_counts:
+                protected_count_errors.append(
+                    f"snapshot_missing_protected_count:{name}; check the audit "
+                    "snapshot and database schema before continuing"
+                )
+            elif (
+                name in baseline_counts
+                and protected_counts[name] < baseline_counts[name]
+            ):
+                protected_count_errors.append(
+                    f"protected_count_decreased:{name}:"
+                    f"{protected_counts[name]}<{baseline_counts[name]}"
+                )
+    protected_ok = not protected_count_errors
     return {
         "checked_at": datetime.now(timezone.utc).isoformat(),
         "summary": {
@@ -46,6 +84,7 @@ def evaluate_wave(rows, protected_counts, baseline_counts=None):
         "wave_has_sources": bool(evaluated),
         "protected_counts": protected_counts,
         "protected_counts_ok": protected_ok,
+        "protected_count_errors": protected_count_errors,
         "sources": evaluated,
     }
 

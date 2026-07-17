@@ -1,10 +1,60 @@
 from pathlib import Path
 
+import pytest
+
 from scripts import audit_source_wave
 from scripts.audit_source_wave import evaluate_wave
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+EXPECTED_PROTECTED_TABLES = (
+    "articles",
+    "article_discoveries",
+    "publisher_domains",
+    "analysis",
+    "temperature",
+    "signals",
+    "signal_evidence",
+    "briefs",
+    "stories",
+    "story_articles",
+    "story_countries",
+    "story_entities",
+    "story_events",
+    "content_embeddings",
+)
+
+
+def test_audit_protects_all_persistent_user_and_global_data():
+    assert audit_source_wave.PROTECTED_TABLES == EXPECTED_PROTECTED_TABLES
+
+
+@pytest.mark.parametrize("decreased_table", EXPECTED_PROTECTED_TABLES)
+def test_canary_rejects_a_decrease_in_every_protected_table(decreased_table):
+    baseline_counts = dict.fromkeys(EXPECTED_PROTECTED_TABLES, 10)
+    protected_counts = baseline_counts.copy()
+    protected_counts[decreased_table] -= 1
+
+    report = evaluate_wave([], protected_counts, baseline_counts)
+
+    assert report["protected_counts_ok"] is False
+
+
+def test_canary_fails_closed_with_action_when_baseline_is_from_older_audit():
+    protected_counts = dict.fromkeys(EXPECTED_PROTECTED_TABLES, 10)
+    old_baseline_counts = {
+        "articles": 10,
+        "analysis": 10,
+        "temperature": 10,
+        "signals": 10,
+        "stories": 10,
+    }
+
+    report = evaluate_wave([], protected_counts, old_baseline_counts)
+
+    assert report["protected_counts_ok"] is False
+    assert "article_discoveries" in " ".join(report["protected_count_errors"])
+    assert "refresh baseline" in " ".join(report["protected_count_errors"])
 
 
 def test_collector_image_contains_source_wave_audit_script():
