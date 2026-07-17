@@ -25,6 +25,7 @@ SOURCES_PATH = BASE_DIR / "src" / "collectors" / "sources.yaml"
 WORLD_SOURCES_PATH = BASE_DIR / "src" / "collectors" / "sources_world.yaml"
 # Generated native-language Google News feeds (scripts/add_native_feeds.py).
 NATIVE_SOURCES_PATH = BASE_DIR / "src" / "collectors" / "sources_native.yaml"
+SOURCE_CANDIDATES_PATH = BASE_DIR / "src" / "collectors" / "source_candidates.yaml"
 
 # Country names — tier-1 deep-coverage set (CIS). For the full world registry
 # (99 countries, regions, memberships) see src/countries.py.
