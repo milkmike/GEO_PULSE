@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
+from functools import lru_cache
 from typing import Any, Iterable
 from uuid import NAMESPACE_URL, UUID, uuid5
 
@@ -526,16 +527,9 @@ def _persist_meta_and_contours(
             ((trend_id, wave) for trend_id, wave in members if wave.contour is Contour.ACTION),
             key=lambda item: item[1].first_observed_at,
         )
-        for media_id, media_wave in media_members:
-            candidates = [
-                (episode_distance(media_wave, action_wave), action_id, action_wave)
-                for action_id, action_wave in remaining_actions
-            ]
-            candidates = [candidate for candidate in candidates if candidate[0] <= timedelta(days=14)]
-            if not candidates:
-                continue
-            _, action_id, action_wave = min(candidates, key=lambda candidate: (candidate[0], candidate[2].first_observed_at, candidate[1]))
-            remaining_actions.remove((action_id, action_wave))
+        for media_id, media_wave, action_id, action_wave in match_contour_episodes(
+            media_members, remaining_actions,
+        ):
             _persist_contour_link(session, country, subject, direction, media_id, media_wave, action_id, action_wave, as_of)
 
 
@@ -549,6 +543,45 @@ def episode_distance(left: CountryWave, right: CountryWave) -> timedelta:
     if left_end < right.first_observed_at:
         return right.first_observed_at - left_end
     return left.first_observed_at - right_end
+
+
+def match_contour_episodes(
+    media_members: list[tuple[int, CountryWave]],
+    action_members: list[tuple[int, CountryWave]],
+) -> tuple[tuple[int, CountryWave, int, CountryWave], ...]:
+    """Find the best order-preserving bounded episode alignment.
+
+    Dynamic programming optimizes pair count first, aggregate gap second.  A
+    lexical identity signature supplies a deterministic final tie-break rather
+    than depending on database row order.
+    """
+
+    media = tuple(sorted(media_members, key=lambda item: (item[1].first_observed_at, item[1].wave_key, item[0])))
+    actions = tuple(sorted(action_members, key=lambda item: (item[1].first_observed_at, item[1].wave_key, item[0])))
+
+    @lru_cache(maxsize=None)
+    def solve(i: int, j: int) -> tuple[tuple[int, int], ...]:
+        if i == len(media) or j == len(actions):
+            return ()
+        options = [solve(i + 1, j), solve(i, j + 1)]
+        gap = episode_distance(media[i][1], actions[j][1])
+        if gap <= timedelta(days=14):
+            options.append(((i, j),) + solve(i + 1, j + 1))
+        return min(options, key=lambda pairs: _match_score(pairs, media, actions))
+
+    return tuple((media[i][0], media[i][1], actions[j][0], actions[j][1]) for i, j in solve(0, 0))
+
+
+def _match_score(
+    pairs: tuple[tuple[int, int], ...], media: tuple[tuple[int, CountryWave], ...],
+    actions: tuple[tuple[int, CountryWave], ...],
+) -> tuple[object, ...]:
+    gap_seconds = sum(episode_distance(media[i][1], actions[j][1]).total_seconds() for i, j in pairs)
+    identity = tuple(
+        (media[i][1].wave_key, str(media[i][0]), actions[j][1].wave_key, str(actions[j][0]))
+        for i, j in pairs
+    )
+    return (-len(pairs), gap_seconds, identity)
 
 
 def _persist_contour_link(

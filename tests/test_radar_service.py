@@ -1,8 +1,8 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from src.radar.repository import make_observation
 from src.radar.grouping import CountryWave, MetaTrend
-from src.radar.service import _persist_meta_and_contours, _state_for, record_analyst_t0_override, run_radar_cycle
+from src.radar.service import _persist_meta_and_contours, _state_for, match_contour_episodes, record_analyst_t0_override, run_radar_cycle
 from src.radar.types import Contour, TrendState
 
 
@@ -217,3 +217,29 @@ def test_contour_alignment_pairs_each_recurrence_episode_separately():
 
     links = [params for sql, params in session.calls if "INSERT INTO radar_contour_links" in sql]
     assert {(params["media_trend_id"], params["action_trend_id"]) for params in links} == {(1, 2), (3, 4)}
+
+
+def test_contour_matching_maximizes_bounded_pairs_before_nearest_gap():
+    base = AS_OF.replace(day=1)
+    media_zero = _episode_wave("media", base, "media-0")
+    media_fifteen = _episode_wave("media", base.replace(day=16), "media-15")
+    action_minus_fourteen = _episode_wave("action", base - timedelta(days=14), "action--14")
+    action_eight = _episode_wave("action", base.replace(day=9), "action-8")
+
+    pairs = match_contour_episodes(
+        [(1, media_zero), (3, media_fifteen)],
+        [(2, action_minus_fourteen), (4, action_eight)],
+    )
+
+    assert [(media_id, action_id) for media_id, _, action_id, _ in pairs] == [(1, 2), (3, 4)]
+
+
+def test_contour_matching_uses_wave_key_for_stable_equal_gap_ties():
+    base = AS_OF.replace(day=10)
+    media = _episode_wave("media", base, "media")
+    earlier = _episode_wave("action", base - timedelta(days=5), "z-earlier")
+    later = _episode_wave("action", base + timedelta(days=5), "a-later")
+
+    pairs = match_contour_episodes([(1, media)], [(2, earlier), (3, later)])
+
+    assert [(media_id, action_id) for media_id, _, action_id, _ in pairs] == [(1, 3)]
