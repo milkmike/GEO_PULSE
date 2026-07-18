@@ -20,11 +20,23 @@ def _coverage_gate(coverage: float) -> CoverageGate:
     return CoverageGate.HEALTHY
 
 
-def _decision(state: TrendState, reason: str, metrics: TrendMetrics) -> TrendDecision:
+def _decision(
+    state: TrendState,
+    reason: str,
+    metrics: TrendMetrics,
+    *,
+    record_confirmation: bool = False,
+) -> TrendDecision:
+    timeline = metrics.timeline
+    if record_confirmation and metrics.as_of is not None:
+        timeline = timeline.confirm(metrics.as_of)
     return TrendDecision(
         state=state,
         reason=reason,
-        confirmation_allowed=_coverage_gate(metrics.coverage) is not CoverageGate.CRITICAL,
+        confirmation_allowed=(
+            _coverage_gate(metrics.coverage) is not CoverageGate.CRITICAL
+        ),
+        timeline=timeline,
     )
 
 
@@ -52,26 +64,37 @@ def decide_state(metrics: TrendMetrics, previous_state: TrendState | str) -> Tre
         return quiet_transition
     if state in (TrendState.REJECTED, TrendState.RESOLVED):
         return _decision(state, "terminal_state", metrics)
+    if _coverage_gate(metrics.coverage) is CoverageGate.CRITICAL:
+        return _decision(state, "critical_coverage", metrics)
 
     if metrics.contour is Contour.MEDIA:
-        if _coverage_gate(metrics.coverage) is CoverageGate.CRITICAL:
-            return _decision(state, "critical_coverage", metrics)
         if metrics.signal_strength < MIN_MEDIA_SIGNAL_STRENGTH:
             return _decision(state, "insufficient_signal_strength", metrics)
         if not metrics.persistent:
             return _decision(state, "insufficient_persistence", metrics)
         if metrics.publisher_family_count < 2:
             return _decision(state, "insufficient_independent_publishers", metrics)
-        return _decision(TrendState.CONFIRMED, "media_confirmation_gates_passed", metrics)
+        return _decision(
+            TrendState.CONFIRMED,
+            "media_confirmation_gates_passed",
+            metrics,
+            record_confirmation=True,
+        )
 
     # ``analysis_action_level`` intentionally does not participate here: it is a
     # media classifier and cannot become independent action evidence.
     if metrics.authoritative or metrics.authority in {"registry", "formal"}:
-        return _decision(TrendState.CONFIRMED, "authoritative_action_evidence", metrics)
+        return _decision(
+            TrendState.CONFIRMED,
+            "authoritative_action_evidence",
+            metrics,
+            record_confirmation=True,
+        )
     if metrics.authoritative_source_count >= 2:
         return _decision(
             TrendState.CONFIRMED,
             "independent_authoritative_sources",
             metrics,
+            record_confirmation=True,
         )
     return _decision(state, "insufficient_authoritative_evidence", metrics)

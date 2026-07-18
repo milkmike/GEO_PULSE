@@ -55,7 +55,7 @@ def _coverage_gate(coverage: float) -> CoverageGate:
     return CoverageGate.HEALTHY
 
 
-def _combine_day(day: date, points: Sequence[DailyPoint]) -> DailyPoint:
+def _combine_points(points: Sequence[DailyPoint]) -> DailyPoint:
     """Aggregate same-day observations without turning absent metrics into zero."""
 
     def mean_attr(name: str) -> Optional[float]:
@@ -85,10 +85,13 @@ def _online_flags(points: Sequence[DailyPoint]) -> tuple[str, ...]:
         for value in values:
             adwin.update(value)
             page_hinkley.update(value)
-        if getattr(adwin, "drift_detected", False):
-            flags.append("adwin")
-        if getattr(page_hinkley, "drift_detected", False):
-            flags.append("page_hinkley")
+            if getattr(adwin, "drift_detected", False) and "adwin" not in flags:
+                flags.append("adwin")
+            if (
+                getattr(page_hinkley, "drift_detected", False)
+                and "page_hinkley" not in flags
+            ):
+                flags.append("page_hinkley")
         return tuple(flags)
 
     # A minimal deterministic fallback is intentionally only a candidate flag.
@@ -110,23 +113,22 @@ def calculate_baseline(
     """
 
     _require_aware(as_of, "as_of")
-    coverage = clamp01(coverage)
-    as_of_day = _utc_day(as_of)
-    start_day = as_of_day - timedelta(days=WINDOW_DAYS)
-
-    buckets: dict[date, list[DailyPoint]] = defaultdict(list)
+    if not 0.0 <= coverage <= 1.0:
+        raise ValueError("coverage must be between 0 and 1")
+    window_start = as_of - timedelta(days=WINDOW_DAYS)
+    buckets: list[list[DailyPoint]] = [[] for _ in range(WINDOW_DAYS)]
     for point in points:
-        if point.at >= as_of:
+        if not window_start <= point.at < as_of:
             continue
-        day = _utc_day(point.at)
-        if start_day <= day < as_of_day:
-            buckets[day].append(point)
+        elapsed = point.at - window_start
+        bucket_index = elapsed // timedelta(days=1)
+        buckets[bucket_index].append(point)
 
     dense: list[Optional[DailyPoint]] = []
-    for offset in range(WINDOW_DAYS):
-        day = start_day + timedelta(days=offset)
-        day_points = buckets.get(day)
-        dense.append(_combine_day(day, day_points) if day_points else None)
+    for bucket_points in buckets:
+        dense.append(
+            _combine_points(bucket_points) if bucket_points else None
+        )
 
     baseline_points = tuple(point for point in dense if point is not None)
     acceleration_points = dense[-ACCELERATION_DAYS:]
@@ -206,10 +208,21 @@ def refine_t0(points: Iterable[DailyPoint], detected_at: datetime) -> T0Result:
     _require_aware(detected_at, "detected_at")
     daily: dict[date, list[DailyPoint]] = defaultdict(list)
     for point in points:
-        if point.at <= detected_at:
+        if point.at < detected_at:
             daily[_utc_day(point.at)].append(point)
-    series = [_combine_day(day, daily[day]) for day in sorted(daily)]
-    valid = [point for point in series if _metric_value(point) is not None]
+    eligible: list[tuple[date, DailyPoint]] = []
+    for day in sorted(daily):
+        combined = _combine_points(daily[day])
+        if _metric_value(combined) is not None:
+            eligible.append((day, combined))
+    contiguous_runs: list[list[DailyPoint]] = []
+    previous_day: Optional[date] = None
+    for day, point in eligible:
+        if previous_day is None or day != previous_day + timedelta(days=1):
+            contiguous_runs.append([])
+        contiguous_runs[-1].append(point)
+        previous_day = day
+    valid = contiguous_runs[-1] if contiguous_runs else []
     if len(valid) < MIN_T0_VALID_DAYS:
         return T0Result(
             detected_at=detected_at,

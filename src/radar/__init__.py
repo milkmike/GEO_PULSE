@@ -11,6 +11,7 @@ from .types import (
     TrendDecision,
     TrendMetrics,
     TrendState,
+    TrendTimeline,
 )
 
 __all__ = (
@@ -22,6 +23,7 @@ __all__ = (
     "TrendDecision",
     "TrendMetrics",
     "TrendState",
+    "TrendTimeline",
     "calculate_baseline",
     "decide_state",
     "refine_t0",

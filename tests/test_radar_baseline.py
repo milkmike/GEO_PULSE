@@ -1,12 +1,15 @@
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
+from src.radar import baseline
 from src.radar.baseline import calculate_baseline, refine_t0
 from src.radar.types import DailyPoint
 
 
 NOW = datetime(2026, 7, 18, 12, 0, tzinfo=timezone.utc)
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def _daily_points(days: int) -> tuple[DailyPoint, ...]:
@@ -58,6 +61,25 @@ def test_baseline_uses_only_the_90_days_before_as_of():
     assert all(point.at < NOW for point in result.baseline_points)
 
 
+def test_baseline_uses_an_exact_rolling_90_times_24_hour_window():
+    window_start = NOW - timedelta(days=90)
+    points = (
+        DailyPoint(at=window_start - timedelta(microseconds=1), volume=100.0),
+        DailyPoint(at=window_start, volume=1.0),
+        DailyPoint(at=NOW - timedelta(hours=1), volume=2.0),
+        DailyPoint(at=NOW, volume=100.0),
+    )
+
+    result = calculate_baseline(points, as_of=NOW, coverage=0.9)
+
+    assert tuple(point.at for point in result.baseline_points) == (
+        window_start,
+        NOW - timedelta(hours=1),
+    )
+    assert result.dense_points[0].at == window_start
+    assert result.dense_points[-1].at == NOW - timedelta(hours=1)
+
+
 def test_baseline_preserves_missing_days_instead_of_treating_them_as_zero():
     points = tuple(
         point
@@ -85,6 +107,30 @@ def test_confidence_multiplies_its_four_bounded_factors():
     assert result.confidence == pytest.approx(0.8 * 0.9 * 0.5 * 0.9)
 
 
+@pytest.mark.parametrize("coverage", (-0.01, 1.01))
+def test_baseline_rejects_coverage_outside_the_unit_interval(coverage):
+    with pytest.raises(ValueError, match="coverage must be between 0 and 1"):
+        calculate_baseline(_daily_points(days=35), as_of=NOW, coverage=coverage)
+
+
+def test_online_drift_flags_are_accumulated_when_detected_midstream(monkeypatch):
+    class TransientDetector:
+        def __init__(self):
+            self.updates = 0
+            self.drift_detected = False
+
+        def update(self, value):
+            self.updates += 1
+            self.drift_detected = self.updates == 2
+
+    monkeypatch.setattr(baseline, "ADWIN", TransientDetector)
+    monkeypatch.setattr(baseline, "PageHinkley", TransientDetector)
+
+    result = calculate_baseline(_daily_points(days=35), as_of=NOW, coverage=0.9)
+
+    assert result.online_candidate_flags == ("adwin", "page_hinkley")
+
+
 def test_t0_is_first_supported_change_not_detection_time():
     result = refine_t0(_regime_change(day=63), detected_at=NOW)
 
@@ -99,3 +145,38 @@ def test_t0_requires_28_valid_daily_points():
 
     assert result.t0_auto is None
     assert result.status == "insufficient_history"
+
+
+def test_t0_excludes_a_point_at_the_detection_time():
+    points = tuple(
+        DailyPoint(at=NOW - timedelta(days=27 - offset), volume=float(offset + 1))
+        for offset in range(28)
+    )
+
+    result = refine_t0(points, detected_at=NOW)
+
+    assert result.valid_days == 27
+    assert result.status == "insufficient_history"
+    assert result.t0_auto is None
+
+
+def test_t0_does_not_collapse_calendar_gaps_into_continuous_history():
+    start = NOW - timedelta(days=40)
+    points = tuple(
+        DailyPoint(at=start + timedelta(days=offset), volume=float(offset + 1))
+        for offset in range(40)
+        if offset != 20
+    )
+
+    result = refine_t0(points, detected_at=NOW)
+
+    assert result.valid_days == 19
+    assert result.status == "insufficient_history"
+    assert result.t0_auto is None
+
+
+def test_temperature_requirements_pin_numpy_compatible_river():
+    requirements = (ROOT / "requirements-temperature.txt").read_text().splitlines()
+
+    assert "river==0.23.0" in requirements
+    assert "river==0.25.0" not in requirements

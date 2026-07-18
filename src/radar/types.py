@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import Enum
 from typing import Optional
@@ -36,6 +36,37 @@ def _require_aware(value: datetime, field: str) -> None:
 def _bounded(value: float, field: str) -> None:
     if not 0.0 <= value <= 1.0:
         raise ValueError(f"{field} must be between 0 and 1")
+
+
+@dataclass(frozen=True, slots=True)
+class TrendTimeline:
+    """Independent lifecycle timestamps retained across every decision."""
+
+    first_observed_at: Optional[datetime] = None
+    detected_at: Optional[datetime] = None
+    confirmed_at: Optional[datetime] = None
+    t0_auto: Optional[datetime] = None
+    t0_effective: Optional[datetime] = None
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "first_observed_at",
+            "detected_at",
+            "confirmed_at",
+            "t0_auto",
+            "t0_effective",
+        ):
+            value = getattr(self, field_name)
+            if value is not None:
+                _require_aware(value, field_name)
+
+    def confirm(self, at: datetime) -> "TrendTimeline":
+        """Return a timeline with first confirmation recorded exactly once."""
+
+        _require_aware(at, "confirmed_at")
+        if self.confirmed_at is not None:
+            return self
+        return replace(self, confirmed_at=at)
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,6 +145,7 @@ class TrendMetrics:
     as_of: Optional[datetime] = None
     quiet_since: Optional[datetime] = None
     missing_collection_cycles: int = 0
+    timeline: TrendTimeline = field(default_factory=TrendTimeline)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "contour", Contour(self.contour))
@@ -136,6 +168,7 @@ class TrendDecision:
     state: TrendState
     reason: str
     confirmation_allowed: bool
+    timeline: TrendTimeline = field(default_factory=TrendTimeline)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "state", TrendState(self.state))
