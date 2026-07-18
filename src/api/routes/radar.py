@@ -6,14 +6,16 @@ import base64
 import binascii
 import json
 import math
+import re
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Protocol
+from typing import Annotated, Any, Protocol
 from urllib.parse import urlparse
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BeforeValidator, WithJsonSchema
 from sqlalchemy import text
 
 from src.api.public_urls import safe_public_url
@@ -28,6 +30,42 @@ _STATES = frozenset({"candidate", "emerging", "confirmed", "cooling", "resolved"
 _CONTOURS = frozenset({"media", "action"})
 _STATE_RANK = {"confirmed": 0, "emerging": 1, "cooling": 2, "candidate": 3, "resolved": 4, "rejected": 5}
 RADAR_METHODOLOGY_UPDATED_AT = datetime(2026, 7, 18, tzinfo=timezone.utc)
+_BIGINT_MAX = 2**63 - 1
+_INTEGER_MAX = 2**31 - 1
+
+
+def _canonical_query_id(value: Any, *, maximum: int, field: str) -> int:
+    """Validate an ID's raw query representation before integer coercion."""
+
+    if type(value) is int:
+        parsed = value
+    elif isinstance(value, str) and re.fullmatch(r"[1-9][0-9]*", value):
+        parsed = int(value)
+    else:
+        raise ValueError(f"{field} must be a canonical unsigned decimal")
+    if not 1 <= parsed <= maximum:
+        raise ValueError(f"{field} is outside its supported range")
+    return parsed
+
+
+def _story_query_id(value: Any) -> int:
+    return _canonical_query_id(value, maximum=_BIGINT_MAX, field="story_id")
+
+
+def _signal_query_id(value: Any) -> int:
+    return _canonical_query_id(value, maximum=_INTEGER_MAX, field="signal_id")
+
+
+StoryQueryId = Annotated[
+    int,
+    BeforeValidator(_story_query_id),
+    WithJsonSchema({"type": "integer", "minimum": 1, "maximum": _BIGINT_MAX}),
+]
+SignalQueryId = Annotated[
+    int,
+    BeforeValidator(_signal_query_id),
+    WithJsonSchema({"type": "integer", "minimum": 1, "maximum": _INTEGER_MAX}),
+]
 
 
 @dataclass(frozen=True)
@@ -138,6 +176,22 @@ def _serialize_country_wave(row: Any) -> dict[str, Any]:
         "confirmed_at": _as_iso(_value(row, "confirmed_at")),
         "t0_auto": _as_iso(_value(row, "t0_auto")),
         "t0_effective": _as_iso(_value(row, "t0_effective")),
+    }
+
+
+def _serialize_timeline_item(item: Any) -> dict[str, Any]:
+    evidence = sanitize_persisted_json(
+        _json_object(_value(item, "evidence"), {})
+    )
+    revision_kind = _value(item, "revision_kind")
+    if revision_kind in {"automatic", "analyst"}:
+        evidence = {**evidence, "revision_kind": revision_kind}
+    return {
+        "kind": _value(item, "kind"),
+        "at": _as_iso(_value(item, "at")),
+        "state": _value(item, "state"),
+        "contour": _value(item, "contour"),
+        "evidence": evidence,
     }
 
 
@@ -310,7 +364,8 @@ class SqlRadarReadService:
                         AND (related.trend_id = trend.id OR EXISTS (
                           SELECT 1 FROM radar_trend_members related_member
                           WHERE related_member.meta_trend_id = trend.id
-                            AND related_member.country_trend_id = related.trend_id))))
+                            AND related_member.country_trend_id = related.trend_id
+                            AND related_member.left_at IS NULL))))
                     /* radar_related_signal */
                     AND (:signal_id IS NULL OR EXISTS (
                       SELECT 1 FROM radar_trend_evidence related
@@ -318,7 +373,8 @@ class SqlRadarReadService:
                         AND (related.trend_id = trend.id OR EXISTS (
                           SELECT 1 FROM radar_trend_members related_member
                           WHERE related_member.meta_trend_id = trend.id
-                            AND related_member.country_trend_id = related.trend_id))))
+                            AND related_member.country_trend_id = related.trend_id
+                            AND related_member.left_at IS NULL))))
                 )
                 SELECT ranked.*, {self._wave_json("ranked.id")} AS country_waves,
                        {self._contour_json("ranked.id")} AS contours,
@@ -446,10 +502,12 @@ class SqlRadarReadService:
         trend_id = _value(trend, "id")
         with radar_read_session() as session:
             items = session.execute(text("""
-                SELECT 'state' AS kind, occurred_at AS at, to_state AS state, NULL::text AS contour, evidence
+                SELECT 'state' AS kind, occurred_at AS at, to_state AS state,
+                       NULL::text AS contour, NULL::text AS revision_kind, evidence
                 FROM radar_state_events WHERE trend_id = :trend_id
                 UNION ALL
-                SELECT 't0_revision' AS kind, created_at AS at, revision_kind AS state, NULL::text AS contour, evidence
+                SELECT 't0_revision' AS kind, created_at AS at, NULL::text AS state,
+                       NULL::text AS contour, revision_kind, evidence
                 FROM radar_t0_revisions WHERE trend_id = :trend_id
                 ORDER BY at ASC
             """), {"trend_id": trend_id}).fetchall()
@@ -459,17 +517,42 @@ class SqlRadarReadService:
         trend = self.trend(public_id)
         if trend is None:
             return None
-        params: dict[str, Any] = {"trend_id": _value(trend, "id"), "limit": limit + 1, "cursor_id": cursor["id"] if cursor else 0}
+        params: dict[str, Any] = {
+            "trend_id": _value(trend, "id"),
+            "scope": _value(trend, "scope"),
+            "limit": limit + 1,
+            "cursor_id": cursor["id"] if cursor else 0,
+        }
         with radar_read_session() as session:
             rows = session.execute(text("""
+                /* radar_related_evidence */
+                WITH related_evidence_ids AS (
+                    SELECT evidence.id
+                    FROM radar_trend_evidence evidence
+                    WHERE evidence.trend_id = :trend_id
+                    UNION
+                    SELECT evidence.id
+                    FROM radar_trend_members related_member
+                    JOIN radar_trend_evidence evidence
+                      ON evidence.trend_id = related_member.country_trend_id
+                    WHERE :scope = 'meta'
+                      AND related_member.meta_trend_id = :trend_id
+                      AND related_member.left_at IS NULL
+                ), deduplicated_evidence AS (
+                    SELECT DISTINCT ON (evidence.public_id) evidence.id
+                    FROM radar_trend_evidence evidence
+                    JOIN related_evidence_ids related ON related.id = evidence.id
+                    ORDER BY evidence.public_id, evidence.id
+                )
                 SELECT evidence.id, evidence.public_id, evidence.role, evidence.contribution, evidence.evidence,
                        COALESCE(article.title, observation.evidence->>'title', event.details->>'title') AS title,
                        COALESCE(article.resolved_url, article.url, observation.evidence->>'url', event.evidence->>'url') AS url
-                FROM radar_trend_evidence evidence
+                FROM deduplicated_evidence related
+                JOIN radar_trend_evidence evidence ON evidence.id = related.id
                 LEFT JOIN radar_observations observation ON observation.id = evidence.observation_id
                 LEFT JOIN action_events event ON event.id = evidence.action_event_id
                 LEFT JOIN articles article ON article.id = COALESCE(evidence.article_id, observation.article_id)
-                WHERE evidence.trend_id = :trend_id AND evidence.id > :cursor_id
+                WHERE evidence.id > :cursor_id
                 ORDER BY evidence.id ASC LIMIT :limit
             """), params).fetchall()
         items = list(rows[:limit])
@@ -498,7 +581,7 @@ def _page_response(page: dict[str, Any], *, scope: str, binding: dict[str, Any],
 @router.get("/radar")
 def get_radar(
     state: str | None = Query(None), contour: str | None = Query(None), country: str | None = Query(None),
-    story_id: int | None = Query(None, ge=1), signal_id: int | None = Query(None, ge=1),
+    story_id: StoryQueryId | None = Query(None), signal_id: SignalQueryId | None = Query(None),
     cursor: str | None = Query(None, max_length=2048), limit: int = Query(25, ge=1, le=100),
     service: RadarReadService = Depends(get_radar_service),
 ):
@@ -520,7 +603,7 @@ def get_radar_trend(public_id: UUID, service: RadarReadService = Depends(get_rad
 @router.get("/countries/{code}/radar")
 def get_country_radar(
     code: str, state: str | None = Query(None), contour: str | None = Query(None), cursor: str | None = Query(None, max_length=2048),
-    story_id: int | None = Query(None, ge=1), signal_id: int | None = Query(None, ge=1),
+    story_id: StoryQueryId | None = Query(None), signal_id: SignalQueryId | None = Query(None),
     limit: int = Query(25, ge=1, le=100), service: RadarReadService = Depends(get_radar_service),
 ):
     """List persisted country waves; story and signal filters combine with AND."""
@@ -536,7 +619,10 @@ def get_radar_timeline(public_id: UUID, service: RadarReadService = Depends(get_
     payload = service.timeline(public_id)
     if payload is None:
         raise HTTPException(status_code=404, detail="radar trend not found")
-    return {"trend": serialize_trend(payload["trend"]), "items": [{"kind": _value(item, "kind"), "at": _as_iso(_value(item, "at")), "state": _value(item, "state"), "contour": _value(item, "contour"), "evidence": sanitize_persisted_json(_json_object(_value(item, "evidence"), {}))} for item in payload.get("items", [])]}
+    return {
+        "trend": serialize_trend(payload["trend"]),
+        "items": [_serialize_timeline_item(item) for item in payload.get("items", [])],
+    }
 
 
 @router.get("/radar/trends/{public_id}/evidence")

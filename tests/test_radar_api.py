@@ -1,18 +1,23 @@
 from __future__ import annotations
 
+import os
+from contextlib import contextmanager
 from datetime import datetime, timezone
 import inspect
-from contextlib import contextmanager
 from uuid import UUID
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine, text
+from sqlalchemy.orm import sessionmaker
 
 from src.api.routes import radar as radar_routes
 
 
 NOW = datetime(2026, 7, 18, 12, 0, tzinfo=timezone.utc)
 TREND_ID = "e7313c19-8f24-4a06-938b-7d5f8ce741e2"
+POSTGRES_URL = os.getenv("GEO_PULSE_TEST_DATABASE_URL")
 
 
 def _trend(**overrides):
@@ -89,23 +94,41 @@ class FakeRadarService:
     def timeline(self, public_id):
         if str(public_id) != TREND_ID:
             return None
-        return {"trend": _trend(), "items": [{
-            "kind": "state",
-            "at": NOW,
-            "state": "confirmed",
-            "contour": "media",
-            "evidence": {
-                "nested_url": "https://news.example/timeline",
-                "unsafe_url": "javascript:alert(1)",
-                "credential_url": "https://user:secret@news.example/private",
-                "neutral": {"value": "//news.example/protocol-relative"},
-                "children": [
-                    {"href": "https://news.example/context"},
-                    {"url": "https://news.example/has whitespace"},
-                    {"url": "https://news.example/control\u0001"},
-                ],
+        return {"trend": _trend(), "items": [
+            {
+                "kind": "state",
+                "at": NOW,
+                "state": "confirmed",
+                "contour": "media",
+                "evidence": {
+                    "nested_url": "https://news.example/timeline",
+                    "unsafe_url": "javascript:alert(1)",
+                    "credential_url": "https://user:secret@news.example/private",
+                    "neutral": {"value": "//news.example/protocol-relative"},
+                    "children": [
+                        {"href": "https://news.example/context"},
+                        {"url": "https://news.example/has whitespace"},
+                        {"url": "https://news.example/control\u0001"},
+                    ],
+                },
             },
-        }]}
+            {
+                "kind": "t0_revision",
+                "at": NOW,
+                "state": None,
+                "contour": None,
+                "revision_kind": "automatic",
+                "evidence": {},
+            },
+            {
+                "kind": "t0_revision",
+                "at": NOW,
+                "state": None,
+                "contour": None,
+                "revision_kind": "analyst",
+                "evidence": {"reason": "reviewed"},
+            },
+        ]}
 
     def evidence(self, public_id, *, cursor, limit):
         if str(public_id) != TREND_ID:
@@ -234,6 +257,76 @@ def test_country_radar_accepts_relation_filters_and_rejects_invalid_ids():
     ).status_code == 422
 
 
+@pytest.mark.parametrize("path", ["/api/v2/radar", "/api/v2/countries/es/radar"])
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        pytest.param("story_id", "1.0", id="story-fractional"),
+        pytest.param("story_id", "+1", id="story-leading-plus"),
+        pytest.param("story_id", "-1", id="story-negative"),
+        pytest.param("story_id", " 1", id="story-leading-space"),
+        pytest.param("story_id", "1 ", id="story-trailing-space"),
+        pytest.param("story_id", "01", id="story-leading-zero"),
+        pytest.param("story_id", str(2**63), id="story-overflow"),
+        pytest.param("signal_id", "1.0", id="signal-fractional"),
+        pytest.param("signal_id", "+1", id="signal-leading-plus"),
+        pytest.param("signal_id", "-1", id="signal-negative"),
+        pytest.param("signal_id", " 1", id="signal-leading-space"),
+        pytest.param("signal_id", "1 ", id="signal-trailing-space"),
+        pytest.param("signal_id", "01", id="signal-leading-zero"),
+        pytest.param("signal_id", str(2**31), id="signal-overflow"),
+    ],
+)
+def test_relation_ids_require_canonical_unsigned_decimal(path, field, value):
+    response = _client(FakeRadarService()).get(path, params={field: value})
+
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize("path", ["/api/v2/radar", "/api/v2/countries/es/radar"])
+def test_relation_ids_accept_their_exact_maximum_and_keep_integer_openapi(path):
+    service = FakeRadarService()
+    app = FastAPI()
+    app.include_router(radar_routes.router)
+    app.dependency_overrides[radar_routes.get_radar_service] = lambda: service
+    client = TestClient(app)
+
+    response = client.get(
+        path,
+        params={"story_id": str(2**63 - 1), "signal_id": str(2**31 - 1)},
+    )
+
+    assert response.status_code == 200
+    filters = service.list_calls[-1][0]
+    assert filters.story_id == 2**63 - 1
+    assert filters.signal_id == 2**31 - 1
+    openapi_path = (
+        "/api/v2/countries/{code}/radar"
+        if path.startswith("/api/v2/countries/")
+        else path
+    )
+    operation = app.openapi()["paths"][openapi_path]["get"]
+    parameters = {item["name"]: item["schema"] for item in operation["parameters"]}
+    story_schema = next(
+        item for item in parameters["story_id"].get("anyOf", [parameters["story_id"]])
+        if item.get("type") == "integer"
+    )
+    signal_schema = next(
+        item for item in parameters["signal_id"].get("anyOf", [parameters["signal_id"]])
+        if item.get("type") == "integer"
+    )
+    assert story_schema == {
+        "maximum": 2**63 - 1,
+        "minimum": 1,
+        "type": "integer",
+    }
+    assert signal_schema == {
+        "maximum": 2**31 - 1,
+        "minimum": 1,
+        "type": "integer",
+    }
+
+
 def test_radar_routes_serialize_persisted_detail_timeline_evidence_and_coverage():
     service = FakeRadarService()
     client = _client(service)
@@ -273,6 +366,25 @@ def test_radar_recursively_sanitizes_persisted_evidence_and_timeline_urls():
     assert evidence_items[0]["evidence"]["chunk"]["url"] == "https://news.example/chunk"
     assert evidence_items[0]["evidence"]["blocked"] is None
     assert evidence_items[1]["evidence"]["url"] is None
+
+
+def test_t0_timeline_revisions_keep_lifecycle_state_empty_and_revision_kind_in_evidence():
+    items = _client(FakeRadarService()).get(
+        f"/api/v2/radar/trends/{TREND_ID}/timeline"
+    ).json()["items"]
+
+    assert items[0]["state"] == "confirmed"
+    assert items[0]["kind"] == "state"
+    assert items[1]["kind"] == "t0_revision"
+    assert items[1]["state"] is None
+    assert items[1]["contour"] is None
+    assert items[1]["evidence"]["revision_kind"] == "automatic"
+    assert items[2]["kind"] == "t0_revision"
+    assert items[2]["state"] is None
+    assert items[2]["evidence"] == {
+        "reason": "reviewed",
+        "revision_kind": "analyst",
+    }
 
 
 def test_sql_radar_read_session_rolls_back_and_closes_without_commit(monkeypatch):
@@ -345,6 +457,7 @@ def test_sql_meta_relation_filters_use_direct_or_member_evidence_and_require_bot
     assert "related.trend_id = trend.id" in sql
     assert "related_member.meta_trend_id = trend.id" in sql
     assert "related_member.country_trend_id = related.trend_id" in sql
+    assert sql.count("related_member.left_at IS NULL") == 2
     assert sql.index("/* radar_related_story */") < sql.index("/* radar_related_signal */")
     assert "AND (:story_id IS NULL OR EXISTS" in sql
     assert "AND (:signal_id IS NULL OR EXISTS" in sql
@@ -389,6 +502,75 @@ def test_sql_country_relation_filters_require_evidence_on_the_returned_wave(monk
     assert "trend.country_code = :country" in sql
 
 
+def test_sql_meta_evidence_pages_direct_and_active_member_rows_without_duplicates(monkeypatch):
+    calls = []
+
+    class Rows:
+        def fetchall(self):
+            return []
+
+    class Session:
+        def execute(self, statement, params=None):
+            calls.append((str(statement), dict(params or {})))
+            return Rows()
+
+    @contextmanager
+    def read_session():
+        yield Session()
+
+    monkeypatch.setattr(radar_routes, "radar_read_session", read_session)
+    service = radar_routes.SqlRadarReadService()
+    monkeypatch.setattr(
+        service,
+        "trend",
+        lambda public_id: {"id": 2, "scope": "meta"},
+    )
+
+    service.evidence(UUID(TREND_ID), cursor=None, limit=20)
+
+    sql, params = calls[-1]
+    assert params["trend_id"] == 2
+    assert params["scope"] == "meta"
+    assert "/* radar_related_evidence */" in sql
+    assert "related_member.meta_trend_id = :trend_id" in sql
+    assert "related_member.left_at IS NULL" in sql
+    assert "UNION" in sql
+    assert "DISTINCT ON (evidence.public_id)" in sql
+    assert "ORDER BY evidence.id ASC" in sql
+
+
+def test_sql_timeline_keeps_revision_kind_out_of_lifecycle_state(monkeypatch):
+    calls = []
+
+    class Rows:
+        def fetchall(self):
+            return []
+
+    class Session:
+        def execute(self, statement, params=None):
+            calls.append((str(statement), dict(params or {})))
+            return Rows()
+
+    @contextmanager
+    def read_session():
+        yield Session()
+
+    monkeypatch.setattr(radar_routes, "radar_read_session", read_session)
+    service = radar_routes.SqlRadarReadService()
+    monkeypatch.setattr(
+        service,
+        "trend",
+        lambda public_id: {"id": 2, "scope": "meta"},
+    )
+
+    service.timeline(UUID(TREND_ID))
+
+    sql, params = calls[-1]
+    assert params == {"trend_id": 2}
+    assert "NULL::text AS state" in sql
+    assert "revision_kind" in sql
+
+
 def test_radar_routes_reject_invalid_filters_and_return_not_found_for_missing_trends():
     client = _client(FakeRadarService())
 
@@ -404,3 +586,181 @@ def test_sql_radar_evidence_reads_action_titles_from_persisted_details():
 
     assert "event.details->>'title'" in source
     assert "event.title" not in source
+
+
+@pytest.mark.skipif(
+    not POSTGRES_URL,
+    reason="GEO_PULSE_TEST_DATABASE_URL is not configured",
+)
+def test_postgres_relation_filters_match_direct_and_active_member_evidence(monkeypatch):
+    pytest.importorskip("psycopg2")
+    engine = create_engine(POSTGRES_URL)
+    connection = engine.connect()
+    try:
+        connection.execute(text("""
+            CREATE TEMP TABLE radar_trends (
+                id BIGINT PRIMARY KEY, public_id UUID NOT NULL, scope TEXT NOT NULL,
+                contour TEXT, country_code CHAR(2), subject_key TEXT NOT NULL,
+                title_ru TEXT NOT NULL, direction TEXT NOT NULL, state TEXT NOT NULL,
+                confidence NUMERIC NOT NULL, coverage_confidence NUMERIC NOT NULL,
+                velocity NUMERIC NOT NULL, first_observed_at TIMESTAMPTZ NOT NULL,
+                detected_at TIMESTAMPTZ, confirmed_at TIMESTAMPTZ,
+                t0_auto TIMESTAMPTZ, t0_effective TIMESTAMPTZ,
+                updated_at TIMESTAMPTZ NOT NULL
+            );
+            CREATE TEMP TABLE radar_trend_members (
+                meta_trend_id BIGINT NOT NULL, country_trend_id BIGINT NOT NULL,
+                left_at TIMESTAMPTZ
+            );
+            CREATE TEMP TABLE radar_trend_evidence (
+                id BIGINT PRIMARY KEY, public_id UUID NOT NULL, trend_id BIGINT NOT NULL,
+                observation_id BIGINT, action_event_id BIGINT, article_id INTEGER,
+                story_id BIGINT, signal_id INTEGER, role TEXT NOT NULL,
+                contribution NUMERIC NOT NULL, evidence JSONB NOT NULL
+            );
+            CREATE TEMP TABLE radar_contour_links (
+                media_trend_id BIGINT, action_trend_id BIGINT, status TEXT
+            );
+            CREATE TEMP TABLE radar_observations (
+                id BIGINT PRIMARY KEY, evidence JSONB NOT NULL, article_id INTEGER
+            );
+            CREATE TEMP TABLE action_events (
+                id BIGINT PRIMARY KEY, details JSONB NOT NULL, evidence JSONB NOT NULL
+            );
+            CREATE TEMP TABLE articles (
+                id INTEGER PRIMARY KEY, title TEXT, resolved_url TEXT, url TEXT
+            );
+        """))
+        connection.execute(text("""
+            INSERT INTO radar_trends(
+                id, public_id, scope, contour, country_code, subject_key,
+                title_ru, direction, state, confidence, coverage_confidence,
+                velocity, first_observed_at, detected_at, confirmed_at,
+                t0_auto, t0_effective, updated_at
+            )
+            SELECT id,
+                   ('00000000-0000-0000-0000-' || lpad(id::text, 12, '0'))::uuid,
+                   CASE WHEN id < 100 THEN 'meta' ELSE 'country' END,
+                   CASE WHEN id < 100 THEN NULL ELSE 'media' END,
+                   CASE WHEN id < 100 THEN NULL ELSE 'ES' END,
+                   'subject:' || id, 'Trend ' || id, 'negative', 'confirmed',
+                   0.9, 0.9, (200 - id)::numeric,
+                   '2026-07-18T10:00:00Z'::timestamptz,
+                   '2026-07-18T10:00:00Z'::timestamptz,
+                   '2026-07-18T10:00:00Z'::timestamptz,
+                   '2026-07-18T10:00:00Z'::timestamptz,
+                   '2026-07-18T10:00:00Z'::timestamptz,
+                   '2026-07-18T12:00:00Z'::timestamptz
+            FROM unnest(ARRAY[1,2,3,4,5,6,7,8,101,102,103,104,105,106,107,108]) id;
+
+            INSERT INTO radar_trend_members(meta_trend_id, country_trend_id, left_at)
+            VALUES (1,101,NULL), (2,102,NULL), (2,102,NULL), (3,103,NULL), (4,104,NULL),
+                   (5,105,NULL), (6,106,NULL),
+                   (7,107,'2026-07-18T11:00:00Z'), (8,108,NULL);
+
+            INSERT INTO radar_trend_evidence(
+                id, public_id, trend_id, story_id, signal_id, role,
+                contribution, evidence
+            ) VALUES
+              (1,'10000000-0000-0000-0000-000000000001',1,501,NULL,'trigger',1,'{}'),
+              (2,'10000000-0000-0000-0000-000000000002',102,501,601,'trigger',1,'{}'),
+              (3,'10000000-0000-0000-0000-000000000003',103,999,999,'trigger',1,'{}'),
+              (4,'10000000-0000-0000-0000-000000000004',4,501,NULL,'trigger',1,'{}'),
+              (5,'10000000-0000-0000-0000-000000000005',5,NULL,601,'trigger',1,'{}'),
+              (6,'10000000-0000-0000-0000-000000000006',6,501,601,'trigger',1,'{}'),
+              (7,'10000000-0000-0000-0000-000000000007',107,501,601,'trigger',1,'{}'),
+              (8,'10000000-0000-0000-0000-000000000008',108,501,601,'trigger',1,'{}'),
+              (9,'10000000-0000-0000-0000-000000000009',102,NULL,NULL,'contradiction',-0.5,'{}'),
+              (10,'10000000-0000-0000-0000-000000000010',2,NULL,NULL,'support',0.25,'{}');
+        """))
+        connection.commit()
+
+        test_session = sessionmaker(bind=connection, expire_on_commit=False)
+        monkeypatch.setattr(radar_routes, "SessionLocal", test_session)
+        app = FastAPI()
+        app.include_router(radar_routes.router)
+        client = TestClient(app)
+
+        def collect(path):
+            first = client.get(path, params={"story_id": 501, "signal_id": 601, "limit": 1})
+            assert first.status_code == 200
+            items = list(first.json()["items"])
+            cursor = first.json()["next_cursor"]
+            while cursor:
+                page = client.get(
+                    path,
+                    params={
+                        "story_id": 501,
+                        "signal_id": 601,
+                        "limit": 1,
+                        "cursor": cursor,
+                    },
+                )
+                assert page.status_code == 200
+                items.extend(page.json()["items"])
+                cursor = page.json()["next_cursor"]
+            return first.json()["next_cursor"], {item["public_id"] for item in items}
+
+        meta_cursor, meta_ids = collect("/api/v2/radar")
+        country_cursor, country_ids = collect("/api/v2/countries/es/radar")
+
+        def collect_evidence(public_id):
+            path = f"/api/v2/radar/trends/{public_id}/evidence"
+            first = client.get(path, params={"limit": 1})
+            assert first.status_code == 200
+            items = list(first.json()["items"])
+            cursor = first.json()["next_cursor"]
+            first_cursor = cursor
+            while cursor:
+                page = client.get(path, params={"limit": 1, "cursor": cursor})
+                assert page.status_code == 200
+                items.extend(page.json()["items"])
+                cursor = page.json()["next_cursor"]
+            return first_cursor, items
+
+        evidence_cursor, meta_evidence = collect_evidence(
+            "00000000-0000-0000-0000-000000000002"
+        )
+        _, country_evidence = collect_evidence(
+            "00000000-0000-0000-0000-000000000102"
+        )
+
+        assert meta_ids == {
+            "00000000-0000-0000-0000-000000000002",
+            "00000000-0000-0000-0000-000000000006",
+            "00000000-0000-0000-0000-000000000008",
+        }
+        assert "00000000-0000-0000-0000-000000000007" not in meta_ids
+        assert country_ids == {
+            "00000000-0000-0000-0000-000000000102",
+            "00000000-0000-0000-0000-000000000107",
+            "00000000-0000-0000-0000-000000000108",
+        }
+        assert "00000000-0000-0000-0000-000000000103" not in country_ids
+        assert [item["public_id"] for item in meta_evidence] == [
+            "10000000-0000-0000-0000-000000000002",
+            "10000000-0000-0000-0000-000000000009",
+            "10000000-0000-0000-0000-000000000010",
+        ]
+        assert {item["role"] for item in meta_evidence} == {
+            "trigger", "contradiction", "support",
+        }
+        assert [item["public_id"] for item in country_evidence] == [
+            "10000000-0000-0000-0000-000000000002",
+            "10000000-0000-0000-0000-000000000009",
+        ]
+        assert client.get(
+            "/api/v2/radar",
+            params={"story_id": 502, "signal_id": 601, "cursor": meta_cursor},
+        ).status_code == 422
+        assert client.get(
+            "/api/v2/countries/es/radar",
+            params={"story_id": 501, "signal_id": 602, "cursor": country_cursor},
+        ).status_code == 422
+        assert client.get(
+            "/api/v2/radar/trends/00000000-0000-0000-0000-000000000006/evidence",
+            params={"cursor": evidence_cursor},
+        ).status_code == 422
+    finally:
+        connection.close()
+        engine.dispose()
