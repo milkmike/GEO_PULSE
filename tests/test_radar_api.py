@@ -457,6 +457,8 @@ def test_sql_meta_relation_filters_use_direct_or_member_evidence_and_require_bot
     assert "related.trend_id = trend.id" in sql
     assert "related_member.meta_trend_id = trend.id" in sql
     assert "related_member.country_trend_id = related.trend_id" in sql
+    assert "active_member.meta_trend_id = trend.id" in sql
+    assert "active_member.left_at IS NULL" in sql
     assert sql.count("related_member.left_at IS NULL") == 2
     assert sql.index("/* radar_related_story */") < sql.index("/* radar_related_signal */")
     assert "AND (:story_id IS NULL OR EXISTS" in sql

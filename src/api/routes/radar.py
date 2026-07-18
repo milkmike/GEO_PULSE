@@ -355,6 +355,10 @@ class SqlRadarReadService:
                     WHEN 'candidate' THEN 3 WHEN 'resolved' THEN 4 ELSE 5 END AS state_rank
                   FROM radar_trends trend
                   WHERE trend.scope = 'meta'
+                    AND EXISTS (
+                      SELECT 1 FROM radar_trend_members active_member
+                      WHERE active_member.meta_trend_id = trend.id
+                        AND active_member.left_at IS NULL)
                     AND ((:state IS NOT NULL AND trend.state = :state)
                       OR (:state IS NULL AND trend.state = ANY(:public_states)))
                     AND (:contour IS NULL OR EXISTS (
