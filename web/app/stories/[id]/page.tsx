@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import SiteHeader from "@/components/SiteHeader";
 import StoryTimeline from "@/components/StoryTimeline";
+import EarlyWarningPanel from "@/components/EarlyWarningPanel";
 import { useFeatureFlags } from "@/components/FeatureFlagsProvider";
 import { api } from "@/lib/api";
 import type { StoryArticleEvidence, StoryDetailResponse, StoryLifecycle } from "@/lib/types";
@@ -70,7 +71,7 @@ function entityHref(id: string, label: string): string {
 }
 
 export default function StoryDetailPage({ params }: { params: Promise<{ id: string }> }) {
-  const { searchNavigation, signalDetail } = useFeatureFlags();
+  const { searchNavigation, signalDetail, earlyWarningRadar } = useFeatureFlags();
   const { id: rawId } = use(params);
   const storyId = /^\d+$/.test(rawId) && Number(rawId) > 0 ? Number(rawId) : null;
   const [story, setStory] = useState<StoryDetailResponse | null>(null);
@@ -299,6 +300,12 @@ export default function StoryDetailPage({ params }: { params: Promise<{ id: stri
           </ul>
         </section>
       </div>
+
+      {earlyWarningRadar && story.countries[0] && (
+        <div className="mt-3">
+          <EarlyWarningPanel countryCode={story.countries[0].country_code} title="Аналитические тренды" limit={3} />
+        </div>
+      )}
 
       <section className="mt-3 card p-4" aria-labelledby="story-signals-title">
         <div className="flex items-baseline gap-2"><Radio aria-hidden="true" size={14} className="text-cooling" /><h2 id="story-signals-title" className="card-title">связанные сигналы · {story.linked_signal_count}</h2></div>

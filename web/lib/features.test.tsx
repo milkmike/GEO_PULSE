@@ -13,17 +13,20 @@ describe("server-only feature flags", () => {
       storiesNavigation: false,
       investigation: false,
       signalDetail: false,
+      earlyWarningRadar: false,
     });
     expect(readFeatureFlags({
       FEATURE_SEARCH_NAVIGATION: "false",
       FEATURE_STORIES_NAVIGATION: "1",
       FEATURE_INVESTIGATION: "yes",
       FEATURE_SIGNAL_DETAIL: "TRUE ",
+      FEATURE_EARLY_WARNING_RADAR: "yes",
     })).toEqual({
       searchNavigation: false,
       storiesNavigation: false,
       investigation: false,
       signalDetail: false,
+      earlyWarningRadar: false,
     });
   });
 
@@ -33,17 +36,19 @@ describe("server-only feature flags", () => {
       FEATURE_STORIES_NAVIGATION: "true",
       FEATURE_INVESTIGATION: "true",
       FEATURE_SIGNAL_DETAIL: "true",
+      FEATURE_EARLY_WARNING_RADAR: "true",
     })).toEqual({
       searchNavigation: true,
       storiesNavigation: true,
       investigation: true,
       signalDetail: true,
+      earlyWarningRadar: true,
     });
   });
 
   it("gates only the new navigation links from a client-side snapshot", () => {
     const { rerender } = render(
-      <FeatureFlagsProvider flags={{ searchNavigation: false, storiesNavigation: false, investigation: false, signalDetail: false }}>
+      <FeatureFlagsProvider flags={{ searchNavigation: false, storiesNavigation: false, investigation: false, signalDetail: false, earlyWarningRadar: false }}>
         <SiteHeader />
       </FeatureFlagsProvider>,
     );
@@ -52,12 +57,13 @@ describe("server-only feature flags", () => {
     expect(screen.getByRole("link", { name: "аналитика" })).toBeVisible();
 
     rerender(
-      <FeatureFlagsProvider flags={{ searchNavigation: true, storiesNavigation: true, investigation: false, signalDetail: false }}>
+      <FeatureFlagsProvider flags={{ searchNavigation: true, storiesNavigation: true, investigation: false, signalDetail: false, earlyWarningRadar: true }}>
         <SiteHeader />
       </FeatureFlagsProvider>,
     );
     expect(screen.getByRole("link", { name: /поиск новостей/i })).toHaveAttribute("href", "/search");
     expect(screen.getByRole("link", { name: "сюжеты" })).toHaveAttribute("href", "/stories");
+    expect(screen.getByRole("link", { name: "радар" })).toHaveAttribute("href", "/radar");
   });
 
   it("keeps the environment reader out of the client graph and passes all flags through the image build", () => {
@@ -76,6 +82,7 @@ describe("server-only feature flags", () => {
     for (const flag of [
       "FEATURE_SEARCH_NAVIGATION", "FEATURE_STORIES_NAVIGATION",
       "FEATURE_INVESTIGATION", "FEATURE_SIGNAL_DETAIL",
+      "FEATURE_EARLY_WARNING_RADAR",
     ]) {
       expect(dockerfile).toContain(`ARG ${flag}=false`);
       expect(compose).toContain(`${flag}: \${${flag}:-false}`);

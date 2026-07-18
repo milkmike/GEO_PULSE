@@ -103,7 +103,7 @@ describe("story placements", () => {
   it("shows exactly six latest stories on the home dashboard", async () => {
     apiMocks.stories.mockResolvedValue({ stories: Array.from({ length: 8 }, (_, index) => story(index + 1)), next_cursor: null });
     render(
-      <FeatureFlagsProvider flags={{ searchNavigation: false, storiesNavigation: true, investigation: false, signalDetail: false }}>
+      <FeatureFlagsProvider flags={{ searchNavigation: false, storiesNavigation: true, investigation: false, signalDetail: false, earlyWarningRadar: false }}>
         <HomePage />
       </FeatureFlagsProvider>,
     );
@@ -116,7 +116,7 @@ describe("story placements", () => {
 
   it("does not query or expose story panels while the server snapshot is off", async () => {
     render(
-      <FeatureFlagsProvider flags={{ searchNavigation: false, storiesNavigation: false, investigation: false, signalDetail: false }}>
+      <FeatureFlagsProvider flags={{ searchNavigation: false, storiesNavigation: false, investigation: false, signalDetail: false, earlyWarningRadar: false }}>
         <HomePage />
       </FeatureFlagsProvider>,
     );
@@ -130,7 +130,7 @@ describe("story placements", () => {
     apiMocks.countryStories.mockResolvedValue({ country: "ES", name: "Испания", stories: [], next_cursor: null });
     await act(async () => {
       render(
-        <FeatureFlagsProvider flags={{ searchNavigation: false, storiesNavigation: true, investigation: false, signalDetail: false }}>
+        <FeatureFlagsProvider flags={{ searchNavigation: false, storiesNavigation: true, investigation: false, signalDetail: false, earlyWarningRadar: false }}>
           <CountryPage params={Promise.resolve({ code: "es" })} />
         </FeatureFlagsProvider>,
       );
@@ -163,7 +163,7 @@ describe("story placements", () => {
         flag: "🇫🇷",
       },
     }));
-    const flags = { searchNavigation: false, storiesNavigation: true, investigation: false, signalDetail: false };
+    const flags = { searchNavigation: false, storiesNavigation: true, investigation: false, signalDetail: false, earlyWarningRadar: false };
     let view!: ReturnType<typeof render>;
     await act(async () => {
       view = render(

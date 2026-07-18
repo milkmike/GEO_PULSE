@@ -8,6 +8,7 @@ import HealthBadge from "@/components/HealthBadge";
 import HeadlinesFeed from "@/components/HeadlinesFeed";
 import Markdown from "@/components/Markdown";
 import RadarPanel from "@/components/RadarPanel";
+import EarlyWarningPanel from "@/components/EarlyWarningPanel";
 import SignalFeed from "@/components/SignalFeed";
 import SiteHeader from "@/components/SiteHeader";
 import SortableGrid, { type SortableItem } from "@/components/SortableGrid";
@@ -21,10 +22,10 @@ import type { Brief, CountrySummary, Headline, Meta, Signal, StoryListItem, Topi
 
 // Default order of the home dashboard cards; visitors can drag to reorder
 // (persisted per browser in localStorage under "home-panel-order").
-const HOME_ORDER = ["map", "ranking", "stories", "headlines", "signals", "brief", "radar"];
+const HOME_ORDER = ["map", "ranking", "early-warning", "stories", "headlines", "signals", "brief", "radar"];
 
 export default function HomePage() {
-  const { storiesNavigation, signalDetail } = useFeatureFlags();
+  const { storiesNavigation, signalDetail, earlyWarningRadar } = useFeatureFlags();
   const [countries, setCountries] = useState<CountrySummary[]>([]);
   const [signals, setSignals] = useState<Signal[]>([]);
   const [headlines, setHeadlines] = useState<Headline[]>([]);
@@ -155,6 +156,10 @@ export default function HomePage() {
           <CountryRanking countries={filtered} topicCounts={topicCounts ?? undefined} />
         </section>
       ),
+    },
+    {
+      id: "early-warning", cellClassName: "col-span-12 lg:col-span-8",
+      node: earlyWarningRadar ? <EarlyWarningPanel limit={3} /> : null,
     },
     {
       id: "stories", cellClassName: "col-span-12 lg:col-span-8",

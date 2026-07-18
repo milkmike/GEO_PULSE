@@ -717,3 +717,108 @@ export interface TemperatureMethodology {
   };
   limitations: string[];
 }
+
+export type RadarTrendState = "candidate" | "emerging" | "confirmed" | "cooling" | "resolved" | "rejected";
+export type RadarContour = "media" | "action";
+export type RadarContourStatus = "aligned" | "divergent" | "insufficient";
+
+export interface RadarCountryWave {
+  public_id: string;
+  country_code: string;
+  contour: RadarContour;
+  state: RadarTrendState;
+  confidence: number | null;
+  coverage_confidence: number | null;
+  velocity: number | null;
+  first_observed_at: string | null;
+  detected_at: string | null;
+  confirmed_at: string | null;
+  t0_auto: string | null;
+  t0_effective: string | null;
+}
+
+export interface RadarTrend {
+  public_id: string;
+  scope: "meta" | "country";
+  state: RadarTrendState;
+  thesis: string;
+  subject_key: string;
+  direction: string;
+  confidence: number | null;
+  coverage_confidence: number | null;
+  velocity: number | null;
+  first_observed_at: string | null;
+  detected_at: string | null;
+  confirmed_at: string | null;
+  t0_auto: string | null;
+  t0_effective: string | null;
+  country_code: string | null;
+  country_waves: RadarCountryWave[];
+  contours: Record<RadarContour, { state: RadarTrendState | "insufficient"; status: RadarContourStatus }>;
+  contradiction_marker: boolean;
+  evidence_preview: null | { public_id: string | null; role: string | null; title: string | null; url: string | null };
+  why_included: string;
+}
+
+export interface RadarFilters {
+  state?: RadarTrendState;
+  contour?: RadarContour;
+  country?: string;
+  limit?: number;
+}
+
+export interface RadarTrendPage {
+  items: RadarTrend[];
+  limit: number;
+  next_cursor: string | null;
+}
+
+export interface RadarTimelineItem {
+  kind: string;
+  at: string | null;
+  state: RadarTrendState | null;
+  contour: RadarContour | null;
+  evidence: Record<string, unknown>;
+}
+
+export interface RadarTimeline { trend: RadarTrend; items: RadarTimelineItem[]; }
+
+export interface RadarEvidenceItem {
+  public_id: string;
+  role: "trigger" | "support" | "context" | "contradiction";
+  contribution: number | null;
+  title: string | null;
+  url: string | null;
+  evidence: Record<string, unknown>;
+  why_included: string;
+}
+
+export interface RadarEvidencePage {
+  items: RadarEvidenceItem[];
+  limit: number;
+  next_cursor: string | null;
+}
+
+export interface RadarCoverage {
+  updated_at: string | null;
+  coverage_source: string;
+  countries: Array<{
+    country_code: string;
+    coverage_confidence: number;
+    state: "critical" | "degraded" | "healthy";
+    blind_spots: unknown[];
+  }>;
+}
+
+export interface RadarMethodology {
+  detector_version: string;
+  updated_at: string;
+  baseline: { window_days: number; acceleration_days: number };
+  lifecycle_gates: { media: Record<string, unknown>; action: Record<string, unknown> };
+  t0_fields: string[];
+  confidence_factors: string[];
+  coverage_hard_gate: string;
+  action_independence: string;
+  evidence_roles: string[];
+  limitations: string[];
+}

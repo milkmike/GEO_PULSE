@@ -4,6 +4,8 @@ import type {
   IndexExplanation, IndexExplanationRequest, Meta, Signal, SignalDetail, SourceHealthRow,
   SourceRow, StoriesListResponse, StoriesRequest, StoryDetailResponse, TemperatureMethodology,
   Thread, TopicBriefResponse, TopicStat, TradeYear, UNVoteYear,
+  RadarCoverage, RadarEvidencePage, RadarFilters, RadarMethodology, RadarTimeline,
+  RadarTrend, RadarTrendPage,
 } from "./types";
 
 /** API base: build-time env wins; otherwise same host on :8100 (compose default). */
@@ -53,7 +55,32 @@ function storyParams(request: StoriesRequest, cursor?: string | null): URLSearch
   return params;
 }
 
+function radarParams(request: RadarFilters, cursor?: string | null): URLSearchParams {
+  const params = new URLSearchParams();
+  if (request.state) params.set("state", request.state);
+  if (request.contour) params.set("contour", request.contour);
+  if (request.country?.trim()) params.set("country", request.country.trim().toUpperCase());
+  if (request.limit && Number.isFinite(request.limit)) params.set("limit", String(request.limit));
+  if (cursor) params.set("cursor", cursor);
+  return params;
+}
+
 export const api = {
+  radar: (request: RadarFilters = {}, cursor?: string | null, signal?: AbortSignal) =>
+    get<RadarTrendPage>(`/api/v2/radar?${radarParams(request, cursor).toString()}`, signal),
+  countryRadar: (code: string, request: Omit<RadarFilters, "country"> = {}, cursor?: string | null, signal?: AbortSignal) =>
+    get<RadarTrendPage>(`/api/v2/countries/${encodeURIComponent(code.trim().toUpperCase())}/radar?${radarParams(request, cursor).toString()}`, signal),
+  radarTrend: (publicId: string, signal?: AbortSignal) =>
+    get<RadarTrend>(`/api/v2/radar/trends/${encodeURIComponent(publicId)}`, signal),
+  radarTimeline: (publicId: string, signal?: AbortSignal) =>
+    get<RadarTimeline>(`/api/v2/radar/trends/${encodeURIComponent(publicId)}/timeline`, signal),
+  radarEvidence: (publicId: string, cursor?: string | null, limit = 25, signal?: AbortSignal) => {
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (cursor) params.set("cursor", cursor);
+    return get<RadarEvidencePage>(`/api/v2/radar/trends/${encodeURIComponent(publicId)}/evidence?${params.toString()}`, signal);
+  },
+  radarCoverage: (signal?: AbortSignal) => get<RadarCoverage>("/api/v2/radar/coverage", signal),
+  radarMethodology: (signal?: AbortSignal) => get<RadarMethodology>("/api/v2/methodology/radar", signal),
   indexExplanation: (
     code: string,
     request: IndexExplanationRequest,

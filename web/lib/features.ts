@@ -3,6 +3,7 @@ export interface FeatureFlags {
   storiesNavigation: boolean;
   investigation: boolean;
   signalDetail: boolean;
+  earlyWarningRadar: boolean;
 }
 
 export const DEFAULT_FEATURE_FLAGS: FeatureFlags = {
@@ -10,4 +11,5 @@ export const DEFAULT_FEATURE_FLAGS: FeatureFlags = {
   storiesNavigation: false,
   investigation: false,
   signalDetail: false,
+  earlyWarningRadar: false,
 };

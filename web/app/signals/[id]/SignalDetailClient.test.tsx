@@ -20,6 +20,7 @@ const flags = {
   storiesNavigation: true,
   investigation: false,
   signalDetail: true,
+  earlyWarningRadar: false,
 };
 
 function view(signalId = 17) {

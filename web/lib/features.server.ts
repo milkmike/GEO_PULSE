@@ -10,5 +10,6 @@ export function readFeatureFlags(environment: FeatureEnvironment = process.env):
     storiesNavigation: environment.FEATURE_STORIES_NAVIGATION === "true",
     investigation: environment.FEATURE_INVESTIGATION === "true",
     signalDetail: environment.FEATURE_SIGNAL_DETAIL === "true",
+    earlyWarningRadar: environment.FEATURE_EARLY_WARNING_RADAR === "true",
   };
 }

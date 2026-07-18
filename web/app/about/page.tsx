@@ -19,7 +19,8 @@ import {
 import SiteHeader from "@/components/SiteHeader";
 import TemperatureMethodologyBlock from "@/components/TemperatureMethodologyBlock";
 import { api } from "@/lib/api";
-import type { Meta, SourceRow, TemperatureMethodology } from "@/lib/types";
+import type { Meta, RadarMethodology, SourceRow, TemperatureMethodology } from "@/lib/types";
+import { useFeatureFlags } from "@/components/FeatureFlagsProvider";
 
 interface StatsState {
   total: number;
@@ -70,6 +71,7 @@ function SectionHead({ num, title }: { num: string; title: string }) {
 }
 
 export default function AboutPage() {
+  const { earlyWarningRadar } = useFeatureFlags();
   const [stats, setStats] = useState<StatsState>({
     total: 0, active: 0, articles: 0, countries: 0, loaded: false, error: false,
   });
@@ -77,6 +79,8 @@ export default function AboutPage() {
   const [temperatureError, setTemperatureError] = useState(false);
   const [temperatureLoading, setTemperatureLoading] = useState(true);
   const [temperatureReload, setTemperatureReload] = useState(0);
+  const [radarMethodology, setRadarMethodology] = useState<RadarMethodology | null>(null);
+  const [radarMethodError, setRadarMethodError] = useState(false);
 
   useEffect(() => {
     Promise.allSettled([api.sources(), api.meta()]).then(([sourcesResult, metaResult]) => {
@@ -114,6 +118,18 @@ export default function AboutPage() {
       });
     return () => controller.abort();
   }, [temperatureReload]);
+
+  useEffect(() => {
+    if (!earlyWarningRadar) return;
+    const controller = new AbortController();
+    setRadarMethodError(false);
+    api.radarMethodology(controller.signal)
+      .then((payload) => { if (!controller.signal.aborted) setRadarMethodology(payload); })
+      .catch((reason: unknown) => {
+        if (!controller.signal.aborted && !(reason instanceof DOMException && reason.name === "AbortError")) setRadarMethodError(true);
+      });
+    return () => controller.abort();
+  }, [earlyWarningRadar]);
 
   const fmt = (n: number) => n.toLocaleString("ru");
   const ph = "…";
@@ -314,6 +330,24 @@ export default function AboutPage() {
       {!temperatureLoading && temperatureMethodology && (
         <TemperatureMethodologyBlock methodology={temperatureMethodology} />
       )}
+
+      {earlyWarningRadar && <>
+        <SectionHead num="04" title="Как работает радар" />
+        {radarMethodError && <p role="alert" className="card border-l-2 border-l-ru-red px-5 py-5 text-sm text-dim">Актуальная методика радара сейчас недоступна.</p>}
+        {radarMethodology && (
+          <section className="prose-editorial" aria-label="Методика радара">
+            <p>Радар сравнивает страновые медиа- и событийные ряды с <b>{radarMethodology.baseline.window_days}-дневной базовой линией</b>, отдельно проверяет ускорение за {radarMethodology.baseline.acceleration_days} дней и сохраняет исходный и эффективный T0.</p>
+            <dl className="my-6 grid gap-px overflow-hidden rounded-lg border border-line bg-line text-sm sm:grid-cols-3">
+              <div className="bg-panel p-4"><dt className="card-title">версия</dt><dd className="tnum mt-2">{radarMethodology.detector_version}</dd></div>
+              <div className="bg-panel p-4"><dt className="card-title">факторы уверенности</dt><dd className="mt-2 text-xs text-dim">{radarMethodology.confidence_factors.join(", ")}</dd></div>
+              <div className="bg-panel p-4"><dt className="card-title">роли доказательств</dt><dd className="mt-2 text-xs text-dim">{radarMethodology.evidence_roles.join(", ")}</dd></div>
+            </dl>
+            <p className="border-l-2 border-cooling pl-4 text-sm text-dim">{radarMethodology.coverage_hard_gate}</p>
+            <p className="mt-3 border-l-2 border-ru-blue pl-4 text-sm text-dim">{radarMethodology.action_independence}</p>
+            <ul className="mt-5 list-disc space-y-2 pl-5 text-sm text-dim">{radarMethodology.limitations.map((item) => <li key={item}>{item}</li>)}</ul>
+          </section>
+        )}
+      </>}
 
       {/* ── 04 data ── */}
       <SectionHead num="04" title="Откуда данные" />

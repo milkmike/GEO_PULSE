@@ -16,6 +16,7 @@ import SortableGrid, { type SortableItem } from "@/components/SortableGrid";
 import StoriesPanel from "@/components/StoriesPanel";
 import InvestigationPanel from "@/components/InvestigationPanel";
 import RriShiftList from "@/components/RriShiftList";
+import EarlyWarningPanel from "@/components/EarlyWarningPanel";
 import { useFeatureFlags } from "@/components/FeatureFlagsProvider";
 import TierDivergencePanel from "@/components/TierDivergencePanel";
 import SanctionsPanel from "@/components/SanctionsPanel";
@@ -34,7 +35,7 @@ import type {
 // Default panel order on country pages. AI-dossier + news sources sit near the
 // top; visitors can drag any card to reorder (saved per browser in localStorage).
 const PANEL_ORDER = [
-  "sparklines", "dynamics", "stories", "brief", "headlines", "index", "gdelt",
+  "sparklines", "dynamics", "early-warning", "stories", "brief", "headlines", "index", "gdelt",
   "tier", "sanctions", "energy", "vox", "topics", "entities",
   "agreements", "unvotes", "trade", "fx", "signals",
 ];
@@ -50,7 +51,7 @@ const CHART_BASE = {
 };
 
 export default function CountryPage({ params }: { params: Promise<{ code: string }> }) {
-  const { storiesNavigation, investigation, signalDetail } = useFeatureFlags();
+  const { storiesNavigation, investigation, signalDetail, earlyWarningRadar } = useFeatureFlags();
   const { push: routerPush, replace: routerReplace } = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -342,6 +343,10 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
     {
       id: "dynamics", cellClassName: "md:col-span-2", tip: COUNTRY_TIPS.dynamics,
       node: <DynamicsPanel code={cc} dossier={dossier} headlines={headlines} topics={topics} />,
+    },
+    {
+      id: "early-warning", cellClassName: "md:col-span-2",
+      node: earlyWarningRadar ? <EarlyWarningPanel countryCode={cc} title={`Радар · ${country.name}`} limit={4} /> : null,
     },
     {
       id: "stories", cellClassName: "md:col-span-2",

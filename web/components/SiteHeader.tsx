@@ -10,6 +10,7 @@ const NAV = [
   { href: "/", label: "карта" },
   { href: "/search", label: "поиск новостей", search: true, feature: "searchNavigation" as const },
   { href: "/stories", label: "сюжеты", feature: "storiesNavigation" as const },
+  { href: "/radar", label: "радар", feature: "earlyWarningRadar" as const },
   { href: "/analytics", label: "аналитика" },
   { href: "/sources", label: "источники" },
   { href: "/signals", label: "сигналы" },

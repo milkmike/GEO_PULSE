@@ -128,7 +128,7 @@ function deferred<T>() {
 function renderCountry(investigation: boolean) {
   return act(async () => {
     render(
-      <FeatureFlagsProvider flags={{ searchNavigation: false, storiesNavigation: false, investigation, signalDetail: false }}>
+      <FeatureFlagsProvider flags={{ searchNavigation: false, storiesNavigation: false, investigation, signalDetail: false, earlyWarningRadar: false }}>
         <CountryPage params={Promise.resolve({ code: "es" })} />
       </FeatureFlagsProvider>,
     );
@@ -212,6 +212,7 @@ describe("country investigation flow", () => {
       storiesNavigation: false,
       investigation: true,
       signalDetail: false,
+      earlyWarningRadar: false,
     };
     let view!: ReturnType<typeof render>;
     await act(async () => {

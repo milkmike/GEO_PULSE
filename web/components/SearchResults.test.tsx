@@ -85,7 +85,8 @@ describe("SearchResults", () => {
           searchNavigation: true,
           storiesNavigation: true,
           investigation: false,
-          signalDetail: false,
+        signalDetail: false,
+        earlyWarningRadar: false,
         }}
       >
         <SearchResults items={[result]} />

@@ -21,7 +21,7 @@ function loadError(reason: unknown): string {
 }
 
 export default function SignalDetailClient({ signalId }: { signalId: number }) {
-  const { storiesNavigation } = useFeatureFlags();
+  const { storiesNavigation, earlyWarningRadar } = useFeatureFlags();
   const [detail, setDetail] = useState<SignalDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -84,7 +84,7 @@ export default function SignalDetailClient({ signalId }: { signalId: number }) {
 
       {!loading && detail && (
         <div className="reveal reveal-1 mt-5">
-          <SignalEvidence detail={detail} storiesEnabled={storiesNavigation} />
+          <SignalEvidence detail={detail} storiesEnabled={storiesNavigation} radarEnabled={earlyWarningRadar} />
         </div>
       )}
     </main>

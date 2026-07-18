@@ -174,7 +174,7 @@ describe("StoryDetailPage", () => {
     apiMocks.story.mockResolvedValue(detail);
     await act(async () => {
       render(
-        <FeatureFlagsProvider flags={{ searchNavigation: true, storiesNavigation: true, investigation: false, signalDetail: true }}>
+        <FeatureFlagsProvider flags={{ searchNavigation: true, storiesNavigation: true, investigation: false, signalDetail: true, earlyWarningRadar: false }}>
           <StoryDetailPage params={Promise.resolve({ id: "42" })} />
         </FeatureFlagsProvider>,
       );

@@ -5,6 +5,7 @@ import Plot from "./Plot";
 import type { SignalArticleReference, SignalDetail } from "@/lib/types";
 import { eventTypeRu, SIGNAL_RU, sourceTierRu } from "@/lib/format";
 import { safeHttpUrl } from "@/lib/urls";
+import EarlyWarningPanel from "./EarlyWarningPanel";
 
 const SEVERITY_LABEL: Record<string, string> = {
   info: "наблюдение",
@@ -204,7 +205,7 @@ function ArticleReferenceRow({ article }: { article: SignalArticleReference }) {
   );
 }
 
-export default function SignalEvidence({ detail, storiesEnabled }: { detail: SignalDetail; storiesEnabled: boolean }) {
+export default function SignalEvidence({ detail, storiesEnabled, radarEnabled = false }: { detail: SignalDetail; storiesEnabled: boolean; radarEnabled?: boolean }) {
   const chartPoints = detail.chart_points
     .map((point) => ({ time: point.time, score: point.score }))
     .filter((point): point is { time: string; score: number } =>
@@ -405,6 +406,10 @@ export default function SignalEvidence({ detail, storiesEnabled }: { detail: Sig
           </ul>
         </section>
       </div>
+
+      {radarEnabled && detail.countries[0] && (
+        <EarlyWarningPanel countryCode={detail.countries[0].code} title="Связанный тренд радара" limit={1} />
+      )}
 
       <section aria-labelledby="signal-evidence-heading" className="card p-5">
         <h2 id="signal-evidence-heading" className="card-title">Полнота доказательств</h2>
