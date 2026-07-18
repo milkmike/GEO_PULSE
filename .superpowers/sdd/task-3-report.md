@@ -68,6 +68,32 @@ git diff --check
 
 Result: `143 passed, 2 warnings` in 7.32s.
 
+## Second review correction pass
+
+- Annual UN/trade collection queries now select by the real `updated_at` inside
+  the requested window. Observations retain that timestamp and record
+  `updated_at`, `temporal_resolution: year`, and `period_year` in evidence.
+  Their input identity instead uses the stable dataset/country/year/value
+  fingerprint, so a refresh without data changes remains idempotent.
+- Fossil prior-state selection now accepts only verified registry/formal Radar
+  observations or verified action events explicitly identified as
+  `ru_fossil_imports`; reported media cannot supply numeric state.
+- Source fingerprints now include emitted deltas, including trade's emitted
+  YoY value, so corrected structured magnitudes create new immutable evidence.
+- Added an executable annual-window test-double that validates and applies the
+  generated `updated_at` predicate, plus replay, authority, and correction
+  regressions.
+
+Final second-pass verification:
+
+```text
+.venv/bin/python -m pytest tests/test_radar_observations.py tests/test_stories.py tests/test_signal_evidence.py -q
+git diff --check
+.venv/bin/python -m py_compile src/radar/actions.py src/radar/media.py src/radar/repository.py src/radar/types.py
+```
+
+Result: `147 passed, 2 warnings` in 1.47s.
+
 ## Commit
 
 `feat(radar): normalize media and action evidence`

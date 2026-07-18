@@ -7,7 +7,7 @@ from uuid import UUID
 
 import pytest
 
-from src.radar.actions import build_action_observations
+from src.radar.actions import _FOSSIL, build_action_observations
 from src.radar.media import build_media_observations
 from src.radar.repository import make_observation, upsert_observations
 from src.radar.types import Contour, Observation, ObservationWindow
@@ -58,6 +58,24 @@ class _Session:
                 )
                 return _Result(rows)
         return _Result()
+
+
+class _AnnualWindowSession(_Session):
+    """Small executable stand-in for the annual collection-window predicate."""
+
+    def execute(self, statement, params=None):
+        sql = str(statement)
+        if "FROM un_votes" not in sql:
+            return super().execute(statement, params)
+        self.calls.append((sql, params or {}))
+        assert "updated_at >= :window_start" in sql
+        assert "updated_at < :window_end" in sql
+        assert "make_date(year, 12, 31)::timestamp AT TIME ZONE 'UTC') >=" not in sql
+        rows = self.action_rows["un_votes"]
+        return _Result(
+            row for row in rows
+            if params["window_start"] <= row.updated_at < params["window_end"]
+        )
 
 
 def _media_row(article_id, publisher_id, publisher_domain, **overrides):
@@ -222,7 +240,9 @@ def test_annual_actions_use_period_and_values_not_mutable_refresh_time():
 
     [point] = build_action_observations(session, _window())
 
-    assert point.observed_at == datetime(2025, 12, 31, tzinfo=timezone.utc)
+    assert point.observed_at == NOW
+    assert point.evidence["period_year"] == 2025
+    assert point.evidence["temporal_resolution"] == "year"
     assert point.evidence["current_value"] == 42.0
     assert point.evidence["previous_value"] == 40.0
     assert point.evidence["delta"] == 2.0
@@ -285,3 +305,80 @@ def test_input_hash_includes_all_evidence_roots():
     })
 
     assert len({baseline.input_hash, changed_story.input_hash, changed_entity.input_hash, changed_action.input_hash}) == 4
+
+
+def test_annual_sql_selects_current_refreshes_by_real_updated_time():
+    refreshed_at = NOW - timedelta(hours=2)
+    session = _AnnualWindowSession(action_rows={
+        "un_votes": (
+            SimpleNamespace(
+                country_code="ES", year=2025, current_value=Decimal("42"),
+                previous_value=Decimal("40"), updated_at=refreshed_at,
+            ),
+            SimpleNamespace(
+                country_code="ES", year=2024, current_value=Decimal("42"),
+                previous_value=Decimal("40"), updated_at=NOW - timedelta(days=2),
+            ),
+        ),
+    })
+
+    [point] = build_action_observations(session, _window())
+
+    annual_sql, params = next(
+        (sql, params) for sql, params in session.calls if "FROM un_votes" in sql
+    )
+    assert "updated_at >= :window_start" in annual_sql
+    assert "updated_at < :window_end" in annual_sql
+    assert "make_date(year, 12, 31)::timestamp AT TIME ZONE 'UTC') >=" not in annual_sql
+    assert params == {"window_start": _window().start, "window_end": _window().end}
+    assert point.observed_at == refreshed_at
+    assert point.evidence["updated_at"] == refreshed_at.isoformat()
+    assert point.evidence["temporal_resolution"] == "year"
+    assert point.evidence["period_year"] == 2025
+
+
+def test_annual_replay_identity_ignores_refreshed_updated_at():
+    def observation(updated_at):
+        session = _Session(action_rows={
+            "trade_data": (SimpleNamespace(
+                country_code="ES", year=2025, current_value=Decimal("120"),
+                previous_value=Decimal("100"), value=Decimal("20"), updated_at=updated_at,
+            ),),
+        })
+        return build_action_observations(session, _window())[0]
+
+    first = observation(NOW - timedelta(hours=2))
+    replay = observation(NOW - timedelta(hours=1))
+
+    assert first.observed_at != replay.observed_at
+    assert first.input_hash == replay.input_hash
+
+
+def test_fossil_prior_query_excludes_reported_or_non_authoritative_rows():
+    sql = str(_FOSSIL)
+
+    assert "prior.authority IN ('registry', 'formal')" in sql
+    assert "prior.evidence->>'status' = 'verified'" in sql
+    assert "event.authority IN ('registry', 'formal')" in sql
+    assert "event.status = 'verified'" in sql
+    assert "event.details->>'dataset' = 'ru_fossil_imports'" in sql
+
+
+def test_corrected_sanction_and_trade_magnitudes_change_replay_identity():
+    def sanction(value):
+        return build_action_observations(_Session(action_rows={
+            "sanctions_pressure": (SimpleNamespace(
+                country_code="ES", value=Decimal(value), observed_at=NOW - timedelta(hours=2),
+            ),),
+        }), _window())[0]
+
+    def trade(value):
+        return build_action_observations(_Session(action_rows={
+            "trade_data": (SimpleNamespace(
+                country_code="ES", year=2025, current_value=Decimal("120"),
+                previous_value=Decimal("100"), value=Decimal(value), updated_at=NOW - timedelta(hours=2),
+            ),),
+        }), _window())[0]
+
+    assert sanction("4").input_hash != sanction("5").input_hash
+    assert trade("20").input_hash != trade("21").input_hash

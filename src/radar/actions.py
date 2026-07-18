@@ -35,35 +35,36 @@ _SANCTIONS = text("""
 # it resolves to the same input hash rather than becoming a new action.
 _UN_VOTES = text("""
     WITH periods AS (
-      SELECT country_code, year, agreement_pct,
+      SELECT country_code, year, agreement_pct, updated_at,
              LAG(agreement_pct) OVER (PARTITION BY country_code ORDER BY year) AS previous_value
       FROM un_votes
     )
     SELECT country_code, year, agreement_pct::numeric AS current_value,
            previous_value::numeric AS previous_value,
            (agreement_pct - previous_value)::numeric AS value,
-           (make_date(year, 12, 31)::timestamp AT TIME ZONE 'UTC') AS observed_at
+           updated_at::timestamptz AS updated_at
     FROM periods
     WHERE previous_value IS NOT NULL AND agreement_pct IS DISTINCT FROM previous_value
-      AND (make_date(year, 12, 31)::timestamp AT TIME ZONE 'UTC') >= :window_start
-      AND (make_date(year, 12, 31)::timestamp AT TIME ZONE 'UTC') < :window_end
+      AND updated_at >= :window_start
+      AND updated_at < :window_end
 """)
 
 _TRADE = text("""
     WITH periods AS (
-      SELECT country_code, year, total_trade_usd, yoy_change_pct,
+      SELECT country_code, year, total_trade_usd, yoy_change_pct, updated_at,
              LAG(total_trade_usd) OVER (PARTITION BY country_code ORDER BY year) AS previous_value
       FROM trade_data
     )
     SELECT country_code, year, total_trade_usd::numeric AS current_value,
            previous_value::numeric AS previous_value,
            COALESCE(yoy_change_pct, total_trade_usd - previous_value)::numeric AS value,
-           (make_date(year, 12, 31)::timestamp AT TIME ZONE 'UTC') AS observed_at
+           yoy_change_pct::numeric AS yoy_change_pct,
+           updated_at::timestamptz AS updated_at
     FROM periods
     WHERE ((yoy_change_pct IS NOT NULL AND yoy_change_pct <> 0)
        OR (previous_value IS NOT NULL AND total_trade_usd IS DISTINCT FROM previous_value))
-      AND (make_date(year, 12, 31)::timestamp AT TIME ZONE 'UTC') >= :window_start
-      AND (make_date(year, 12, 31)::timestamp AT TIME ZONE 'UTC') < :window_end
+      AND updated_at >= :window_start
+      AND updated_at < :window_end
 """)
 
 # ``radar_observations`` and ``action_events`` retain prior comparable
@@ -85,7 +86,9 @@ _FOSSIL = text("""
         WHERE prior.contour = 'action'
           AND prior.country_code = imports.country_code
           AND prior.subject_key = 'energy:imports:russia'
+          AND prior.authority IN ('registry', 'formal')
           AND prior.evidence->>'dataset' = 'ru_fossil_imports'
+          AND prior.evidence->>'status' = 'verified'
         UNION ALL
         SELECT event.effective_at AS at, event.id AS record_id,
                COALESCE((event.details->>'current_value')::numeric,
@@ -93,6 +96,9 @@ _FOSSIL = text("""
         FROM action_events event
         WHERE event.country_code = imports.country_code
           AND event.subject_key = 'energy:imports:russia'
+          AND event.authority IN ('registry', 'formal')
+          AND event.status = 'verified'
+          AND event.details->>'dataset' = 'ru_fossil_imports'
       ) candidates
       WHERE candidates.value IS NOT NULL
       ORDER BY candidates.at DESC, candidates.record_id DESC
@@ -154,22 +160,29 @@ def _build_rows(session, sql, window: ObservationWindow) -> list[Any]:
 def _structured_observation(
     *, dataset: str, authority: str, metric: str, resolution: str,
     country: str, observed_at: datetime, current: Decimal | None,
-    previous: Decimal | None, delta: Decimal,
+    previous: Decimal | None, delta: Decimal, period_year: int | None = None,
+    yoy_change_pct: Decimal | None = None,
     window: ObservationWindow,
 ) -> Observation:
-    period = str(observed_at.year) if resolution == "annual" else observed_at.isoformat()
+    period = str(period_year) if resolution == "year" else observed_at.isoformat()
     current_fingerprint = _fingerprint(current if current is not None else delta)
     previous_fingerprint = _fingerprint(previous if previous is not None else Decimal("0"))
+    delta_fingerprint = _fingerprint(delta)
     source_id = ":".join((
         dataset, country, period, current_fingerprint, previous_fingerprint,
+        delta_fingerprint,
     ))
     evidence = {
         "dataset": dataset,
+        "status": "verified",
         "source_id": source_id,
         "temporal_resolution": resolution,
+        "period_year": period_year,
+        "updated_at": observed_at.isoformat() if resolution == "year" else None,
         "previous_value": _number(previous) if previous is not None else None,
         "current_value": _number(current) if current is not None else None,
         "delta": _number(delta),
+        "yoy_change_pct": _number(yoy_change_pct) if yoy_change_pct is not None else None,
     }
     return make_observation(
         country_code=country,
@@ -186,6 +199,7 @@ def _structured_observation(
         baseline={"temporal_resolution": resolution},
         evidence=evidence,
         evidence_ids=(source_id,),
+        identity_observed_at=_annual_at(period_year) if resolution == "year" else None,
     )
 
 
@@ -194,8 +208,8 @@ def build_action_observations(session, window: ObservationWindow) -> list[Observ
 
     datasets = (
         ("sanctions_pressure", _SANCTIONS, "registry", "delta", "event"),
-        ("un_votes", _UN_VOTES, "formal", "agreement_pct_delta", "annual"),
-        ("trade_data", _TRADE, "registry", "trade_change", "annual"),
+        ("un_votes", _UN_VOTES, "formal", "agreement_pct_delta", "year"),
+        ("trade_data", _TRADE, "registry", "trade_change", "year"),
         ("ru_fossil_imports", _FOSSIL, "registry", "import_value_delta", "snapshot"),
     )
     observations: list[Observation] = []
@@ -204,8 +218,9 @@ def build_action_observations(session, window: ObservationWindow) -> list[Observ
             country = str(_value(row, "country_code", "")).upper()
             if len(country) != 2:
                 continue
-            observed_at = _annual_at(_value(row, "year")) if resolution == "annual" else _value(row, "observed_at")
-            if observed_at is None:
+            period_year = int(_value(row, "year")) if resolution == "year" and _value(row, "year") is not None else None
+            observed_at = _value(row, "updated_at") if resolution == "year" else _value(row, "observed_at")
+            if observed_at is None or (resolution == "year" and period_year is None):
                 continue
             current = _decimal(_value(row, "current_value"))
             previous = _decimal(_value(row, "previous_value"))
@@ -214,7 +229,7 @@ def build_action_observations(session, window: ObservationWindow) -> list[Observ
                 if current is None or previous is None:
                     continue
                 delta = current - previous
-            elif resolution == "annual":
+            elif resolution == "year":
                 if current is None or previous is None:
                     continue
                 delta = current - previous if delta is None else delta
@@ -224,5 +239,7 @@ def build_action_observations(session, window: ObservationWindow) -> list[Observ
                 dataset=dataset, authority=authority, metric=metric,
                 resolution=resolution, country=country, observed_at=observed_at,
                 current=current, previous=previous, delta=delta, window=window,
+                period_year=period_year,
+                yoy_change_pct=_decimal(_value(row, "yoy_change_pct")),
             ))
     return observations
