@@ -190,6 +190,18 @@ wait_for_write_stats_quiescence() {
   return 1
 }
 
+wait_for_http_content() {
+  url="$1"
+  expected="$2"
+  for attempt in $(seq 1 30); do
+    if curl --connect-timeout 2 --max-time 5 -fsS "$url" | grep -F "$expected" >/dev/null; then
+      return 0
+    fi
+    sleep 2
+  done
+  return 1
+}
+
 fail_closed() {
   status=$?
   trap - EXIT HUP INT TERM
@@ -267,9 +279,9 @@ docker compose build web
 docker compose up -d --no-deps --force-recreate web
 
 # Feature-specific API/content checks before the mandatory real browser gate.
-curl -fsS "http://127.0.0.1:8100/api/v2/radar?limit=1" | grep -F 'items' >/dev/null
-curl -fsS "http://127.0.0.1:8100/api/v2/radar/trends/$trend_id" | grep -F "$trend_id" >/dev/null
-curl -fsS "http://127.0.0.1:3334/radar" | grep -F 'Радар' >/dev/null
+wait_for_http_content "http://127.0.0.1:8100/api/v2/radar?limit=1" "items"
+wait_for_http_content "http://127.0.0.1:8100/api/v2/radar/trends/$trend_id" "$trend_id"
+wait_for_http_content "http://127.0.0.1:3334/radar" "Радар"
 
 printf '%s\n' \
   'MANDATORY browser smoke (real browser, not curl):' \

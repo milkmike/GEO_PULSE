@@ -900,6 +900,31 @@ def test_runbook_stabilizes_postgres_write_stats_before_authoritative_baseline()
     assert runbook.count("\nwait_for_write_stats_quiescence\n") == 5
 
 
+def test_runbook_waits_for_recreated_web_before_public_smoke():
+    runbook = (ROOT / "docs/release/early-warning-radar-wave1.md").read_text(
+        encoding="utf-8"
+    )
+
+    helper = runbook.index("wait_for_http_content()")
+    recreate = runbook.index(
+        "docker compose up -d --no-deps --force-recreate web", helper
+    )
+    api_wait = runbook.index(
+        'wait_for_http_content "http://127.0.0.1:8100/api/v2/radar?limit=1" "items"',
+        recreate,
+    )
+    web_wait = runbook.index(
+        'wait_for_http_content "http://127.0.0.1:3334/radar" "Радар"',
+        api_wait,
+    )
+
+    assert helper < recreate < api_wait < web_wait
+    assert "for attempt in $(seq 1 30)" in runbook[helper:recreate]
+    assert "curl --connect-timeout 2 --max-time 5 -fsS" in runbook[helper:recreate]
+    assert "sleep 2" in runbook[helper:recreate]
+    assert "done\n  return 1\n}" in runbook[helper:recreate]
+
+
 def test_audit_output_uses_private_process_umask():
     source = (ROOT / "scripts/audit_radar_wave1.py").read_text(encoding="utf-8")
 
