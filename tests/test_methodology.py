@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from src import methodology
+from src.api.routes import radar as radar_routes
 from src.engine import index
 
 
@@ -68,6 +69,20 @@ def test_methodology_payload_contains_every_current_coefficient_category():
     assert technical["anomaly"]["minimum_samples"] == 5
     assert technical["trend"]["history_points"] == 3
     assert technical["upstream_analysis"]["provenance_is_per_article"] is True
+    assert payload["limitations"]
+
+
+def test_radar_methodology_is_immutable_and_exposes_detector_contract():
+    payload = radar_routes.radar_methodology_payload()
+
+    assert payload["detector_version"] == "radar-wave-1"
+    assert payload["updated_at"] == radar_routes.RADAR_METHODOLOGY_UPDATED_AT.isoformat()
+    assert payload["baseline"] == {"window_days": 90, "acceleration_days": 7}
+    assert payload["lifecycle_gates"]["media"]["independent_publisher_families"] == 2
+    assert payload["t0_fields"] == ["t0_auto", "t0_effective"]
+    assert payload["coverage_hard_gate"]
+    assert payload["action_independence"]
+    assert payload["evidence_roles"] == ["trigger", "support", "context", "contradiction"]
     assert payload["limitations"]
 
 
