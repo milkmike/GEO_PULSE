@@ -206,6 +206,10 @@ docker compose up -d
 backfill и release gate из
 [`docs/release/investigation-search-stories.md`](docs/release/investigation-search-stories.md).
 
+Первое включение Early Warning Radar выполняйте только через read-only shadow,
+bounded apply и GET-write gates из
+[`docs/release/early-warning-radar-wave1.md`](docs/release/early-warning-radar-wave1.md).
+
 Первичный прогон мирового контура:
 
 ```bash
