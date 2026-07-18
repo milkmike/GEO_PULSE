@@ -26,11 +26,19 @@ for f in "${MIG_DIR}"/*.sql; do
         continue
     fi
     echo "[migrate] applying ${b}"
-    # Apply the file and record it atomically.  A failed statement rolls back
-    # the whole migration instead of leaving an untracked partial schema.
-    "${PSQL[@]}" -1 -f "$f" -c \
-        "INSERT INTO public.schema_migrations(filename) VALUES ('${b}')
-         ON CONFLICT DO NOTHING;"
+    marker_sql="INSERT INTO public.schema_migrations(filename) VALUES ('${b}')
+                ON CONFLICT DO NOTHING;"
+    if grep -Eiq 'CONCURRENTLY|(^|[^[:alpha:]])VACUUM([^[:alpha:]]|$)|ALTER[[:space:]]+SYSTEM|CREATE[[:space:]]+DATABASE' "$f"; then
+        # PostgreSQL forbids concurrent index maintenance and a few maintenance
+        # commands inside transaction blocks.  Preserve their required
+        # autocommit mode and record them only after the file succeeds.
+        "${PSQL[@]}" -f "$f"
+        "${PSQL[@]}" -c "$marker_sql"
+    else
+        # Transaction-safe migrations (including Radar 027–030) and their
+        # schema_migrations marker commit atomically.
+        "${PSQL[@]}" -1 -f "$f" -c "$marker_sql"
+    fi
 done
 
 echo "[migrate] migrations complete"
