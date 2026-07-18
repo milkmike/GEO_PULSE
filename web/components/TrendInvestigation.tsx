@@ -147,8 +147,11 @@ export default function TrendInvestigation({
   const contradictions = evidence.items.filter((item) => item.role === "contradiction");
   const support = evidence.items.filter((item) => item.role !== "contradiction");
   const evidenceComplete = evidence.next_cursor === null;
+  const relevantCountryCodes = new Set<string>();
+  if (trend.country_code) relevantCountryCodes.add(trend.country_code.toUpperCase());
+  for (const wave of trend.country_waves) relevantCountryCodes.add(wave.country_code.toUpperCase());
   const relevantCoverage = coverage.countries.filter((item) => (
-    trend.country_waves.some((wave) => wave.country_code === item.country_code)
+    relevantCountryCodes.has(item.country_code.toUpperCase())
   ));
   const timelineRows = timeline.items.map(validateTimelineRow);
   const timelinePoints = timelineRows.filter((item): item is Extract<ValidatedTimelineRow, { category: "state" }> & { at: string; state: RadarTrendState } => (
@@ -195,6 +198,17 @@ export default function TrendInvestigation({
           </button>
         ))}
       </div>
+
+      {VIEWS.filter((item) => item.id !== view).map((item) => (
+        <div
+          key={item.id}
+          id={`${tabsId}-radar-panel-${item.id}`}
+          role="tabpanel"
+          aria-labelledby={`${tabsId}-radar-tab-${item.id}`}
+          tabIndex={-1}
+          hidden
+        />
+      ))}
 
       {view === "propagation" && <div id={`${tabsId}-radar-panel-propagation`} role="tabpanel" aria-labelledby={`${tabsId}-radar-tab-propagation`} tabIndex={0} className="space-y-4">
         <section className="card p-5">

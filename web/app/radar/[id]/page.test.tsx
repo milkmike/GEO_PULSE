@@ -133,6 +133,22 @@ describe("Radar investigation page", () => {
     expect(screen.queryByText("Надёжное доказательство")).not.toBeInTheDocument();
   });
 
+  it("shows coverage for a country-scope trend without member waves", async () => {
+    const countryTrend: RadarTrend = {
+      ...trend,
+      scope: "country",
+      country_code: "ES",
+      country_waves: [],
+    };
+    apiMocks.radarTrend.mockResolvedValueOnce(countryTrend);
+    navigation.query = "view=coverage";
+
+    await renderPage();
+
+    expect(await screen.findByText(/ES · критический пробел покрытия/i)).toBeVisible();
+    expect(screen.queryByText(/страновая оценка покрытия не опубликована/i)).not.toBeInTheDocument();
+  });
+
   it("does not claim contradictions are globally absent before all evidence pages load", async () => {
     const firstPage = { items: [evidence.items[0]], limit: 1, next_cursor: "evidence-next" };
     const finalPage = { items: [evidence.items[1]], limit: 1, next_cursor: null };
@@ -176,11 +192,26 @@ describe("Radar investigation page", () => {
     await renderPage();
     const propagation = await screen.findByRole("tab", { name: /распространение/i });
     const evidenceTab = screen.getByRole("tab", { name: /доказательства/i });
-    const panel = screen.getByRole("tabpanel");
-    expect(propagation).toHaveAttribute("aria-controls", panel.id);
-    expect(panel).toHaveAttribute("aria-labelledby", propagation.id);
-    expect(propagation.id).not.toBe("");
-    expect(panel.id).not.toBe("");
+    const tabs = screen.getAllByRole("tab");
+    const panels = Array.from(document.querySelectorAll<HTMLElement>('[role="tabpanel"]'));
+    expect(panels).toHaveLength(4);
+    expect(panels.filter((panel) => !panel.hidden)).toHaveLength(1);
+    for (const tab of tabs) {
+      const controlledId = tab.getAttribute("aria-controls");
+      expect(controlledId).toBeTruthy();
+      const controlledPanel = document.getElementById(controlledId!);
+      expect(controlledPanel).not.toBeNull();
+      expect(controlledPanel).toHaveAttribute("aria-labelledby", tab.id);
+      if (tab.getAttribute("aria-selected") === "true") {
+        expect(controlledPanel).not.toHaveAttribute("hidden");
+        expect(controlledPanel).toHaveAttribute("tabindex", "0");
+      } else {
+        expect(controlledPanel).toHaveAttribute("hidden");
+        expect(controlledPanel).toHaveAttribute("tabindex", "-1");
+        expect(controlledPanel).toBeEmptyDOMElement();
+      }
+    }
+    expect(screen.getAllByRole("tabpanel")).toHaveLength(1);
     propagation.focus();
     fireEvent.keyDown(propagation, { key: "ArrowRight" });
     expect(evidenceTab).toHaveFocus();
