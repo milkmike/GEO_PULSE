@@ -144,6 +144,7 @@ def test_release_metrics_exclude_detector_context_before_exact_90_day_window(mon
     assert report.evidence_validity == {
         "total": 1, "valid": 1, "invalid": 0, "ratio": 1.0,
     }
+    assert report.evidence_completeness == {"complete": 1, "incomplete": 0}
 
 
 def test_replay_prefers_corrected_richer_observation_without_double_count(monkeypatch):
@@ -589,6 +590,13 @@ def test_cycle_zero_fills_only_a_healthy_collection_day(monkeypatch):
         lambda *_: [*target, healthy_other_subject],
     )
     monkeypatch.setattr(service, "build_action_observations", lambda *_: [])
+    monkeypatch.setattr(
+        service,
+        "_media_collection_health",
+        lambda *_: {
+            "ES": {service._bucket_index(first + timedelta(days=1), AS_OF)},
+        },
+    )
 
     report = run_radar_cycle(_Session(), AS_OF, shadow=True)
     wave = next(item for item in report.country_waves if item.subject_key == "event:energy")
@@ -600,6 +608,20 @@ def test_cycle_zero_fills_only_a_healthy_collection_day(monkeypatch):
 
     assert points[(first + timedelta(days=1)).date()].volume == 0
     assert wave.baseline.dense_points[-1] is None
+
+
+def test_observation_does_not_imply_healthy_collection_without_explicit_telemetry():
+    import src.radar.service as service
+
+    action = make_observation(
+        country_code="ES", contour="action",
+        subject_key="diplomacy:un_alignment:russia", direction="hardening",
+        metric="alignment_delta", observed_at=AS_OF - timedelta(days=1),
+        evidence_ids=("un_vote:1",), authority="registry", value=1.0,
+        evidence={"dataset": "un_votes"},
+    )
+
+    assert service._healthy_collection_buckets((action,), AS_OF) == {}
 
 
 def test_collection_gap_cannot_manufacture_cooling(monkeypatch):
@@ -632,29 +654,104 @@ def test_collection_gap_cannot_manufacture_cooling(monkeypatch):
 def test_independent_media_health_uses_verified_non_duplicate_country_articles():
     import src.radar.service as service
 
+    def health_row(day, publisher_id, domain):
+        return {
+            "article_id": day * 100 + publisher_id,
+            "country_code": "ES",
+            "healthy_day": AS_OF - timedelta(days=90 - day),
+            "publisher_id": publisher_id,
+            "publisher_url": f"https://{domain}/rss",
+            "publisher_config": {"publisher_domain": domain},
+        }
+
     class _HealthSession:
         def __init__(self):
             self.sql = ""
 
         def execute(self, statement, params=None):
             self.sql = str(statement)
-            return _Result(rows=[{
-                "country_code": "ES",
-                "healthy_day": AS_OF - timedelta(days=1),
-            }])
+            return _Result(rows=[
+                health_row(day, publisher_id, domain)
+                for day in (0, 1, 2, 89)
+                for publisher_id, domain in (
+                    (1, "diario.example"), (2, "radio.example"),
+                )
+            ])
 
     session = _HealthSession()
     window = ObservationWindow(AS_OF - timedelta(days=90), AS_OF)
 
     health = service._media_collection_health(session, window)
 
-    assert health == {"ES": {89}}
+    assert health == {"ES": {0, 1, 2, 89}}
     assert "article_country_facts" in session.sql
+    assert "JOIN sources" in session.sql
     assert "articles" in session.sql
     assert "is_duplicate = FALSE" in session.sql
+    assert "is_backfill = FALSE" in session.sql
+    assert "collected_at <= article.published_at + INTERVAL '24 hours'" in session.sql
     assert "AT TIME ZONE 'UTC'" in session.sql
     assert "analysis" not in session.sql
     assert "is_relevant" not in session.sql
+
+
+@pytest.mark.parametrize(
+    "publishers",
+    (
+        ((1, "solo.example"),),
+        ((1, "shared.example"), (2, "shared.example")),
+    ),
+)
+def test_media_health_rejects_single_source_or_single_publisher_family(publishers):
+    import src.radar.service as service
+
+    rows = [
+        {
+            "article_id": day * 100 + publisher_id,
+            "country_code": "ES",
+            "healthy_day": AS_OF - timedelta(days=90 - day),
+            "publisher_id": publisher_id,
+            "publisher_url": f"https://feed-{publisher_id}.example/rss",
+            "publisher_config": {"publisher_domain": domain},
+        }
+        for day in (0, 1, 2, 89)
+        for publisher_id, domain in publishers
+    ]
+
+    class _HealthSession:
+        def execute(self, statement, params=None):
+            return _Result(rows=rows)
+
+    window = ObservationWindow(AS_OF - timedelta(days=90), AS_OF)
+
+    assert service._media_collection_health(_HealthSession(), window) == {}
+
+
+def test_media_health_rejects_day_below_historical_source_breadth():
+    import src.radar.service as service
+
+    rows = []
+    for day, count in ((0, 4), (1, 4), (2, 4), (89, 2)):
+        for publisher_id in range(1, count + 1):
+            rows.append({
+                "article_id": day * 100 + publisher_id,
+                "country_code": "ES",
+                "healthy_day": AS_OF - timedelta(days=90 - day),
+                "publisher_id": publisher_id,
+                "publisher_url": f"https://publisher-{publisher_id}.example/rss",
+                "publisher_config": {
+                    "publisher_domain": f"publisher-{publisher_id}.example",
+                },
+            })
+
+    class _HealthSession:
+        def execute(self, statement, params=None):
+            return _Result(rows=rows)
+
+    window = ObservationWindow(AS_OF - timedelta(days=90), AS_OF)
+    health = service._media_collection_health(_HealthSession(), window)
+
+    assert health == {"ES": {0, 1, 2}}
 
 
 def _stale_previous_media(state, days_ago):

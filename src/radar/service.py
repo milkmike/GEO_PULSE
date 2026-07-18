@@ -17,7 +17,7 @@ from .actions import build_action_observations
 from .baseline import calculate_baseline, clamp01, refine_t0
 from .grouping import CountryWave, MetaTrend, assign_country_waves, assign_meta_trends
 from .lifecycle import decide_state
-from .media import build_media_observations
+from .media import _publisher_family_labels, build_media_observations
 from .repository import upsert_observations
 from .types import (
     BaselineResult,
@@ -73,16 +73,21 @@ WHERE observed_at >= :history_start AND observed_at < :as_of
 
 _MEDIA_COLLECTION_HEALTH = text("""
 /* radar_media_collection_health */
-SELECT fact.country_code,
+SELECT article.id AS article_id,
+       fact.country_code,
        (date_trunc('day', article.published_at AT TIME ZONE 'UTC')
-         AT TIME ZONE 'UTC') AS healthy_day
+         AT TIME ZONE 'UTC') AS healthy_day,
+       publisher.id AS publisher_id,
+       publisher.url AS publisher_url,
+       publisher.config AS publisher_config
 FROM articles article
 JOIN article_country_facts fact ON fact.article_id = article.id
+JOIN sources publisher ON publisher.id = fact.id
 WHERE article.is_duplicate = FALSE
+  AND article.is_backfill = FALSE
+  AND article.collected_at <= article.published_at + INTERVAL '24 hours'
   AND article.published_at >= :window_start
   AND article.published_at < :window_end
-GROUP BY fact.country_code,
-         date_trunc('day', article.published_at AT TIME ZONE 'UTC')
 """)
 
 _PROTECTED_COUNTS = text("""
@@ -234,7 +239,14 @@ def _history(session, as_of: datetime, days: int) -> tuple[Observation, ...]:
 def _media_collection_health(
     session, window: ObservationWindow,
 ) -> dict[str, set[int]]:
-    """Verified national indexing health, independent of Russia relevance."""
+    """Replay-safe national indexing health, independent of Russia relevance.
+
+    A non-empty day is not automatically healthy: it must retain at least 75%
+    of the country's first-60-day upper-quartile source and publisher-family
+    breadth.  This deliberately freezes lifecycle cooling when collection is
+    partial.  Fetch status is not used because only the latest status is stored
+    today and applying it retrospectively would leak future state into replay.
+    """
 
     if _store(session) is not None:
         return {}
@@ -242,15 +254,50 @@ def _media_collection_health(
         "window_start": window.start,
         "window_end": window.end,
     }).fetchall()
-    health: dict[str, set[int]] = defaultdict(set)
+    grouped: dict[tuple[str, int], list[Any]] = defaultdict(list)
     for row in rows:
         country = str(_row_value(row, "country_code", "")).upper()
         healthy_day = _row_value(row, "healthy_day")
         if len(country) != 2 or not isinstance(healthy_day, datetime):
             continue
         index = _bucket_index(healthy_day, window.end)
-        if index is not None:
-            health[country].add(index)
+        publisher_id = _row_value(row, "publisher_id")
+        if index is not None and _positive_int(publisher_id):
+            grouped[country, index].append(row)
+
+    breadth: dict[tuple[str, int], tuple[int, int]] = {}
+    for key, members in grouped.items():
+        source_count = len({int(_row_value(row, "publisher_id")) for row in members})
+        family_count = len(_publisher_family_labels(members))
+        breadth[key] = source_count, family_count
+
+    def upper_quartile(values: list[int]) -> int | None:
+        if not values:
+            return None
+        ordered = sorted(values)
+        return ordered[max(0, (3 * len(ordered) + 3) // 4 - 1)]
+
+    countries = {country for country, _index in breadth}
+    health: dict[str, set[int]] = defaultdict(set)
+    for country in countries:
+        reference = [
+            counts for (candidate, index), counts in breadth.items()
+            if candidate == country and index < 60
+        ]
+        reference_sources = upper_quartile([counts[0] for counts in reference])
+        reference_families = upper_quartile([counts[1] for counts in reference])
+        if reference_sources is None or reference_families is None:
+            continue
+        for (candidate, index), (source_count, family_count) in breadth.items():
+            if candidate != country:
+                continue
+            if (
+                source_count >= 2
+                and family_count >= 2
+                and source_count * 4 >= reference_sources * 3
+                and family_count * 4 >= reference_families * 3
+            ):
+                health[country].add(index)
     return dict(health)
 
 
@@ -383,7 +430,7 @@ def _healthy_collection_buckets(
     healthy: dict[tuple[str, Contour], set[int]] = defaultdict(set)
     for observation in observations:
         index = _bucket_index(observation.observed_at, as_of)
-        if index is not None and observation.evidence.get("collection_healthy", True) is not False:
+        if index is not None and observation.evidence.get("collection_healthy") is True:
             healthy[(observation.country_code, observation.contour)].add(index)
     return healthy
 
@@ -1532,7 +1579,7 @@ def run_radar_cycle(session, as_of: datetime, shadow: bool = True, *, days: int 
         else:
             inserted, trend_id, updated = _persist_sql(session, generated, scored_waves, metas.meta_trends, as_of)
     after_counts = _protected_counts(session)
-    evidence_complete = sum(_valid_evidence_root(point) for point in observations)
+    evidence_complete = sum(_valid_evidence_root(point) for point in audited_observations)
     t0_count = sum(wave.t0_auto is not None for wave in scored_waves)
     evidence_validity = _evidence_validity(audited_observations)
     collector_suppressed = _collector_suppressed(scored_waves)
@@ -1546,7 +1593,10 @@ def run_radar_cycle(session, as_of: datetime, shadow: bool = True, *, days: int 
         state_counts=state_counts, collector_suppressed=collector_suppressed,
         country_coverage=_coverage(observations),
         t0_distribution={"automatic": t0_count, "unresolved": len(scored_waves) - t0_count},
-        evidence_completeness={"complete": evidence_complete, "incomplete": len(observations) - evidence_complete},
+        evidence_completeness={
+            "complete": evidence_complete,
+            "incomplete": len(audited_observations) - evidence_complete,
+        },
         protected_row_counts=_count_report(before_counts, after_counts),
         lookback_days=days,
         observation_count=len(audited_observations),
