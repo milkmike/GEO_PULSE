@@ -80,6 +80,8 @@ def test_radar_schema_is_additive_auditable_and_bootstrapped():
         assert "CHECK (contour IN ('media','action'))" in sql
         assert "'candidate','emerging','confirmed','cooling','resolved','rejected'" in sql
         assert "'trigger','support','context','contradiction'" in sql
+        assert "uq_radar_country_trend_identity" in sql
+        assert "uq_radar_meta_trend_identity" in sql
     assert "UPDATE articles SET" not in migration_sql
     assert "DELETE FROM articles" not in migration_sql
 ```
@@ -119,8 +121,19 @@ CREATE TABLE IF NOT EXISTS radar_trends (
   explanation JSONB NOT NULL DEFAULT '{}',
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  UNIQUE(scope, contour, country_code, subject_key, direction, detector_version)
+  CHECK (
+    (scope = 'country' AND contour IS NOT NULL AND country_code IS NOT NULL)
+    OR (scope = 'meta' AND contour IS NULL AND country_code IS NULL)
+  )
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_radar_country_trend_identity
+  ON radar_trends(contour, country_code, subject_key, direction, detector_version)
+  WHERE scope = 'country';
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_radar_meta_trend_identity
+  ON radar_trends(subject_key, direction, detector_version)
+  WHERE scope = 'meta';
 ```
 
 `radar_state_events` and `radar_t0_revisions` are append-only. `notification_events` uses a unique `(trend_id, transition_id, channel, audience_key)` delivery key. `analysis_runs` stores input hash, parameters, detector/model version, status, cost, and output references.
