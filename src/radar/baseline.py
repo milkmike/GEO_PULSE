@@ -224,7 +224,7 @@ def refine_t0(points: Iterable[DailyPoint], detected_at: datetime) -> T0Result:
             valid_days=len(valid),
         )
     expected_final_day = _utc_day(detected_at_utc - timedelta(days=1))
-    if eligible[-1][0] != expected_final_day:
+    if eligible[-1][0] < expected_final_day:
         return T0Result(
             detected_at=detected_at_utc,
             t0_auto=None,

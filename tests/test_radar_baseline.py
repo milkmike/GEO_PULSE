@@ -192,6 +192,32 @@ def test_t0_rejects_history_that_does_not_reach_detection_boundary():
     assert result.t0_auto is None
 
 
+def test_t0_accepts_history_ending_earlier_on_detection_day(monkeypatch):
+    class NoChangePelt:
+        def __init__(self, *, model, min_size, jump):
+            pass
+
+        def fit(self, signal):
+            self.sample_count = len(signal)
+            return self
+
+        def predict(self, *, pen):
+            return [self.sample_count]
+
+    monkeypatch.setattr(baseline, "rpt", SimpleNamespace(Pelt=NoChangePelt))
+    latest = NOW - timedelta(hours=1)
+    points = tuple(
+        DailyPoint(at=latest - timedelta(days=27 - offset), volume=1.0)
+        for offset in range(28)
+    )
+
+    result = refine_t0(points, detected_at=NOW)
+
+    assert result.valid_days == 28
+    assert result.status == "no_changepoint"
+    assert result.t0_auto is None
+
+
 def test_t0_excludes_a_point_at_the_detection_time():
     points = tuple(
         DailyPoint(at=NOW - timedelta(days=27 - offset), volume=float(offset + 1))
