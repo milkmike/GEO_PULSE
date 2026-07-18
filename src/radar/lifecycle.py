@@ -51,6 +51,16 @@ def _quiet_transition(
     if metrics.quiet_since is None or metrics.as_of is None:
         return None
     quiet_for = metrics.as_of - metrics.quiet_since
+    if (
+        not metrics.missing_collection_cycles
+        and previous_state in (TrendState.CANDIDATE, TrendState.EMERGING)
+        and quiet_for >= RESOLVED_QUIET_WINDOW
+    ):
+        return _decision(
+            TrendState.REJECTED,
+            "unconfirmed_quiet_window_elapsed",
+            metrics,
+        )
     if previous_state is TrendState.COOLING and quiet_for >= RESOLVED_QUIET_WINDOW:
         return _decision(TrendState.RESOLVED, "quiet_window_elapsed", metrics)
     if previous_state is TrendState.CONFIRMED and quiet_for >= COOLING_QUIET_WINDOW:

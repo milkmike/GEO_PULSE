@@ -236,3 +236,17 @@ def test_quiet_windows_drive_cooling_then_resolution():
 
     assert cooling.state == "cooling"
     assert resolved.state == "resolved"
+
+
+@pytest.mark.parametrize("previous_state", ("candidate", "emerging"))
+def test_unconfirmed_trend_is_rejected_after_healthy_quiet_window(previous_state):
+    decision = decide_state(
+        _metrics(
+            quiet_since=NOW - timedelta(days=31),
+            missing_collection_cycles=0,
+        ),
+        previous_state,
+    )
+
+    assert decision.state == "rejected"
+    assert decision.reason == "unconfirmed_quiet_window_elapsed"
