@@ -43,10 +43,13 @@ def _decision(
 def _quiet_transition(
     metrics: TrendMetrics, previous_state: TrendState
 ) -> TrendDecision | None:
+    if (
+        metrics.missing_collection_cycles
+        and previous_state in (TrendState.CONFIRMED, TrendState.COOLING)
+    ):
+        return _decision(previous_state, "collection_gap", metrics)
     if metrics.quiet_since is None or metrics.as_of is None:
         return None
-    if metrics.missing_collection_cycles:
-        return _decision(previous_state, "collection_gap", metrics)
     quiet_for = metrics.as_of - metrics.quiet_since
     if previous_state is TrendState.COOLING and quiet_for >= RESOLVED_QUIET_WINDOW:
         return _decision(TrendState.RESOLVED, "quiet_window_elapsed", metrics)
@@ -71,9 +74,13 @@ def decide_state(metrics: TrendMetrics, previous_state: TrendState | str) -> Tre
         if metrics.signal_strength < MIN_MEDIA_SIGNAL_STRENGTH:
             return _decision(state, "insufficient_signal_strength", metrics)
         if not metrics.persistent:
-            return _decision(state, "insufficient_persistence", metrics)
+            return _decision(TrendState.EMERGING, "insufficient_persistence", metrics)
         if metrics.publisher_family_count < 2:
-            return _decision(state, "insufficient_independent_publishers", metrics)
+            return _decision(
+                TrendState.EMERGING,
+                "insufficient_independent_publishers",
+                metrics,
+            )
         return _decision(
             TrendState.CONFIRMED,
             "media_confirmation_gates_passed",
@@ -94,4 +101,8 @@ def decide_state(metrics: TrendMetrics, previous_state: TrendState | str) -> Tre
             "independent_authoritative_sources",
             metrics,
         )
-    return _decision(state, "insufficient_authoritative_evidence", metrics)
+    return _decision(
+        TrendState.EMERGING,
+        "insufficient_authoritative_evidence",
+        metrics,
+    )

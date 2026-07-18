@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 from src.radar.grouping import CountryWave, assign_country_waves, assign_meta_trends
@@ -96,6 +97,8 @@ def test_moving_replay_window_keeps_original_automatic_t0():
         _observation("ES", at=DAY_1),
         _observation("ES", at=DAY_1 + timedelta(days=10)),
     ], []).waves[0]
+    # T0 belongs to the detector, not to grouping's first-observation fallback.
+    first = replace(first, t0_auto=DAY_1, t0_effective=DAY_1)
 
     replay = assign_country_waves([
         _observation("ES", at=DAY_1 + timedelta(days=10)),

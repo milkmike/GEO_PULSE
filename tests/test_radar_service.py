@@ -222,6 +222,14 @@ def test_sql_persistence_uses_wave_keys_and_reports_real_count_deltas(monkeypatc
     assert any("radar_observation_history" in sql for sql, _ in session.calls)
 
 
+def test_sql_update_preserves_first_detection_timestamp():
+    import src.radar.service as service
+
+    sql = str(service._UPDATE_TREND)
+
+    assert "detected_at = COALESCE(trend.detected_at, :detected_at)" in sql
+
+
 def test_sql_evidence_copies_observation_roots_to_the_country_trend(monkeypatch):
     import src.radar.service as service
 
@@ -312,6 +320,106 @@ def test_lifecycle_uses_persisted_confirmed_state_and_timeline():
     assert decision.timeline.confirmed_at == ANALYST_T0
 
 
+def _media_point(at, *, subject="event:energy", value=0.1, article_id=1):
+    return make_observation(
+        country_code="ES", contour="media", subject_key=subject,
+        direction="negative", metric="attention_share", observed_at=at,
+        evidence_ids=(f"article:{article_id}",), value=value,
+        publisher_family_count=2, source_count=2, coverage_confidence=1.0,
+        article_id=article_id,
+        evidence={
+            "article_ids": (article_id,),
+            "alignment_subject": "energy:imports:russia",
+            "alignment_direction": "hardening",
+        },
+    )
+
+
+def test_cycle_runs_real_baseline_and_refines_t0_after_confirmation(monkeypatch):
+    import src.radar.service as service
+
+    start = AS_OF - timedelta(days=89)
+    observations = [
+        _media_point(
+            start + timedelta(days=offset),
+            value=0.05 if offset < 63 else 0.9,
+            article_id=1000 + offset,
+        )
+        for offset in range(89)
+    ]
+    monkeypatch.setattr(service, "build_media_observations", lambda *_: observations)
+    monkeypatch.setattr(service, "build_action_observations", lambda *_: [])
+
+    report = run_radar_cycle(_Session(), AS_OF, shadow=True)
+
+    [wave] = report.country_waves
+    assert wave.state is TrendState.CONFIRMED
+    assert wave.baseline is not None
+    assert wave.baseline.window_days == 90
+    assert wave.baseline.acceleration_days == 7
+    assert wave.detected_at == AS_OF
+    assert wave.confirmed_at == AS_OF
+    assert wave.t0_auto is not None
+    assert start < wave.t0_auto < AS_OF
+    assert wave.velocity > 0
+
+
+def test_cycle_zero_fills_only_a_healthy_collection_day(monkeypatch):
+    import src.radar.service as service
+
+    first = AS_OF - timedelta(days=4)
+    target = [
+        _media_point(first, article_id=1),
+        _media_point(first + timedelta(days=2), article_id=2),
+    ]
+    healthy_other_subject = _media_point(
+        first + timedelta(days=1), subject="event:trade", article_id=3,
+    )
+    monkeypatch.setattr(
+        service, "build_media_observations",
+        lambda *_: [*target, healthy_other_subject],
+    )
+    monkeypatch.setattr(service, "build_action_observations", lambda *_: [])
+
+    report = run_radar_cycle(_Session(), AS_OF, shadow=True)
+    wave = next(item for item in report.country_waves if item.subject_key == "event:energy")
+    points = {
+        point.at.date(): point
+        for point in wave.baseline.dense_points
+        if point is not None
+    }
+
+    assert points[(first + timedelta(days=1)).date()].volume == 0
+    assert wave.baseline.dense_points[-1] is None
+
+
+def test_collection_gap_cannot_manufacture_cooling(monkeypatch):
+    import src.radar.service as service
+
+    observation = _media_point(AS_OF - timedelta(days=10), article_id=7)
+    previous = CountryWave(
+        country_code="ES", contour="media", subject_key=observation.subject_key,
+        direction=observation.direction, observations=(),
+        first_observed_at=observation.observed_at,
+        last_observed_at=observation.observed_at,
+        t0_auto=observation.observed_at, t0_effective=observation.observed_at,
+        wave_key="existing", state=TrendState.CONFIRMED,
+        detected_at=AS_OF - timedelta(days=12),
+        confirmed_at=AS_OF - timedelta(days=11),
+    )
+    monkeypatch.setattr(service, "_previous_waves", lambda *_: (previous,))
+    monkeypatch.setattr(service, "build_media_observations", lambda *_: [observation])
+    monkeypatch.setattr(service, "build_action_observations", lambda *_: [])
+
+    report = run_radar_cycle(_Session(), AS_OF, shadow=True)
+
+    [wave] = report.country_waves
+    assert wave.state is TrendState.CONFIRMED
+    assert wave.lifecycle_reason == "collection_gap"
+    assert wave.detected_at == previous.detected_at
+    assert wave.confirmed_at == previous.confirmed_at
+
+
 def test_analyst_meta_t0_override_is_append_only():
     class _OverrideSession:
         def __init__(self):
@@ -376,6 +484,62 @@ def test_contour_alignment_pairs_each_recurrence_episode_separately():
 
     links = [params for sql, params in session.calls if "INSERT INTO radar_contour_links" in sql]
     assert {(params["media_trend_id"], params["action_trend_id"]) for params in links} == {(1, 2), (3, 4)}
+
+
+def test_contour_alignment_uses_shared_evidence_identity_across_local_keys():
+    session = _RecordingSqlSession()
+    media_observation = _media_point(AS_OF - timedelta(days=2), article_id=88)
+    action_observation = make_observation(
+        country_code="ES", contour="action",
+        subject_key="energy:imports:russia", direction="decrease",
+        metric="import_value_delta", observed_at=AS_OF - timedelta(days=1),
+        evidence_ids=("fossil:88",), value=-10, authority="registry",
+        source_count=1, coverage_confidence=1.0,
+        evidence={
+            "alignment_subject": "energy:imports:russia",
+            "alignment_direction": "hardening",
+        },
+    )
+    media = CountryWave(
+        "ES", "media", media_observation.subject_key,
+        media_observation.direction, (media_observation,),
+        media_observation.observed_at, media_observation.observed_at,
+        wave_key="media-aligned",
+    )
+    action = CountryWave(
+        "ES", "action", action_observation.subject_key,
+        action_observation.direction, (action_observation,),
+        action_observation.observed_at, action_observation.observed_at,
+        wave_key="action-aligned",
+    )
+    metas = (
+        MetaTrend(media.subject_key, media.direction, (media,), media.t0_auto, meta_key="media-meta"),
+        MetaTrend(action.subject_key, action.direction, (action,), action.t0_auto, meta_key="action-meta"),
+    )
+    wave_ids = {
+        (wave.country_code, wave.contour, wave.subject_key, wave.direction, wave.wave_key): trend_id
+        for wave, trend_id in ((media, 1), (action, 2))
+    }
+
+    _persist_meta_and_contours(session, metas, wave_ids, AS_OF)
+
+    links = [params for sql, params in session.calls if "INSERT INTO radar_contour_links" in sql]
+    assert [(params["media_trend_id"], params["action_trend_id"]) for params in links] == [(1, 2)]
+    assert json.loads(links[0]["evidence"])["direction"] == "hardening"
+
+
+def test_meta_persistence_closes_stale_members_before_reopening_current_ones():
+    session = _RecordingSqlSession()
+    wave = _episode_wave("media", AS_OF, "current")
+    meta = MetaTrend("event:energy", "increase", (wave,), AS_OF, meta_key="current-meta")
+    wave_ids = {(wave.country_code, wave.contour, wave.subject_key, wave.direction, wave.wave_key): 10}
+
+    _persist_meta_and_contours(session, (meta,), wave_ids, AS_OF)
+
+    close_sql = next(sql for sql, _ in session.calls if "UPDATE radar_trend_members member" in sql)
+    member_sql = next(sql for sql, _ in session.calls if "INSERT INTO radar_trend_members" in sql)
+    assert "member.left_at IS NULL" in close_sql
+    assert "left_at = NULL" in member_sql
 
 
 def test_contour_matching_maximizes_bounded_pairs_before_nearest_gap():

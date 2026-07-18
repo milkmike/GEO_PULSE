@@ -59,6 +59,24 @@ def test_media_requires_persistence_and_two_independent_families():
     assert decision.reason == "insufficient_independent_publishers"
 
 
+def test_media_signal_becomes_emerging_before_confirmation_gates_pass():
+    decision = decide_state(
+        _metrics(persistent=False, publisher_family_count=1), TrendState.CANDIDATE
+    )
+
+    assert decision.state == TrendState.EMERGING
+    assert decision.reason == "insufficient_persistence"
+
+
+def test_unverified_action_signal_becomes_emerging_without_confirmation():
+    decision = decide_state(
+        _metrics(contour="action", authoritative=False), TrendState.CANDIDATE
+    )
+
+    assert decision.state == TrendState.EMERGING
+    assert decision.reason == "insufficient_authoritative_evidence"
+
+
 def test_critical_coverage_prevents_media_confirmation():
     decision = decide_state(
         _metrics(persistent=True, publisher_family_count=3, coverage=0.42),

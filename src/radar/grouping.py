@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Iterable, Sequence
 
-from .types import Contour, Observation, TrendState
+from .types import BaselineResult, Contour, Observation, TrendState
 
 
 MAX_WAVE_GAP = timedelta(days=14)
@@ -30,8 +30,13 @@ class CountryWave:
     wave_key: str = ""
     last_observed_at: datetime | None = None
     state: TrendState = TrendState.CONFIRMED
+    detected_at: datetime | None = None
     confirmed_at: datetime | None = None
     t0_effective: datetime | None = None
+    baseline: BaselineResult | None = None
+    lifecycle_reason: str = "unscored"
+    t0_status: str = "not_evaluated"
+    velocity: float = 0.0
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "contour", Contour(self.contour))
@@ -129,13 +134,14 @@ def _wave(
         subject_key=subject,
         direction=direction,
         observations=tuple(observations),
-        first_observed_at=first,
-        t0_auto=min((value for value in (first, reused.t0_auto if reused else None) if value is not None)),
+        first_observed_at=min(first, reused.first_observed_at) if reused is not None else first,
+        t0_auto=reused.t0_auto if reused is not None else None,
         wave_key=wave_key,
         last_observed_at=last,
         state=reused.state if reused is not None else TrendState.CANDIDATE,
+        detected_at=reused.detected_at if reused is not None else None,
         confirmed_at=reused.confirmed_at if reused is not None else None,
-        t0_effective=reused.t0_effective if reused is not None else first,
+        t0_effective=reused.t0_effective if reused is not None else None,
     )
 
 
