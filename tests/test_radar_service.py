@@ -1,4 +1,6 @@
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+import json
 from uuid import UUID
 
 from src.radar.repository import make_observation
@@ -125,6 +127,39 @@ def test_replay_prefers_corrected_richer_observation_without_double_count(monkey
     assert report.country_waves[0].observations == (corrected,)
 
 
+def test_replay_prefers_current_generated_root_when_history_is_equally_rich(monkeypatch):
+    import src.radar.service as service
+
+    common = dict(
+        country_code="ES", contour="media", subject_key="event:energy",
+        direction="negative", metric="attention_share",
+        observed_at=AS_OF.replace(day=10), value=0.8,
+        publisher_family_count=2, source_count=2, coverage_confidence=1,
+        article_id=101, story_id=202,
+    )
+    historical = make_observation(
+        **common,
+        signal_id=900,
+        evidence_ids=("article:101", "story:202", "signal:900"),
+        evidence={"article_ids": (101,), "story_ids": (202,), "signal_ids": (900,)},
+    )
+    historical = replace(historical, input_hash="f" * 64)
+    corrected = make_observation(
+        **common,
+        signal_id=303,
+        evidence_ids=("article:101", "story:202", "signal:303"),
+        evidence={"article_ids": (101,), "story_ids": (202,), "signal_ids": (303,)},
+    )
+    monkeypatch.setattr(service, "_history", lambda *_: (historical,))
+    monkeypatch.setattr(service, "build_media_observations", lambda *_: [corrected])
+    monkeypatch.setattr(service, "build_action_observations", lambda *_: [])
+
+    report = run_radar_cycle(_Session(), AS_OF, shadow=True)
+
+    assert report.country_waves[0].observations == (corrected,)
+    assert report.country_waves[0].observations[0].signal_id == 303
+
+
 def test_replay_keeps_legitimate_independent_observations(monkeypatch):
     import src.radar.service as service
 
@@ -223,7 +258,8 @@ def test_sql_evidence_copies_observation_roots_to_the_country_trend(monkeypatch)
     assert "prior.observation_id = observation.id" in evidence_sql
     assert "role =" not in evidence_sql.split("DO UPDATE", 1)[1]
     assert "contribution =" not in evidence_sql.split("DO UPDATE", 1)[1]
-    assert "evidence =" not in evidence_sql.split("DO UPDATE", 1)[1]
+    assert "radar_trend_evidence.evidence ||" in evidence_sql.split("DO UPDATE", 1)[1]
+    assert "jsonb_build_object('_relation_only', true)" in evidence_sql
 
 
 def test_sql_evidence_materializes_every_story_and_signal_relation(monkeypatch):
@@ -249,6 +285,15 @@ def test_sql_evidence_materializes_every_story_and_signal_relation(monkeypatch):
     }
     assert len({params["public_id"] for params in writes}) == 3
     assert all(params["trend_id"] == 1 for params in writes)
+    persisted_evidence = {
+        params["relation_kind"]: json.loads(params["evidence"])
+        for params in writes
+    }
+    assert "_relation_only" not in persisted_evidence["base"]
+    assert persisted_evidence["story"]["_relation_only"] is True
+    assert persisted_evidence["signal"]["_relation_only"] is True
+    assert all(payload["story_ids"] == [202, 203] for payload in persisted_evidence.values())
+    assert all(payload["signal_ids"] == [303, 304] for payload in persisted_evidence.values())
     assert len(report.country_waves[0].observations) == 1
 
 

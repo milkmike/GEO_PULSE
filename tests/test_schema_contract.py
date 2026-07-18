@@ -279,6 +279,22 @@ def test_radar_evidence_root_backfill_is_atomic_non_destructive_and_indexed():
             assert f"WHERE {root} IS NOT NULL" in sql
 
 
+def test_radar_evidence_relation_upgrade_repairs_the_legacy_unique_index():
+    migration_sql = migration("029_radar_evidence_relation_rows.sql")
+    init_sql = (ROOT / "data" / "init.sql").read_text()
+
+    assert migration_sql.lstrip().startswith("BEGIN;")
+    assert migration_sql.rstrip().endswith("COMMIT;")
+    assert "DROP INDEX IF EXISTS public.uq_radar_trend_evidence_observation" in migration_sql
+    assert "DELETE FROM radar_trend_evidence" not in migration_sql
+    assert "FROM public.radar_observations observation" in migration_sql
+    assert "COALESCE(target.article_id, observation.article_id)" in migration_sql
+    for sql in (migration_sql, init_sql):
+        assert "CREATE UNIQUE INDEX IF NOT EXISTS uq_radar_trend_evidence_observation" not in sql
+        for root in ("article_id", "story_id", "signal_id", "canonical_entity_id"):
+            assert f"idx_radar_trend_evidence_{root}_lookup" in sql
+
+
 def test_google_news_publisher_attribution_orm_contract():
     from src.db import Article, ArticleDiscovery, PublisherDomain
 

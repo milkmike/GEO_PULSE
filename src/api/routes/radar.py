@@ -32,6 +32,9 @@ _STATE_RANK = {"confirmed": 0, "emerging": 1, "cooling": 2, "candidate": 3, "res
 RADAR_METHODOLOGY_UPDATED_AT = datetime(2026, 7, 18, tzinfo=timezone.utc)
 _BIGINT_MAX = 2**63 - 1
 _INTEGER_MAX = 2**31 - 1
+_PUBLIC_EVIDENCE_PREDICATE = (
+    "(evidence.evidence->>'_relation_only' IS DISTINCT FROM 'true')"
+)
 
 
 def _canonical_query_id(value: Any, *, maximum: int, field: str) -> int:
@@ -378,9 +381,8 @@ class SqlRadarReadService:
                 )
                 SELECT ranked.*, {self._wave_json("ranked.id")} AS country_waves,
                        {self._contour_json("ranked.id")} AS contours,
-                       EXISTS (SELECT 1 FROM radar_trend_members member JOIN radar_trend_evidence evidence ON evidence.trend_id = member.country_trend_id
-                               WHERE member.meta_trend_id = ranked.id AND evidence.role = 'contradiction') AS contradiction_marker,
-                       {self._preview_json("ranked.id")} AS evidence_preview,
+                       {self._contradiction_sql("ranked.id", include_active_members=True)} AS contradiction_marker,
+                       {self._preview_json("ranked.id", include_active_members=True)} AS evidence_preview,
                        'prioritized_by_state_and_velocity' AS why_included
                 FROM ranked
                 WHERE TRUE {cursor_sql}
@@ -411,15 +413,41 @@ class SqlRadarReadService:
                   ORDER BY wave.contour, CASE wave.state WHEN 'confirmed' THEN 0 WHEN 'emerging' THEN 1 ELSE 2 END, wave.updated_at DESC) contour_rows), '{{}}'::jsonb)"""
 
     @staticmethod
-    def _preview_json(trend_id: str) -> str:
+    def _evidence_scope_sql(trend_id: str, *, include_active_members: bool) -> str:
+        direct = f"evidence.trend_id = {trend_id}"
+        if not include_active_members:
+            return direct
+        return f"""({direct} OR EXISTS (
+              SELECT 1 FROM radar_trend_members evidence_member
+              WHERE evidence_member.meta_trend_id = {trend_id}
+                AND evidence_member.country_trend_id = evidence.trend_id
+                AND evidence_member.left_at IS NULL))"""
+
+    @classmethod
+    def _contradiction_sql(cls, trend_id: str, *, include_active_members: bool) -> str:
+        scope = cls._evidence_scope_sql(
+            trend_id,
+            include_active_members=include_active_members,
+        )
+        return f"""EXISTS (SELECT 1 FROM radar_trend_evidence evidence
+            WHERE {scope} AND evidence.role = 'contradiction'
+              AND {_PUBLIC_EVIDENCE_PREDICATE})"""
+
+    @classmethod
+    def _preview_json(cls, trend_id: str, *, include_active_members: bool) -> str:
+        scope = cls._evidence_scope_sql(
+            trend_id,
+            include_active_members=include_active_members,
+        )
         return f"""(SELECT jsonb_build_object('public_id', evidence.public_id, 'role', evidence.role,
                    'title', COALESCE(article.title, observation.evidence->>'title', event.details->>'title'),
                    'url', COALESCE(article.resolved_url, article.url, observation.evidence->>'url', event.evidence->>'url'))
-            FROM radar_trend_members member JOIN radar_trend_evidence evidence ON evidence.trend_id = member.country_trend_id
+            FROM radar_trend_evidence evidence
             LEFT JOIN radar_observations observation ON observation.id = evidence.observation_id
             LEFT JOIN action_events event ON event.id = evidence.action_event_id
             LEFT JOIN articles article ON article.id = COALESCE(evidence.article_id, observation.article_id)
-            WHERE member.meta_trend_id = {trend_id} AND evidence.role IN ('trigger', 'support')
+            WHERE {scope} AND evidence.role IN ('trigger', 'support')
+              AND {_PUBLIC_EVIDENCE_PREDICATE}
             ORDER BY CASE evidence.role WHEN 'trigger' THEN 0 ELSE 1 END, evidence.id LIMIT 1)"""
 
     def _page(self, rows: list[Any], limit: int) -> dict[str, Any]:
@@ -436,8 +464,12 @@ class SqlRadarReadService:
                 SELECT trend.*, {self._wave_json('trend.id')} AS country_waves,
                        CASE WHEN trend.scope = 'country' THEN jsonb_build_object(trend.contour, jsonb_build_object('state', trend.state, 'status', 'insufficient'))
                             ELSE {self._contour_json('trend.id')} END AS contours,
-                       EXISTS (SELECT 1 FROM radar_trend_evidence evidence WHERE evidence.trend_id = trend.id AND evidence.role = 'contradiction') AS contradiction_marker,
-                       {self._preview_json('trend.id')} AS evidence_preview
+                       CASE WHEN trend.scope = 'meta'
+                            THEN {self._contradiction_sql('trend.id', include_active_members=True)}
+                            ELSE {self._contradiction_sql('trend.id', include_active_members=False)} END AS contradiction_marker,
+                       CASE WHEN trend.scope = 'meta'
+                            THEN {self._preview_json('trend.id', include_active_members=True)}
+                            ELSE {self._preview_json('trend.id', include_active_members=False)} END AS evidence_preview
                 FROM radar_trends trend WHERE trend.public_id = :public_id
             """), {"public_id": public_id}).first()
         return row
@@ -487,8 +519,8 @@ class SqlRadarReadService:
                       WHERE related.trend_id = trend.id AND related.signal_id = :signal_id)))
                 SELECT ranked.*, '[]'::jsonb AS country_waves,
                        jsonb_build_object(contour, jsonb_build_object('state', state, 'status', 'insufficient')) AS contours,
-                       EXISTS (SELECT 1 FROM radar_trend_evidence evidence WHERE evidence.trend_id = ranked.id AND evidence.role = 'contradiction') AS contradiction_marker,
-                       {self._preview_json('ranked.id')} AS evidence_preview,
+                       {self._contradiction_sql('ranked.id', include_active_members=False)} AS contradiction_marker,
+                       {self._preview_json('ranked.id', include_active_members=False)} AS evidence_preview,
                        'country_wave_matches_selected_filters' AS why_included
                 FROM ranked WHERE TRUE {cursor_sql}
                 ORDER BY state_rank ASC, velocity DESC, first_observed_at DESC, public_id ASC LIMIT :limit
@@ -524,7 +556,7 @@ class SqlRadarReadService:
             "cursor_id": cursor["id"] if cursor else 0,
         }
         with radar_read_session() as session:
-            rows = session.execute(text("""
+            rows = session.execute(text(f"""
                 /* radar_related_evidence */
                 WITH related_evidence_ids AS (
                     SELECT evidence.id
@@ -553,6 +585,7 @@ class SqlRadarReadService:
                 LEFT JOIN action_events event ON event.id = evidence.action_event_id
                 LEFT JOIN articles article ON article.id = COALESCE(evidence.article_id, observation.article_id)
                 WHERE evidence.id > :cursor_id
+                  AND {_PUBLIC_EVIDENCE_PREDICATE}
                 ORDER BY evidence.id ASC LIMIT :limit
             """), params).fetchall()
         items = list(rows[:limit])

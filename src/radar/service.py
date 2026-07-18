@@ -218,7 +218,7 @@ def _logical_observation_key(observation: Observation) -> tuple[object, ...]:
     )
 
 
-def _observation_richness(observation: Observation) -> tuple[int, int, str]:
+def _observation_richness(observation: Observation) -> tuple[int, int]:
     roots = sum(value is not None for value in (
         observation.article_id, observation.story_id, observation.signal_id,
         observation.canonical_entity_id,
@@ -226,17 +226,22 @@ def _observation_richness(observation: Observation) -> tuple[int, int, str]:
     evidence_roots = sum(len(tuple(observation.evidence.get(key, ()))) for key in (
         "article_ids", "story_ids", "signal_ids", "entity_ids",
     ))
-    return roots, evidence_roots, observation.input_hash
+    return roots, evidence_roots
 
 
-def _prefer_logical_observations(observations: Iterable[Observation]) -> list[Observation]:
-    selected: dict[tuple[object, ...], Observation] = {}
-    for observation in observations:
-        key = _logical_observation_key(observation)
-        current = selected.get(key)
-        if current is None or _observation_richness(observation) > _observation_richness(current):
-            selected[key] = observation
-    return sorted(selected.values(), key=lambda point: (
+def _prefer_logical_observations(
+    history: Iterable[Observation],
+    generated: Iterable[Observation],
+) -> list[Observation]:
+    selected: dict[tuple[object, ...], tuple[Observation, tuple[int, int, int]]] = {}
+    for is_generated, observations in ((False, history), (True, generated)):
+        for observation in observations:
+            key = _logical_observation_key(observation)
+            quality = (int(is_generated), *_observation_richness(observation))
+            current = selected.get(key)
+            if current is None or quality > current[1]:
+                selected[key] = observation, quality
+    return sorted((point for point, _quality in selected.values()), key=lambda point: (
         point.observed_at, point.country_code, point.contour.value,
         point.subject_key, point.direction, point.metric, point.input_hash,
     ))
@@ -403,7 +408,11 @@ ON CONFLICT (public_id) DO UPDATE SET
   article_id = COALESCE(radar_trend_evidence.article_id, EXCLUDED.article_id),
   story_id = COALESCE(radar_trend_evidence.story_id, EXCLUDED.story_id),
   signal_id = COALESCE(radar_trend_evidence.signal_id, EXCLUDED.signal_id),
-  canonical_entity_id = COALESCE(radar_trend_evidence.canonical_entity_id, EXCLUDED.canonical_entity_id)
+  canonical_entity_id = COALESCE(radar_trend_evidence.canonical_entity_id, EXCLUDED.canonical_entity_id),
+  evidence = CASE WHEN :relation_kind = 'base'
+    THEN radar_trend_evidence.evidence
+    ELSE radar_trend_evidence.evidence || jsonb_build_object('_relation_only', true)
+  END
 """)
 
 
@@ -436,8 +445,11 @@ def _persist_observation_evidence(
         if signal_id != observation.signal_id
     )
 
-    evidence = json.dumps(dict(observation.evidence))
+    observation_evidence = dict(observation.evidence)
     for relation_kind, story_id, signal_id, public_name in relations:
+        evidence = dict(observation_evidence)
+        if relation_kind != "base":
+            evidence["_relation_only"] = True
         session.execute(_INSERT_OBSERVATION_EVIDENCE, {
             "public_id": uuid5(NAMESPACE_URL, public_name),
             "trend_id": trend_id,
@@ -447,7 +459,7 @@ def _persist_observation_evidence(
             "relation_kind": relation_kind,
             "role": role,
             "contribution": contribution,
-            "evidence": evidence,
+            "evidence": json.dumps(evidence),
         })
 
 
@@ -758,7 +770,7 @@ def run_radar_cycle(session, as_of: datetime, shadow: bool = True, *, days: int 
     before_counts = _protected_counts(session)
     generated = [*build_media_observations(session, window), *build_action_observations(session, window)]
     history = _history(session, as_of, days)
-    observations = _prefer_logical_observations([*history, *generated])
+    observations = _prefer_logical_observations(history, generated)
     assignments = assign_country_waves(observations, _previous_waves(session, as_of))
     scored_waves = tuple(
         replace(wave, state=decision.state, confirmed_at=decision.timeline.confirmed_at,

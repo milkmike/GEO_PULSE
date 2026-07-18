@@ -152,12 +152,13 @@ def test_media_observation_counts_publisher_families_not_feed_rows():
     assert point.value == pytest.approx(1.0)
 
 
-def test_media_uses_signal_id_and_deterministic_representative_entity():
+def test_media_uses_signal_foreign_key_not_signal_evidence_row_id():
     first_entity = UUID("00000000-0000-0000-0000-000000000010")
     second_entity = UUID("00000000-0000-0000-0000-000000000020")
     session = _Session(media_rows=(
         _media_row(
-            ARTICLE_A, 10, "example.es", signal_ids=(902,),
+            ARTICLE_A, 10, "example.es", signal_ids=(303,),
+            signal_evidence_ids=(900,),
             entity_ids=(second_entity, first_entity),
         ),
     ))
@@ -166,7 +167,9 @@ def test_media_uses_signal_id_and_deterministic_representative_entity():
 
     assert "evidence.signal_id" in str(_MEDIA_ROWS)
     assert "evidence.id" not in str(_MEDIA_ROWS)
-    assert point.signal_id == 902
+    assert point.signal_id == 303
+    assert point.evidence["signal_ids"] == (303,)
+    assert 900 not in point.evidence["signal_ids"]
     assert point.canonical_entity_id == first_entity
     assert point.evidence["entity_ids"] == (str(first_entity), str(second_entity))
 

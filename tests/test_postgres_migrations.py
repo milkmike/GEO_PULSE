@@ -1102,6 +1102,9 @@ def test_radar_evidence_root_upsert_backfills_without_overwriting_decision():
                        array_agg(role ORDER BY id),
                        array_agg(contribution ORDER BY id),
                        array_agg(evidence->>'decision' ORDER BY id),
+                       array_agg(COALESCE(
+                         (evidence->>'_relation_only')::boolean, false
+                       ) ORDER BY id),
                        bool_and(evidence @> '{"story_ids":[202,203],"signal_ids":[303,304]}'::jsonb)
                          FILTER (WHERE role = 'trigger')
                 FROM radar_trend_evidence
@@ -1114,7 +1117,146 @@ def test_radar_evidence_root_upsert_backfills_without_overwriting_decision():
                 ["context", "support", "trigger", "trigger"],
                 [Decimal("0.25000"), Decimal("0.50000"), Decimal("1.00000"), Decimal("1.00000")],
                 ["preserve", "also-preserve", None, None],
+                [False, False, True, True],
                 True,
             )
+    finally:
+        connection.close()
+
+
+def test_radar_relation_upgrade_drops_legacy_unique_index_before_multi_root_persistence():
+    dsn, psycopg2 = _requirements()
+    from src.radar.service import _persist_observation_evidence
+    from src.radar.types import Observation
+
+    migration_name = "029_radar_evidence_relation_rows.sql"
+    connection = psycopg2.connect(dsn)
+    connection.autocommit = True
+    try:
+        with connection.cursor() as cursor:
+            _reset(cursor, initialize=True)
+            cursor.execute("""
+                INSERT INTO countries(code, name_ru, name_en, iso3, region)
+                VALUES ('XZ', 'Тест', 'Test', 'XZZ', 'test');
+                INSERT INTO articles(id, title, url, published_at)
+                VALUES (101, 'Evidence', 'https://example.test/evidence', NOW());
+                INSERT INTO stories(id, slug, title_ru, lifecycle, first_seen, last_seen)
+                VALUES
+                  (202, 'evidence-story', 'Evidence', 'emerging', NOW(), NOW()),
+                  (203, 'related-story', 'Related', 'emerging', NOW(), NOW());
+                INSERT INTO signals(id, signal_type, country_code, dedup_key)
+                VALUES
+                  (303, 'test', 'XZ', 'evidence-signal'),
+                  (304, 'test', 'XZ', 'related-signal');
+                INSERT INTO radar_observations(
+                  id, public_id, input_hash, country_code, contour, subject_key,
+                  direction, metric, observed_at, article_id, story_id, signal_id,
+                  evidence
+                ) VALUES (
+                  404, '00000000-0000-0000-0000-000000000404',
+                  'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                  'XZ', 'media', 'event:evidence', 'negative', 'attention_share', NOW(),
+                  101, 202, 303,
+                  '{"article_ids":[101],"story_ids":[202,203],"signal_ids":[303,304]}'::jsonb
+                );
+                INSERT INTO radar_trends(
+                  id, public_id, scope, contour, country_code, subject_key,
+                  wave_key, title_ru, direction, state, confidence,
+                  coverage_confidence, first_observed_at, detector_version
+                ) VALUES (
+                  505, '00000000-0000-0000-0000-000000000505', 'country', 'media',
+                  'XZ', 'event:evidence', 'wave:evidence', 'Evidence', 'negative',
+                  'candidate', 0.5, 1, NOW(), 'test-v1'
+                );
+                INSERT INTO radar_trend_evidence(
+                  public_id, trend_id, observation_id, role, contribution, evidence
+                ) VALUES (
+                  '00000000-0000-0000-0000-000000000606', 505, 404,
+                  'context', 0.25, '{"decision":"preserve"}'::jsonb
+                );
+                CREATE UNIQUE INDEX uq_radar_trend_evidence_observation
+                  ON radar_trend_evidence(trend_id, observation_id);
+                CREATE TABLE schema_migrations(
+                  filename TEXT PRIMARY KEY, applied_at TIMESTAMPTZ DEFAULT now()
+                );
+            """)
+            cursor.executemany(
+                "INSERT INTO schema_migrations(filename) VALUES (%s)",
+                [
+                    (path.name,)
+                    for path in sorted(MIGRATIONS.glob("*.sql"))
+                    if path.name != migration_name
+                ],
+            )
+
+        upgraded = _run_migrations(dsn)
+        _assert_success(upgraded)
+        assert f"applying {migration_name}" in upgraded.stdout
+
+        observation = Observation(
+            public_id=UUID("00000000-0000-0000-0000-000000000404"),
+            input_hash="a" * 64,
+            country_code="XZ",
+            contour="media",
+            subject_key="event:evidence",
+            direction="negative",
+            metric="attention_share",
+            observed_at=datetime(2026, 7, 18, tzinfo=timezone.utc),
+            window=None,
+            value=0.8,
+            publisher_family_count=2,
+            source_count=2,
+            coverage_confidence=1,
+            article_id=101,
+            story_id=202,
+            signal_id=303,
+            evidence={
+                "article_ids": (101,),
+                "story_ids": (202, 203),
+                "signal_ids": (303, 304),
+            },
+        )
+        engine = create_engine(dsn)
+        Session = sessionmaker(bind=engine)
+        try:
+            with Session.begin() as session:
+                for _ in range(2):
+                    _persist_observation_evidence(
+                        session,
+                        trend_id=505,
+                        observation=observation,
+                        role="trigger",
+                        contribution=1,
+                    )
+        finally:
+            engine.dispose()
+
+        with connection.cursor() as cursor:
+            cursor.execute("""
+                SELECT to_regclass('public.uq_radar_trend_evidence_observation'),
+                       count(*), array_agg(story_id ORDER BY id),
+                       array_agg(signal_id ORDER BY id),
+                       array_agg(role ORDER BY id),
+                       array_agg(evidence->>'decision' ORDER BY id),
+                       array_agg(COALESCE(
+                         (evidence->>'_relation_only')::boolean, false
+                       ) ORDER BY id)
+                FROM radar_trend_evidence
+                WHERE trend_id = 505 AND observation_id = 404
+            """)
+            assert cursor.fetchone() == (
+                None,
+                3,
+                [202, 203, 202],
+                [303, 303, 304],
+                ["context", "trigger", "trigger"],
+                ["preserve", None, None],
+                [False, True, True],
+            )
+            cursor.execute(
+                "SELECT count(*) FROM schema_migrations WHERE filename = %s",
+                (migration_name,),
+            )
+            assert cursor.fetchone()[0] == 1
     finally:
         connection.close()

@@ -461,6 +461,9 @@ def test_sql_meta_relation_filters_use_direct_or_member_evidence_and_require_bot
     assert sql.index("/* radar_related_story */") < sql.index("/* radar_related_signal */")
     assert "AND (:story_id IS NULL OR EXISTS" in sql
     assert "AND (:signal_id IS NULL OR EXISTS" in sql
+    assert sql.count(radar_routes._PUBLIC_EVIDENCE_PREDICATE) >= 2
+    assert sql.count("evidence.trend_id = ranked.id") >= 2
+    assert sql.count("evidence_member.left_at IS NULL") >= 2
 
 
 def test_sql_country_relation_filters_require_evidence_on_the_returned_wave(monkeypatch):
@@ -500,6 +503,37 @@ def test_sql_country_relation_filters_require_evidence_on_the_returned_wave(monk
     assert "related.signal_id = :signal_id" in sql
     assert "radar_trend_members related_member" not in sql
     assert "trend.country_code = :country" in sql
+    assert sql.count(radar_routes._PUBLIC_EVIDENCE_PREDICATE) >= 2
+    assert sql.count("evidence.trend_id = ranked.id") >= 2
+    assert "evidence_member" not in sql
+
+
+def test_sql_trend_detail_scopes_evidence_to_direct_or_active_members(monkeypatch):
+    calls = []
+
+    class Rows:
+        def first(self):
+            return None
+
+    class Session:
+        def execute(self, statement, params=None):
+            calls.append((str(statement), dict(params or {})))
+            return Rows()
+
+    @contextmanager
+    def read_session():
+        yield Session()
+
+    monkeypatch.setattr(radar_routes, "radar_read_session", read_session)
+
+    radar_routes.SqlRadarReadService().trend(UUID(TREND_ID))
+
+    sql, params = calls[-1]
+    assert params == {"public_id": UUID(TREND_ID)}
+    assert sql.count("evidence.trend_id = trend.id") >= 2
+    assert sql.count("trend.scope = 'meta'") >= 2
+    assert sql.count("evidence_member.left_at IS NULL") >= 2
+    assert sql.count(radar_routes._PUBLIC_EVIDENCE_PREDICATE) >= 2
 
 
 def test_sql_meta_evidence_pages_direct_and_active_member_rows_without_duplicates(monkeypatch):
@@ -536,6 +570,7 @@ def test_sql_meta_evidence_pages_direct_and_active_member_rows_without_duplicate
     assert "related_member.left_at IS NULL" in sql
     assert "UNION" in sql
     assert "DISTINCT ON (evidence.public_id)" in sql
+    assert radar_routes._PUBLIC_EVIDENCE_PREDICATE in sql
     assert "ORDER BY evidence.id ASC" in sql
 
 
@@ -658,20 +693,26 @@ def test_postgres_relation_filters_match_direct_and_active_member_evidence(monke
                    (5,105,NULL), (6,106,NULL),
                    (7,107,'2026-07-18T11:00:00Z'), (8,108,NULL);
 
+            INSERT INTO radar_observations(id, evidence, article_id)
+            VALUES (201, '{}', NULL), (202, '{}', NULL);
+
             INSERT INTO radar_trend_evidence(
-                id, public_id, trend_id, story_id, signal_id, role,
+                id, public_id, trend_id, observation_id, story_id, signal_id, role,
                 contribution, evidence
             ) VALUES
-              (1,'10000000-0000-0000-0000-000000000001',1,501,NULL,'trigger',1,'{}'),
-              (2,'10000000-0000-0000-0000-000000000002',102,501,601,'trigger',1,'{}'),
-              (3,'10000000-0000-0000-0000-000000000003',103,999,999,'trigger',1,'{}'),
-              (4,'10000000-0000-0000-0000-000000000004',4,501,NULL,'trigger',1,'{}'),
-              (5,'10000000-0000-0000-0000-000000000005',5,NULL,601,'trigger',1,'{}'),
-              (6,'10000000-0000-0000-0000-000000000006',6,501,601,'trigger',1,'{}'),
-              (7,'10000000-0000-0000-0000-000000000007',107,501,601,'trigger',1,'{}'),
-              (8,'10000000-0000-0000-0000-000000000008',108,501,601,'trigger',1,'{}'),
-              (9,'10000000-0000-0000-0000-000000000009',102,NULL,NULL,'contradiction',-0.5,'{}'),
-              (10,'10000000-0000-0000-0000-000000000010',2,NULL,NULL,'support',0.25,'{}');
+              (1,'10000000-0000-0000-0000-000000000001',1,NULL,501,NULL,'trigger',1,'{}'),
+              (2,'10000000-0000-0000-0000-000000000002',102,201,501,601,'trigger',1,'{}'),
+              (3,'10000000-0000-0000-0000-000000000003',103,NULL,999,999,'trigger',1,'{}'),
+              (4,'10000000-0000-0000-0000-000000000004',4,NULL,501,NULL,'trigger',1,'{}'),
+              (5,'10000000-0000-0000-0000-000000000005',5,NULL,NULL,601,'trigger',1,'{}'),
+              (6,'10000000-0000-0000-0000-000000000006',6,NULL,501,601,'trigger',1,'{}'),
+              (7,'10000000-0000-0000-0000-000000000007',107,NULL,501,601,'trigger',1,'{}'),
+              (8,'10000000-0000-0000-0000-000000000008',108,NULL,501,601,'trigger',1,'{}'),
+              (9,'10000000-0000-0000-0000-000000000009',102,201,NULL,NULL,'contradiction',-0.5,'{}'),
+              (10,'10000000-0000-0000-0000-000000000010',2,202,NULL,NULL,'support',0.25,'{}'),
+              (11,'10000000-0000-0000-0000-000000000011',102,201,502,601,'trigger',1,'{"_relation_only":true}'),
+              (12,'10000000-0000-0000-0000-000000000012',102,201,501,602,'trigger',1,'{"_relation_only":true}'),
+              (13,'10000000-0000-0000-0000-000000000013',107,NULL,NULL,NULL,'contradiction',-0.5,'{}');
         """))
         connection.commit()
 
@@ -681,8 +722,11 @@ def test_postgres_relation_filters_match_direct_and_active_member_evidence(monke
         app.include_router(radar_routes.router)
         client = TestClient(app)
 
-        def collect(path):
-            first = client.get(path, params={"story_id": 501, "signal_id": 601, "limit": 1})
+        def collect(path, *, story_id=501, signal_id=601):
+            first = client.get(
+                path,
+                params={"story_id": story_id, "signal_id": signal_id, "limit": 1},
+            )
             assert first.status_code == 200
             items = list(first.json()["items"])
             cursor = first.json()["next_cursor"]
@@ -690,8 +734,8 @@ def test_postgres_relation_filters_match_direct_and_active_member_evidence(monke
                 page = client.get(
                     path,
                     params={
-                        "story_id": 501,
-                        "signal_id": 601,
+                        "story_id": story_id,
+                        "signal_id": signal_id,
                         "limit": 1,
                         "cursor": cursor,
                     },
@@ -703,6 +747,12 @@ def test_postgres_relation_filters_match_direct_and_active_member_evidence(monke
 
         meta_cursor, meta_ids = collect("/api/v2/radar")
         country_cursor, country_ids = collect("/api/v2/countries/es/radar")
+        _, meta_relation_ids = collect(
+            "/api/v2/radar", story_id=502, signal_id=602
+        )
+        _, country_relation_ids = collect(
+            "/api/v2/countries/es/radar", story_id=502, signal_id=602
+        )
 
         def collect_evidence(public_id):
             path = f"/api/v2/radar/trends/{public_id}/evidence"
@@ -724,6 +774,18 @@ def test_postgres_relation_filters_match_direct_and_active_member_evidence(monke
         _, country_evidence = collect_evidence(
             "00000000-0000-0000-0000-000000000102"
         )
+        active_meta = client.get(
+            "/api/v2/radar/trends/00000000-0000-0000-0000-000000000002"
+        ).json()
+        direct_meta = client.get(
+            "/api/v2/radar/trends/00000000-0000-0000-0000-000000000004"
+        ).json()
+        departed_meta = client.get(
+            "/api/v2/radar/trends/00000000-0000-0000-0000-000000000007"
+        ).json()
+        direct_country = client.get(
+            "/api/v2/radar/trends/00000000-0000-0000-0000-000000000107"
+        ).json()
 
         assert meta_ids == {
             "00000000-0000-0000-0000-000000000002",
@@ -737,6 +799,12 @@ def test_postgres_relation_filters_match_direct_and_active_member_evidence(monke
             "00000000-0000-0000-0000-000000000108",
         }
         assert "00000000-0000-0000-0000-000000000103" not in country_ids
+        assert meta_relation_ids == {
+            "00000000-0000-0000-0000-000000000002",
+        }
+        assert country_relation_ids == {
+            "00000000-0000-0000-0000-000000000102",
+        }
         assert [item["public_id"] for item in meta_evidence] == [
             "10000000-0000-0000-0000-000000000002",
             "10000000-0000-0000-0000-000000000009",
@@ -749,6 +817,20 @@ def test_postgres_relation_filters_match_direct_and_active_member_evidence(monke
             "10000000-0000-0000-0000-000000000002",
             "10000000-0000-0000-0000-000000000009",
         ]
+        assert active_meta["contradiction_marker"] is True
+        assert active_meta["evidence_preview"]["public_id"] == (
+            "10000000-0000-0000-0000-000000000002"
+        )
+        assert direct_meta["contradiction_marker"] is False
+        assert direct_meta["evidence_preview"]["public_id"] == (
+            "10000000-0000-0000-0000-000000000004"
+        )
+        assert departed_meta["contradiction_marker"] is False
+        assert departed_meta["evidence_preview"] is None
+        assert direct_country["contradiction_marker"] is True
+        assert direct_country["evidence_preview"]["public_id"] == (
+            "10000000-0000-0000-0000-000000000007"
+        )
         assert client.get(
             "/api/v2/radar",
             params={"story_id": 502, "signal_id": 601, "cursor": meta_cursor},

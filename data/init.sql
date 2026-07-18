@@ -908,6 +908,8 @@ CREATE TABLE IF NOT EXISTS radar_trend_evidence (
 );
 CREATE INDEX IF NOT EXISTS idx_radar_trend_evidence_trend_role
   ON radar_trend_evidence(trend_id, role, id);
+-- Multiple evidence rows may share a trend/observation pair: distinct audit
+-- decisions and exact story/signal relation roots must remain materialized.
 CREATE INDEX IF NOT EXISTS idx_radar_trend_evidence_article_id_lookup
   ON radar_trend_evidence(article_id, trend_id)
   WHERE article_id IS NOT NULL;
