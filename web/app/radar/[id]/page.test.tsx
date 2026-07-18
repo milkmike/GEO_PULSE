@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { FeatureFlagsProvider } from "@/components/FeatureFlagsProvider";
 import type { FeatureFlags } from "@/lib/features";
@@ -60,15 +61,17 @@ describe("Radar investigation page", () => {
     apiMocks.radarMethodology.mockReset().mockResolvedValue(methodology);
   });
 
-  it("answers the eight approved investigation questions in order", async () => {
+  it("renders only propagation questions and the fetched timeline in propagation view", async () => {
     await renderPage();
     const article = await screen.findByRole("article");
     const headings = within(article).getAllByRole("heading", { level: 2 }).map((heading) => heading.textContent);
     expect(headings).toEqual([
       "01 · Что меняется?", "02 · Где началось и куда распространяется?", "03 · Что произошло в медиаконтуре?",
-      "04 · Что произошло в контуре действий?", "05 · Почему система в это верит?", "06 · Какие данные противоречат тренду?",
-      "07 · Достаточно ли покрытие?", "08 · Как рассчитаны baseline, T0, уверенность и состояние?",
+      "04 · Что произошло в контуре действий?",
     ]);
+    expect(screen.getByRole("list", { name: /хронология тренда/i })).toHaveTextContent(/confirmed.*media/i);
+    expect(screen.queryByText("Надёжное доказательство")).not.toBeInTheDocument();
+    expect(screen.queryByText(/критический пробел покрытия/i)).not.toBeInTheDocument();
   });
 
   it("separates contours, country waves and effective T0", async () => {
@@ -80,12 +83,45 @@ describe("Radar investigation page", () => {
     expect(screen.getAllByText(/эффективный T0/i).length).toBeGreaterThanOrEqual(1);
   });
 
-  it("labels contradictions and coverage gaps while sanitizing evidence links", async () => {
+  it("makes evidence, coverage and method views materially distinct", async () => {
+    navigation.query = "view=evidence";
     await renderPage();
     expect(await screen.findByText("Противоречащий материал")).toBeVisible();
-    expect(screen.getByText(/критический пробел покрытия/i)).toBeVisible();
     expect(screen.getByRole("link", { name: /Надёжное доказательство/i })).toHaveAttribute("href", "https://example.test/safe");
     expect(screen.queryByRole("link", { name: /Противоречащий материал/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/критический пробел покрытия/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/90 дней/i)).not.toBeInTheDocument();
+  });
+
+  it("shows coverage limitations only in coverage and baseline/T0 only in method", async () => {
+    navigation.query = "view=coverage";
+    const coverageView = await renderPage();
+    expect(await screen.findByText(/критический пробел покрытия/i)).toBeVisible();
+    expect(screen.getByText("Coverage proxy")).toBeVisible();
+    expect(screen.queryByText(/T0 авто/i)).not.toBeInTheDocument();
+    coverageView.unmount();
+
+    navigation.query = "view=method";
+    await renderPage();
+    expect(await screen.findByText(/T0 авто/i)).toBeVisible();
+    expect(screen.getByText(/90 дней/i)).toBeVisible();
+    expect(screen.queryByText(/критический пробел покрытия/i)).not.toBeInTheDocument();
+    expect(screen.queryByText("Надёжное доказательство")).not.toBeInTheDocument();
+  });
+
+  it("does not claim contradictions are globally absent before all evidence pages load", async () => {
+    const firstPage = { items: [evidence.items[0]], limit: 1, next_cursor: "evidence-next" };
+    const finalPage = { items: [evidence.items[1]], limit: 1, next_cursor: null };
+    apiMocks.radarEvidence.mockReset().mockResolvedValueOnce(firstPage).mockResolvedValueOnce(finalPage);
+    navigation.query = "view=evidence";
+    const user = userEvent.setup();
+    await renderPage();
+
+    expect(await screen.findByText(/в загруженных доказательствах противоречий/i)).toBeVisible();
+    expect(screen.queryByText(/сохранённых противоречий нет/i)).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /загрузить ещё доказательства/i }));
+    expect(await screen.findByText("Противоречащий материал")).toBeVisible();
+    expect(apiMocks.radarEvidence).toHaveBeenLastCalledWith("trend-1", "evidence-next", 25, expect.any(AbortSignal));
   });
 
   it("keeps the selected view in the URL and supports keyboard tab navigation", async () => {
@@ -97,6 +133,9 @@ describe("Radar investigation page", () => {
     expect(evidenceTab).toHaveFocus();
     fireEvent.click(evidenceTab);
     expect(navigation.replace).toHaveBeenCalledWith("/radar/trend-1?view=evidence");
+
+    fireEvent.click(propagation);
+    expect(navigation.replace).toHaveBeenCalledWith("/radar/trend-1?view=propagation");
   });
 
   it("aborts every investigation request on unmount", async () => {

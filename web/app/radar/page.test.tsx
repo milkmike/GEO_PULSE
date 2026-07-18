@@ -85,6 +85,31 @@ describe("Radar list page", () => {
     expect(apiMocks.radar.mock.calls[1][0]).toMatchObject({ state: "emerging", contour: "action" });
   });
 
+  it("aborts a stale load-more request and never appends its old-filter page", async () => {
+    let resolveOldPage!: (value: { items: RadarTrend[]; limit: number; next_cursor: null }) => void;
+    const oldPage = new Promise<{ items: RadarTrend[]; limit: number; next_cursor: null }>((resolve) => { resolveOldPage = resolve; });
+    const oldTrend = { ...baseTrend, public_id: "old-page", thesis: "Старая страница" };
+    const freshTrend = { ...baseTrend, public_id: "fresh-page", thesis: "Новый фильтр" };
+    apiMocks.radar
+      .mockResolvedValueOnce({ items: [baseTrend], limit: 25, next_cursor: "next" })
+      .mockReturnValueOnce(oldPage)
+      .mockResolvedValueOnce({ items: [freshTrend], limit: 25, next_cursor: null });
+
+    const user = userEvent.setup();
+    const { rerender } = renderPage();
+    await screen.findByText(baseTrend.thesis);
+    await user.click(screen.getByRole("button", { name: /следующие тренды/i }));
+    const loadMoreSignal = apiMocks.radar.mock.calls[1][2] as AbortSignal;
+
+    navigation.query = "state=emerging";
+    rerender(<FeatureFlagsProvider flags={enabled}><RadarPage /></FeatureFlagsProvider>);
+    expect(await screen.findByText(freshTrend.thesis)).toBeVisible();
+    expect(loadMoreSignal.aborted).toBe(true);
+
+    resolveOldPage({ items: [oldTrend], limit: 25, next_cursor: null });
+    await waitFor(() => expect(screen.queryByText(oldTrend.thesis)).not.toBeInTheDocument());
+  });
+
   it("writes filter changes to a shareable URL and presents honest empty and error states", async () => {
     apiMocks.radar.mockResolvedValueOnce({ items: [], limit: 25, next_cursor: null });
     const user = userEvent.setup();

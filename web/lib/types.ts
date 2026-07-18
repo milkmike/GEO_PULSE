@@ -764,6 +764,8 @@ export interface RadarFilters {
   state?: RadarTrendState;
   contour?: RadarContour;
   country?: string;
+  storyId?: number;
+  signalId?: number;
   limit?: number;
 }
 

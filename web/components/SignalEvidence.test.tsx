@@ -4,6 +4,11 @@ import type { SignalDetail } from "@/lib/types";
 import SignalEvidence from "./SignalEvidence";
 
 vi.mock("@/components/Plot", () => ({ default: () => <div data-testid="signal-chart">chart</div> }));
+vi.mock("./EarlyWarningPanel", () => ({
+  default: ({ filters, countryCode }: { filters?: unknown; countryCode?: string }) => (
+    <div data-testid="signal-radar" data-filters={JSON.stringify(filters)} data-country={countryCode}>signal radar</div>
+  ),
+}));
 
 const fmtContextTime = (value: string) => new Date(value).toLocaleString("ru-RU", {
   day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit",
@@ -68,6 +73,13 @@ const complete: SignalDetail = {
 };
 
 describe("SignalEvidence", () => {
+  it("queries the exact signal relation rather than a country top trend", () => {
+    render(<SignalEvidence detail={complete} storiesEnabled radarEnabled />);
+    const panel = screen.getByTestId("signal-radar");
+    expect(panel).toHaveAttribute("data-filters", JSON.stringify({ signalId: 17 }));
+    expect(panel).not.toHaveAttribute("data-country");
+  });
+
   it("renders concrete rule, values, exact window, chart and primary evidence", () => {
     render(<SignalEvidence detail={complete} storiesEnabled />);
 

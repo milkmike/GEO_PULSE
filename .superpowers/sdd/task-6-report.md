@@ -32,3 +32,22 @@ Status: **DONE**
 ## Concerns
 
 None. The UI consumes the Task 5 response shapes as currently implemented.
+
+## Review corrections — 2026-07-18
+
+- Evidence pagination now keeps absence claims page-bounded until `next_cursor` is exhausted. The evidence view says “в загруженных доказательствах” while incomplete and supports repeated, abortable load-more requests.
+- The four shareable investigation views are now materially distinct: propagation uses the fetched timeline, evidence owns support and contradictions, coverage owns country gaps and limitations, and method owns baseline/T0/confidence details. The URL explicitly retains every selected `view`, including `view=propagation`.
+- Radar list pagination now owns a dedicated `AbortController` and request generation. Filter changes and unmounts abort pending pages; responses from older filter generations cannot append.
+- Story and signal placements now request exact `story_id` and `signal_id` relations through typed `RadarFilters`, rather than substituting a first-country trend list.
+
+### Review test evidence
+
+- Focused regression suite: `npm test -- --run app/radar 'app/stories/[id]/StoryDetailPage.test.tsx' components/SignalEvidence.test.tsx lib/api.radar.test.ts` — 5 files, 40 tests passed.
+- Full web suite: `npm test -- --run` — 25 files, 135 tests passed.
+- Type check: `npx tsc --noEmit` — passed sequentially after the production build generated Next.js route types.
+- Production build: `npm run build` — passed; `/radar` remains static and `/radar/[id]` remains dynamic.
+- Diff hygiene: `git diff --check` — passed.
+
+### Review concerns
+
+None.

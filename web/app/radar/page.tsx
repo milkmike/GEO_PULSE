@@ -27,16 +27,22 @@ function RadarPageContent() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [reload, setReload] = useState(0);
   const pageController = useRef<AbortController | null>(null);
+  const loadMoreController = useRef<AbortController | null>(null);
+  const requestGeneration = useRef(0);
 
   const filters = useMemo<RadarFilters>(() => {
     const params = new URLSearchParams(query);
     const stateValue = params.get("state");
     const contour = params.get("contour");
     const country = params.get("country");
+    const storyId = Number(params.get("story_id"));
+    const signalId = Number(params.get("signal_id"));
     return {
       ...(STATES.some(([value]) => value === stateValue) && stateValue ? { state: stateValue as RadarTrendState } : {}),
       ...(CONTOURS.some(([value]) => value === contour) && contour ? { contour: contour as RadarContour } : {}),
       ...(country && /^[a-z]{2}$/iu.test(country) ? { country: country.toUpperCase() } : {}),
+      ...(Number.isInteger(storyId) && storyId > 0 ? { storyId } : {}),
+      ...(Number.isInteger(signalId) && signalId > 0 ? { signalId } : {}),
       limit: 25,
     };
   }, [query]);
@@ -47,13 +53,16 @@ function RadarPageContent() {
   useEffect(() => {
     if (!earlyWarningRadar) return;
     const controller = new AbortController();
+    const generation = ++requestGeneration.current;
     pageController.current?.abort();
+    loadMoreController.current?.abort();
     pageController.current = controller;
-    setState("loading"); setItems([]); setNextCursor(null);
+    loadMoreController.current = null;
+    setLoadingMore(false); setState("loading"); setItems([]); setNextCursor(null);
     api.radar(filters, null, controller.signal).then((payload) => {
-      if (!controller.signal.aborted) { setItems(payload.items); setNextCursor(payload.next_cursor); setState("ready"); }
-    }).catch((reason: unknown) => { if (!controller.signal.aborted && !isAbort(reason)) setState("error"); });
-    return () => controller.abort();
+      if (!controller.signal.aborted && requestGeneration.current === generation) { setItems(payload.items); setNextCursor(payload.next_cursor); setState("ready"); }
+    }).catch((reason: unknown) => { if (!controller.signal.aborted && requestGeneration.current === generation && !isAbort(reason)) setState("error"); });
+    return () => { controller.abort(); loadMoreController.current?.abort(); };
   }, [earlyWarningRadar, filters, reload]);
 
   function updateFilter(key: "state" | "contour" | "country", raw: string) {
@@ -74,15 +83,23 @@ function RadarPageContent() {
   async function loadMore() {
     if (!nextCursor || loadingMore) return;
     const controller = new AbortController();
+    const generation = requestGeneration.current;
+    loadMoreController.current?.abort();
+    loadMoreController.current = controller;
     setLoadingMore(true);
     try {
       const payload = await api.radar(filters, nextCursor, controller.signal);
-      if (!controller.signal.aborted) {
+      if (!controller.signal.aborted && requestGeneration.current === generation && loadMoreController.current === controller) {
         setItems((current) => [...current, ...payload.items.filter((item) => !current.some((existing) => existing.public_id === item.public_id))]);
         setNextCursor(payload.next_cursor);
       }
-    } catch (reason) { if (!isAbort(reason)) setState("error"); }
-    finally { setLoadingMore(false); }
+    } catch (reason) { if (!controller.signal.aborted && requestGeneration.current === generation && !isAbort(reason)) setState("error"); }
+    finally {
+      if (loadMoreController.current === controller) {
+        loadMoreController.current = null;
+        setLoadingMore(false);
+      }
+    }
   }
 
   if (!earlyWarningRadar) return <main className="mx-auto max-w-[1240px] px-3 pb-16"><SiteHeader /><div className="mx-auto mt-16 max-w-xl border-y border-line py-10 text-center"><Radar size={24} className="mx-auto mb-3 text-dim" aria-hidden="true" /><h1 className="display text-2xl">Радар раннего предупреждения</h1><p className="mt-3 text-sm text-dim">Раздел раннего предупреждения отключён.</p></div></main>;

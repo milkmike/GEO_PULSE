@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useEffect, useMemo, useState } from "react";
+import { use, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { CircleAlert, LoaderCircle } from "lucide-react";
@@ -27,25 +27,65 @@ export default function RadarTrendPage({ params }: { params: Promise<{ id: strin
   const [payload, setPayload] = useState<null | { trend: RadarTrend; timeline: RadarTimeline; evidence: RadarEvidencePage; coverage: RadarCoverage; methodology: RadarMethodology }>(null);
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
   const [reload, setReload] = useState(0);
+  const [evidenceLoadingMore, setEvidenceLoadingMore] = useState(false);
+  const [evidenceLoadError, setEvidenceLoadError] = useState(false);
+  const evidencePageController = useRef<AbortController | null>(null);
+  const requestGeneration = useRef(0);
 
   useEffect(() => {
     if (!earlyWarningRadar) return;
     const controller = new AbortController();
-    setState("loading"); setPayload(null);
+    const generation = ++requestGeneration.current;
+    evidencePageController.current?.abort();
+    evidencePageController.current = null;
+    setEvidenceLoadingMore(false); setEvidenceLoadError(false); setState("loading"); setPayload(null);
     Promise.all([
       api.radarTrend(id, controller.signal), api.radarTimeline(id, controller.signal),
       api.radarEvidence(id, null, 25, controller.signal), api.radarCoverage(controller.signal), api.radarMethodology(controller.signal),
     ]).then(([trend, timeline, evidence, coverage, methodology]) => {
-      if (!controller.signal.aborted) { setPayload({ trend, timeline, evidence, coverage, methodology }); setState("ready"); }
-    }).catch((reason: unknown) => { if (!controller.signal.aborted && !isAbort(reason)) setState("error"); });
-    return () => controller.abort();
+      if (!controller.signal.aborted && requestGeneration.current === generation) { setPayload({ trend, timeline, evidence, coverage, methodology }); setState("ready"); }
+    }).catch((reason: unknown) => { if (!controller.signal.aborted && requestGeneration.current === generation && !isAbort(reason)) setState("error"); });
+    return () => { controller.abort(); evidencePageController.current?.abort(); };
   }, [earlyWarningRadar, id, reload]);
 
   function setView(nextView: RadarView) {
     const next = new URLSearchParams(query);
-    if (nextView === "propagation") next.delete("view"); else next.set("view", nextView);
+    next.set("view", nextView);
     const value = next.toString();
     router.replace(value ? `${pathname}?${value}` : pathname);
+  }
+
+  async function loadMoreEvidence() {
+    const cursor = payload?.evidence.next_cursor;
+    if (!cursor || evidenceLoadingMore) return;
+    const controller = new AbortController();
+    const generation = requestGeneration.current;
+    evidencePageController.current?.abort();
+    evidencePageController.current = controller;
+    setEvidenceLoadingMore(true);
+    setEvidenceLoadError(false);
+    try {
+      const nextPage = await api.radarEvidence(id, cursor, 25, controller.signal);
+      if (controller.signal.aborted || requestGeneration.current !== generation || evidencePageController.current !== controller) return;
+      setPayload((current) => {
+        if (!current || requestGeneration.current !== generation) return current;
+        const existing = new Set(current.evidence.items.map((item) => item.public_id));
+        return {
+          ...current,
+          evidence: {
+            ...nextPage,
+            items: [...current.evidence.items, ...nextPage.items.filter((item) => !existing.has(item.public_id))],
+          },
+        };
+      });
+    } catch (reason) {
+      if (!controller.signal.aborted && requestGeneration.current === generation && !isAbort(reason)) setEvidenceLoadError(true);
+    } finally {
+      if (evidencePageController.current === controller) {
+        evidencePageController.current = null;
+        setEvidenceLoadingMore(false);
+      }
+    }
   }
 
   if (!earlyWarningRadar) return <main className="mx-auto max-w-[1240px] px-3 pb-16"><SiteHeader /><p className="mt-16 border-y border-line py-10 text-center text-sm text-dim">Раздел раннего предупреждения отключён.</p></main>;
@@ -55,7 +95,7 @@ export default function RadarTrendPage({ params }: { params: Promise<{ id: strin
       <div className="pt-7"><Link href="/radar" className="inline-flex min-h-11 items-center text-xs uppercase tracking-wide text-dim hover:text-accent focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent">← все тренды</Link></div>
       {state === "loading" && <p role="status" className="flex items-center justify-center gap-2 py-20 text-sm text-dim"><LoaderCircle size={20} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />собираем расследование…</p>}
       {state === "error" && <div role="alert" className="mt-12 border-y border-ru-red/40 py-12 text-center"><CircleAlert size={20} className="mx-auto mb-3 text-ru-red" aria-hidden="true" /><p className="text-sm text-dim">Не удалось загрузить расследование тренда.</p><button type="button" onClick={() => setReload((value) => value + 1)} className="mt-3 min-h-11 text-accent underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">повторить</button></div>}
-      {state === "ready" && payload && <div className="reveal reveal-1 mt-4"><header className="mb-6 border-b border-line pb-7"><p className="section-num">TREND INVESTIGATION / {payload.trend.state.toUpperCase()}</p><h1 className="display mt-3 max-w-5xl text-[38px] leading-[1.05] sm:text-[54px]">{payload.trend.thesis}</h1></header><TrendInvestigation {...payload} view={view} onViewChange={setView} /></div>}
+      {state === "ready" && payload && <div className="reveal reveal-1 mt-4"><header className="mb-6 border-b border-line pb-7"><p className="section-num">TREND INVESTIGATION / {payload.trend.state.toUpperCase()}</p><h1 className="display mt-3 max-w-5xl text-[38px] leading-[1.05] sm:text-[54px]">{payload.trend.thesis}</h1></header><TrendInvestigation {...payload} view={view} onViewChange={setView} evidenceLoadingMore={evidenceLoadingMore} evidenceLoadError={evidenceLoadError} onLoadMoreEvidence={loadMoreEvidence} /></div>}
     </main>
   );
 }

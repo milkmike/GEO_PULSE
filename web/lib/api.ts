@@ -60,6 +60,8 @@ function radarParams(request: RadarFilters, cursor?: string | null): URLSearchPa
   if (request.state) params.set("state", request.state);
   if (request.contour) params.set("contour", request.contour);
   if (request.country?.trim()) params.set("country", request.country.trim().toUpperCase());
+  if (request.storyId && Number.isInteger(request.storyId) && request.storyId > 0) params.set("story_id", String(request.storyId));
+  if (request.signalId && Number.isInteger(request.signalId) && request.signalId > 0) params.set("signal_id", String(request.signalId));
   if (request.limit && Number.isFinite(request.limit)) params.set("limit", String(request.limit));
   if (cursor) params.set("cursor", cursor);
   return params;

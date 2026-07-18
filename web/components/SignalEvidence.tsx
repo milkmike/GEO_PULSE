@@ -407,8 +407,8 @@ export default function SignalEvidence({ detail, storiesEnabled, radarEnabled = 
         </section>
       </div>
 
-      {radarEnabled && detail.countries[0] && (
-        <EarlyWarningPanel countryCode={detail.countries[0].code} title="Связанный тренд радара" limit={1} />
+      {radarEnabled && (
+        <EarlyWarningPanel filters={{ signalId: detail.id }} title="Связанный тренд радара" limit={1} />
       )}
 
       <section aria-labelledby="signal-evidence-heading" className="card p-5">

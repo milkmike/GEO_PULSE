@@ -301,9 +301,9 @@ export default function StoryDetailPage({ params }: { params: Promise<{ id: stri
         </section>
       </div>
 
-      {earlyWarningRadar && story.countries[0] && (
+      {earlyWarningRadar && (
         <div className="mt-3">
-          <EarlyWarningPanel countryCode={story.countries[0].country_code} title="Аналитические тренды" limit={3} />
+          <EarlyWarningPanel filters={{ storyId: story.id }} title="Аналитические тренды" limit={3} />
         </div>
       )}
 

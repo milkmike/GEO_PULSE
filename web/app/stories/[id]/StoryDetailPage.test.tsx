@@ -8,6 +8,11 @@ import { FeatureFlagsProvider } from "@/components/FeatureFlagsProvider";
 const apiMocks = vi.hoisted(() => ({ story: vi.fn() }));
 
 vi.mock("@/lib/api", () => ({ api: apiMocks }));
+vi.mock("@/components/EarlyWarningPanel", () => ({
+  default: ({ filters, countryCode }: { filters?: unknown; countryCode?: string }) => (
+    <div data-testid="story-radar" data-filters={JSON.stringify(filters)} data-country={countryCode}>story radar</div>
+  ),
+}));
 
 const detail: StoryDetailResponse = {
   id: 42,
@@ -185,6 +190,21 @@ describe("StoryDetailPage", () => {
       "href",
       "/search?entity_id=person%3Aputin&entity_label=%D0%92%D0%BB%D0%B0%D0%B4%D0%B8%D0%BC%D0%B8%D1%80+%D0%9F%D1%83%D1%82%D0%B8%D0%BD",
     );
+  });
+
+  it("queries the exact story relation without reducing it to the first country", async () => {
+    apiMocks.story.mockResolvedValue(detail);
+    await act(async () => {
+      render(
+        <FeatureFlagsProvider flags={{ searchNavigation: false, storiesNavigation: true, investigation: false, signalDetail: true, earlyWarningRadar: true }}>
+          <StoryDetailPage params={Promise.resolve({ id: "42" })} />
+        </FeatureFlagsProvider>,
+      );
+    });
+
+    const panel = await screen.findByTestId("story-radar");
+    expect(panel).toHaveAttribute("data-filters", JSON.stringify({ storyId: 42 }));
+    expect(panel).not.toHaveAttribute("data-country");
   });
 
   it("appends a cursor page without replacing the evidence dossier", async () => {
