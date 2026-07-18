@@ -13,6 +13,7 @@ import subprocess
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
+from uuid import UUID
 
 import pytest
 from sqlalchemy import create_engine, text
@@ -995,7 +996,8 @@ def test_radar_migration_is_idempotent_and_preserves_audit_history():
 
 def test_radar_evidence_root_upsert_backfills_without_overwriting_decision():
     dsn, psycopg2 = _requirements()
-    from src.radar.service import _INSERT_OBSERVATION_EVIDENCE
+    from src.radar.service import _persist_observation_evidence
+    from src.radar.types import Observation
 
     connection = psycopg2.connect(dsn)
     connection.autocommit = True
@@ -1008,20 +1010,25 @@ def test_radar_evidence_root_upsert_backfills_without_overwriting_decision():
                 INSERT INTO articles(id, title, url, published_at)
                 VALUES (101, 'Evidence', 'https://example.test/evidence', NOW());
                 INSERT INTO stories(id, slug, title_ru, lifecycle, first_seen, last_seen)
-                VALUES (202, 'evidence-story', 'Evidence', 'emerging', NOW(), NOW());
+                VALUES
+                  (202, 'evidence-story', 'Evidence', 'emerging', NOW(), NOW()),
+                  (203, 'related-story', 'Related', 'emerging', NOW(), NOW());
                 INSERT INTO signals(id, signal_type, country_code, dedup_key)
-                VALUES (303, 'test', 'XZ', 'evidence-signal');
+                VALUES
+                  (303, 'test', 'XZ', 'evidence-signal'),
+                  (304, 'test', 'XZ', 'related-signal');
                 INSERT INTO canonical_entities(id, kind, canonical_name, normalized_name)
                 VALUES ('00000000-0000-0000-0000-000000000099', 'event', 'Evidence', 'evidence');
                 INSERT INTO radar_observations(
                   id, public_id, input_hash, country_code, contour, subject_key,
                   direction, metric, observed_at, article_id, story_id, signal_id,
-                  canonical_entity_id
+                  canonical_entity_id, evidence
                 ) VALUES (
                   404, '00000000-0000-0000-0000-000000000404',
                   'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
                   'XZ', 'media', 'event:evidence', 'negative', 'attention_share', NOW(),
-                  101, 202, 303, '00000000-0000-0000-0000-000000000099'
+                  101, 202, 303, '00000000-0000-0000-0000-000000000099',
+                  '{"article_ids":[101],"story_ids":[202,203],"signal_ids":[303,304]}'::jsonb
                 );
                 INSERT INTO radar_trends(
                   id, public_id, scope, contour, country_code, subject_key,
@@ -1049,37 +1056,65 @@ def test_radar_evidence_root_upsert_backfills_without_overwriting_decision():
         engine = create_engine(dsn)
         Session = sessionmaker(bind=engine)
         try:
+            observation = Observation(
+                public_id=UUID("00000000-0000-0000-0000-000000000404"),
+                input_hash="a" * 64,
+                country_code="XZ",
+                contour="media",
+                subject_key="event:evidence",
+                direction="negative",
+                metric="attention_share",
+                observed_at=datetime(2026, 7, 18, tzinfo=timezone.utc),
+                window=None,
+                value=0.8,
+                publisher_family_count=2,
+                source_count=2,
+                coverage_confidence=1,
+                article_id=101,
+                story_id=202,
+                signal_id=303,
+                canonical_entity_id=UUID("00000000-0000-0000-0000-000000000099"),
+                evidence={
+                    "article_ids": (101,),
+                    "story_ids": (202, 203),
+                    "signal_ids": (303, 304),
+                },
+            )
             with Session.begin() as session:
-                params = {
-                    "public_id": "00000000-0000-0000-0000-000000000707",
-                    "trend_id": 505,
-                    "input_hash": "a" * 64,
-                    "role": "trigger",
-                    "contribution": 1,
-                    "evidence": '{"decision":"replace"}',
-                }
-                session.execute(_INSERT_OBSERVATION_EVIDENCE, params)
-                session.execute(_INSERT_OBSERVATION_EVIDENCE, params)
+                for _ in range(2):
+                    _persist_observation_evidence(
+                        session,
+                        trend_id=505,
+                        observation=observation,
+                        role="trigger",
+                        contribution=1,
+                    )
         finally:
             engine.dispose()
 
         with connection.cursor() as cursor:
             cursor.execute("""
-                SELECT count(*), bool_and(article_id = 101), bool_and(story_id = 202),
-                       bool_and(signal_id = 303),
+                SELECT count(*), bool_and(article_id = 101),
                        bool_and(canonical_entity_id::text =
                          '00000000-0000-0000-0000-000000000099'),
+                       array_agg(story_id ORDER BY id),
+                       array_agg(signal_id ORDER BY id),
                        array_agg(role ORDER BY id),
                        array_agg(contribution ORDER BY id),
-                       array_agg(evidence->>'decision' ORDER BY id)
+                       array_agg(evidence->>'decision' ORDER BY id),
+                       bool_and(evidence @> '{"story_ids":[202,203],"signal_ids":[303,304]}'::jsonb)
+                         FILTER (WHERE role = 'trigger')
                 FROM radar_trend_evidence
                 WHERE trend_id = 505 AND observation_id = 404
             """)
             assert cursor.fetchone() == (
-                2, True, True, True, True,
-                ["context", "support"],
-                [Decimal("0.25000"), Decimal("0.50000")],
-                ["preserve", "also-preserve"],
+                4, True, True,
+                [202, 202, 203, 202],
+                [303, 303, 303, 304],
+                ["context", "support", "trigger", "trigger"],
+                [Decimal("0.25000"), Decimal("0.50000"), Decimal("1.00000"), Decimal("1.00000")],
+                ["preserve", "also-preserve", None, None],
+                True,
             )
     finally:
         connection.close()

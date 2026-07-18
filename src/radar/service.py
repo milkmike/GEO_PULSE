@@ -389,12 +389,13 @@ INSERT INTO radar_trend_evidence (
 )
 SELECT COALESCE((
          SELECT prior.public_id FROM radar_trend_evidence prior
-         WHERE prior.trend_id = :trend_id
+         WHERE :relation_kind = 'base'
+           AND prior.trend_id = :trend_id
            AND prior.observation_id = observation.id
          ORDER BY prior.id LIMIT 1
        ), :public_id),
        :trend_id, observation.id, observation.article_id,
-       observation.story_id, observation.signal_id, observation.canonical_entity_id,
+       :story_id, :signal_id, observation.canonical_entity_id,
        :role, :contribution, CAST(:evidence AS jsonb)
 FROM radar_observations observation
 WHERE observation.input_hash = :input_hash
@@ -404,6 +405,51 @@ ON CONFLICT (public_id) DO UPDATE SET
   signal_id = COALESCE(radar_trend_evidence.signal_id, EXCLUDED.signal_id),
   canonical_entity_id = COALESCE(radar_trend_evidence.canonical_entity_id, EXCLUDED.canonical_entity_id)
 """)
+
+
+def _valid_relation_ids(value: object) -> tuple[int, ...]:
+    if not isinstance(value, (list, tuple, set, frozenset)):
+        return ()
+    return tuple(sorted({item for item in value if isinstance(item, int) and not isinstance(item, bool) and item > 0}))
+
+
+def _persist_observation_evidence(
+    session,
+    *,
+    trend_id: int,
+    observation: Observation,
+    role: str,
+    contribution: float,
+) -> None:
+    """Materialize every exact story/signal root without multiplying observations."""
+
+    base_name = f"geo-pulse:radar-evidence:{trend_id}:{observation.input_hash}"
+    relations = [("base", observation.story_id, observation.signal_id, base_name)]
+    relations.extend(
+        ("story", story_id, observation.signal_id, f"{base_name}:story:{story_id}")
+        for story_id in _valid_relation_ids(observation.evidence.get("story_ids"))
+        if story_id != observation.story_id
+    )
+    relations.extend(
+        ("signal", observation.story_id, signal_id, f"{base_name}:signal:{signal_id}")
+        for signal_id in _valid_relation_ids(observation.evidence.get("signal_ids"))
+        if signal_id != observation.signal_id
+    )
+
+    evidence = json.dumps(dict(observation.evidence))
+    for relation_kind, story_id, signal_id, public_name in relations:
+        session.execute(_INSERT_OBSERVATION_EVIDENCE, {
+            "public_id": uuid5(NAMESPACE_URL, public_name),
+            "trend_id": trend_id,
+            "input_hash": observation.input_hash,
+            "story_id": story_id,
+            "signal_id": signal_id,
+            "relation_kind": relation_kind,
+            "role": role,
+            "contribution": contribution,
+            "evidence": evidence,
+        })
+
 
 _META_BY_IDENTITY = text("""
 SELECT id, state, confirmed_at, t0_auto, t0_effective, meta_key FROM radar_trends
@@ -502,13 +548,13 @@ def _persist_sql(session, observations: list[Observation], waves: Iterable[Count
             if previous_state != state:
                 _insert_state_event(session, trend_id, previous_state, state, "recalculated", as_of, metrics=_baseline_payload(wave), evidence={"wave_key": wave.wave_key, "observation_hashes": [point.input_hash for point in wave.observations]})
         for index, observation in enumerate(wave.observations):
-            session.execute(_INSERT_OBSERVATION_EVIDENCE, {
-                "public_id": uuid5(NAMESPACE_URL, f"geo-pulse:radar-evidence:{trend_id}:{observation.input_hash}"),
-                "trend_id": trend_id, "input_hash": observation.input_hash,
-                "role": "trigger" if index == 0 else "support",
-                "contribution": 1.0 if index == 0 else 0.5,
-                "evidence": json.dumps(dict(observation.evidence)),
-            })
+            _persist_observation_evidence(
+                session,
+                trend_id=trend_id,
+                observation=observation,
+                role="trigger" if index == 0 else "support",
+                contribution=1.0 if index == 0 else 0.5,
+            )
         wave_ids[(wave.country_code, wave.contour, wave.subject_key, wave.direction, wave.wave_key)] = trend_id
         first_id = first_id or trend_id
     _persist_meta_and_contours(session, metas, wave_ids, as_of)

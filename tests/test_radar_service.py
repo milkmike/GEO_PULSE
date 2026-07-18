@@ -209,15 +209,47 @@ def test_sql_evidence_copies_observation_roots_to_the_country_trend(monkeypatch)
     assert (observation_write["article_id"], observation_write["story_id"], observation_write["signal_id"], observation_write["canonical_entity_id"]) == (101, 202, 303, entity_id)
     assert evidence_write["trend_id"] == 1
     assert evidence_write["input_hash"] == observation.input_hash
-    for root in ("article_id", "story_id", "signal_id", "canonical_entity_id"):
+    assert (evidence_write["story_id"], evidence_write["signal_id"]) == (202, 303)
+    assert evidence_write["relation_kind"] == "base"
+    for root in ("article_id", "canonical_entity_id"):
         assert f"observation.{root}" in evidence_sql
+    for root in ("story_id", "signal_id"):
+        assert f":{root}" in evidence_sql
+    for root in ("article_id", "story_id", "signal_id", "canonical_entity_id"):
         assert f"COALESCE(radar_trend_evidence.{root}, EXCLUDED.{root})" in evidence_sql
     assert "ON CONFLICT (public_id) DO UPDATE" in evidence_sql
+    assert ":relation_kind = 'base'" in evidence_sql
     assert "prior.trend_id = :trend_id" in evidence_sql
     assert "prior.observation_id = observation.id" in evidence_sql
     assert "role =" not in evidence_sql.split("DO UPDATE", 1)[1]
     assert "contribution =" not in evidence_sql.split("DO UPDATE", 1)[1]
     assert "evidence =" not in evidence_sql.split("DO UPDATE", 1)[1]
+
+
+def test_sql_evidence_materializes_every_story_and_signal_relation(monkeypatch):
+    import src.radar.service as service
+
+    observation = make_observation(
+        country_code="ES", contour="media", subject_key="event:energy", direction="negative",
+        metric="attention_share", observed_at=AS_OF.replace(day=10),
+        evidence_ids=("article:101", "story:202", "story:203", "signal:303", "signal:304"),
+        value=0.8, publisher_family_count=2, source_count=2, coverage_confidence=1,
+        article_id=101, story_id=202, signal_id=303,
+        evidence={"article_ids": (101,), "story_ids": (202, 203), "signal_ids": (303, 304)},
+    )
+    monkeypatch.setattr(service, "build_media_observations", lambda *_: [observation])
+    monkeypatch.setattr(service, "build_action_observations", lambda *_: [])
+    session = _RecordingSqlSession()
+
+    report = run_radar_cycle(session, AS_OF, shadow=False)
+
+    writes = [params for sql, params in session.calls if "INSERT INTO radar_trend_evidence" in sql]
+    assert {(params["story_id"], params["signal_id"]) for params in writes} == {
+        (202, 303), (203, 303), (202, 304),
+    }
+    assert len({params["public_id"] for params in writes}) == 3
+    assert all(params["trend_id"] == 1 for params in writes)
+    assert len(report.country_waves[0].observations) == 1
 
 
 def test_lifecycle_uses_persisted_confirmed_state_and_timeline():
