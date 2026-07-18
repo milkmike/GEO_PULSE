@@ -9,7 +9,7 @@ import pytest
 
 from src.radar.actions import _FOSSIL, build_action_observations
 from src.radar.media import build_media_observations
-from src.radar.repository import make_observation, upsert_observations
+from src.radar.repository import observation_input_hash, make_observation, upsert_observations
 from src.radar.types import Contour, Observation, ObservationWindow
 
 
@@ -22,25 +22,32 @@ def _window() -> ObservationWindow:
 
 
 class _Result:
-    def __init__(self, rows=(), rowcount=0):
+    def __init__(self, rows=(), rowcount=0, scalar_value=None):
         self._rows = list(rows)
         self.rowcount = rowcount
+        self._scalar_value = scalar_value
 
     def fetchall(self):
         return self._rows
 
+    def scalar(self):
+        return self._scalar_value
+
 
 class _Session:
-    def __init__(self, media_rows=(), action_rows=(), inserted=1):
+    def __init__(self, media_rows=(), action_rows=(), inserted=1, existing_source_fingerprints=()):
         self.media_rows = media_rows
         self.action_rows = action_rows
         self.inserted = inserted
         self.calls = []
         self.inserted_hashes = set()
+        self.existing_source_fingerprints = set(existing_source_fingerprints)
 
     def execute(self, statement, params=None):
         sql = str(statement)
         self.calls.append((sql, params or {}))
+        if "annual_source_fingerprint_gate" in sql:
+            return _Result(scalar_value=(params or {})["source_id"] in self.existing_source_fingerprints)
         if "radar_observations" in sql and "INSERT" in sql:
             input_hash = (params or {})["input_hash"]
             if input_hash in self.inserted_hashes:
@@ -230,7 +237,7 @@ def test_attention_denominator_includes_verified_irrelevant_national_coverage():
     assert point.value == pytest.approx(0.5)
 
 
-def test_annual_actions_use_period_and_values_not_mutable_refresh_time():
+def test_annual_actions_expose_period_values_and_real_refresh_time():
     session = _Session(action_rows={
         "un_votes": (SimpleNamespace(
             country_code="ES", year=2025, current_value=Decimal("42.0"),
@@ -246,14 +253,6 @@ def test_annual_actions_use_period_and_values_not_mutable_refresh_time():
     assert point.evidence["current_value"] == 42.0
     assert point.evidence["previous_value"] == 40.0
     assert point.evidence["delta"] == 2.0
-    replay = _Session(action_rows={
-        "un_votes": (SimpleNamespace(
-            country_code="ES", year=2025, current_value=Decimal("42.00"),
-            previous_value=Decimal("40.00"), updated_at=NOW + timedelta(days=10),
-        ),),
-    })
-    [replayed] = build_action_observations(replay, _window())
-    assert replayed.input_hash == point.input_hash
 
 
 def test_fossil_snapshot_requires_comparable_prior_and_canonicalizes_numbers():
@@ -337,7 +336,7 @@ def test_annual_sql_selects_current_refreshes_by_real_updated_time():
     assert point.evidence["period_year"] == 2025
 
 
-def test_annual_replay_identity_ignores_refreshed_updated_at():
+def test_annual_hash_uses_exact_persisted_observed_at():
     def observation(updated_at):
         session = _Session(action_rows={
             "trade_data": (SimpleNamespace(
@@ -351,7 +350,50 @@ def test_annual_replay_identity_ignores_refreshed_updated_at():
     replay = observation(NOW - timedelta(hours=1))
 
     assert first.observed_at != replay.observed_at
-    assert first.input_hash == replay.input_hash
+    assert first.input_hash != replay.input_hash
+    assert first.input_hash == observation_input_hash(
+        contour=first.contour,
+        country_code=first.country_code,
+        subject_key=first.subject_key,
+        direction=first.direction,
+        observed_at=first.observed_at,
+        metric=first.metric,
+        evidence_ids=first.evidence["evidence_ids"],
+    )
+
+
+def test_annual_source_fingerprint_suppresses_unchanged_refresh():
+    row = SimpleNamespace(
+        country_code="ES", year=2025, current_value=Decimal("120"),
+        previous_value=Decimal("100"), value=Decimal("20"), updated_at=NOW - timedelta(hours=2),
+    )
+    [first] = build_action_observations(_Session(action_rows={"trade_data": (row,)}), _window())
+    refreshed = SimpleNamespace(**{**row.__dict__, "updated_at": NOW - timedelta(hours=1)})
+
+    suppressed = build_action_observations(_Session(
+        action_rows={"trade_data": (refreshed,)},
+        existing_source_fingerprints=(first.evidence["source_id"],),
+    ), _window())
+
+    assert suppressed == []
+
+
+def test_annual_corrected_value_emits_with_real_updated_time_and_new_hash():
+    original = SimpleNamespace(
+        country_code="ES", year=2025, current_value=Decimal("120"),
+        previous_value=Decimal("100"), value=Decimal("20"), updated_at=NOW - timedelta(hours=2),
+    )
+    [first] = build_action_observations(_Session(action_rows={"trade_data": (original,)}), _window())
+    corrected_at = NOW - timedelta(hours=1)
+    corrected = SimpleNamespace(**{**original.__dict__, "value": Decimal("21"), "updated_at": corrected_at})
+
+    [point] = build_action_observations(_Session(
+        action_rows={"trade_data": (corrected,)},
+        existing_source_fingerprints=(first.evidence["source_id"],),
+    ), _window())
+
+    assert point.observed_at == corrected_at
+    assert point.input_hash != first.input_hash
 
 
 def test_fossil_prior_query_excludes_reported_or_non_authoritative_rows():

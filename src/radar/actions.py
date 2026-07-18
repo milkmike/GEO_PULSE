@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -109,6 +109,25 @@ _FOSSIL = text("""
 """)
 
 
+_ANNUAL_FINGERPRINT_GATE = text("""
+    /* annual_source_fingerprint_gate */
+    SELECT EXISTS (
+        SELECT 1
+        FROM radar_observations prior
+        WHERE prior.contour = 'action'
+          AND prior.country_code = :country_code
+          AND prior.evidence->>'dataset' = :dataset
+          AND prior.evidence->>'source_id' = :source_id
+        UNION ALL
+        SELECT 1
+        FROM action_events prior
+        WHERE prior.country_code = :country_code
+          AND prior.details->>'dataset' = :dataset
+          AND prior.details->>'source_id' = :source_id
+    )
+""")
+
+
 def _value(row: Any, name: str, default: Any = None) -> Any:
     if isinstance(row, dict):
         return row.get(name, default)
@@ -139,13 +158,6 @@ def _fingerprint(value: Decimal) -> str:
     return "0" if rendered in {"-0", ""} else rendered
 
 
-def _annual_at(year: Any) -> datetime | None:
-    try:
-        return datetime(int(year), 12, 31, tzinfo=timezone.utc)
-    except (TypeError, ValueError):
-        return None
-
-
 def _direction(value: Decimal) -> str:
     return "increase" if value > 0 else "decrease"
 
@@ -157,21 +169,41 @@ def _build_rows(session, sql, window: ObservationWindow) -> list[Any]:
     }).fetchall()
 
 
-def _structured_observation(
-    *, dataset: str, authority: str, metric: str, resolution: str,
-    country: str, observed_at: datetime, current: Decimal | None,
-    previous: Decimal | None, delta: Decimal, period_year: int | None = None,
-    yoy_change_pct: Decimal | None = None,
-    window: ObservationWindow,
-) -> Observation:
+def _source_fingerprint(
+    *, dataset: str, country: str, observed_at: datetime, resolution: str,
+    current: Decimal | None, previous: Decimal | None, delta: Decimal,
+    period_year: int | None,
+) -> str:
     period = str(period_year) if resolution == "year" else observed_at.isoformat()
     current_fingerprint = _fingerprint(current if current is not None else delta)
     previous_fingerprint = _fingerprint(previous if previous is not None else Decimal("0"))
     delta_fingerprint = _fingerprint(delta)
-    source_id = ":".join((
+    return ":".join((
         dataset, country, period, current_fingerprint, previous_fingerprint,
         delta_fingerprint,
     ))
+
+
+def _annual_fingerprint_exists(session, *, country: str, dataset: str, source_id: str) -> bool:
+    return bool(session.execute(_ANNUAL_FINGERPRINT_GATE, {
+        "country_code": country,
+        "dataset": dataset,
+        "source_id": source_id,
+    }).scalar())
+
+
+def _structured_observation(
+    *, dataset: str, authority: str, metric: str, resolution: str,
+    country: str, observed_at: datetime, current: Decimal | None,
+    previous: Decimal | None, delta: Decimal, period_year: int | None = None,
+    yoy_change_pct: Decimal | None = None, source_id: str | None = None,
+    window: ObservationWindow,
+) -> Observation:
+    source_id = source_id or _source_fingerprint(
+        dataset=dataset, country=country, observed_at=observed_at,
+        resolution=resolution, current=current, previous=previous, delta=delta,
+        period_year=period_year,
+    )
     evidence = {
         "dataset": dataset,
         "status": "verified",
@@ -199,7 +231,6 @@ def _structured_observation(
         baseline={"temporal_resolution": resolution},
         evidence=evidence,
         evidence_ids=(source_id,),
-        identity_observed_at=_annual_at(period_year) if resolution == "year" else None,
     )
 
 
@@ -235,11 +266,21 @@ def build_action_observations(session, window: ObservationWindow) -> list[Observ
                 delta = current - previous if delta is None else delta
             if delta is None or delta == 0:
                 continue
+            source_id = _source_fingerprint(
+                dataset=dataset, country=country, observed_at=observed_at,
+                resolution=resolution, current=current, previous=previous,
+                delta=delta, period_year=period_year,
+            )
+            if resolution == "year" and _annual_fingerprint_exists(
+                session, country=country, dataset=dataset, source_id=source_id,
+            ):
+                continue
             observations.append(_structured_observation(
                 dataset=dataset, authority=authority, metric=metric,
                 resolution=resolution, country=country, observed_at=observed_at,
                 current=current, previous=previous, delta=delta, window=window,
                 period_year=period_year,
                 yoy_change_pct=_decimal(_value(row, "yoy_change_pct")),
+                source_id=source_id,
             ))
     return observations

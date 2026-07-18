@@ -94,6 +94,28 @@ git diff --check
 
 Result: `147 passed, 2 warnings` in 1.47s.
 
+## Final observation-identity correction
+
+- Removed the synthetic annual identity timestamp. Every observation hash and
+  public ID now use the exact `observed_at` persisted to `radar_observations`.
+- Added a separate annual source-fingerprint gate against persisted action
+  Radar observations and action events. The fingerprint covers dataset,
+  country, year, current/previous values, and emitted delta. An unchanged
+  refresh is therefore suppressed before construction; a correction has a new
+  fingerprint, real refresh timestamp, and hash.
+- Added regressions for exact hash time, unchanged refresh suppression, and
+  corrected annual magnitude emission.
+
+Final verification:
+
+```text
+.venv/bin/python -m pytest tests/test_radar_observations.py tests/test_stories.py tests/test_signal_evidence.py -q
+git diff --check
+.venv/bin/python -m py_compile src/radar/actions.py src/radar/repository.py src/radar/media.py src/radar/types.py
+```
+
+Result: `149 passed, 2 warnings` in 6.01s.
+
 ## Commit
 
 `feat(radar): normalize media and action evidence`

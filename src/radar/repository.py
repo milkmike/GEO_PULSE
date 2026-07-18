@@ -58,7 +58,6 @@ def make_observation(
     *, country_code: str, contour: Contour | str, subject_key: str,
     direction: str, metric: str, observed_at: datetime,
     evidence_ids: Iterable[str], window: ObservationWindow | None = None,
-    identity_observed_at: datetime | None = None,
     value: float | None = None, publisher_family_count: int = 0,
     source_count: int = 0, coverage_confidence: float = 0.0,
     authority: str | None = None, article_id: int | None = None,
@@ -81,7 +80,7 @@ def make_observation(
     evidence_payload["evidence_ids"] = normalized_evidence_ids
     input_hash = observation_input_hash(
         contour=contour, country_code=country_code, subject_key=subject_key,
-        direction=direction, observed_at=identity_observed_at or observed_at, metric=metric,
+        direction=direction, observed_at=observed_at, metric=metric,
         evidence_ids=normalized_evidence_ids,
     )
     return Observation(
