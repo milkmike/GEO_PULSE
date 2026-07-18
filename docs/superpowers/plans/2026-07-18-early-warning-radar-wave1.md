@@ -256,6 +256,7 @@ git commit -m "feat(radar): add baseline and lifecycle engine"
 - Create: `src/radar/media.py`
 - Create: `src/radar/actions.py`
 - Create: `src/radar/repository.py`
+- Modify: `src/radar/types.py`
 - Create: `tests/test_radar_observations.py`
 
 **Interfaces:**
