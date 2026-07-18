@@ -336,17 +336,31 @@ def _persist_meta_and_contours(
                 "meta_trend_id": meta_id, "country_trend_id": country_id,
                 "evidence": json.dumps({"subject_key": meta.subject_key, "direction": meta.direction}),
             })
-    grouped: dict[tuple[str, str, str], dict[Contour, int]] = {}
+    grouped: dict[tuple[str, str, str], dict[Contour, tuple[int, CountryWave]]] = {}
+    wave_by_identity = {
+        (wave.country_code, wave.contour, wave.subject_key, wave.direction): wave
+        for meta in metas for wave in meta.waves
+    }
     for (country, contour, subject, direction), trend_id in wave_ids.items():
-        grouped.setdefault((country, subject, direction), {})[contour] = trend_id
+        grouped.setdefault((country, subject, direction), {})[contour] = (
+            trend_id, wave_by_identity[(country, contour, subject, direction)],
+        )
     for (country, subject, direction), contours in grouped.items():
-        media_id, action_id = contours.get(Contour.MEDIA), contours.get(Contour.ACTION)
-        if media_id is None or action_id is None:
+        media, action = contours.get(Contour.MEDIA), contours.get(Contour.ACTION)
+        if media is None or action is None:
             continue
+        media_id, media_wave = media
+        action_id, action_wave = action
+        if media_wave.t0_auto is None or action_wave.t0_auto is None:
+            status = "insufficient"
+        elif abs(media_wave.t0_auto - action_wave.t0_auto) <= timedelta(days=14):
+            status = "aligned"
+        else:
+            status = "divergent"
         session.execute(_UPSERT_CONTOUR_LINK, {
             "public_id": uuid5(NAMESPACE_URL, f"geo-pulse:radar-contour:{media_id}:{action_id}"),
             "media_trend_id": media_id, "action_trend_id": action_id,
-            "status": "aligned", "evidence": json.dumps({"country_code": country, "subject_key": subject, "direction": direction}),
+            "status": status, "evidence": json.dumps({"country_code": country, "subject_key": subject, "direction": direction}),
             "evaluated_at": as_of,
         })
 
