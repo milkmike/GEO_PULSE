@@ -34,14 +34,14 @@ def _as_of(value: str | None) -> datetime:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build replayable Radar waves")
     parser.add_argument("--as-of", help="ISO-8601 UTC cutoff (defaults to now)")
-    parser.add_argument("--days", type=int, default=90, help="lookback window (default: 90)")
+    parser.add_argument("--days", type=int, default=90, help="audited lookback window (must be 90)")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--shadow", action="store_true", help="dry-run (the default)")
     mode.add_argument("--apply", action="store_true", help="persist immutable observations and trends")
     parser.add_argument("--json-report", help="write the machine-readable replay report")
     args = parser.parse_args(argv)
-    if args.days <= 0:
-        parser.error("--days must be positive")
+    if args.days != 90:
+        parser.error("--days must be exactly 90 for Radar Wave 1")
     return args
 
 
