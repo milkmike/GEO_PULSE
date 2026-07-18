@@ -24,11 +24,11 @@ def _decision(
     state: TrendState,
     reason: str,
     metrics: TrendMetrics,
-    *,
-    record_confirmation: bool = False,
 ) -> TrendDecision:
     timeline = metrics.timeline
-    if record_confirmation and metrics.as_of is not None:
+    if state is TrendState.CONFIRMED:
+        if metrics.as_of is None:
+            raise ValueError("as_of is required for confirmed state")
         timeline = timeline.confirm(metrics.as_of)
     return TrendDecision(
         state=state,
@@ -78,7 +78,6 @@ def decide_state(metrics: TrendMetrics, previous_state: TrendState | str) -> Tre
             TrendState.CONFIRMED,
             "media_confirmation_gates_passed",
             metrics,
-            record_confirmation=True,
         )
 
     # ``analysis_action_level`` intentionally does not participate here: it is a
@@ -88,13 +87,11 @@ def decide_state(metrics: TrendMetrics, previous_state: TrendState | str) -> Tre
             TrendState.CONFIRMED,
             "authoritative_action_evidence",
             metrics,
-            record_confirmation=True,
         )
     if metrics.authoritative_source_count >= 2:
         return _decision(
             TrendState.CONFIRMED,
             "independent_authoritative_sources",
             metrics,
-            record_confirmation=True,
         )
     return _decision(state, "insufficient_authoritative_evidence", metrics)

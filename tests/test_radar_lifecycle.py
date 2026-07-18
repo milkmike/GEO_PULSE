@@ -4,7 +4,13 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from src.radar.lifecycle import decide_state
-from src.radar.types import Contour, TrendMetrics, TrendState, TrendTimeline
+from src.radar.types import (
+    Contour,
+    TrendDecision,
+    TrendMetrics,
+    TrendState,
+    TrendTimeline,
+)
 
 
 NOW = datetime(2026, 7, 18, 12, 0, tzinfo=timezone.utc)
@@ -126,6 +132,43 @@ def test_confirmation_sets_only_confirmed_at_on_immutable_timeline():
     assert timeline.confirmed_at is None
     with pytest.raises(FrozenInstanceError):
         decision.timeline.confirmed_at = NOW - timedelta(days=1)
+
+
+@pytest.mark.parametrize(
+    "confirmation_metrics",
+    (
+        {"contour": "media", "persistent": True, "publisher_family_count": 2},
+        {"contour": "action", "authoritative": True, "authority": "registry"},
+    ),
+)
+def test_confirmation_requires_as_of(confirmation_metrics):
+    with pytest.raises(ValueError, match="as_of is required for confirmed state"):
+        decide_state(_metrics(as_of=None, **confirmation_metrics), "emerging")
+
+
+def test_confirmed_result_always_has_confirmed_at():
+    decision = decide_state(
+        _metrics(
+            contour="media",
+            persistent=True,
+            publisher_family_count=2,
+            timeline=TrendTimeline(detected_at=NOW - timedelta(days=1)),
+        ),
+        "confirmed",
+    )
+
+    assert decision.state == "confirmed"
+    assert decision.timeline.confirmed_at == NOW
+
+
+def test_confirmed_decision_rejects_a_timeline_without_confirmed_at():
+    with pytest.raises(ValueError, match="confirmed state requires confirmed_at"):
+        TrendDecision(
+            state="confirmed",
+            reason="invalid",
+            confirmation_allowed=True,
+            timeline=TrendTimeline(),
+        )
 
 
 def test_reconfirmation_preserves_original_confirmed_at():

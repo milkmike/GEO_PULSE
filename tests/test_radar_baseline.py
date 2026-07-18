@@ -1,5 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -80,6 +82,28 @@ def test_baseline_uses_an_exact_rolling_90_times_24_hour_window():
     assert result.dense_points[-1].at == NOW - timedelta(hours=1)
 
 
+def test_baseline_normalizes_berlin_dst_timestamps_before_window_math():
+    berlin = ZoneInfo("Europe/Berlin")
+    as_of = datetime(2026, 4, 15, 12, 0, tzinfo=berlin)
+    as_of_utc = as_of.astimezone(timezone.utc)
+    window_start = as_of_utc - timedelta(days=90)
+    points = (
+        DailyPoint(at=window_start - timedelta(microseconds=1), volume=100.0),
+        DailyPoint(at=window_start, volume=1.0),
+        DailyPoint(at=as_of - timedelta(hours=1), volume=2.0),
+    )
+
+    result = calculate_baseline(points, as_of=as_of, coverage=0.9)
+
+    assert result.as_of == as_of_utc
+    assert result.as_of.tzinfo is timezone.utc
+    assert tuple(point.at for point in result.baseline_points) == (
+        window_start,
+        as_of_utc - timedelta(hours=1),
+    )
+    assert all(point.at.tzinfo is timezone.utc for point in result.baseline_points)
+
+
 def test_baseline_preserves_missing_days_instead_of_treating_them_as_zero():
     points = tuple(
         point
@@ -131,7 +155,20 @@ def test_online_drift_flags_are_accumulated_when_detected_midstream(monkeypatch)
     assert result.online_candidate_flags == ("adwin", "page_hinkley")
 
 
-def test_t0_is_first_supported_change_not_detection_time():
+def test_t0_is_first_supported_change_not_detection_time(monkeypatch):
+    class DeterministicPelt:
+        def __init__(self, *, model, min_size, jump):
+            assert (model, min_size, jump) == ("l2", 7, 1)
+
+        def fit(self, signal):
+            self.sample_count = len(signal)
+            return self
+
+        def predict(self, *, pen):
+            assert pen > 0
+            return [63, self.sample_count]
+
+    monkeypatch.setattr(baseline, "rpt", SimpleNamespace(Pelt=DeterministicPelt))
     result = refine_t0(_regime_change(day=63), detected_at=NOW)
 
     expected = NOW - timedelta(days=7)
@@ -145,6 +182,14 @@ def test_t0_requires_28_valid_daily_points():
 
     assert result.t0_auto is None
     assert result.status == "insufficient_history"
+
+
+def test_t0_rejects_history_that_does_not_reach_detection_boundary():
+    result = refine_t0(_regime_change(day=63)[:-2], detected_at=NOW)
+
+    assert result.valid_days == 68
+    assert result.status == "trailing_gap"
+    assert result.t0_auto is None
 
 
 def test_t0_excludes_a_point_at_the_detection_time():
@@ -173,6 +218,17 @@ def test_t0_does_not_collapse_calendar_gaps_into_continuous_history():
     assert result.valid_days == 19
     assert result.status == "insufficient_history"
     assert result.t0_auto is None
+
+
+def test_t0_reports_detector_unavailable_without_heuristic_fallback(monkeypatch):
+    monkeypatch.setattr(baseline, "rpt", None)
+
+    result = refine_t0(_regime_change(day=63), detected_at=NOW)
+
+    assert result.valid_days == 70
+    assert result.status == "detector_unavailable"
+    assert result.t0_auto is None
+    assert result.changepoints == ()
 
 
 def test_temperature_requirements_pin_numpy_compatible_river():

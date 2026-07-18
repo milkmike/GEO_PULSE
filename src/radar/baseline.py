@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from math import log1p
 from statistics import fmean
@@ -36,6 +37,11 @@ def clamp01(value: float) -> float:
 def _require_aware(value: datetime, field: str) -> None:
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError(f"{field} must be timezone-aware")
+
+
+def _as_utc(value: datetime, field: str) -> datetime:
+    _require_aware(value, field)
+    return value.astimezone(timezone.utc)
 
 
 def _utc_day(value: datetime) -> date:
@@ -112,17 +118,18 @@ def calculate_baseline(
     as ``None``.  Missing collection cannot manufacture an apparent quiet period.
     """
 
-    _require_aware(as_of, "as_of")
+    as_of_utc = _as_utc(as_of, "as_of")
     if not 0.0 <= coverage <= 1.0:
         raise ValueError("coverage must be between 0 and 1")
-    window_start = as_of - timedelta(days=WINDOW_DAYS)
+    window_start = as_of_utc - timedelta(days=WINDOW_DAYS)
     buckets: list[list[DailyPoint]] = [[] for _ in range(WINDOW_DAYS)]
     for point in points:
-        if not window_start <= point.at < as_of:
+        normalized_point = replace(point, at=_as_utc(point.at, "point.at"))
+        if not window_start <= normalized_point.at < as_of_utc:
             continue
-        elapsed = point.at - window_start
+        elapsed = normalized_point.at - window_start
         bucket_index = elapsed // timedelta(days=1)
-        buckets[bucket_index].append(point)
+        buckets[bucket_index].append(normalized_point)
 
     dense: list[Optional[DailyPoint]] = []
     for bucket_points in buckets:
@@ -142,7 +149,7 @@ def calculate_baseline(
     return BaselineResult(
         window_days=WINDOW_DAYS,
         acceleration_days=ACCELERATION_DAYS,
-        as_of=as_of,
+        as_of=as_of_utc,
         baseline_points=baseline_points,
         dense_points=tuple(dense),
         missing_days=sum(point is None for point in dense),
@@ -174,23 +181,8 @@ def _metric_value(point: DailyPoint) -> Optional[float]:
     return fmean(parts) if parts else None
 
 
-def _fallback_changepoints(values: Sequence[float]) -> list[int]:
-    """Find the strongest supported split when ruptures is unavailable."""
-
-    candidates: list[tuple[float, int]] = []
-    for split in range(MIN_SEGMENT_DAYS, len(values) - MIN_SEGMENT_DAYS + 1):
-        before = fmean(values[split - MIN_SEGMENT_DAYS:split])
-        after = fmean(values[split:split + MIN_SEGMENT_DAYS])
-        candidates.append((abs(after - before), split))
-    if not candidates:
-        return []
-    strength, split = max(candidates)
-    return [split] if strength > 0.0 else []
-
-
 def _pelt_changepoints(values: Sequence[float]) -> list[int]:
-    if rpt is None:
-        return _fallback_changepoints(values)
+    assert rpt is not None
     # BIC-style penalty keeps a flat metric flat while retaining sustained shifts.
     variance = fmean((value - fmean(values)) ** 2 for value in values)
     penalty = max(1.0, log1p(len(values)) * variance)
@@ -205,11 +197,12 @@ def _pelt_changepoints(values: Sequence[float]) -> list[int]:
 def refine_t0(points: Iterable[DailyPoint], detected_at: datetime) -> T0Result:
     """Refine automatic T0 from the earliest changepoint before detection."""
 
-    _require_aware(detected_at, "detected_at")
+    detected_at_utc = _as_utc(detected_at, "detected_at")
     daily: dict[date, list[DailyPoint]] = defaultdict(list)
     for point in points:
-        if point.at < detected_at:
-            daily[_utc_day(point.at)].append(point)
+        normalized_point = replace(point, at=_as_utc(point.at, "point.at"))
+        if normalized_point.at < detected_at_utc:
+            daily[_utc_day(normalized_point.at)].append(normalized_point)
     eligible: list[tuple[date, DailyPoint]] = []
     for day in sorted(daily):
         combined = _combine_points(daily[day])
@@ -225,9 +218,24 @@ def refine_t0(points: Iterable[DailyPoint], detected_at: datetime) -> T0Result:
     valid = contiguous_runs[-1] if contiguous_runs else []
     if len(valid) < MIN_T0_VALID_DAYS:
         return T0Result(
-            detected_at=detected_at,
+            detected_at=detected_at_utc,
             t0_auto=None,
             status="insufficient_history",
+            valid_days=len(valid),
+        )
+    expected_final_day = _utc_day(detected_at_utc - timedelta(days=1))
+    if eligible[-1][0] != expected_final_day:
+        return T0Result(
+            detected_at=detected_at_utc,
+            t0_auto=None,
+            status="trailing_gap",
+            valid_days=len(valid),
+        )
+    if rpt is None:
+        return T0Result(
+            detected_at=detected_at_utc,
+            t0_auto=None,
+            status="detector_unavailable",
             valid_days=len(valid),
         )
 
@@ -235,7 +243,7 @@ def refine_t0(points: Iterable[DailyPoint], detected_at: datetime) -> T0Result:
     splits = _pelt_changepoints(values)  # values are guaranteed non-null above.
     if not splits:
         return T0Result(
-            detected_at=detected_at,
+            detected_at=detected_at_utc,
             t0_auto=None,
             status="no_changepoint",
             valid_days=len(valid),
@@ -244,13 +252,13 @@ def refine_t0(points: Iterable[DailyPoint], detected_at: datetime) -> T0Result:
     changepoints = tuple(valid[split].at for split in splits if split < len(valid))
     if not changepoints:
         return T0Result(
-            detected_at=detected_at,
+            detected_at=detected_at_utc,
             t0_auto=None,
             status="no_changepoint",
             valid_days=len(valid),
         )
     return T0Result(
-        detected_at=detected_at,
+        detected_at=detected_at_utc,
         t0_auto=changepoints[0],
         status="refined",
         valid_days=len(valid),

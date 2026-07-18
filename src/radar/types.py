@@ -172,3 +172,5 @@ class TrendDecision:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "state", TrendState(self.state))
+        if self.state is TrendState.CONFIRMED and self.timeline.confirmed_at is None:
+            raise ValueError("confirmed state requires confirmed_at")
