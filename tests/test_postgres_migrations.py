@@ -749,15 +749,38 @@ def test_radar_migration_is_idempotent_and_preserves_audit_history():
             cursor.execute("""
                 INSERT INTO radar_trends(
                     public_id, scope, contour, country_code, subject_key, title_ru,
-                    direction, state, confidence, coverage_confidence,
+                    direction, wave_key, state, confidence, coverage_confidence,
                     first_observed_at, detector_version
                 ) VALUES (
                     '00000000-0000-0000-0000-000000000001', 'country', 'media',
-                    %s, 'policy:test', 'Тест', 'warming', 'candidate', 0.5, 0.5,
-                    NOW(), 'test-v1'
+                    %s, 'policy:test', 'Тест', 'warming', 'wave:test:1',
+                    'candidate', 0.5, 0.5, NOW(), 'test-v1'
                 ) RETURNING id
             """, (country_code,))
             trend_id = cursor.fetchone()[0]
+            cursor.execute("""
+                INSERT INTO radar_trends(
+                    public_id, scope, contour, country_code, subject_key, title_ru,
+                    direction, wave_key, state, confidence, coverage_confidence,
+                    first_observed_at, detector_version
+                ) VALUES (
+                    '00000000-0000-0000-0000-000000000015', 'country', 'media',
+                    %s, 'policy:test', 'Вторая волна', 'warming', 'wave:test:2',
+                    'candidate', 0.5, 0.5, NOW(), 'test-v1'
+                )
+            """, (country_code,))
+            with pytest.raises(psycopg2.errors.UniqueViolation):
+                cursor.execute("""
+                    INSERT INTO radar_trends(
+                        public_id, scope, contour, country_code, subject_key,
+                        title_ru, direction, wave_key, state, confidence,
+                        coverage_confidence, first_observed_at, detector_version
+                    ) VALUES (
+                        '00000000-0000-0000-0000-000000000016', 'country',
+                        'media', %s, 'policy:test', 'Дубликат волны', 'warming',
+                        'wave:test:1', 'candidate', 0.5, 0.5, NOW(), 'test-v1'
+                    )
+                """, (country_code,))
             cursor.execute("""
                 INSERT INTO radar_trends(
                     public_id, scope, subject_key, title_ru, direction, state,
@@ -770,27 +793,63 @@ def test_radar_migration_is_idempotent_and_preserves_audit_history():
                 ) RETURNING id
             """)
             meta_trend_id = cursor.fetchone()[0]
+            with pytest.raises(psycopg2.errors.UniqueViolation):
+                cursor.execute("""
+                    INSERT INTO radar_trends(
+                        public_id, scope, subject_key, title_ru, direction, state,
+                        confidence, coverage_confidence, first_observed_at,
+                        detector_version
+                    ) VALUES (
+                        '00000000-0000-0000-0000-000000000017', 'meta',
+                        'policy:test', 'Мета-дубликат', 'warming', 'candidate',
+                        0.5, 0.5, NOW(), 'test-v1'
+                    )
+                """)
+            with pytest.raises(psycopg2.errors.CheckViolation):
+                cursor.execute("""
+                    INSERT INTO radar_trends(
+                        public_id, scope, subject_key, title_ru, direction,
+                        wave_key, state, confidence, coverage_confidence,
+                        first_observed_at, detector_version
+                    ) VALUES (
+                        '00000000-0000-0000-0000-000000000018', 'meta',
+                        'policy:meta-wave', 'Недопустимая мета-волна', 'warming',
+                        'wave:meta', 'candidate', 0.5, 0.5, NOW(), 'test-v1'
+                    )
+                """)
+            with pytest.raises(psycopg2.errors.CheckViolation):
+                cursor.execute("""
+                    INSERT INTO radar_trends(
+                        public_id, scope, contour, country_code, subject_key,
+                        title_ru, direction, state, confidence,
+                        coverage_confidence, first_observed_at, detector_version
+                    ) VALUES (
+                        '00000000-0000-0000-0000-000000000019', 'country',
+                        'media', %s, 'policy:no-wave', 'Без волны', 'warming',
+                        'candidate', 0.5, 0.5, NOW(), 'test-v1'
+                    )
+                """, (country_code,))
             cursor.execute("""
                 INSERT INTO radar_trends(
                     public_id, scope, contour, country_code, subject_key, title_ru,
-                    direction, state, confidence, coverage_confidence,
+                    direction, wave_key, state, confidence, coverage_confidence,
                     first_observed_at, detector_version
                 ) VALUES (
                     '00000000-0000-0000-0000-000000000006', 'country', 'action',
-                    %s, 'policy:test', 'Тест действия', 'warming', 'candidate',
-                    0.5, 0.5, NOW(), 'test-v1'
+                    %s, 'policy:test', 'Тест действия', 'warming',
+                    'wave:action:1', 'candidate', 0.5, 0.5, NOW(), 'test-v1'
                 ) RETURNING id
             """, (country_code,))
             action_trend_id = cursor.fetchone()[0]
             cursor.execute("""
                 INSERT INTO radar_trends(
                     public_id, scope, contour, country_code, subject_key, title_ru,
-                    direction, state, confidence, coverage_confidence,
+                    direction, wave_key, state, confidence, coverage_confidence,
                     first_observed_at, detector_version
                 ) VALUES (
                     '00000000-0000-0000-0000-000000000007', 'country', 'action',
                     %s, 'policy:test', 'Несовместимое действие', 'cooling',
-                    'candidate', 0.5, 0.5, NOW(), 'test-v1'
+                    'wave:action:2', 'candidate', 0.5, 0.5, NOW(), 'test-v1'
                 ) RETURNING id
             """, (country_code,))
             incompatible_action_trend_id = cursor.fetchone()[0]
@@ -840,6 +899,12 @@ def test_radar_migration_is_idempotent_and_preserves_audit_history():
                     "UPDATE radar_trends SET subject_key = 'policy:changed' "
                     "WHERE id = %s",
                     (action_trend_id,),
+                )
+            with pytest.raises(psycopg2.errors.CheckViolation):
+                cursor.execute(
+                    "UPDATE radar_trends SET wave_key = 'wave:test:changed' "
+                    "WHERE id = %s",
+                    (trend_id,),
                 )
             cursor.execute("""
                 INSERT INTO radar_state_events(
