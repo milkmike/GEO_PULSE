@@ -35,9 +35,17 @@ class RadarFilters:
     state: str | None = None
     contour: str | None = None
     country: str | None = None
+    story_id: int | None = None
+    signal_id: int | None = None
 
-    def binding(self) -> dict[str, str | None]:
-        return {"state": self.state, "contour": self.contour, "country": self.country}
+    def binding(self) -> dict[str, str | int | None]:
+        return {
+            "state": self.state,
+            "contour": self.contour,
+            "country": self.country,
+            "story_id": self.story_id,
+            "signal_id": self.signal_id,
+        }
 
 
 class RadarReadService(Protocol):
@@ -191,7 +199,13 @@ def serialize_trend(row: Any) -> dict[str, Any]:
     }
 
 
-def _validate_filters(state: str | None, contour: str | None, country: str | None) -> RadarFilters:
+def _validate_filters(
+    state: str | None,
+    contour: str | None,
+    country: str | None,
+    story_id: int | None = None,
+    signal_id: int | None = None,
+) -> RadarFilters:
     normalized_state = state.strip().lower() if state else None
     normalized_contour = contour.strip().lower() if contour else None
     normalized_country = country.strip().upper() if country else None
@@ -201,7 +215,17 @@ def _validate_filters(state: str | None, contour: str | None, country: str | Non
         raise HTTPException(status_code=422, detail="invalid radar contour")
     if normalized_country and len(normalized_country) != 2 or normalized_country and not normalized_country.isalpha():
         raise HTTPException(status_code=422, detail="invalid radar country")
-    return RadarFilters(normalized_state, normalized_contour, normalized_country)
+    if story_id is not None and (type(story_id) is not int or story_id < 1):
+        raise HTTPException(status_code=422, detail="invalid radar story ID")
+    if signal_id is not None and (type(signal_id) is not int or signal_id < 1):
+        raise HTTPException(status_code=422, detail="invalid radar signal ID")
+    return RadarFilters(
+        normalized_state,
+        normalized_contour,
+        normalized_country,
+        story_id,
+        signal_id,
+    )
 
 
 def _encode_cursor(*, scope: str, binding: dict[str, Any], key: dict[str, Any]) -> str:
@@ -247,7 +271,14 @@ class SqlRadarReadService:
     """Read-only SQL adapter over the immutable Radar persistence tables."""
 
     def list_trends(self, *, filters: RadarFilters, cursor: dict[str, Any] | None, limit: int) -> dict[str, Any]:
-        params: dict[str, Any] = {"state": filters.state, "contour": filters.contour, "country": filters.country, "limit": limit + 1}
+        params: dict[str, Any] = {
+            "state": filters.state,
+            "contour": filters.contour,
+            "country": filters.country,
+            "story_id": filters.story_id,
+            "signal_id": filters.signal_id,
+            "limit": limit + 1,
+        }
         cursor_sql = ""
         if cursor:
             params.update({"cursor_state_rank": cursor["state_rank"], "cursor_velocity": cursor["velocity"], "cursor_first_observed_at": cursor["first_observed_at"], "cursor_public_id": cursor["public_id"]})
@@ -272,6 +303,22 @@ class SqlRadarReadService:
                     AND (:country IS NULL OR EXISTS (
                       SELECT 1 FROM radar_trend_members member JOIN radar_trends wave ON wave.id = member.country_trend_id
                       WHERE member.meta_trend_id = trend.id AND member.left_at IS NULL AND wave.country_code = :country))
+                    /* radar_related_story */
+                    AND (:story_id IS NULL OR EXISTS (
+                      SELECT 1 FROM radar_trend_evidence related
+                      WHERE related.story_id = :story_id
+                        AND (related.trend_id = trend.id OR EXISTS (
+                          SELECT 1 FROM radar_trend_members related_member
+                          WHERE related_member.meta_trend_id = trend.id
+                            AND related_member.country_trend_id = related.trend_id))))
+                    /* radar_related_signal */
+                    AND (:signal_id IS NULL OR EXISTS (
+                      SELECT 1 FROM radar_trend_evidence related
+                      WHERE related.signal_id = :signal_id
+                        AND (related.trend_id = trend.id OR EXISTS (
+                          SELECT 1 FROM radar_trend_members related_member
+                          WHERE related_member.meta_trend_id = trend.id
+                            AND related_member.country_trend_id = related.trend_id))))
                 )
                 SELECT ranked.*, {self._wave_json("ranked.id")} AS country_waves,
                        {self._contour_json("ranked.id")} AS contours,
@@ -341,11 +388,24 @@ class SqlRadarReadService:
 
     def country_trends(self, country_code: str, *, filters: RadarFilters, cursor: dict[str, Any] | None, limit: int) -> dict[str, Any]:
         # Country waves use the same stable sort and cursor key as the meta list.
-        country_filters = RadarFilters(filters.state, filters.contour, country_code)
+        country_filters = RadarFilters(
+            state=filters.state,
+            contour=filters.contour,
+            country=country_code,
+            story_id=filters.story_id,
+            signal_id=filters.signal_id,
+        )
         return self._country_page(country_filters, cursor, limit)
 
     def _country_page(self, filters: RadarFilters, cursor: dict[str, Any] | None, limit: int) -> dict[str, Any]:
-        params: dict[str, Any] = {"state": filters.state, "contour": filters.contour, "country": filters.country, "limit": limit + 1}
+        params: dict[str, Any] = {
+            "state": filters.state,
+            "contour": filters.contour,
+            "country": filters.country,
+            "story_id": filters.story_id,
+            "signal_id": filters.signal_id,
+            "limit": limit + 1,
+        }
         cursor_sql = ""
         if cursor:
             params.update({"cursor_state_rank": cursor["state_rank"], "cursor_velocity": cursor["velocity"], "cursor_first_observed_at": cursor["first_observed_at"], "cursor_public_id": cursor["public_id"]})
@@ -360,7 +420,15 @@ class SqlRadarReadService:
                 WITH ranked AS (
                   SELECT trend.*, CASE trend.state WHEN 'confirmed' THEN 0 WHEN 'emerging' THEN 1 WHEN 'cooling' THEN 2 WHEN 'candidate' THEN 3 WHEN 'resolved' THEN 4 ELSE 5 END AS state_rank
                   FROM radar_trends trend WHERE trend.scope = 'country' AND trend.country_code = :country
-                    AND (:state IS NULL OR trend.state = :state) AND (:contour IS NULL OR trend.contour = :contour))
+                    AND (:state IS NULL OR trend.state = :state) AND (:contour IS NULL OR trend.contour = :contour)
+                    /* radar_related_story */
+                    AND (:story_id IS NULL OR EXISTS (
+                      SELECT 1 FROM radar_trend_evidence related
+                      WHERE related.trend_id = trend.id AND related.story_id = :story_id))
+                    /* radar_related_signal */
+                    AND (:signal_id IS NULL OR EXISTS (
+                      SELECT 1 FROM radar_trend_evidence related
+                      WHERE related.trend_id = trend.id AND related.signal_id = :signal_id)))
                 SELECT ranked.*, '[]'::jsonb AS country_waves,
                        jsonb_build_object(contour, jsonb_build_object('state', state, 'status', 'insufficient')) AS contours,
                        EXISTS (SELECT 1 FROM radar_trend_evidence evidence WHERE evidence.trend_id = ranked.id AND evidence.role = 'contradiction') AS contradiction_marker,
@@ -430,10 +498,13 @@ def _page_response(page: dict[str, Any], *, scope: str, binding: dict[str, Any],
 @router.get("/radar")
 def get_radar(
     state: str | None = Query(None), contour: str | None = Query(None), country: str | None = Query(None),
+    story_id: int | None = Query(None, ge=1), signal_id: int | None = Query(None, ge=1),
     cursor: str | None = Query(None, max_length=2048), limit: int = Query(25, ge=1, le=100),
     service: RadarReadService = Depends(get_radar_service),
 ):
-    filters = _validate_filters(state, contour, country)
+    """List persisted meta trends; story and signal filters combine with AND."""
+
+    filters = _validate_filters(state, contour, country, story_id, signal_id)
     key = _decode_cursor(cursor, scope="radar", binding=filters.binding(), validator=_list_cursor_key) if cursor else None
     return _page_response(service.list_trends(filters=filters, cursor=key, limit=limit), scope="radar", binding=filters.binding(), limit=limit)
 
@@ -449,10 +520,13 @@ def get_radar_trend(public_id: UUID, service: RadarReadService = Depends(get_rad
 @router.get("/countries/{code}/radar")
 def get_country_radar(
     code: str, state: str | None = Query(None), contour: str | None = Query(None), cursor: str | None = Query(None, max_length=2048),
+    story_id: int | None = Query(None, ge=1), signal_id: int | None = Query(None, ge=1),
     limit: int = Query(25, ge=1, le=100), service: RadarReadService = Depends(get_radar_service),
 ):
+    """List persisted country waves; story and signal filters combine with AND."""
+
     country = code.strip().upper()
-    filters = _validate_filters(state, contour, country)
+    filters = _validate_filters(state, contour, country, story_id, signal_id)
     key = _decode_cursor(cursor, scope="country_radar", binding=filters.binding(), validator=_list_cursor_key) if cursor else None
     return _page_response(service.country_trends(country, filters=filters, cursor=key, limit=limit), scope="country_radar", binding=filters.binding(), limit=limit)
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import inspect
+from contextlib import contextmanager
 from uuid import UUID
 
 from fastapi import FastAPI
@@ -72,9 +73,18 @@ class FakeRadarService:
         return _trend() if str(public_id) == TREND_ID else None
 
     def country_trends(self, country_code, *, filters, cursor, limit):
+        self.list_calls.append((filters, cursor, limit))
         if country_code != "ES":
             return {"items": [], "next_key": None}
-        return {"items": [_trend(scope="country", country_code="ES")], "next_key": None}
+        return {
+            "items": [_trend(scope="country", country_code="ES")],
+            "next_key": {
+                "state_rank": 0,
+                "velocity": 2.5,
+                "first_observed_at": NOW,
+                "public_id": TREND_ID,
+            },
+        }
 
     def timeline(self, public_id):
         if str(public_id) != TREND_ID:
@@ -168,6 +178,62 @@ def test_radar_list_is_read_only_exposes_both_contours_and_binds_cursor_to_filte
     assert malformed.status_code == 422
 
 
+def test_radar_relation_filters_are_positive_combined_with_and_and_cursor_bound():
+    service = FakeRadarService()
+    client = _client(service)
+
+    first = client.get(
+        "/api/v2/radar",
+        params={"story_id": 501, "signal_id": 601, "limit": 1},
+    )
+
+    assert first.status_code == 200
+    filters = service.list_calls[-1][0]
+    assert filters.story_id == 501
+    assert filters.signal_id == 601
+    cursor = first.json()["next_cursor"]
+    assert client.get(
+        "/api/v2/radar",
+        params={"story_id": 502, "signal_id": 601, "cursor": cursor},
+    ).status_code == 422
+    assert client.get(
+        "/api/v2/radar",
+        params={"story_id": 501, "signal_id": 602, "cursor": cursor},
+    ).status_code == 422
+    assert client.get("/api/v2/radar", params={"story_id": 0}).status_code == 422
+    assert client.get("/api/v2/radar", params={"signal_id": -1}).status_code == 422
+
+
+def test_country_radar_accepts_relation_filters_and_rejects_invalid_ids():
+    service = FakeRadarService()
+    client = _client(service)
+
+    response = client.get(
+        "/api/v2/countries/es/radar",
+        params={"story_id": 501, "signal_id": 601},
+    )
+
+    assert response.status_code == 200
+    filters = service.list_calls[-1][0]
+    assert filters.story_id == 501
+    assert filters.signal_id == 601
+    cursor = response.json()["next_cursor"]
+    assert client.get(
+        "/api/v2/countries/es/radar",
+        params={"story_id": 502, "signal_id": 601, "cursor": cursor},
+    ).status_code == 422
+    assert client.get(
+        "/api/v2/countries/es/radar",
+        params={"story_id": 501, "signal_id": 602, "cursor": cursor},
+    ).status_code == 422
+    assert client.get(
+        "/api/v2/countries/es/radar", params={"story_id": 0}
+    ).status_code == 422
+    assert client.get(
+        "/api/v2/countries/es/radar", params={"signal_id": -1}
+    ).status_code == 422
+
+
 def test_radar_routes_serialize_persisted_detail_timeline_evidence_and_coverage():
     service = FakeRadarService()
     client = _client(service)
@@ -242,6 +308,85 @@ def test_sql_radar_read_session_rolls_back_and_closes_without_commit(monkeypatch
     assert session.rollback_calls == 1
     assert session.close_calls == 1
     assert session.commit_calls == 0
+
+
+def test_sql_meta_relation_filters_use_direct_or_member_evidence_and_require_both(monkeypatch):
+    calls = []
+
+    class Rows:
+        def fetchall(self):
+            return []
+
+    class Session:
+        def execute(self, statement, params=None):
+            calls.append((str(statement), dict(params or {})))
+            return Rows()
+
+    @contextmanager
+    def read_session():
+        yield Session()
+
+    monkeypatch.setattr(radar_routes, "radar_read_session", read_session)
+    service = radar_routes.SqlRadarReadService()
+
+    service.list_trends(
+        filters=radar_routes.RadarFilters(
+            country="ES", story_id=501, signal_id=601
+        ),
+        cursor=None,
+        limit=20,
+    )
+
+    sql, params = calls[-1]
+    assert params["story_id"] == 501
+    assert params["signal_id"] == 601
+    assert "/* radar_related_story */" in sql
+    assert "/* radar_related_signal */" in sql
+    assert "related.trend_id = trend.id" in sql
+    assert "related_member.meta_trend_id = trend.id" in sql
+    assert "related_member.country_trend_id = related.trend_id" in sql
+    assert sql.index("/* radar_related_story */") < sql.index("/* radar_related_signal */")
+    assert "AND (:story_id IS NULL OR EXISTS" in sql
+    assert "AND (:signal_id IS NULL OR EXISTS" in sql
+
+
+def test_sql_country_relation_filters_require_evidence_on_the_returned_wave(monkeypatch):
+    calls = []
+
+    class Rows:
+        def fetchall(self):
+            return []
+
+    class Session:
+        def execute(self, statement, params=None):
+            calls.append((str(statement), dict(params or {})))
+            return Rows()
+
+    @contextmanager
+    def read_session():
+        yield Session()
+
+    monkeypatch.setattr(radar_routes, "radar_read_session", read_session)
+    service = radar_routes.SqlRadarReadService()
+
+    service.country_trends(
+        "ES",
+        filters=radar_routes.RadarFilters(
+            country="ES", story_id=501, signal_id=601
+        ),
+        cursor=None,
+        limit=20,
+    )
+
+    sql, params = calls[-1]
+    assert params["country"] == "ES"
+    assert params["story_id"] == 501
+    assert params["signal_id"] == 601
+    assert "related.trend_id = trend.id" in sql
+    assert "related.story_id = :story_id" in sql
+    assert "related.signal_id = :signal_id" in sql
+    assert "radar_trend_members related_member" not in sql
+    assert "trend.country_code = :country" in sql
 
 
 def test_radar_routes_reject_invalid_filters_and_return_not_found_for_missing_trends():
