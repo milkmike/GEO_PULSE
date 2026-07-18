@@ -1,5 +1,3 @@
-BEGIN;
-
 -- Backfill each historical audit row from its own immutable observation.  Do
 -- not collapse rows: distinct roles, contributions, and evidence are valid
 -- audit facts even when they reference the same trend/observation pair.
@@ -29,5 +27,3 @@ CREATE INDEX IF NOT EXISTS idx_radar_trend_evidence_signal_id_lookup
 CREATE INDEX IF NOT EXISTS idx_radar_trend_evidence_canonical_entity_id_lookup
   ON radar_trend_evidence(canonical_entity_id, trend_id)
   WHERE canonical_entity_id IS NOT NULL;
-
-COMMIT;

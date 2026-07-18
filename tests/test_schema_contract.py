@@ -266,8 +266,8 @@ def test_radar_schema_is_additive_auditable_and_bootstrapped():
 def test_radar_evidence_root_backfill_is_atomic_non_destructive_and_indexed():
     migration_sql = migration("028_radar_evidence_roots.sql")
     init_sql = (ROOT / "data" / "init.sql").read_text()
-    assert migration_sql.lstrip().startswith("BEGIN;")
-    assert migration_sql.rstrip().endswith("COMMIT;")
+    assert not migration_sql.lstrip().startswith("BEGIN;")
+    assert not migration_sql.rstrip().endswith("COMMIT;")
     assert "DELETE FROM radar_trend_evidence" not in migration_sql
     assert "CREATE UNIQUE INDEX" not in migration_sql
     assert "FROM radar_observations observation" in migration_sql
@@ -283,8 +283,8 @@ def test_radar_evidence_relation_upgrade_repairs_the_legacy_unique_index():
     migration_sql = migration("029_radar_evidence_relation_rows.sql")
     init_sql = (ROOT / "data" / "init.sql").read_text()
 
-    assert migration_sql.lstrip().startswith("BEGIN;")
-    assert migration_sql.rstrip().endswith("COMMIT;")
+    assert not migration_sql.lstrip().startswith("BEGIN;")
+    assert not migration_sql.rstrip().endswith("COMMIT;")
     assert "DROP INDEX IF EXISTS public.uq_radar_trend_evidence_observation" in migration_sql
     assert "DELETE FROM radar_trend_evidence" not in migration_sql
     assert "FROM public.radar_observations observation" in migration_sql
@@ -299,8 +299,8 @@ def test_radar_contour_alignment_is_separate_from_local_trend_identity():
     migration_sql = migration("030_radar_contour_alignment_identity.sql")
     init_sql = (ROOT / "data" / "init.sql").read_text()
 
-    assert migration_sql.lstrip().startswith("BEGIN;")
-    assert migration_sql.rstrip().endswith("COMMIT;")
+    assert not migration_sql.lstrip().startswith("BEGIN;")
+    assert not migration_sql.rstrip().endswith("COMMIT;")
     assert "DELETE FROM" not in migration_sql
     for sql in (migration_sql, init_sql):
         assert "alignment_subject TEXT" in sql
@@ -315,6 +315,21 @@ def test_radar_contour_alignment_is_separate_from_local_trend_identity():
         )
         assert "OLD.alignment_subject IS DISTINCT FROM NEW.alignment_subject" in sql
         assert "OLD.alignment_direction IS DISTINCT FROM NEW.alignment_direction" in sql
+
+
+def test_radar_migration_runner_owns_transaction_and_marker_atomically():
+    runner = (ROOT / "scripts" / "apply_migrations.sh").read_text()
+    assert '-1 -f "$f" -c "$marker_sql"' in runner
+    for filename in (
+        "027_early_warning_radar.sql",
+        "028_radar_evidence_roots.sql",
+        "029_radar_evidence_relation_rows.sql",
+        "030_radar_contour_alignment_identity.sql",
+    ):
+        migration_sql = migration(filename)
+        assert "CONCURRENTLY" not in migration_sql
+        assert not migration_sql.lstrip().startswith("BEGIN;")
+        assert not migration_sql.rstrip().endswith("COMMIT;")
 
 
 def test_google_news_publisher_attribution_orm_contract():

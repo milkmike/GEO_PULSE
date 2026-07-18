@@ -944,6 +944,13 @@ SELECT trend.id, trend.state, trend.confirmed_at, trend.t0_auto,
          SELECT 1 FROM radar_t0_revisions revision
          WHERE revision.trend_id = trend.id
            AND revision.revision_kind = 'analyst'
+           AND revision.created_at >= COALESCE((
+             SELECT max(event.occurred_at)
+             FROM radar_state_events event
+             WHERE event.trend_id = trend.id
+               AND event.from_state IN ('resolved', 'rejected')
+               AND event.to_state IN ('emerging', 'confirmed')
+           ), '-infinity'::timestamptz)
        ) AS has_analyst_t0_override
 FROM radar_trends trend
 WHERE scope = 'meta' AND subject_key = :subject_key AND direction = :direction
@@ -967,12 +974,28 @@ _UPDATE_META = text("""
 UPDATE radar_trends trend SET
   state = :state, confidence = :confidence, coverage_confidence = :coverage_confidence,
   velocity = :velocity,
-  detected_at = COALESCE(trend.detected_at, :detected_at),
-  confirmed_at = COALESCE(trend.confirmed_at, :confirmed_at), t0_auto = :t0_auto,
-  t0_effective = CASE WHEN EXISTS (
-    SELECT 1 FROM radar_t0_revisions revision
-    WHERE revision.trend_id = trend.id AND revision.revision_kind = 'analyst'
-  ) THEN trend.t0_effective ELSE :t0_effective END,
+  detected_at = CASE WHEN :reopening THEN :detected_at
+                     ELSE COALESCE(trend.detected_at, :detected_at) END,
+  confirmed_at = CASE WHEN :reopening THEN :confirmed_at
+                      ELSE COALESCE(trend.confirmed_at, :confirmed_at) END,
+  t0_auto = CASE WHEN :reopening THEN :t0_auto
+                 ELSE COALESCE(:t0_auto, trend.t0_auto) END,
+  t0_effective = CASE
+    WHEN :reopening THEN :t0_effective
+    WHEN EXISTS (
+      SELECT 1 FROM radar_t0_revisions revision
+      WHERE revision.trend_id = trend.id
+        AND revision.revision_kind = 'analyst'
+        AND revision.created_at >= COALESCE((
+          SELECT max(event.occurred_at)
+          FROM radar_state_events event
+          WHERE event.trend_id = trend.id
+            AND event.from_state IN ('resolved', 'rejected')
+            AND event.to_state IN ('emerging', 'confirmed')
+        ), '-infinity'::timestamptz)
+    ) THEN trend.t0_effective
+    ELSE COALESCE(:t0_effective, trend.t0_effective)
+  END,
   baseline = CAST(:baseline AS jsonb), explanation = CAST(:explanation AS jsonb), updated_at = NOW()
 WHERE trend.id = :id
 """)
@@ -1096,6 +1119,10 @@ def _persist_meta_and_contours(
         confirmed = tuple(wave for wave in meta.waves if wave.state is TrendState.CONFIRMED)
         prior_state = _row_value(existing, "state") if existing is not None else None
         state = _meta_state(meta, prior_state).value
+        reopening = existing is not None and _is_meta_reopening(
+            prior_state, state
+        )
+        meta_effective_t0 = _meta_effective_t0(meta)
         meta_detected_at, meta_confirmed_at = _meta_timeline(
             meta, TrendState(state)
         )
@@ -1117,7 +1144,7 @@ def _persist_meta_and_contours(
                 "first_observed_at": min(wave.first_observed_at for wave in meta.waves),
                 "detected_at": meta_detected_at,
                 "confirmed_at": meta_confirmed_at,
-                "t0_auto": meta.t0_auto, "t0_effective": meta.t0_auto,
+                "t0_auto": meta.t0_auto, "t0_effective": meta_effective_t0,
                 "baseline": json.dumps(baseline), "explanation": json.dumps(explanation),
             })
             meta_id = int(result.scalar())
@@ -1132,7 +1159,8 @@ def _persist_meta_and_contours(
                 "velocity": velocity,
                 "detected_at": meta_detected_at,
                 "confirmed_at": meta_confirmed_at,
-                "t0_auto": meta.t0_auto, "t0_effective": meta.t0_auto,
+                "reopening": reopening,
+                "t0_auto": meta.t0_auto, "t0_effective": meta_effective_t0,
                 "baseline": json.dumps(baseline), "explanation": json.dumps(explanation),
             })
             if prior_state != state:
@@ -1401,6 +1429,31 @@ def _meta_state(
     return current
 
 
+def _is_meta_reopening(
+    previous_state: TrendState | str | None,
+    current_state: TrendState | str,
+) -> bool:
+    if previous_state is None:
+        return False
+    return (
+        TrendState(previous_state) in (TrendState.RESOLVED, TrendState.REJECTED)
+        and TrendState(current_state) in (TrendState.EMERGING, TrendState.CONFIRMED)
+    )
+
+
+def _meta_effective_t0(meta: MetaTrend) -> datetime | None:
+    if meta.t0_auto is not None:
+        return meta.t0_auto
+    overrides = {
+        wave.country_code: wave.t0_effective
+        for wave in meta.waves
+        if wave.state is TrendState.CONFIRMED
+        and wave.has_analyst_t0_override
+        and wave.t0_effective is not None
+    }
+    return min(overrides.values()) if len(overrides) >= 2 else None
+
+
 def _meta_identity(meta: MetaTrend) -> tuple[str, str, str]:
     return meta.subject_key, meta.meta_key, meta.direction
 
@@ -1522,20 +1575,16 @@ def _t0_sanity(
         effective_t0 = meta.t0_auto
         inherited_analyst_override = False
         context = (meta_contexts or {}).get(_meta_identity(meta))
-        if context is not None and context.has_analyst_t0_override:
+        if (
+            context is not None
+            and context.has_analyst_t0_override
+            and not _is_meta_reopening(context.state, state)
+        ):
             effective_t0 = context.t0_effective
             inherited_analyst_override = effective_t0 is not None
         elif state is TrendState.CONFIRMED and meta.t0_auto is None:
-            member_overrides = {
-                wave.country_code: wave.t0_effective
-                for wave in meta.waves
-                if wave.state is TrendState.CONFIRMED
-                and wave.has_analyst_t0_override
-                and wave.t0_effective is not None
-            }
-            if len(member_overrides) >= 2:
-                effective_t0 = min(member_overrides.values())
-                inherited_analyst_override = True
+            effective_t0 = _meta_effective_t0(meta)
+            inherited_analyst_override = effective_t0 is not None
         entries.append((
             state, meta.t0_auto, effective_t0, detected, confirmed,
             inherited_analyst_override,

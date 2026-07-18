@@ -917,7 +917,7 @@ def test_meta_persistence_uses_member_detection_and_second_country_confirmation(
     )
     assert insert["detected_at"] == first.detected_at
     assert insert["confirmed_at"] == second.confirmed_at
-    assert "detected_at = COALESCE(trend.detected_at, :detected_at)" in str(service._UPDATE_META)
+    assert "detected_at = CASE WHEN :reopening THEN :detected_at" in str(service._UPDATE_META)
 
 
 def test_contour_alignment_pairs_each_recurrence_episode_separately():
@@ -1115,6 +1115,107 @@ def test_meta_persistence_uses_prior_state_to_prevent_lifecycle_regression():
     assert (transition["from_state"], transition["to_state"]) == (
         TrendState.CONFIRMED.value, TrendState.COOLING.value,
     )
+
+
+def test_meta_reopen_resets_episode_timeline_and_ignores_old_analyst_t0():
+    import src.radar.service as service
+
+    class _ResolvedMetaSession(_RecordingSqlSession):
+        def execute(self, statement, params=None):
+            sql = str(statement)
+            if "scope = 'meta'" in sql and "has_analyst_t0_override" in sql:
+                self.calls.append((sql, params or {}))
+                return _Result(rows=[{
+                    "id": 99,
+                    "state": TrendState.RESOLVED.value,
+                    "confirmed_at": AS_OF - timedelta(days=40),
+                    "t0_auto": AS_OF - timedelta(days=45),
+                    "t0_effective": AS_OF - timedelta(days=46),
+                    "has_analyst_t0_override": True,
+                    "meta_key": "canonical:event:energy:increase",
+                }])
+            return super().execute(statement, params)
+
+    new_t0 = AS_OF - timedelta(days=4)
+    waves = tuple(
+        replace(
+            _episode_wave("media", AS_OF - timedelta(days=3), f"reopen-{country}"),
+            country_code=country,
+            state=TrendState.CONFIRMED,
+            detected_at=AS_OF - timedelta(days=3),
+            confirmed_at=AS_OF - timedelta(days=2),
+            t0_auto=new_t0,
+            t0_effective=new_t0,
+        )
+        for country in ("ES", "PT")
+    )
+    meta = MetaTrend(
+        "event:energy", "increase", waves, new_t0,
+        meta_key="canonical:event:energy:increase",
+    )
+    wave_ids = {
+        (wave.country_code, wave.contour, wave.subject_key, wave.direction, wave.wave_key): index
+        for index, wave in enumerate(waves, 10)
+    }
+    session = _ResolvedMetaSession()
+
+    _persist_meta_and_contours(session, (meta,), wave_ids, AS_OF)
+
+    update = next(
+        params for sql, params in session.calls
+        if "UPDATE radar_trends trend SET" in sql and params.get("id") == 99
+    )
+    assert update["reopening"] is True
+    assert update["detected_at"] == AS_OF - timedelta(days=3)
+    assert update["confirmed_at"] == AS_OF - timedelta(days=2)
+    assert update["t0_auto"] == new_t0
+    assert update["t0_effective"] == new_t0
+    update_sql = str(service._UPDATE_META)
+    assert "WHEN :reopening THEN :t0_effective" in update_sql
+    assert "FROM radar_state_events event" in update_sql
+
+
+def test_meta_cooling_preserves_last_automatic_t0():
+    import src.radar.service as service
+
+    class _ConfirmedMetaSession(_RecordingSqlSession):
+        def execute(self, statement, params=None):
+            sql = str(statement)
+            if "scope = 'meta'" in sql and "has_analyst_t0_override" in sql:
+                self.calls.append((sql, params or {}))
+                return _Result(rows=[{
+                    "id": 99,
+                    "state": TrendState.CONFIRMED.value,
+                    "confirmed_at": AS_OF - timedelta(days=8),
+                    "t0_auto": AS_OF - timedelta(days=10),
+                    "t0_effective": AS_OF - timedelta(days=10),
+                    "meta_key": "meta-cooling-preserve-t0",
+                }])
+            return super().execute(statement, params)
+
+    wave = replace(
+        _episode_wave("media", AS_OF - timedelta(days=8), "cooling-preserve"),
+        state=TrendState.COOLING,
+    )
+    meta = MetaTrend(
+        "event:energy", "increase", (wave,), None,
+        meta_key="meta-cooling-preserve-t0",
+    )
+    wave_ids = {
+        (wave.country_code, wave.contour, wave.subject_key, wave.direction, wave.wave_key): 10,
+    }
+    session = _ConfirmedMetaSession()
+
+    _persist_meta_and_contours(session, (meta,), wave_ids, AS_OF)
+
+    update = next(
+        params for sql, params in session.calls
+        if "UPDATE radar_trends trend SET" in sql and params.get("id") == 99
+    )
+    assert update["state"] == TrendState.COOLING.value
+    assert update["reopening"] is False
+    assert update["t0_auto"] is None
+    assert "ELSE COALESCE(:t0_auto, trend.t0_auto)" in str(service._UPDATE_META)
 
 
 @pytest.mark.parametrize(

@@ -1,5 +1,3 @@
-BEGIN;
-
 -- An early 028 deployment enforced one row per trend/observation and removed
 -- valid audit facts.  Relation rows intentionally share that pair, so repair
 -- the deployed shape without deleting or combining any evidence.
@@ -31,5 +29,3 @@ CREATE INDEX IF NOT EXISTS idx_radar_trend_evidence_signal_id_lookup
 CREATE INDEX IF NOT EXISTS idx_radar_trend_evidence_canonical_entity_id_lookup
   ON public.radar_trend_evidence(canonical_entity_id, trend_id)
   WHERE canonical_entity_id IS NOT NULL;
-
-COMMIT;

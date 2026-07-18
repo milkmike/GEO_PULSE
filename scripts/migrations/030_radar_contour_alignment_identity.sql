@@ -1,5 +1,3 @@
-BEGIN;
-
 -- Country waves keep their local analytical identity (story/event/dataset),
 -- while contour links use a separate canonical Russia-relationship identity.
 -- This prevents unrelated local waves from being merged merely to make the
@@ -112,5 +110,3 @@ BEGIN
   RETURN NEW;
 END;
 $$;
-
-COMMIT;
