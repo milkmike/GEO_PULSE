@@ -112,6 +112,7 @@ fail_closed() {
 
 trap 'fail_closed' EXIT HUP INT TERM
 test -z "$running_writers" || docker compose stop $running_writers
+RADAR_AS_OF="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
 
 radar_run() {
   docker compose --profile radar run --rm --no-deps \
@@ -123,7 +124,7 @@ radar_run python scripts/audit_radar_wave1.py \
   --phase before --json --out "/app/$RELEASE_DIR/authoritative-before.json"
 
 # Exactly 90 days, no persistence; the audit validates the enriched replay contract.
-radar_run sh -c "umask 077; exec python scripts/build_radar.py --shadow --days 90 --json-report '/app/$RELEASE_DIR/shadow-replay.json'"
+radar_run sh -c "umask 077; exec python scripts/build_radar.py --shadow --days 90 --as-of '$RADAR_AS_OF' --json-report '/app/$RELEASE_DIR/shadow-replay.json'"
 radar_run python scripts/audit_radar_wave1.py \
   --phase shadow \
   --compare "/app/$RELEASE_DIR/authoritative-before.json" \
@@ -132,7 +133,8 @@ radar_run python scripts/audit_radar_wave1.py \
   --json --out "/app/$RELEASE_DIR/shadow-audit.json"
 
 # One bounded write; never start a loop or permanent radar-worker here.
-radar_run sh -c "umask 077; exec python scripts/build_radar.py --apply --days 90 --json-report '/app/$RELEASE_DIR/bounded-apply.json'"
+radar_run sh -c "umask 077; exec python scripts/build_radar.py --apply --days 90 --as-of '$RADAR_AS_OF' --json-report '/app/$RELEASE_DIR/bounded-apply.json'"
+radar_run python -c "import json; from scripts.audit_radar_wave1 import validate_replay_report; validate_replay_report(json.load(open('/app/$RELEASE_DIR/bounded-apply.json', encoding='utf-8')), expected_shadow=False)"
 docker compose stop radar-worker >/dev/null 2>&1 || true
 
 # Fresh PostgreSQL write-counter and exact row snapshot after apply, before any GET.

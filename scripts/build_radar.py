@@ -18,10 +18,6 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.db import get_session, wait_for_db
-from src.radar.service import run_radar_cycle
-
-
 def _as_of(value: str | None) -> datetime:
     if value is None:
         return datetime.now(timezone.utc)
@@ -47,6 +43,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    # Keep --help and argument validation independent of runtime DB config.
+    # Importing src.db creates the SQLAlchemy engine, so it belongs after
+    # argparse has had a chance to exit successfully.
+    from src.db import get_session, wait_for_db
+    from src.radar.service import run_radar_cycle
+
     as_of = _as_of(args.as_of)
     # Explicit --shadow is retained for audit logs; absence still means shadow.
     shadow = not args.apply

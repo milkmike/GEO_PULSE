@@ -47,4 +47,15 @@ def test_failed_migration_stops_chain_and_is_not_recorded(tmp_path):
     assert "-f " + str(migrations / "002_fail.sql") in calls
     assert "003_must_not_run.sql" not in calls
     assert "INSERT INTO public.schema_migrations(filename) VALUES ('001_ok.sql')" in calls
-    assert "INSERT INTO public.schema_migrations(filename) VALUES ('002_fail.sql')" not in calls
+    first_apply = next(
+        line for line in calls.splitlines()
+        if "-f " + str(migrations / "001_ok.sql") in line
+    )
+    assert "-1" in first_apply
+    assert "INSERT INTO public.schema_migrations(filename) VALUES ('001_ok.sql')" in first_apply
+    failed_apply = next(
+        line for line in calls.splitlines()
+        if "-f " + str(migrations / "002_fail.sql") in line
+    )
+    assert "-1" in failed_apply
+    assert "INSERT INTO public.schema_migrations(filename) VALUES ('002_fail.sql')" in failed_apply

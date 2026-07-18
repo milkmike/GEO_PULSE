@@ -26,9 +26,11 @@ for f in "${MIG_DIR}"/*.sql; do
         continue
     fi
     echo "[migrate] applying ${b}"
-    "${PSQL[@]}" -f "$f"
-    "${PSQL[@]}" -c "INSERT INTO public.schema_migrations(filename) VALUES ('${b}')
-                     ON CONFLICT DO NOTHING;"
+    # Apply the file and record it atomically.  A failed statement rolls back
+    # the whole migration instead of leaving an untracked partial schema.
+    "${PSQL[@]}" -1 -f "$f" -c \
+        "INSERT INTO public.schema_migrations(filename) VALUES ('${b}')
+         ON CONFLICT DO NOTHING;"
 done
 
 echo "[migrate] migrations complete"

@@ -586,6 +586,15 @@ def test_replay_contract_is_strict(mutate, match):
         audit.validate_replay_report(replay)
 
 
+def test_apply_report_uses_the_same_strict_contract_with_shadow_false():
+    replay = _rich_replay()
+    replay["shadow"] = False
+
+    audit.validate_replay_report(replay, expected_shadow=False)
+    with pytest.raises(ValueError, match="shadow=true"):
+        audit.validate_replay_report(replay)
+
+
 def test_phase_report_contract_requires_before_reports_for_comparison_and_get_baseline():
     before = _report(phase="before")
     audit.validate_phase_reports(
@@ -668,6 +677,9 @@ def test_runbook_is_one_quiesced_fail_closed_sequence():
     assert 'running_services="$(docker compose ps --status running --services)"' in runbook
     assert 'docker compose ps --status running --services | grep' not in runbook
     assert "--contour-minimum 0.80" in runbook
+    assert 'RADAR_AS_OF="$(date -u' in runbook
+    assert runbook.count("--as-of '$RADAR_AS_OF'") == 2
+    assert "bounded-apply.json', encoding='utf-8')), expected_shadow=False" in runbook
 
 
 def test_audit_output_uses_private_process_umask():

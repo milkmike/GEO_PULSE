@@ -434,9 +434,13 @@ def _validated_states(replay: Mapping[str, Any], key: str, expected_total: int) 
     return counts
 
 
-def validate_replay_report(replay: Mapping[str, Any]) -> None:
-    if replay.get("shadow") is not True:
-        raise ValueError("replay report must have shadow=true")
+def validate_replay_report(
+    replay: Mapping[str, Any], *, expected_shadow: bool = True,
+) -> None:
+    if replay.get("shadow") is not expected_shadow:
+        raise ValueError(
+            f"replay report must have shadow={str(expected_shadow).lower()}"
+        )
     if replay.get("lookback_days") != 90:
         raise ValueError("replay report lookback_days must be exactly 90")
     if replay.get("detector_version") != DETECTOR_VERSION:
