@@ -6,7 +6,6 @@ import json
 from collections import defaultdict
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
-from functools import lru_cache
 from statistics import fmean
 from typing import Any, Iterable
 from uuid import NAMESPACE_URL, UUID, uuid5
@@ -15,6 +14,7 @@ from sqlalchemy import text
 
 from .actions import build_action_observations
 from .baseline import calculate_baseline, clamp01, refine_t0
+from .episodes import EpisodeInterval, episode_distance, match_episode_intervals
 from .grouping import CountryWave, MetaTrend, assign_country_waves, assign_meta_trends
 from .lifecycle import decide_state
 from .media import _publisher_family_labels, build_media_observations
@@ -1206,18 +1206,6 @@ def _persist_meta_and_contours(
             _persist_contour_link(session, country, subject, direction, media_id, media_wave, action_id, action_wave, as_of)
 
 
-def episode_distance(left: CountryWave, right: CountryWave) -> timedelta:
-    """Zero for overlap, otherwise the gap between two bounded episodes."""
-
-    left_end = left.last_observed_at or left.first_observed_at
-    right_end = right.last_observed_at or right.first_observed_at
-    if left.first_observed_at <= right_end and right.first_observed_at <= left_end:
-        return timedelta()
-    if left_end < right.first_observed_at:
-        return right.first_observed_at - left_end
-    return left.first_observed_at - right_end
-
-
 def match_contour_episodes(
     media_members: list[tuple[int, CountryWave]],
     action_members: list[tuple[int, CountryWave]],
@@ -1229,32 +1217,28 @@ def match_contour_episodes(
     than depending on database row order.
     """
 
-    media = tuple(sorted(media_members, key=lambda item: (item[1].first_observed_at, item[1].wave_key, item[0])))
-    actions = tuple(sorted(action_members, key=lambda item: (item[1].first_observed_at, item[1].wave_key, item[0])))
-
-    @lru_cache(maxsize=None)
-    def solve(i: int, j: int) -> tuple[tuple[int, int], ...]:
-        if i == len(media) or j == len(actions):
-            return ()
-        options = [solve(i + 1, j), solve(i, j + 1)]
-        gap = episode_distance(media[i][1], actions[j][1])
-        if gap <= timedelta(days=14):
-            options.append(((i, j),) + solve(i + 1, j + 1))
-        return min(options, key=lambda pairs: _match_score(pairs, media, actions))
-
-    return tuple((media[i][0], media[i][1], actions[j][0], actions[j][1]) for i, j in solve(0, 0))
-
-
-def _match_score(
-    pairs: tuple[tuple[int, int], ...], media: tuple[tuple[int, CountryWave], ...],
-    actions: tuple[tuple[int, CountryWave], ...],
-) -> tuple[object, ...]:
-    gap_seconds = sum(episode_distance(media[i][1], actions[j][1]).total_seconds() for i, j in pairs)
-    identity = tuple(
-        (media[i][1].wave_key, str(media[i][0]), actions[j][1].wave_key, str(actions[j][0]))
-        for i, j in pairs
+    media_by_id = dict(media_members)
+    action_by_id = dict(action_members)
+    pairs = match_episode_intervals(
+        [
+            EpisodeInterval(
+                trend_id, wave.first_observed_at,
+                wave.last_observed_at or wave.first_observed_at, wave.wave_key,
+            )
+            for trend_id, wave in media_members
+        ],
+        [
+            EpisodeInterval(
+                trend_id, wave.first_observed_at,
+                wave.last_observed_at or wave.first_observed_at, wave.wave_key,
+            )
+            for trend_id, wave in action_members
+        ],
     )
-    return (-len(pairs), gap_seconds, identity)
+    return tuple(
+        (media_id, media_by_id[media_id], action_id, action_by_id[action_id])
+        for media_id, action_id in pairs
+    )
 
 
 def _persist_contour_link(
@@ -1632,12 +1616,16 @@ def _contour_completeness(waves: tuple[CountryWave, ...]) -> dict[str, int | flo
         grouped[(wave.country_code, subject, direction)].append((index, wave))
     linked = 0
     possible = 0
+    identity_candidates = 0
     for members in grouped.values():
         media = [(index, wave) for index, wave in members if wave.contour is Contour.MEDIA]
         actions = [(index, wave) for index, wave in members if wave.contour is Contour.ACTION]
-        possible += min(len(media), len(actions))
-        linked += len(match_contour_episodes(media, actions))
+        identity_candidates += min(len(media), len(actions))
+        eligible = match_contour_episodes(media, actions)
+        possible += len(eligible)
+        linked += len(eligible)
     return {
+        "identity_candidate_pairs": identity_candidates,
         "possible_pairs": possible,
         "linked_pairs": linked,
         "ratio": linked / possible if possible else None,

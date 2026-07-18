@@ -54,7 +54,7 @@ def _report(*, phase: str = "after") -> dict:
             "t0_sanity": {"status": "available", "invalid": 0},
             "duplicate_public_ids": {"status": "available", "duplicates": 0},
             "notification_idempotency": {"status": "available", "duplicate_delivery_keys": 0, "invalid_references": 0},
-            "contour_completeness": {"status": "available", "possible_pairs": 10, "linked_pairs": 8, "ratio": 0.8},
+            "contour_completeness": {"status": "available", "identity_candidate_pairs": 10, "possible_pairs": 10, "linked_pairs": 8, "ratio": 0.8},
         },
         "write_activity": {
             name: {
@@ -431,6 +431,7 @@ def test_contour_unavailable_fails_and_empty_no_pair_case_is_explicit():
     unavailable = _report()
     unavailable["radar"]["contour_completeness"] = {
         "status": "unavailable",
+        "identity_candidate_pairs": None,
         "possible_pairs": None,
         "linked_pairs": None,
         "ratio": None,
@@ -438,6 +439,7 @@ def test_contour_unavailable_fails_and_empty_no_pair_case_is_explicit():
     no_pairs = _report()
     no_pairs["radar"]["contour_completeness"] = {
         "status": "not_applicable_no_pairs",
+        "identity_candidate_pairs": 2,
         "possible_pairs": 0,
         "linked_pairs": 0,
         "ratio": None,
@@ -459,6 +461,7 @@ def test_contour_ratio_below_default_gate_fails():
     current = _report()
     current["radar"]["contour_completeness"] = {
         "status": "available",
+        "identity_candidate_pairs": 10,
         "possible_pairs": 10,
         "linked_pairs": 7,
         "ratio": 0.7,
@@ -557,7 +560,7 @@ def _rich_replay() -> dict:
         "collector_suppressed": 0,
         "confirmed_below_coverage_gate": 0,
         "t0_sanity": {"automatic": 3, "unresolved": 0, "violations": 0},
-        "contour_completeness": {"possible_pairs": 2, "linked_pairs": 2, "ratio": 1.0},
+        "contour_completeness": {"identity_candidate_pairs": 2, "possible_pairs": 2, "linked_pairs": 2, "ratio": 1.0},
     }
 
 
@@ -641,6 +644,64 @@ def test_contour_gate_uses_the_canonical_alignment_identity_from_migration_030()
 
     assert "action.alignment_subject = media.alignment_subject" in source
     assert "action.alignment_direction = media.alignment_direction" in source
+
+
+def _database_contour_report(monkeypatch, *, action_at, links=()):
+    media_at = datetime(2026, 7, 1, tzinfo=timezone.utc)
+    bounds = [
+        (1, "media", "ES", "energy:imports:russia", "hardening", "radar-wave-1", "media-wave", media_at, media_at),
+        (2, "action", "ES", "energy:imports:russia", "hardening", "radar-wave-1", "action-wave", action_at, action_at),
+    ]
+
+    def execute(_connection, statement, parameters=None):
+        del parameters
+        if "audit_contour_episode_bounds" in statement:
+            return bounds
+        if "audit_contour_links" in statement:
+            return list(links)
+        # Old implementation: keep RED as an assertion failure, not a fixture error.
+        if "audit_contour_completeness" in statement:
+            return [(1, 1, 1, len(links))]
+        raise AssertionError(statement)
+
+    monkeypatch.setattr(audit, "_execute", execute)
+    return audit._contour_completeness(
+        object(),
+        {"radar_trends", "radar_contour_links", "radar_trend_evidence", "radar_observations"},
+    )
+
+
+def test_database_contour_denominator_excludes_temporally_ineligible_candidate(monkeypatch):
+    report = _database_contour_report(
+        monkeypatch,
+        action_at=datetime(2026, 7, 15, 0, 0, 1, tzinfo=timezone.utc),
+    )
+
+    assert report == {
+        "status": "not_applicable_no_pairs",
+        "media_trends": 1,
+        "action_trends": 1,
+        "identity_candidate_pairs": 1,
+        "possible_pairs": 0,
+        "linked_pairs": 0,
+        "ratio": None,
+    }
+
+
+def test_database_contour_gate_detects_missing_eligible_link(monkeypatch):
+    action_at = datetime(2026, 7, 15, tzinfo=timezone.utc)
+    missing = _database_contour_report(monkeypatch, action_at=action_at)
+    assert missing["identity_candidate_pairs"] == 1
+    assert missing["possible_pairs"] == 1
+    assert missing["linked_pairs"] == 0
+    assert missing["ratio"] == 0.0
+
+    linked = _database_contour_report(
+        monkeypatch, action_at=action_at, links=((1, 2),),
+    )
+    assert linked["possible_pairs"] == 1
+    assert linked["linked_pairs"] == 1
+    assert linked["ratio"] == 1.0
 
 
 def test_runbook_is_one_quiesced_fail_closed_sequence():

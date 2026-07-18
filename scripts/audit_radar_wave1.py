@@ -19,12 +19,16 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 from uuid import UUID
 
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from src.radar.episodes import EpisodeInterval, match_episode_intervals
+
 
 SCHEMA_VERSION = 1
 DETECTOR_VERSION = "radar-wave-1"
 LIFECYCLE_STATES = ("candidate", "emerging", "confirmed", "cooling", "resolved", "rejected")
-ROOT = Path(__file__).resolve().parents[1]
-
 PROTECTED_TABLES = (
     "articles",
     "analysis",
@@ -344,59 +348,99 @@ def _state_distribution(connection, available: set[str]) -> dict[str, Any]:
 
 
 def _contour_completeness(connection, available: set[str]) -> dict[str, Any]:
-    required = {"radar_trends", "radar_contour_links"}
+    required = {
+        "radar_trends", "radar_contour_links",
+        "radar_trend_evidence", "radar_observations",
+    }
     if not required.issubset(available):
         return {
             "status": "unavailable",
             "media_trends": None,
             "action_trends": None,
+            "identity_candidate_pairs": None,
             "possible_pairs": None,
             "linked_pairs": None,
             "ratio": None,
         }
-    row = _execute(
+    rows = _execute(
         connection,
         """
-        /* audit_contour_completeness */
-        WITH possible AS (
-          SELECT media.country_code, media.alignment_subject, media.alignment_direction,
-                 least(count(DISTINCT media.id), count(DISTINCT action.id)) AS possible
-          FROM public.radar_trends media
-          JOIN public.radar_trends action
-            ON action.scope = 'country' AND action.contour = 'action'
-           AND action.country_code = media.country_code
-           AND action.alignment_subject = media.alignment_subject
-           AND action.alignment_direction = media.alignment_direction
-          WHERE media.scope = 'country' AND media.contour = 'media'
-            AND media.alignment_subject IS NOT NULL
-            AND media.alignment_direction IS NOT NULL
-          GROUP BY media.country_code, media.alignment_subject, media.alignment_direction
-        ), possible_total AS (
-          SELECT COALESCE(sum(possible), 0) AS count FROM possible
-        ), valid_links AS (
-          SELECT count(*) AS count
-          FROM public.radar_contour_links link
-          JOIN public.radar_trends media ON media.id = link.media_trend_id
-          JOIN public.radar_trends action ON action.id = link.action_trend_id
-          WHERE media.scope = 'country' AND media.contour = 'media'
-            AND action.scope = 'country' AND action.contour = 'action'
-            AND media.country_code = action.country_code
-            AND action.alignment_subject = media.alignment_subject
-            AND action.alignment_direction = media.alignment_direction
-        )
-        SELECT
-          count(*) FILTER (WHERE trend.scope = 'country' AND trend.contour = 'media'),
-          count(*) FILTER (WHERE trend.scope = 'country' AND trend.contour = 'action'),
-          (SELECT count FROM possible_total),
-          (SELECT count FROM valid_links)
+        /* audit_contour_episode_bounds */
+        SELECT trend.id, trend.contour, trend.country_code,
+               trend.alignment_subject, trend.alignment_direction,
+               trend.detector_version, trend.wave_key,
+               COALESCE(min(observation.observed_at), trend.first_observed_at),
+               COALESCE(max(observation.observed_at), trend.first_observed_at)
         FROM public.radar_trends trend
+        LEFT JOIN public.radar_trend_evidence evidence
+          ON evidence.trend_id = trend.id
+        LEFT JOIN public.radar_observations observation
+          ON observation.id = evidence.observation_id
+        WHERE trend.scope = 'country'
+          AND trend.contour IN ('media', 'action')
+          AND trend.alignment_subject IS NOT NULL
+          AND trend.alignment_direction IS NOT NULL
+        GROUP BY trend.id, trend.contour, trend.country_code,
+                 trend.alignment_subject, trend.alignment_direction,
+                 trend.detector_version, trend.wave_key, trend.first_observed_at
         """,
-    )[0]
-    media, action, possible, linked = (int(value or 0) for value in row)
+    )
+    valid_links = {
+        (int(media_id), int(action_id))
+        for media_id, action_id in _execute(
+            connection,
+            """
+            /* audit_contour_links */
+            SELECT link.media_trend_id, link.action_trend_id
+            FROM public.radar_contour_links link
+            JOIN public.radar_trends media ON media.id = link.media_trend_id
+            JOIN public.radar_trends action ON action.id = link.action_trend_id
+            WHERE media.scope = 'country' AND media.contour = 'media'
+              AND action.scope = 'country' AND action.contour = 'action'
+              AND media.country_code = action.country_code
+              AND action.alignment_subject = media.alignment_subject
+              AND action.alignment_direction = media.alignment_direction
+              AND action.detector_version = media.detector_version
+            """,
+        )
+    }
+    grouped: dict[
+        tuple[str, str, str, str], list[tuple[str, EpisodeInterval]]
+    ] = {}
+    media = 0
+    action = 0
+    for (
+        trend_id, contour, country, subject, direction, detector_version,
+        wave_key, first_observed_at, last_observed_at,
+    ) in rows:
+        interval = EpisodeInterval(
+            int(trend_id), first_observed_at, last_observed_at,
+            str(wave_key or trend_id),
+        )
+        grouped.setdefault((
+            str(country), str(subject), str(direction), str(detector_version),
+        ), []).append((str(contour), interval))
+        media += str(contour) == "media"
+        action += str(contour) == "action"
+
+    identity_candidates = 0
+    expected_pairs: set[tuple[int, int]] = set()
+    for members in grouped.values():
+        media_members = [
+            interval for contour, interval in members if contour == "media"
+        ]
+        action_members = [
+            interval for contour, interval in members if contour == "action"
+        ]
+        identity_candidates += min(len(media_members), len(action_members))
+        expected_pairs.update(match_episode_intervals(media_members, action_members))
+    possible = len(expected_pairs)
+    linked = len(expected_pairs.intersection(valid_links))
     return {
         "status": "not_applicable_no_pairs" if possible == 0 else "available",
         "media_trends": media,
         "action_trends": action,
+        "identity_candidate_pairs": identity_candidates,
         "possible_pairs": possible,
         "linked_pairs": linked,
         "ratio": round(linked / possible, 6) if possible else None,
@@ -487,11 +531,14 @@ def validate_replay_report(
         raise ValueError("t0_sanity counts are inconsistent with trend totals")
 
     contour = _required_mapping(replay, "contour_completeness")
+    identity_candidates = _required_count(contour, "identity_candidate_pairs")
     possible = _required_count(contour, "possible_pairs")
     linked = _required_count(contour, "linked_pairs")
     ratio = _required_ratio(contour, "ratio", allow_none=True)
-    if linked > possible:
-        raise ValueError("contour linked_pairs cannot exceed possible_pairs")
+    if linked > possible or possible > identity_candidates:
+        raise ValueError(
+            "contour pairs must satisfy linked <= possible <= identity candidates"
+        )
     if possible == 0:
         if linked != 0 or ratio is not None:
             raise ValueError("empty contour pair set must use linked_pairs=0 and ratio=null")
@@ -1181,14 +1228,27 @@ def compare_reports(
             )
 
         contour = radar.get("contour_completeness", {})
+        identity_candidates = contour.get("identity_candidate_pairs")
         possible = contour.get("possible_pairs")
         linked = contour.get("linked_pairs")
         contour_ratio = contour.get("ratio")
-        if contour.get("status") == "not_applicable_no_pairs" and possible == 0 and linked == 0 and contour_ratio is None:
+        if (
+            contour.get("status") == "not_applicable_no_pairs"
+            and _is_count(identity_candidates)
+            and possible == 0 and linked == 0 and contour_ratio is None
+        ):
             pass
-        elif contour.get("status") != "available" or not _is_count(possible) or not _is_count(linked) or not _is_ratio(contour_ratio):
+        elif (
+            contour.get("status") != "available"
+            or not _is_count(identity_candidates)
+            or not _is_count(possible) or not _is_count(linked)
+            or not _is_ratio(contour_ratio)
+        ):
             failures.append(_failure("contour_completeness_unavailable", "Contour completeness is unavailable or inconsistent."))
-        elif possible == 0 or linked > possible or abs(contour_ratio - linked / possible) > 0.000001:
+        elif (
+            possible == 0 or linked > possible or possible > identity_candidates
+            or abs(contour_ratio - linked / possible) > 0.000001
+        ):
             failures.append(_failure("contour_completeness_invalid", "Contour numerator and denominator are inconsistent."))
         elif contour_ratio < contour_minimum:
             failures.append(_failure("contour_completeness_below_gate", "Contour completeness is below the configured gate.", actual=contour_ratio, minimum=contour_minimum))

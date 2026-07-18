@@ -8,6 +8,9 @@ ONLY`; он пишет только явно указанный `--out`.
 Порог полноты traceable evidence — `0.95`. Порог связанных media/action
 контуров — `0.80`; если возможных пар нет, отчёт обязан явно вернуть
 `not_applicable_no_pairs`, `possible_pairs=0`, `linked_pairs=0`, `ratio=null`.
+`identity_candidate_pairs` остаётся диагностикой совпадения страны, канонической
+темы и направления; в `possible_pairs` входят только one-to-one эпизоды,
+прошедшие тот же временной допуск 14 дней, что и production-linker.
 
 Все production-команды используют только SSH-алиас `geopulse-prod`. Не
 подставляйте IP, URL БД или пароль.

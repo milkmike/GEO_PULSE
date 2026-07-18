@@ -571,6 +571,7 @@ def test_cycle_json_report_has_exact_release_metrics_from_vertical_slice(monkeyp
         "automatic": 4, "unresolved": 2, "violations": 0,
     }
     assert payload["contour_completeness"] == {
+        "identity_candidate_pairs": 1,
         "possible_pairs": 1, "linked_pairs": 1, "ratio": 1.0,
     }
 
@@ -1420,16 +1421,42 @@ def test_shadow_report_uses_persisted_meta_state_for_monotonic_lifecycle(monkeyp
     assert report.meta_state_counts[TrendState.EMERGING.value] == 0
 
 
-def test_contour_completeness_exposes_temporally_unlinked_possible_pair():
+def test_contour_denominator_excludes_temporally_ineligible_identity_candidate():
     import src.radar.service as service
 
     media = _episode_wave("media", AS_OF - timedelta(days=30), "media-old")
     action = _episode_wave("action", AS_OF, "action-new")
 
+    assert match_contour_episodes([(1, media)], [(2, action)]) == ()
     assert service._contour_completeness((media, action)) == {
-        "possible_pairs": 1,
+        "identity_candidate_pairs": 1,
+        "possible_pairs": 0,
         "linked_pairs": 0,
-        "ratio": 0.0,
+        "ratio": None,
+    }
+
+
+def test_contour_denominator_keeps_exact_fourteen_day_boundary_only():
+    import src.radar.service as service
+
+    media = _episode_wave("media", AS_OF - timedelta(days=30), "media-old")
+    boundary = _episode_wave("action", AS_OF - timedelta(days=16), "action-boundary")
+    outside = _episode_wave(
+        "action", AS_OF - timedelta(days=16) + timedelta(seconds=1),
+        "action-outside",
+    )
+
+    assert service._contour_completeness((media, boundary)) == {
+        "identity_candidate_pairs": 1,
+        "possible_pairs": 1,
+        "linked_pairs": 1,
+        "ratio": 1.0,
+    }
+    assert service._contour_completeness((media, outside)) == {
+        "identity_candidate_pairs": 1,
+        "possible_pairs": 0,
+        "linked_pairs": 0,
+        "ratio": None,
     }
 
 
