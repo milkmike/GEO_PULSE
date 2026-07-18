@@ -704,6 +704,7 @@ def test_radar_migration_is_idempotent_and_preserves_audit_history():
                 DROP TABLE IF EXISTS radar_trends CASCADE;
                 DROP TABLE IF EXISTS action_events CASCADE;
                 DROP TABLE IF EXISTS radar_observations CASCADE;
+                DROP TABLE IF EXISTS analysis_runs CASCADE;
                 DROP FUNCTION IF EXISTS public.reject_radar_history_mutation();
             """)
             migration_sql = (
@@ -712,8 +713,33 @@ def test_radar_migration_is_idempotent_and_preserves_audit_history():
             cursor.execute(migration_sql)
             cursor.execute(migration_sql)
 
-            cursor.execute("SELECT code FROM countries ORDER BY code LIMIT 1")
-            country_code = cursor.fetchone()[0]
+            cursor.execute("""
+                INSERT INTO analysis_runs(
+                    public_id, run_type, input_hash, status
+                ) VALUES (
+                    '00000000-0000-0000-0000-000000000010', 'radar-test',
+                    'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                    'pending'
+                )
+                RETURNING detector_version, model_version
+            """)
+            assert cursor.fetchone() == ('not_applicable', 'not_applicable')
+            with pytest.raises(psycopg2.errors.UniqueViolation):
+                cursor.execute("""
+                    INSERT INTO analysis_runs(
+                        public_id, run_type, input_hash, status
+                    ) VALUES (
+                        '00000000-0000-0000-0000-000000000011', 'radar-test',
+                        'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                        'pending'
+                    )
+                """)
+
+            cursor.execute("""
+                INSERT INTO countries(code, name_ru, name_en, iso3, region)
+                VALUES ('XZ', 'Тестовая страна', 'Test country', 'XZZ', 'test')
+            """)
+            country_code = 'XZ'
             cursor.execute("""
                 INSERT INTO articles(title, url, published_at)
                 VALUES ('Radar evidence', 'https://example.test/radar', NOW())
@@ -732,6 +758,89 @@ def test_radar_migration_is_idempotent_and_preserves_audit_history():
                 ) RETURNING id
             """, (country_code,))
             trend_id = cursor.fetchone()[0]
+            cursor.execute("""
+                INSERT INTO radar_trends(
+                    public_id, scope, subject_key, title_ru, direction, state,
+                    confidence, coverage_confidence, first_observed_at,
+                    detector_version
+                ) VALUES (
+                    '00000000-0000-0000-0000-000000000005', 'meta',
+                    'policy:test', 'Мета-тест', 'warming', 'candidate', 0.5, 0.5,
+                    NOW(), 'test-v1'
+                ) RETURNING id
+            """)
+            meta_trend_id = cursor.fetchone()[0]
+            cursor.execute("""
+                INSERT INTO radar_trends(
+                    public_id, scope, contour, country_code, subject_key, title_ru,
+                    direction, state, confidence, coverage_confidence,
+                    first_observed_at, detector_version
+                ) VALUES (
+                    '00000000-0000-0000-0000-000000000006', 'country', 'action',
+                    %s, 'policy:test', 'Тест действия', 'warming', 'candidate',
+                    0.5, 0.5, NOW(), 'test-v1'
+                ) RETURNING id
+            """, (country_code,))
+            action_trend_id = cursor.fetchone()[0]
+            cursor.execute("""
+                INSERT INTO radar_trends(
+                    public_id, scope, contour, country_code, subject_key, title_ru,
+                    direction, state, confidence, coverage_confidence,
+                    first_observed_at, detector_version
+                ) VALUES (
+                    '00000000-0000-0000-0000-000000000007', 'country', 'action',
+                    %s, 'policy:test', 'Несовместимое действие', 'cooling',
+                    'candidate', 0.5, 0.5, NOW(), 'test-v1'
+                ) RETURNING id
+            """, (country_code,))
+            incompatible_action_trend_id = cursor.fetchone()[0]
+
+            with pytest.raises(psycopg2.errors.CheckViolation):
+                cursor.execute("""
+                    INSERT INTO radar_trend_members(
+                        public_id, meta_trend_id, country_trend_id
+                    ) VALUES (
+                        '00000000-0000-0000-0000-000000000008', %s, %s
+                    )
+                """, (trend_id, meta_trend_id))
+            with pytest.raises(psycopg2.errors.CheckViolation):
+                cursor.execute("""
+                    INSERT INTO radar_contour_links(
+                        public_id, media_trend_id, action_trend_id, status
+                    ) VALUES (
+                        '00000000-0000-0000-0000-000000000009', %s, %s,
+                        'divergent'
+                    )
+                """, (action_trend_id, trend_id))
+            with pytest.raises(psycopg2.errors.CheckViolation):
+                cursor.execute("""
+                    INSERT INTO radar_contour_links(
+                        public_id, media_trend_id, action_trend_id, status
+                    ) VALUES (
+                        '00000000-0000-0000-0000-000000000012', %s, %s,
+                        'divergent'
+                    )
+                """, (trend_id, incompatible_action_trend_id))
+            cursor.execute("""
+                INSERT INTO radar_trend_members(
+                    public_id, meta_trend_id, country_trend_id
+                ) VALUES (
+                    '00000000-0000-0000-0000-000000000013', %s, %s
+                )
+            """, (meta_trend_id, trend_id))
+            cursor.execute("""
+                INSERT INTO radar_contour_links(
+                    public_id, media_trend_id, action_trend_id, status
+                ) VALUES (
+                    '00000000-0000-0000-0000-000000000014', %s, %s, 'aligned'
+                )
+            """, (trend_id, action_trend_id))
+            with pytest.raises(psycopg2.errors.CheckViolation):
+                cursor.execute(
+                    "UPDATE radar_trends SET subject_key = 'policy:changed' "
+                    "WHERE id = %s",
+                    (action_trend_id,),
+                )
             cursor.execute("""
                 INSERT INTO radar_state_events(
                     public_id, trend_id, to_state, transition_reason

@@ -241,6 +241,10 @@ def test_radar_schema_is_additive_auditable_and_bootstrapped():
         assert "'trigger','support','context','contradiction'" in sql
         assert "uq_radar_country_trend_identity" in sql
         assert "uq_radar_meta_trend_identity" in sql
+        assert "detector_version VARCHAR(40) NOT NULL DEFAULT 'not_applicable'" in sql
+        assert "model_version VARCHAR(120) NOT NULL DEFAULT 'not_applicable'" in sql
+        assert "validate_radar_trend_member_topology" in sql
+        assert "validate_radar_contour_link_topology" in sql
     assert "UPDATE articles SET" not in migration_sql
     assert "DELETE FROM articles" not in migration_sql
 

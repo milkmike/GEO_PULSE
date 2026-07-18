@@ -790,6 +790,29 @@ CREATE INDEX IF NOT EXISTS idx_radar_trends_meta_state_time
   ON radar_trends(state, first_observed_at DESC, id DESC)
   WHERE scope = 'meta';
 
+CREATE OR REPLACE FUNCTION public.reject_radar_trend_identity_mutation()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF OLD.scope IS DISTINCT FROM NEW.scope
+     OR OLD.contour IS DISTINCT FROM NEW.contour
+     OR OLD.country_code IS DISTINCT FROM NEW.country_code
+     OR OLD.subject_key IS DISTINCT FROM NEW.subject_key
+     OR OLD.direction IS DISTINCT FROM NEW.direction
+     OR OLD.detector_version IS DISTINCT FROM NEW.detector_version THEN
+    RAISE EXCEPTION 'radar trend identity fields are immutable'
+      USING ERRCODE = '23514';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS radar_trend_identity_immutable ON radar_trends;
+CREATE TRIGGER radar_trend_identity_immutable
+  BEFORE UPDATE ON radar_trends
+  FOR EACH ROW EXECUTE FUNCTION public.reject_radar_trend_identity_mutation();
+
 CREATE TABLE IF NOT EXISTS radar_trend_members (
   id BIGSERIAL PRIMARY KEY,
   public_id UUID UNIQUE NOT NULL,
@@ -805,6 +828,37 @@ CREATE TABLE IF NOT EXISTS radar_trend_members (
 );
 CREATE INDEX IF NOT EXISTS idx_radar_trend_members_country
   ON radar_trend_members(country_trend_id, joined_at DESC, id DESC);
+
+CREATE OR REPLACE FUNCTION public.validate_radar_trend_member_topology()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  referenced_meta_scope VARCHAR(16);
+  referenced_country_scope VARCHAR(16);
+BEGIN
+  SELECT scope INTO referenced_meta_scope
+  FROM public.radar_trends
+  WHERE id = NEW.meta_trend_id;
+
+  SELECT scope INTO referenced_country_scope
+  FROM public.radar_trends
+  WHERE id = NEW.country_trend_id;
+
+  IF referenced_meta_scope IS DISTINCT FROM 'meta'
+     OR referenced_country_scope IS DISTINCT FROM 'country' THEN
+    RAISE EXCEPTION
+      'radar trend member requires meta_trend_id scope=meta and country_trend_id scope=country'
+      USING ERRCODE = '23514';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS radar_trend_members_topology ON radar_trend_members;
+CREATE TRIGGER radar_trend_members_topology
+  BEFORE INSERT OR UPDATE ON radar_trend_members
+  FOR EACH ROW EXECUTE FUNCTION public.validate_radar_trend_member_topology();
 
 CREATE TABLE IF NOT EXISTS radar_trend_evidence (
   id BIGSERIAL PRIMARY KEY,
@@ -898,14 +952,65 @@ CREATE TABLE IF NOT EXISTS radar_contour_links (
 CREATE INDEX IF NOT EXISTS idx_radar_contour_links_media_time
   ON radar_contour_links(media_trend_id, evaluated_at DESC, id DESC);
 
+CREATE OR REPLACE FUNCTION public.validate_radar_contour_link_topology()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  media_scope VARCHAR(16);
+  media_contour VARCHAR(16);
+  media_country CHAR(2);
+  media_subject TEXT;
+  media_direction VARCHAR(24);
+  action_scope VARCHAR(16);
+  action_contour VARCHAR(16);
+  action_country CHAR(2);
+  action_subject TEXT;
+  action_direction VARCHAR(24);
+BEGIN
+  SELECT scope, contour, country_code, subject_key, direction
+  INTO media_scope, media_contour, media_country, media_subject, media_direction
+  FROM public.radar_trends
+  WHERE id = NEW.media_trend_id;
+
+  SELECT scope, contour, country_code, subject_key, direction
+  INTO action_scope, action_contour, action_country, action_subject, action_direction
+  FROM public.radar_trends
+  WHERE id = NEW.action_trend_id;
+
+  IF media_scope IS DISTINCT FROM 'country'
+     OR media_contour IS DISTINCT FROM 'media'
+     OR action_scope IS DISTINCT FROM 'country'
+     OR action_contour IS DISTINCT FROM 'action' THEN
+    RAISE EXCEPTION
+      'radar contour link requires country/media and country/action trends'
+      USING ERRCODE = '23514';
+  END IF;
+
+  IF media_country IS DISTINCT FROM action_country
+     OR media_subject IS DISTINCT FROM action_subject
+     OR media_direction IS DISTINCT FROM action_direction THEN
+    RAISE EXCEPTION
+      'radar contour link trends must share country, subject, and direction'
+      USING ERRCODE = '23514';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS radar_contour_links_topology ON radar_contour_links;
+CREATE TRIGGER radar_contour_links_topology
+  BEFORE INSERT OR UPDATE ON radar_contour_links
+  FOR EACH ROW EXECUTE FUNCTION public.validate_radar_contour_link_topology();
+
 CREATE TABLE IF NOT EXISTS analysis_runs (
   id BIGSERIAL PRIMARY KEY,
   public_id UUID UNIQUE NOT NULL,
   run_type VARCHAR(40) NOT NULL,
   input_hash CHAR(64) NOT NULL,
   parameters JSONB NOT NULL DEFAULT '{}',
-  detector_version VARCHAR(40),
-  model_version VARCHAR(120),
+  detector_version VARCHAR(40) NOT NULL DEFAULT 'not_applicable',
+  model_version VARCHAR(120) NOT NULL DEFAULT 'not_applicable',
   status VARCHAR(16) NOT NULL CHECK (status IN ('pending','running','succeeded','failed','cancelled')),
   cost NUMERIC(14,6) NOT NULL DEFAULT 0 CHECK (cost >= 0),
   input_references JSONB NOT NULL DEFAULT '{}',
@@ -917,6 +1022,17 @@ CREATE TABLE IF NOT EXISTS analysis_runs (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE(run_type, input_hash, detector_version, model_version)
 );
+UPDATE analysis_runs
+SET detector_version = 'not_applicable'
+WHERE detector_version IS NULL;
+UPDATE analysis_runs
+SET model_version = 'not_applicable'
+WHERE model_version IS NULL;
+ALTER TABLE analysis_runs
+  ALTER COLUMN detector_version SET DEFAULT 'not_applicable',
+  ALTER COLUMN detector_version SET NOT NULL,
+  ALTER COLUMN model_version SET DEFAULT 'not_applicable',
+  ALTER COLUMN model_version SET NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_analysis_runs_status_time
   ON analysis_runs(status, created_at DESC, id DESC);
 
