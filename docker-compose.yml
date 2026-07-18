@@ -101,6 +101,23 @@ services:
         condition: service_completed_successfully
     restart: unless-stopped
 
+  # Opt-in shadow replay worker.  It intentionally has no loop/schedule until
+  # the replay has been assessed; start it manually with --profile radar.
+  radar-worker:
+    profiles: ["radar"]
+    build:
+      context: .
+      dockerfile: Dockerfile.temperature
+    command: python scripts/build_radar.py --shadow --days 90
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: "no"
+
   threads:
     build:
       context: .
