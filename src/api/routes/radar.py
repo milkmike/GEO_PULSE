@@ -737,7 +737,7 @@ def radar_methodology_payload() -> dict[str, Any]:
         "baseline": {"window_days": 90, "acceleration_days": 7},
         "lifecycle_gates": {"media": {"persistent_observation_days": 2, "independent_publisher_families": 2, "minimum_signal_strength": 0.5}, "action": {"authoritative_source": True, "independent_authoritative_sources": 2}},
         "t0_fields": ["t0_auto", "t0_effective"],
-        "confidence_factors": ["semantic_shift", "source_independence", "coverage_health", "persistence"],
+        "confidence_factors": ["signal_strength", "source_independence", "coverage_health", "persistence"],
         "coverage_hard_gate": "coverage_confidence <= 0.5 suppresses confirmation while retaining the candidate",
         "action_independence": "analysis.action_level is media classification and never independently confirms action evidence",
         "evidence_roles": ["trigger", "support", "context", "contradiction"],

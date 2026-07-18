@@ -269,7 +269,7 @@ export default function TrendInvestigation({
           </ol>
         </section>
 
-        <section className="card p-5"><h2 className="display text-[23px]">03 · Что произошло в медиаконтуре?</h2><p className="mt-3 text-sm text-dim">Медиаконтур: <strong className="text-fg">{trend.contours.media.state}</strong> · связь контуров {trend.contours.media.status}. Он измеряет сдвиг внимания, тона и тезисов в публикациях.</p></section>
+        <section className="card p-5"><h2 className="display text-[23px]">03 · Что произошло в медиаконтуре?</h2><p className="mt-3 text-sm text-dim">Медиаконтур: <strong className="text-fg">{trend.contours.media.state}</strong> · связь контуров {trend.contours.media.status}. Он измеряет изменение доли внимания и знака тональности в проиндексированных публикациях.</p></section>
         <section className="card p-5"><h2 className="display text-[23px]">04 · Что произошло в контуре действий?</h2><p className="mt-3 text-sm text-dim">Контур действий: <strong className="text-fg">{trend.contours.action.state}</strong> · связь контуров {trend.contours.action.status}. Медийная классификация не заменяет авторитетное подтверждение действия.</p></section>
       </div>}
 
