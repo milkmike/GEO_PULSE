@@ -897,7 +897,7 @@ def test_runbook_stabilizes_postgres_write_stats_before_authoritative_baseline()
     assert definition < stop
     assert "sleep 2" in runbook[definition:stop]
     assert "default_transaction_read_only=on" in runbook
-    assert runbook.count("\nwait_for_write_stats_quiescence\n") == 5
+    assert runbook.count("wait_for_write_stats_quiescence") == 6  # definition + 5 barriers
 
 
 def test_runbook_waits_for_recreated_web_before_public_smoke():
@@ -914,7 +914,7 @@ def test_runbook_waits_for_recreated_web_before_public_smoke():
         recreate,
     )
     web_wait = runbook.index(
-        'wait_for_http_content "http://127.0.0.1:3334/radar" "Радар"',
+        """wait_for_http_content "http://127.0.0.1:3334/radar" 'earlyWarningRadar\\":true'""",
         api_wait,
     )
 
@@ -939,6 +939,28 @@ def test_runbook_serializes_with_production_auto_update():
 
     assert lock_fd < lock_wait < inspect_writers
     assert '.deploy-state/auto-update.lock' in auto_update
+
+
+def test_runbook_finalize_only_requires_prior_successful_radar_artifacts():
+    runbook = (ROOT / "docs/release/early-warning-radar-wave1.md").read_text(
+        encoding="utf-8"
+    )
+
+    mode = runbook.index('FINALIZE_ONLY="${FINALIZE_ONLY:-false}"')
+    branch = runbook.index('if test "$FINALIZE_ONLY" = true; then', mode)
+    apply_proof = runbook.index("bounded-apply.json", branch)
+    hidden_proof = runbook.index("hidden-after.json", apply_proof)
+    replay = runbook.index("--shadow --days 90", hidden_proof)
+    public_baseline = runbook.index("public-get-before.json", replay)
+
+    assert mode < branch < apply_proof < hidden_proof < replay < public_baseline
+    assert "validate_replay_report" in runbook[branch:replay]
+    assert "report.get('schema_version') == 1" in runbook[hidden_proof:replay]
+    assert "report.get('phase') == 'after'" in runbook[hidden_proof:replay]
+    assert "report.get('gates', {}).get('passed') is True" in runbook[hidden_proof:replay]
+    assert "sys.exit(0 if ok else" in runbook[hidden_proof:replay]
+    assert "assert report" not in runbook[hidden_proof:replay]
+    assert "FINALIZE_ONLY='${FINALIZE_ONLY:-false}' RELEASE_DIR=" in runbook
 
 
 def test_audit_output_uses_private_process_umask():

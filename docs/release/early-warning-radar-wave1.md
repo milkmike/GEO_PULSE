@@ -227,6 +227,8 @@ active_writers="$(printf '%s\n' "$active_services" | grep -E "^($(printf '%s' "$
 test -z "$active_writers"
 wait_for_write_stats_quiescence
 RADAR_AS_OF="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+FINALIZE_ONLY="${FINALIZE_ONLY:-false}"
+case "$FINALIZE_ONLY" in true|false) ;; *) exit 1 ;; esac
 
 radar_run() {
   docker compose --profile radar run --rm --no-deps \
@@ -237,19 +239,24 @@ radar_run() {
 radar_run python scripts/audit_radar_wave1.py \
   --phase before --json --out "/app/$RELEASE_DIR/authoritative-before.json"
 
-# Exactly 90 days, no persistence; the audit validates the enriched replay contract.
-radar_run sh -c "umask 077; export PGOPTIONS='-c default_transaction_read_only=on -c lock_timeout=30s'; exec python scripts/build_radar.py --shadow --days 90 --as-of '$RADAR_AS_OF' --json-report '/app/$RELEASE_DIR/shadow-replay.json'"
-wait_for_write_stats_quiescence
-radar_run python scripts/audit_radar_wave1.py \
-  --phase shadow \
-  --compare "/app/$RELEASE_DIR/authoritative-before.json" \
-  --replay-report "/app/$RELEASE_DIR/shadow-replay.json" \
-  --evidence-minimum 0.95 --contour-minimum 0.80 \
-  --json --out "/app/$RELEASE_DIR/shadow-audit.json"
+if test "$FINALIZE_ONLY" = true; then
+  # Resume only after a successful bounded apply and hidden audit in this release directory.
+  radar_run python -c "import json, sys; from scripts.audit_radar_wave1 import validate_replay_report; validate_replay_report(json.load(open('/app/$RELEASE_DIR/bounded-apply.json', encoding='utf-8')), expected_shadow=False); report=json.load(open('/app/$RELEASE_DIR/hidden-after.json', encoding='utf-8')); ok=report.get('schema_version') == 1 and report.get('phase') == 'after' and report.get('gates', {}).get('passed') is True; sys.exit(0 if ok else 'prior hidden audit did not pass')"
+else
+  # Exactly 90 days, no persistence; the audit validates the enriched replay contract.
+  radar_run sh -c "umask 077; export PGOPTIONS='-c default_transaction_read_only=on -c lock_timeout=30s'; exec python scripts/build_radar.py --shadow --days 90 --as-of '$RADAR_AS_OF' --json-report '/app/$RELEASE_DIR/shadow-replay.json'"
+  wait_for_write_stats_quiescence
+  radar_run python scripts/audit_radar_wave1.py \
+    --phase shadow \
+    --compare "/app/$RELEASE_DIR/authoritative-before.json" \
+    --replay-report "/app/$RELEASE_DIR/shadow-replay.json" \
+    --evidence-minimum 0.95 --contour-minimum 0.80 \
+    --json --out "/app/$RELEASE_DIR/shadow-audit.json"
 
-# One bounded write; never start a loop or permanent radar-worker here.
-radar_run sh -c "umask 077; exec python scripts/build_radar.py --apply --days 90 --as-of '$RADAR_AS_OF' --json-report '/app/$RELEASE_DIR/bounded-apply.json'"
-radar_run python -c "import json; from scripts.audit_radar_wave1 import validate_replay_report; validate_replay_report(json.load(open('/app/$RELEASE_DIR/bounded-apply.json', encoding='utf-8')), expected_shadow=False)"
+  # One bounded write; never start a loop or permanent radar-worker here.
+  radar_run sh -c "umask 077; exec python scripts/build_radar.py --apply --days 90 --as-of '$RADAR_AS_OF' --json-report '/app/$RELEASE_DIR/bounded-apply.json'"
+  radar_run python -c "import json; from scripts.audit_radar_wave1 import validate_replay_report; validate_replay_report(json.load(open('/app/$RELEASE_DIR/bounded-apply.json', encoding='utf-8')), expected_shadow=False)"
+fi
 docker compose stop radar-worker >/dev/null 2>&1 || true
 wait_for_write_stats_quiescence
 
@@ -285,7 +292,7 @@ docker compose up -d --no-deps --force-recreate web
 # Feature-specific API/content checks before the mandatory real browser gate.
 wait_for_http_content "http://127.0.0.1:8100/api/v2/radar?limit=1" "items"
 wait_for_http_content "http://127.0.0.1:8100/api/v2/radar/trends/$trend_id" "$trend_id"
-wait_for_http_content "http://127.0.0.1:3334/radar" "Радар"
+wait_for_http_content "http://127.0.0.1:3334/radar" 'earlyWarningRadar\":true'
 
 printf '%s\n' \
   'MANDATORY browser smoke (real browser, not curl):' \
@@ -312,7 +319,7 @@ trap - EXIT HUP INT TERM
 printf 'RADAR_RELEASE_PASSED reports=%s\n' "$RELEASE_DIR"
 RELEASE_GATE
 
-ssh -tt geopulse-prod "set -euo pipefail; umask 077; cd /opt/geopulse; RELEASE_DIR='$RELEASE_DIR' bash '$RELEASE_DIR/release-gate.sh'"
+ssh -tt geopulse-prod "set -euo pipefail; umask 077; cd /opt/geopulse; FINALIZE_ONLY='${FINALIZE_ONLY:-false}' RELEASE_DIR='$RELEASE_DIR' bash '$RELEASE_DIR/release-gate.sh'"
 ```
 
 `final-after.json` должен иметь `gates.passed=true`, точное равенство count и
