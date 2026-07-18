@@ -35,19 +35,25 @@ class _Result:
 
 
 class _Session:
-    def __init__(self, media_rows=(), action_rows=(), inserted=1, existing_source_fingerprints=()):
+    def __init__(
+        self, media_rows=(), action_rows=(), inserted=1,
+        existing_source_fingerprints=(), registered_country_codes=("ES",),
+    ):
         self.media_rows = media_rows
         self.action_rows = action_rows
         self.inserted = inserted
         self.calls = []
         self.inserted_hashes = set()
         self.existing_source_fingerprints = set(existing_source_fingerprints)
+        self.registered_country_codes = tuple(registered_country_codes)
 
     def execute(self, statement, params=None):
         sql = str(statement)
         self.calls.append((sql, params or {}))
         if "annual_source_fingerprint_gate" in sql:
             return _Result(scalar_value=(params or {})["source_id"] in self.existing_source_fingerprints)
+        if "radar_registered_country_codes" in sql:
+            return _Result(SimpleNamespace(code=code) for code in self.registered_country_codes)
         if "radar_observations" in sql and "INSERT" in sql:
             input_hash = (params or {})["input_hash"]
             if input_hash in self.inserted_hashes:
@@ -152,6 +158,36 @@ def test_media_observation_counts_publisher_families_not_feed_rows():
     assert point.value == pytest.approx(1.0)
 
 
+def test_single_source_media_stays_critical_and_exposes_alignment_contract():
+    session = _Session(media_rows=(
+        _media_row(
+            ARTICLE_A, 10, "example.es", sentiment=-0.5,
+            topics=("energy",),
+        ),
+    ))
+
+    point = _only(build_media_observations(session, _window()), metric="attention_share")
+
+    assert point.coverage_confidence <= 0.5
+    assert point.evidence["alignment_subject"] == "energy:imports:russia"
+    assert point.evidence["alignment_direction"] == "hardening"
+
+
+def test_media_alignment_defaults_to_general_and_maps_sentiment_direction():
+    session = _Session(media_rows=(
+        _media_row(
+            ARTICLE_A, 10, "example.es", sentiment=0.5,
+            topics=("culture_sport",), event_key="film festival",
+            story_event_keys=(), story_id=None,
+        ),
+    ))
+
+    [point] = build_media_observations(session, _window())
+
+    assert point.evidence["alignment_subject"] == "russia:general"
+    assert point.evidence["alignment_direction"] == "warming"
+
+
 def test_media_uses_signal_foreign_key_not_signal_evidence_row_id():
     first_entity = UUID("00000000-0000-0000-0000-000000000010")
     second_entity = UUID("00000000-0000-0000-0000-000000000020")
@@ -182,17 +218,39 @@ def test_media_action_level_never_confirms_action_observation():
     assert build_action_observations(session, _window()) == []
 
 
-def test_sanction_delta_creates_authoritative_action_observation():
+def test_generic_sanctions_dataset_is_excluded_from_radar_wave_one():
     session = _Session(action_rows=(SimpleNamespace(
         country_code="ES", value=4, observed_at=NOW - timedelta(hours=1),
         source_id="sanctions_pressure:ES:2026-07-18T11:00:00+00:00",
     ),))
 
+    assert build_action_observations(session, _window()) == []
+    assert all("FROM sanctions_pressure" not in sql for sql, _ in session.calls)
+
+
+def test_action_observations_suppress_unregistered_country_codes():
+    session = _Session(
+        registered_country_codes=("ES",),
+        action_rows={
+            "un_votes": (
+                SimpleNamespace(
+                    country_code="ES", year=2025, current_value=Decimal("42"),
+                    previous_value=Decimal("40"), updated_at=NOW,
+                ),
+                SimpleNamespace(
+                    country_code="EU", year=2025, current_value=Decimal("42"),
+                    previous_value=Decimal("40"), updated_at=NOW,
+                ),
+            ),
+        },
+    )
+
     [point] = build_action_observations(session, _window())
 
-    assert point.contour == Contour.ACTION
-    assert point.authority == "registry"
-    assert point.subject_key == "policy:sanctions:russia"
+    assert point.country_code == "ES"
+    action_sql = [sql for sql, _ in session.calls if "FROM un_votes" in sql]
+    assert len(action_sql) == 1
+    assert "JOIN countries tracked" in action_sql[0]
 
 
 def test_observation_upsert_uses_input_hash_conflict_and_returns_inserted_count():
@@ -275,6 +333,8 @@ def test_annual_actions_expose_period_values_and_real_refresh_time():
     assert point.evidence["current_value"] == 42.0
     assert point.evidence["previous_value"] == 40.0
     assert point.evidence["delta"] == 2.0
+    assert point.evidence["alignment_subject"] == "diplomacy:un_alignment:russia"
+    assert point.evidence["alignment_direction"] == "warming"
 
 
 def test_fossil_snapshot_requires_comparable_prior_and_canonicalizes_numbers():
@@ -310,6 +370,8 @@ def test_fossil_decrease_uses_delta_and_retains_comparison_values():
     assert point.evidence["previous_value"] == 100.0
     assert point.evidence["current_value"] == 90.0
     assert point.evidence["delta"] == -10.0
+    assert point.evidence["alignment_subject"] == "energy:imports:russia"
+    assert point.evidence["alignment_direction"] == "hardening"
 
 
 def test_input_hash_includes_all_evidence_roots():
@@ -428,14 +490,7 @@ def test_fossil_prior_query_excludes_reported_or_non_authoritative_rows():
     assert "event.details->>'dataset' = 'ru_fossil_imports'" in sql
 
 
-def test_corrected_sanction_and_trade_magnitudes_change_replay_identity():
-    def sanction(value):
-        return build_action_observations(_Session(action_rows={
-            "sanctions_pressure": (SimpleNamespace(
-                country_code="ES", value=Decimal(value), observed_at=NOW - timedelta(hours=2),
-            ),),
-        }), _window())[0]
-
+def test_corrected_trade_magnitude_changes_replay_identity_and_exposes_alignment():
     def trade(value):
         return build_action_observations(_Session(action_rows={
             "trade_data": (SimpleNamespace(
@@ -444,5 +499,6 @@ def test_corrected_sanction_and_trade_magnitudes_change_replay_identity():
             ),),
         }), _window())[0]
 
-    assert sanction("4").input_hash != sanction("5").input_hash
     assert trade("20").input_hash != trade("21").input_hash
+    assert trade("20").evidence["alignment_subject"] == "economy:trade:russia"
+    assert trade("20").evidence["alignment_direction"] == "warming"

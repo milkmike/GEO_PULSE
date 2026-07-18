@@ -13,31 +13,27 @@ from .types import Contour, Observation, ObservationWindow
 
 
 ACTION_SUBJECTS = {
-    "sanctions_pressure": "policy:sanctions:russia",
     "un_votes": "diplomacy:un_alignment:russia",
     "trade_data": "economy:trade:russia",
     "ru_fossil_imports": "energy:imports:russia",
 }
 
-
-_SANCTIONS = text("""
-    SELECT country_code, delta::numeric AS value,
-           COALESCE(last_change::timestamp, updated_at)::timestamptz AS observed_at,
-           'sanctions_pressure:' || country_code || ':' ||
-             COALESCE(last_change::text, updated_at::text) AS source_id
-    FROM sanctions_pressure
-    WHERE delta IS NOT NULL AND delta <> 0
-      AND COALESCE(last_change::timestamp, updated_at) >= :window_start
-      AND COALESCE(last_change::timestamp, updated_at) < :window_end
+_REGISTERED_COUNTRIES = text("""
+    /* radar_registered_country_codes */
+    SELECT code
+    FROM countries
 """)
 
 # A refreshed annual row has the same effective date and data fingerprint, so
 # it resolves to the same input hash rather than becoming a new action.
 _UN_VOTES = text("""
     WITH periods AS (
-      SELECT country_code, year, agreement_pct, updated_at,
-             LAG(agreement_pct) OVER (PARTITION BY country_code ORDER BY year) AS previous_value
-      FROM un_votes
+      SELECT votes.country_code, votes.year, votes.agreement_pct, votes.updated_at,
+             LAG(votes.agreement_pct) OVER (
+               PARTITION BY votes.country_code ORDER BY votes.year
+             ) AS previous_value
+      FROM un_votes votes
+      JOIN countries tracked ON tracked.code = votes.country_code
     )
     SELECT country_code, year, agreement_pct::numeric AS current_value,
            previous_value::numeric AS previous_value,
@@ -51,9 +47,13 @@ _UN_VOTES = text("""
 
 _TRADE = text("""
     WITH periods AS (
-      SELECT country_code, year, total_trade_usd, yoy_change_pct, updated_at,
-             LAG(total_trade_usd) OVER (PARTITION BY country_code ORDER BY year) AS previous_value
-      FROM trade_data
+      SELECT trade.country_code, trade.year, trade.total_trade_usd,
+             trade.yoy_change_pct, trade.updated_at,
+             LAG(trade.total_trade_usd) OVER (
+               PARTITION BY trade.country_code ORDER BY trade.year
+             ) AS previous_value
+      FROM trade_data trade
+      JOIN countries tracked ON tracked.code = trade.country_code
     )
     SELECT country_code, year, total_trade_usd::numeric AS current_value,
            previous_value::numeric AS previous_value,
@@ -75,6 +75,7 @@ _FOSSIL = text("""
            (imports.total_eur::numeric - previous.value) AS value,
            imports.updated_at::timestamptz AS observed_at
     FROM ru_fossil_imports imports
+    JOIN countries tracked ON tracked.code = imports.country_code
     JOIN LATERAL (
       SELECT candidates.value
       FROM (
@@ -162,11 +163,26 @@ def _direction(value: Decimal) -> str:
     return "increase" if value > 0 else "decrease"
 
 
+def _alignment_direction(value: Decimal) -> str:
+    """Normalize action direction to its effect on the Russia relationship."""
+
+    return "warming" if value > 0 else "hardening"
+
+
 def _build_rows(session, sql, window: ObservationWindow) -> list[Any]:
     return session.execute(sql, {
         "window_start": window.start,
         "window_end": window.end,
     }).fetchall()
+
+
+def _registered_country_codes(session) -> frozenset[str]:
+    rows = session.execute(_REGISTERED_COUNTRIES).fetchall()
+    return frozenset(
+        str(_value(row, "code", "")).strip().upper()
+        for row in rows
+        if len(str(_value(row, "code", "")).strip()) == 2
+    )
 
 
 def _source_fingerprint(
@@ -215,6 +231,8 @@ def _structured_observation(
         "current_value": _number(current) if current is not None else None,
         "delta": _number(delta),
         "yoy_change_pct": _number(yoy_change_pct) if yoy_change_pct is not None else None,
+        "alignment_subject": ACTION_SUBJECTS[dataset],
+        "alignment_direction": _alignment_direction(delta),
     }
     return make_observation(
         country_code=country,
@@ -237,8 +255,8 @@ def _structured_observation(
 def build_action_observations(session, window: ObservationWindow) -> list[Observation]:
     """Use registry/formal changes only; media analysis is never an input."""
 
+    registered_countries = _registered_country_codes(session)
     datasets = (
-        ("sanctions_pressure", _SANCTIONS, "registry", "delta", "event"),
         ("un_votes", _UN_VOTES, "formal", "agreement_pct_delta", "year"),
         ("trade_data", _TRADE, "registry", "trade_change", "year"),
         ("ru_fossil_imports", _FOSSIL, "registry", "import_value_delta", "snapshot"),
@@ -247,7 +265,7 @@ def build_action_observations(session, window: ObservationWindow) -> list[Observ
     for dataset, query, authority, metric, resolution in datasets:
         for row in _build_rows(session, query, window):
             country = str(_value(row, "country_code", "")).upper()
-            if len(country) != 2:
+            if country not in registered_countries:
                 continue
             period_year = int(_value(row, "year")) if resolution == "year" and _value(row, "year") is not None else None
             observed_at = _value(row, "updated_at") if resolution == "year" else _value(row, "observed_at")

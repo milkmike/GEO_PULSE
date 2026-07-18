@@ -20,7 +20,8 @@ _MEDIA_ROWS = text("""
            source.country_code, source.id AS publisher_id,
            source.name AS publisher_name, source.url AS publisher_url,
            publisher.config AS publisher_config,
-           story_link.story_id, analysis.event_key, analysis.sentiment, analysis.is_relevant,
+           story_link.story_id, analysis.event_key, analysis.sentiment,
+           analysis.is_relevant, COALESCE(analysis.topics, ARRAY[]::text[]) AS topics,
            ARRAY(SELECT DISTINCT event.event_key FROM story_events event
                  WHERE event.story_id = story_link.story_id) AS story_event_keys,
            ARRAY(SELECT DISTINCT entity.entity_id FROM story_entities entity
@@ -37,6 +38,22 @@ _MEDIA_ROWS = text("""
       AND a.published_at >= :window_start
       AND a.published_at < :window_end
 """)
+
+
+_TOPIC_ALIGNMENT = {
+    "diplomacy": "diplomacy:un_alignment:russia",
+    "organizations": "diplomacy:un_alignment:russia",
+    "economy_trade": "economy:trade:russia",
+    "energy": "energy:imports:russia",
+    "sanctions": "policy:sanctions:russia",
+}
+
+_SUBJECT_ALIGNMENT_TERMS = {
+    "diplomacy:un_alignment:russia": ("diplomacy", "diplomatic", "un-vote", "un_vote"),
+    "economy:trade:russia": ("trade", "commerce", "export", "import"),
+    "energy:imports:russia": ("energy", "fossil", "oil", "gas"),
+    "policy:sanctions:russia": ("sanction", "embargo"),
+}
 
 
 def _value(row: Any, name: str, default: Any = None) -> Any:
@@ -66,6 +83,51 @@ def _direction(sentiment: Any) -> str:
     if value < 0:
         return "negative"
     return "neutral"
+
+
+def _alignment_direction(direction: str) -> str:
+    return {
+        "positive": "warming",
+        "negative": "hardening",
+        "neutral": "neutral",
+    }[direction]
+
+
+def _alignment_subject(subject: str, rows: list[Any]) -> str:
+    """Return a conservative shared domain, falling back on general Russia coverage."""
+
+    candidates = {
+        _TOPIC_ALIGNMENT[str(topic)]
+        for row in rows
+        for topic in (_value(row, "topics", ()) or ())
+        if str(topic) in _TOPIC_ALIGNMENT
+    }
+    if len(candidates) == 1:
+        return next(iter(candidates))
+    if candidates:
+        return "russia:general"
+
+    normalized_subject = subject.casefold()
+    subject_candidates = {
+        alignment
+        for alignment, terms in _SUBJECT_ALIGNMENT_TERMS.items()
+        if any(term in normalized_subject for term in terms)
+    }
+    return next(iter(subject_candidates)) if len(subject_candidates) == 1 else "russia:general"
+
+
+def _coverage_confidence(*, article_count: int, source_count: int, family_count: int) -> float:
+    """Estimate evidence breadth without treating a lone article as full coverage."""
+
+    article_breadth = min(article_count / 5, 1.0)
+    source_breadth = min(source_count / 3, 1.0)
+    family_breadth = min(family_count / 2, 1.0)
+    return round(
+        0.25 * article_breadth
+        + 0.25 * source_breadth
+        + 0.5 * family_breadth,
+        4,
+    )
 
 
 def _canonical_entities(entity_ids: tuple[str, ...]) -> tuple[UUID, ...]:
@@ -167,6 +229,13 @@ def build_media_observations(session, window: ObservationWindow) -> list[Observa
         canonical_entities = _canonical_entities(entity_ids)
         denominator = len(national_coverage[country, day])
         families = _publisher_family_labels(members)
+        source_count = len({int(_value(row, "publisher_id")) for row in members})
+        coverage_confidence = _coverage_confidence(
+            article_count=len(article_ids),
+            source_count=source_count,
+            family_count=len(families),
+        )
+        alignment_subject = _alignment_subject(subject, members)
         evidence_ids = tuple(f"article:{article_id}" for article_id in article_ids) + tuple(
             f"signal:{signal_id}" for signal_id in signal_ids
         ) + tuple(f"story:{story_id}" for story_id in story_ids) + tuple(
@@ -182,19 +251,28 @@ def build_media_observations(session, window: ObservationWindow) -> list[Observa
             window=window,
             value=len(article_ids) / denominator if denominator else None,
             publisher_family_count=len(families),
-            source_count=len({int(_value(row, "publisher_id")) for row in members}),
-            coverage_confidence=1.0 if denominator else 0.0,
+            source_count=source_count,
+            coverage_confidence=coverage_confidence if denominator else 0.0,
             article_id=article_ids[0] if article_ids else None,
             story_id=story_ids[0] if story_ids else None,
             signal_id=signal_ids[0] if signal_ids else None,
             canonical_entity_id=canonical_entities[0] if canonical_entities else None,
-            baseline={"national_indexed_article_count": denominator},
+            baseline={
+                "national_indexed_article_count": denominator,
+                "coverage_components": {
+                    "article_count": len(article_ids),
+                    "source_count": source_count,
+                    "publisher_family_count": len(families),
+                },
+            },
             evidence={
                 "article_ids": article_ids,
                 "story_ids": story_ids,
                 "signal_ids": signal_ids,
                 "entity_ids": entity_ids,
                 "publisher_families": families,
+                "alignment_subject": alignment_subject,
+                "alignment_direction": _alignment_direction(direction),
             },
             evidence_ids=evidence_ids,
         ))
