@@ -119,6 +119,33 @@ def test_radar_cycle_rejects_any_non_exact_lookback(monkeypatch, days):
         run_radar_cycle(_Session(), AS_OF, shadow=True, days=days)
 
 
+def test_release_metrics_exclude_detector_context_before_exact_90_day_window(monkeypatch):
+    import src.radar.service as service
+
+    context = make_observation(
+        country_code="ES", contour="media", subject_key="event:energy",
+        direction="negative", metric="attention_share",
+        observed_at=AS_OF - timedelta(days=95),
+        evidence_ids=("opaque:context",), value=0.1,
+        publisher_family_count=2, source_count=2, coverage_confidence=1.0,
+        evidence={},
+    )
+    audited = _media_point(
+        AS_OF - timedelta(days=89), value=0.8, article_id=909,
+    )
+    monkeypatch.setattr(service, "_history", lambda *_: (context, audited))
+    monkeypatch.setattr(service, "build_media_observations", lambda *_: [])
+    monkeypatch.setattr(service, "build_action_observations", lambda *_: [])
+
+    report = run_radar_cycle(_Session(), AS_OF, shadow=True)
+
+    assert len(report.country_waves[0].observations) == 2
+    assert report.observation_count == 1
+    assert report.evidence_validity == {
+        "total": 1, "valid": 1, "invalid": 0, "ratio": 1.0,
+    }
+
+
 def test_replay_prefers_corrected_richer_observation_without_double_count(monkeypatch):
     import src.radar.service as service
 
@@ -355,13 +382,15 @@ def test_shadow_preserves_analyst_effective_t0_when_auto_t0_was_null(monkeypatch
     monkeypatch.setattr(service, "build_media_observations", lambda *_: [point])
     monkeypatch.setattr(service, "build_action_observations", lambda *_: [])
 
-    [wave] = run_radar_cycle(_Session(), AS_OF, shadow=True).country_waves
+    report = run_radar_cycle(_Session(), AS_OF, shadow=True)
+    [wave] = report.country_waves
 
     assert "radar_t0_revisions" in str(service._PRIOR_WAVES)
     assert "has_analyst_t0_override" in str(service._PRIOR_WAVES)
     assert wave.t0_auto is None
     assert wave.t0_effective == ANALYST_T0
     assert wave.has_analyst_t0_override is True
+    assert report.t0_sanity["violations"] == 0
 
 
 def _media_point(at, *, subject="event:energy", value=0.1, article_id=1):
@@ -924,6 +953,56 @@ def test_meta_persistence_closes_stale_members_before_reopening_current_ones():
     assert "left_at = NULL" in member_sql
 
 
+def test_meta_persistence_uses_prior_state_to_prevent_lifecycle_regression():
+    class _ExistingMetaSession(_RecordingSqlSession):
+        def execute(self, statement, params=None):
+            sql = str(statement)
+            if "scope = 'meta'" in sql and "SELECT id, state" in sql:
+                self.calls.append((sql, params or {}))
+                return _Result(rows=[{
+                    "id": 99,
+                    "state": TrendState.CONFIRMED.value,
+                    "confirmed_at": AS_OF - timedelta(days=2),
+                    "t0_auto": AS_OF - timedelta(days=3),
+                    "t0_effective": AS_OF - timedelta(days=3),
+                    "meta_key": "meta-cooling",
+                }])
+            return super().execute(statement, params)
+
+    confirmed = replace(
+        _episode_wave("media", AS_OF, "confirmed"),
+        country_code="ES", state=TrendState.CONFIRMED,
+    )
+    cooling = replace(
+        _episode_wave("media", AS_OF, "cooling"),
+        country_code="PT", state=TrendState.COOLING,
+    )
+    meta = MetaTrend(
+        "event:energy", "increase", (confirmed, cooling), AS_OF,
+        meta_key="meta-cooling",
+    )
+    wave_ids = {
+        (wave.country_code, wave.contour, wave.subject_key, wave.direction, wave.wave_key): trend_id
+        for trend_id, wave in enumerate((confirmed, cooling), 10)
+    }
+    session = _ExistingMetaSession()
+
+    _persist_meta_and_contours(session, (meta,), wave_ids, AS_OF)
+
+    update = next(
+        params for sql, params in session.calls
+        if "UPDATE radar_trends trend SET" in sql and params.get("id") == 99
+    )
+    assert update["state"] == TrendState.COOLING.value
+    transition = next(
+        params for sql, params in session.calls
+        if "INSERT INTO radar_state_events" in sql and params.get("trend_id") == 99
+    )
+    assert (transition["from_state"], transition["to_state"]) == (
+        TrendState.CONFIRMED.value, TrendState.COOLING.value,
+    )
+
+
 @pytest.mark.parametrize(
     ("states", "countries", "expected"),
     (
@@ -953,6 +1032,67 @@ def test_meta_lifecycle_exposes_early_and_terminal_states(states, countries, exp
     )
 
     assert service._meta_state(meta) is expected
+
+
+def test_meta_lifecycle_cools_when_confirmed_members_start_cooling():
+    import src.radar.service as service
+
+    confirmed = replace(
+        _episode_wave("media", AS_OF, "confirmed"),
+        country_code="ES", state=TrendState.CONFIRMED,
+    )
+    cooling = replace(
+        _episode_wave("media", AS_OF, "cooling"),
+        country_code="PT", state=TrendState.COOLING,
+    )
+    meta = MetaTrend(
+        "event:energy", "increase", (confirmed, cooling), AS_OF,
+        meta_key="meta-cooling",
+    )
+
+    assert service._meta_state(meta, TrendState.CONFIRMED) is TrendState.COOLING
+
+
+def test_meta_lifecycle_does_not_regress_after_cooling():
+    import src.radar.service as service
+
+    emerging = replace(
+        _episode_wave("media", AS_OF, "emerging"),
+        state=TrendState.EMERGING,
+    )
+    meta = MetaTrend(
+        "event:energy", "increase", (emerging,), None,
+        meta_key="meta-cooling",
+    )
+
+    assert service._meta_state(meta, TrendState.COOLING) is TrendState.COOLING
+
+
+def test_shadow_report_uses_persisted_meta_state_for_monotonic_lifecycle(monkeypatch):
+    import src.radar.service as service
+
+    point = _media_point(
+        AS_OF - timedelta(days=1), value=0.9, article_id=919,
+    )
+    session = _Session()
+    session.radar_store["trends"].append({
+        "id": 99,
+        "identity": (
+            "meta", point.subject_key,
+            f"canonical:{point.subject_key}:{point.direction}",
+            point.direction, service.DETECTOR_VERSION,
+        ),
+        "state": TrendState.COOLING.value,
+        "t0_auto": None,
+        "t0_effective": None,
+    })
+    monkeypatch.setattr(service, "build_media_observations", lambda *_: [point])
+    monkeypatch.setattr(service, "build_action_observations", lambda *_: [])
+
+    report = run_radar_cycle(session, AS_OF, shadow=True)
+
+    assert report.meta_state_counts[TrendState.COOLING.value] == 1
+    assert report.meta_state_counts[TrendState.EMERGING.value] == 0
 
 
 def test_contour_completeness_exposes_temporally_unlinked_possible_pair():

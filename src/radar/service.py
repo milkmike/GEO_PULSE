@@ -1031,7 +1031,8 @@ def _persist_meta_and_contours(
         params = {"subject_key": meta.subject_key, "meta_key": meta.meta_key, "direction": meta.direction, "detector_version": DETECTOR_VERSION}
         existing = session.execute(_META_BY_IDENTITY, params).first()
         confirmed = tuple(wave for wave in meta.waves if wave.state is TrendState.CONFIRMED)
-        state = _meta_state(meta).value
+        prior_state = _row_value(existing, "state") if existing is not None else None
+        state = _meta_state(meta, prior_state).value
         meta_detected_at, meta_confirmed_at = _meta_timeline(
             meta, TrendState(state)
         )
@@ -1060,7 +1061,7 @@ def _persist_meta_and_contours(
             _insert_state_event(session, meta_id, None, state, "meta_assignment", as_of, metrics=baseline, evidence=explanation)
         else:
             meta_id = int(_row_value(existing, "id"))
-            prior_state = str(_row_value(existing, "state"))
+            prior_state = str(prior_state)
             prior_t0 = _row_value(existing, "t0_auto")
             session.execute(_UPDATE_META, {
                 "id": meta_id, "state": state, "confidence": coverage,
@@ -1297,23 +1298,74 @@ def _state_distribution(states: Iterable[TrendState | str]) -> dict[str, int]:
     return {state.value: values.count(state.value) for state in TrendState}
 
 
-def _meta_state(meta: MetaTrend) -> TrendState:
+def _meta_state(
+    meta: MetaTrend, previous_state: TrendState | str | None = None,
+) -> TrendState:
     states = tuple(wave.state for wave in meta.waves)
     confirmed_countries = {
         wave.country_code for wave in meta.waves
         if wave.state is TrendState.CONFIRMED
     }
     if len(confirmed_countries) >= 2:
-        return TrendState.CONFIRMED
-    if any(state in (TrendState.EMERGING, TrendState.CONFIRMED) for state in states):
-        return TrendState.EMERGING
-    if states and all(state is TrendState.RESOLVED for state in states):
-        return TrendState.RESOLVED
-    if states and all(state is TrendState.REJECTED for state in states):
-        return TrendState.REJECTED
-    if any(state is TrendState.COOLING for state in states):
+        current = TrendState.CONFIRMED
+    elif states and all(state is TrendState.RESOLVED for state in states):
+        current = TrendState.RESOLVED
+    elif states and all(state is TrendState.REJECTED for state in states):
+        current = TrendState.REJECTED
+    elif any(state is TrendState.COOLING for state in states):
+        current = TrendState.COOLING
+    elif any(state in (TrendState.EMERGING, TrendState.CONFIRMED) for state in states):
+        current = TrendState.EMERGING
+    else:
+        current = TrendState.CANDIDATE
+
+    if previous_state is None:
+        return current
+    previous = TrendState(previous_state)
+    if previous in (TrendState.RESOLVED, TrendState.REJECTED):
+        return previous
+    if previous is TrendState.COOLING and current is not TrendState.RESOLVED:
         return TrendState.COOLING
-    return TrendState.CANDIDATE
+    if previous is TrendState.CONFIRMED and current in (
+        TrendState.CANDIDATE, TrendState.EMERGING, TrendState.REJECTED,
+    ):
+        return TrendState.COOLING
+    if previous is TrendState.EMERGING and current is TrendState.CANDIDATE:
+        return TrendState.EMERGING
+    return current
+
+
+def _meta_identity(meta: MetaTrend) -> tuple[str, str, str]:
+    return meta.subject_key, meta.meta_key, meta.direction
+
+
+def _previous_meta_states(
+    session, metas: tuple[MetaTrend, ...],
+) -> dict[tuple[str, str, str], TrendState]:
+    store = _store(session)
+    if store is not None:
+        previous: dict[tuple[str, str, str], TrendState] = {}
+        for row in store["trends"]:
+            identity = row.get("identity", ())
+            if len(identity) != 5 or identity[0] != "meta":
+                continue
+            previous[(identity[1], identity[2], identity[3])] = TrendState(
+                row["state"]
+            )
+        return previous
+
+    previous = {}
+    for meta in metas:
+        params = {
+            "subject_key": meta.subject_key,
+            "meta_key": meta.meta_key,
+            "direction": meta.direction,
+            "detector_version": DETECTOR_VERSION,
+        }
+        row = session.execute(_META_BY_IDENTITY, params).first()
+        if row is not None:
+            previous[_meta_identity(meta)] = TrendState(_row_value(row, "state"))
+    return previous
 
 
 def _meta_timeline(
@@ -1367,33 +1419,40 @@ def _collector_suppressed(waves: Iterable[CountryWave]) -> int:
 
 def _t0_sanity(
     waves: tuple[CountryWave, ...], metas: tuple[MetaTrend, ...],
+    meta_states: tuple[TrendState, ...] | None = None,
 ) -> dict[str, int]:
-    entries: list[tuple[TrendState, datetime | None, datetime | None, datetime | None, datetime | None]] = [
+    entries: list[tuple[TrendState, datetime | None, datetime | None, datetime | None, datetime | None, bool]] = [
         (
             wave.state,
             wave.t0_auto,
             wave.t0_effective,
             wave.detected_at,
             wave.confirmed_at,
+            wave.has_analyst_t0_override,
         )
         for wave in waves
     ]
-    for meta in metas:
-        state = _meta_state(meta)
+    for index, meta in enumerate(metas):
+        state = meta_states[index] if meta_states is not None else _meta_state(meta)
         detected, confirmed = _meta_timeline(meta, state)
-        entries.append((state, meta.t0_auto, meta.t0_auto, detected, confirmed))
-    automatic = sum(t0_auto is not None for _, t0_auto, _, _, _ in entries)
+        entries.append((state, meta.t0_auto, meta.t0_auto, detected, confirmed, False))
+    automatic = sum(t0_auto is not None for _, t0_auto, _, _, _, _ in entries)
     violations = sum(
         (
             state is TrendState.CONFIRMED and t0_auto is None
+            and not (has_analyst_override and t0_effective is not None)
         ) or (
             t0_auto is not None and detected_at is not None and t0_auto > detected_at
         ) or (
             t0_auto is not None and confirmed_at is not None and t0_auto > confirmed_at
         ) or (
             t0_effective is not None and t0_auto is None
+            and not has_analyst_override
         )
-        for state, t0_auto, t0_effective, detected_at, confirmed_at in entries
+        for (
+            state, t0_auto, t0_effective, detected_at, confirmed_at,
+            has_analyst_override,
+        ) in entries
     )
     return {
         "automatic": automatic,
@@ -1432,6 +1491,10 @@ def run_radar_cycle(session, as_of: datetime, shadow: bool = True, *, days: int 
     generated = [*build_media_observations(session, window), *build_action_observations(session, window)]
     history = _history(session, as_of, days)
     observations = _prefer_logical_observations(history, generated)
+    audited_observations = tuple(
+        point for point in observations
+        if window.start <= _utc(point.observed_at) < window.end
+    )
     previous_waves = _previous_waves(session, as_of)
     assignments = assign_country_waves(observations, previous_waves)
     assigned_keys = {wave.wave_key for wave in assignments.waves}
@@ -1454,9 +1517,12 @@ def run_radar_cycle(session, as_of: datetime, shadow: bool = True, *, days: int 
     )
     metas = assign_meta_trends(scored_waves, _story_anchors(session, as_of))
     state_counts = _state_distribution(wave.state for wave in scored_waves)
-    meta_state_counts = _state_distribution(
-        _meta_state(meta) for meta in metas.meta_trends
+    previous_meta_states = _previous_meta_states(session, metas.meta_trends)
+    meta_states = tuple(
+        _meta_state(meta, previous_meta_states.get(_meta_identity(meta)))
+        for meta in metas.meta_trends
     )
+    meta_state_counts = _state_distribution(meta_states)
     inserted = 0
     updated = 0
     trend_id: int | None = None
@@ -1468,7 +1534,7 @@ def run_radar_cycle(session, as_of: datetime, shadow: bool = True, *, days: int 
     after_counts = _protected_counts(session)
     evidence_complete = sum(_valid_evidence_root(point) for point in observations)
     t0_count = sum(wave.t0_auto is not None for wave in scored_waves)
-    evidence_validity = _evidence_validity(observations)
+    evidence_validity = _evidence_validity(audited_observations)
     collector_suppressed = _collector_suppressed(scored_waves)
     confirmed_below_coverage_gate = sum(
         wave.state is TrendState.CONFIRMED and _wave_coverage(wave) <= 0.5
@@ -1483,12 +1549,12 @@ def run_radar_cycle(session, as_of: datetime, shadow: bool = True, *, days: int 
         evidence_completeness={"complete": evidence_complete, "incomplete": len(observations) - evidence_complete},
         protected_row_counts=_count_report(before_counts, after_counts),
         lookback_days=days,
-        observation_count=len(observations),
+        observation_count=len(audited_observations),
         country_state_counts=state_counts,
         meta_state_counts=meta_state_counts,
         evidence_validity=evidence_validity,
         confirmed_below_coverage_gate=confirmed_below_coverage_gate,
-        t0_sanity=_t0_sanity(scored_waves, metas.meta_trends),
+        t0_sanity=_t0_sanity(scored_waves, metas.meta_trends, meta_states),
         contour_completeness=_contour_completeness(scored_waves),
     )
 
