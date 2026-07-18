@@ -925,6 +925,22 @@ def test_runbook_waits_for_recreated_web_before_public_smoke():
     assert "done\n  return 1\n}" in runbook[helper:recreate]
 
 
+def test_runbook_serializes_with_production_auto_update():
+    runbook = (ROOT / "docs/release/early-warning-radar-wave1.md").read_text(
+        encoding="utf-8"
+    )
+    auto_update = (ROOT / "deploy/auto-update.sh").read_text(encoding="utf-8")
+
+    lock_fd = runbook.index('exec 8>".deploy-state/auto-update.lock"')
+    lock_wait = runbook.index("flock -w 30 8", lock_fd)
+    inspect_writers = runbook.index(
+        'running_services="$(docker compose ps --status running --services)"'
+    )
+
+    assert lock_fd < lock_wait < inspect_writers
+    assert '.deploy-state/auto-update.lock' in auto_update
+
+
 def test_audit_output_uses_private_process_umask():
     source = (ROOT / "scripts/audit_radar_wave1.py").read_text(encoding="utf-8")
 

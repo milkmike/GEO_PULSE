@@ -82,6 +82,10 @@ cd /opt/geopulse
 : "${RELEASE_DIR:?RELEASE_DIR is required}"
 case "$RELEASE_DIR" in backups/radar-wave1.*) ;; *) exit 1 ;; esac
 
+mkdir -p .deploy-state
+exec 8>".deploy-state/auto-update.lock"
+flock -w 30 8
+
 candidates='collector analyzer temperature threads integrity gdelt-collector ru-index signals briefs fx-collector un-votes-loader trade-loader sanctions-loader crea-imports-loader market-radar-loader vox-collector vox-analyzer vox-engine tg-collector radar-worker'
 running_services="$(docker compose ps --status running --services)"
 running_writers="$(printf '%s\n' "$running_services" | grep -E "^($(printf '%s' "$candidates" | tr ' ' '|'))$" || true)"
