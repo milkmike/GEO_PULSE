@@ -758,6 +758,7 @@ CREATE TABLE IF NOT EXISTS radar_trends (
   title_ru TEXT NOT NULL,
   direction VARCHAR(24) NOT NULL,
   wave_key TEXT,
+  meta_key TEXT,
   state VARCHAR(16) NOT NULL CHECK (state IN
     ('candidate','emerging','confirmed','cooling','resolved','rejected')),
   confidence NUMERIC(5,4) NOT NULL CHECK (confidence BETWEEN 0 AND 1),
@@ -775,31 +776,36 @@ CREATE TABLE IF NOT EXISTS radar_trends (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT radar_trends_scope_shape_check CHECK (
     (scope = 'country' AND contour IS NOT NULL AND country_code IS NOT NULL
-      AND wave_key IS NOT NULL)
+      AND wave_key IS NOT NULL AND meta_key IS NULL)
     OR (scope = 'meta' AND contour IS NULL AND country_code IS NULL
-      AND wave_key IS NULL)
+      AND wave_key IS NULL AND meta_key IS NOT NULL)
   )
 );
 ALTER TABLE radar_trends
-  ADD COLUMN IF NOT EXISTS wave_key TEXT;
+  ADD COLUMN IF NOT EXISTS wave_key TEXT,
+  ADD COLUMN IF NOT EXISTS meta_key TEXT;
 UPDATE radar_trends
 SET wave_key = 'legacy:' || id::text
 WHERE scope = 'country' AND wave_key IS NULL;
+UPDATE radar_trends
+SET meta_key = 'legacy:' || id::text
+WHERE scope = 'meta' AND meta_key IS NULL;
 ALTER TABLE radar_trends
   DROP CONSTRAINT IF EXISTS radar_trends_scope_shape_check;
 ALTER TABLE radar_trends
   ADD CONSTRAINT radar_trends_scope_shape_check CHECK (
     (scope = 'country' AND contour IS NOT NULL AND country_code IS NOT NULL
-      AND wave_key IS NOT NULL)
+      AND wave_key IS NOT NULL AND meta_key IS NULL)
     OR (scope = 'meta' AND contour IS NULL AND country_code IS NULL
-      AND wave_key IS NULL)
+      AND wave_key IS NULL AND meta_key IS NOT NULL)
   );
 DROP INDEX IF EXISTS uq_radar_country_trend_identity;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_radar_country_trend_identity
   ON radar_trends(contour, country_code, subject_key, direction, wave_key, detector_version)
   WHERE scope = 'country';
+DROP INDEX IF EXISTS uq_radar_meta_trend_identity;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_radar_meta_trend_identity
-  ON radar_trends(subject_key, direction, detector_version)
+  ON radar_trends(subject_key, direction, meta_key, detector_version)
   WHERE scope = 'meta';
 CREATE INDEX IF NOT EXISTS idx_radar_trends_country_state_time
   ON radar_trends(country_code, state, first_observed_at DESC, id DESC)
@@ -819,6 +825,7 @@ BEGIN
      OR OLD.subject_key IS DISTINCT FROM NEW.subject_key
      OR OLD.direction IS DISTINCT FROM NEW.direction
      OR OLD.wave_key IS DISTINCT FROM NEW.wave_key
+     OR OLD.meta_key IS DISTINCT FROM NEW.meta_key
      OR OLD.detector_version IS DISTINCT FROM NEW.detector_version THEN
     RAISE EXCEPTION 'radar trend identity fields are immutable'
       USING ERRCODE = '23514';

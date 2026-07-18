@@ -242,11 +242,18 @@ def test_radar_schema_is_additive_auditable_and_bootstrapped():
         assert "uq_radar_country_trend_identity" in sql
         assert "uq_radar_meta_trend_identity" in sql
         assert "wave_key TEXT" in sql
+        assert "meta_key TEXT" in sql
         assert "AND wave_key IS NOT NULL" in sql
         assert "AND wave_key IS NULL" in sql
+        assert "AND meta_key IS NULL" in sql
+        assert "AND meta_key IS NOT NULL" in sql
         assert (
             "ON radar_trends(contour, country_code, subject_key, direction, "
             "wave_key, detector_version)" in sql
+        )
+        assert (
+            "ON radar_trends(subject_key, direction, meta_key, detector_version)"
+            in sql
         )
         assert "detector_version VARCHAR(40) NOT NULL DEFAULT 'not_applicable'" in sql
         assert "model_version VARCHAR(120) NOT NULL DEFAULT 'not_applicable'" in sql
