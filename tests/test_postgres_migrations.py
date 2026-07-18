@@ -685,3 +685,91 @@ def test_temperature_anomaly_precision_migration_preserves_rows_and_retries():
             ]
     finally:
         connection.close()
+
+
+def test_radar_migration_is_idempotent_and_preserves_audit_history():
+    dsn, psycopg2 = _requirements()
+    connection = psycopg2.connect(dsn)
+    connection.autocommit = True
+    try:
+        with connection.cursor() as cursor:
+            _reset(cursor, initialize=True)
+            cursor.execute("""
+                DROP TABLE IF EXISTS notification_events CASCADE;
+                DROP TABLE IF EXISTS radar_contour_links CASCADE;
+                DROP TABLE IF EXISTS radar_t0_revisions CASCADE;
+                DROP TABLE IF EXISTS radar_state_events CASCADE;
+                DROP TABLE IF EXISTS radar_trend_evidence CASCADE;
+                DROP TABLE IF EXISTS radar_trend_members CASCADE;
+                DROP TABLE IF EXISTS radar_trends CASCADE;
+                DROP TABLE IF EXISTS action_events CASCADE;
+                DROP TABLE IF EXISTS radar_observations CASCADE;
+                DROP FUNCTION IF EXISTS public.reject_radar_history_mutation();
+            """)
+            migration_sql = (
+                MIGRATIONS / "027_early_warning_radar.sql"
+            ).read_text()
+            cursor.execute(migration_sql)
+            cursor.execute(migration_sql)
+
+            cursor.execute("SELECT code FROM countries ORDER BY code LIMIT 1")
+            country_code = cursor.fetchone()[0]
+            cursor.execute("""
+                INSERT INTO articles(title, url, published_at)
+                VALUES ('Radar evidence', 'https://example.test/radar', NOW())
+                RETURNING id
+            """)
+            article_id = cursor.fetchone()[0]
+            cursor.execute("""
+                INSERT INTO radar_trends(
+                    public_id, scope, contour, country_code, subject_key, title_ru,
+                    direction, state, confidence, coverage_confidence,
+                    first_observed_at, detector_version
+                ) VALUES (
+                    '00000000-0000-0000-0000-000000000001', 'country', 'media',
+                    %s, 'policy:test', 'Тест', 'warming', 'candidate', 0.5, 0.5,
+                    NOW(), 'test-v1'
+                ) RETURNING id
+            """, (country_code,))
+            trend_id = cursor.fetchone()[0]
+            cursor.execute("""
+                INSERT INTO radar_state_events(
+                    public_id, trend_id, to_state, transition_reason
+                ) VALUES (
+                    '00000000-0000-0000-0000-000000000002', %s, 'candidate',
+                    'test'
+                ) RETURNING id
+            """, (trend_id,))
+            state_event_id = cursor.fetchone()[0]
+            cursor.execute("""
+                INSERT INTO radar_t0_revisions(
+                    public_id, trend_id, revised_t0, revision_kind, reason
+                ) VALUES (
+                    '00000000-0000-0000-0000-000000000003', %s, NOW(),
+                    'automatic', 'test'
+                ) RETURNING id
+            """, (trend_id,))
+            t0_revision_id = cursor.fetchone()[0]
+            cursor.execute("""
+                INSERT INTO radar_trend_evidence(
+                    public_id, trend_id, article_id, role
+                ) VALUES (
+                    '00000000-0000-0000-0000-000000000004', %s, %s, 'support'
+                )
+            """, (trend_id, article_id))
+
+            with pytest.raises(psycopg2.errors.RaiseException):
+                cursor.execute(
+                    "UPDATE radar_state_events SET transition_reason = 'changed' "
+                    "WHERE id = %s",
+                    (state_event_id,),
+                )
+            with pytest.raises(psycopg2.errors.RaiseException):
+                cursor.execute(
+                    "DELETE FROM radar_t0_revisions WHERE id = %s",
+                    (t0_revision_id,),
+                )
+            with pytest.raises(psycopg2.errors.ForeignKeyViolation):
+                cursor.execute("DELETE FROM articles WHERE id = %s", (article_id,))
+    finally:
+        connection.close()

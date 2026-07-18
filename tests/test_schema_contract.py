@@ -224,6 +224,27 @@ def test_temperature_anomaly_storage_preserves_unbounded_v1_z_scores():
     assert "anomaly_score DECIMAL(8,2)" in init_sql
 
 
+def test_radar_schema_is_additive_auditable_and_bootstrapped():
+    migration_sql = migration("027_early_warning_radar.sql")
+    init_sql = (ROOT / "data" / "init.sql").read_text()
+    tables = (
+        "radar_observations", "action_events", "radar_trends",
+        "radar_trend_members", "radar_trend_evidence", "radar_state_events",
+        "radar_t0_revisions", "radar_contour_links", "analysis_runs",
+        "notification_events",
+    )
+    for sql in (migration_sql, init_sql):
+        for table in tables:
+            assert f"CREATE TABLE IF NOT EXISTS {table}" in sql
+        assert "CHECK (contour IN ('media','action'))" in sql
+        assert "'candidate','emerging','confirmed','cooling','resolved','rejected'" in sql
+        assert "'trigger','support','context','contradiction'" in sql
+        assert "uq_radar_country_trend_identity" in sql
+        assert "uq_radar_meta_trend_identity" in sql
+    assert "UPDATE articles SET" not in migration_sql
+    assert "DELETE FROM articles" not in migration_sql
+
+
 def test_google_news_publisher_attribution_orm_contract():
     from src.db import Article, ArticleDiscovery, PublisherDomain
 
