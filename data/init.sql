@@ -755,8 +755,10 @@ CREATE TABLE IF NOT EXISTS radar_trends (
   contour VARCHAR(16) CHECK (contour IN ('media','action')),
   country_code CHAR(2) REFERENCES countries(code),
   subject_key TEXT NOT NULL,
+  alignment_subject TEXT,
   title_ru TEXT NOT NULL,
   direction VARCHAR(24) NOT NULL,
+  alignment_direction VARCHAR(24),
   wave_key TEXT,
   meta_key TEXT,
   state VARCHAR(16) NOT NULL CHECK (state IN
@@ -783,13 +785,20 @@ CREATE TABLE IF NOT EXISTS radar_trends (
 );
 ALTER TABLE radar_trends
   ADD COLUMN IF NOT EXISTS wave_key TEXT,
-  ADD COLUMN IF NOT EXISTS meta_key TEXT;
+  ADD COLUMN IF NOT EXISTS meta_key TEXT,
+  ADD COLUMN IF NOT EXISTS alignment_subject TEXT,
+  ADD COLUMN IF NOT EXISTS alignment_direction VARCHAR(24);
 UPDATE radar_trends
 SET wave_key = 'legacy:' || id::text
 WHERE scope = 'country' AND wave_key IS NULL;
 UPDATE radar_trends
 SET meta_key = 'legacy:' || id::text
 WHERE scope = 'meta' AND meta_key IS NULL;
+UPDATE radar_trends
+SET alignment_subject = COALESCE(alignment_subject, subject_key),
+    alignment_direction = COALESCE(alignment_direction, direction)
+WHERE scope = 'country'
+  AND (alignment_subject IS NULL OR alignment_direction IS NULL);
 ALTER TABLE radar_trends
   DROP CONSTRAINT IF EXISTS radar_trends_scope_shape_check;
 ALTER TABLE radar_trends
@@ -824,6 +833,8 @@ BEGIN
      OR OLD.country_code IS DISTINCT FROM NEW.country_code
      OR OLD.subject_key IS DISTINCT FROM NEW.subject_key
      OR OLD.direction IS DISTINCT FROM NEW.direction
+     OR OLD.alignment_subject IS DISTINCT FROM NEW.alignment_subject
+     OR OLD.alignment_direction IS DISTINCT FROM NEW.alignment_direction
      OR OLD.wave_key IS DISTINCT FROM NEW.wave_key
      OR OLD.meta_key IS DISTINCT FROM NEW.meta_key
      OR OLD.detector_version IS DISTINCT FROM NEW.detector_version THEN
@@ -1000,21 +1011,23 @@ DECLARE
   media_scope VARCHAR(16);
   media_contour VARCHAR(16);
   media_country CHAR(2);
-  media_subject TEXT;
-  media_direction VARCHAR(24);
+  media_alignment_subject TEXT;
+  media_alignment_direction VARCHAR(24);
   action_scope VARCHAR(16);
   action_contour VARCHAR(16);
   action_country CHAR(2);
-  action_subject TEXT;
-  action_direction VARCHAR(24);
+  action_alignment_subject TEXT;
+  action_alignment_direction VARCHAR(24);
 BEGIN
-  SELECT scope, contour, country_code, subject_key, direction
-  INTO media_scope, media_contour, media_country, media_subject, media_direction
+  SELECT scope, contour, country_code, alignment_subject, alignment_direction
+  INTO media_scope, media_contour, media_country,
+       media_alignment_subject, media_alignment_direction
   FROM public.radar_trends
   WHERE id = NEW.media_trend_id;
 
-  SELECT scope, contour, country_code, subject_key, direction
-  INTO action_scope, action_contour, action_country, action_subject, action_direction
+  SELECT scope, contour, country_code, alignment_subject, alignment_direction
+  INTO action_scope, action_contour, action_country,
+       action_alignment_subject, action_alignment_direction
   FROM public.radar_trends
   WHERE id = NEW.action_trend_id;
 
@@ -1028,10 +1041,14 @@ BEGIN
   END IF;
 
   IF media_country IS DISTINCT FROM action_country
-     OR media_subject IS DISTINCT FROM action_subject
-     OR media_direction IS DISTINCT FROM action_direction THEN
+     OR media_alignment_subject IS NULL
+     OR media_alignment_direction IS NULL
+     OR action_alignment_subject IS NULL
+     OR action_alignment_direction IS NULL
+     OR media_alignment_subject IS DISTINCT FROM action_alignment_subject
+     OR media_alignment_direction IS DISTINCT FROM action_alignment_direction THEN
     RAISE EXCEPTION
-      'radar contour link trends must share country, subject, and direction'
+      'radar contour link trends must share country and canonical alignment identity'
       USING ERRCODE = '23514';
   END IF;
   RETURN NEW;

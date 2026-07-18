@@ -295,6 +295,28 @@ def test_radar_evidence_relation_upgrade_repairs_the_legacy_unique_index():
             assert f"idx_radar_trend_evidence_{root}_lookup" in sql
 
 
+def test_radar_contour_alignment_is_separate_from_local_trend_identity():
+    migration_sql = migration("030_radar_contour_alignment_identity.sql")
+    init_sql = (ROOT / "data" / "init.sql").read_text()
+
+    assert migration_sql.lstrip().startswith("BEGIN;")
+    assert migration_sql.rstrip().endswith("COMMIT;")
+    assert "DELETE FROM" not in migration_sql
+    for sql in (migration_sql, init_sql):
+        assert "alignment_subject TEXT" in sql
+        assert "alignment_direction VARCHAR(24)" in sql
+        assert (
+            "media_alignment_subject IS DISTINCT FROM "
+            "action_alignment_subject" in sql
+        )
+        assert (
+            "media_alignment_direction IS DISTINCT FROM "
+            "action_alignment_direction" in sql
+        )
+        assert "OLD.alignment_subject IS DISTINCT FROM NEW.alignment_subject" in sql
+        assert "OLD.alignment_direction IS DISTINCT FROM NEW.alignment_direction" in sql
+
+
 def test_google_news_publisher_attribution_orm_contract():
     from src.db import Article, ArticleDiscovery, PublisherDomain
 

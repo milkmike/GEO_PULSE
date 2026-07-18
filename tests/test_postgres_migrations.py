@@ -412,6 +412,96 @@ def test_actual_runner_bootstraps_twice_and_story_resolution_is_safe():
         connection.close()
 
 
+def test_radar_alignment_migration_links_different_local_contour_identities():
+    dsn, psycopg2 = _requirements()
+    connection = psycopg2.connect(dsn)
+    connection.autocommit = True
+    try:
+        with connection.cursor() as cursor:
+            _reset(cursor, initialize=True)
+            migration_sql = (
+                MIGRATIONS / "030_radar_contour_alignment_identity.sql"
+            ).read_text()
+            cursor.execute(migration_sql)
+            cursor.execute(migration_sql)
+            cursor.execute("""
+                INSERT INTO countries(code, name_ru, name_en, iso3, region)
+                VALUES ('XZ', 'Тестовая страна', 'Test country', 'XZZ', 'test')
+                ON CONFLICT (code) DO NOTHING
+            """)
+            cursor.execute("""
+                INSERT INTO radar_trends(
+                    public_id, scope, contour, country_code, subject_key,
+                    alignment_subject, title_ru, direction,
+                    alignment_direction, wave_key, state, confidence,
+                    coverage_confidence, first_observed_at, detector_version
+                ) VALUES (
+                    '30000000-0000-0000-0000-000000000001', 'country',
+                    'media', 'XZ', 'story:local-media',
+                    'economy:trade:russia', 'Медиа-волна', 'negative',
+                    'hardening', 'wave:alignment:media', 'confirmed', 0.8, 0.8,
+                    NOW(), 'alignment-test'
+                ) RETURNING id
+            """)
+            media_id = cursor.fetchone()[0]
+            cursor.execute("""
+                INSERT INTO radar_trends(
+                    public_id, scope, contour, country_code, subject_key,
+                    alignment_subject, title_ru, direction,
+                    alignment_direction, wave_key, state, confidence,
+                    coverage_confidence, first_observed_at, detector_version
+                ) VALUES (
+                    '30000000-0000-0000-0000-000000000002', 'country',
+                    'action', 'XZ', 'economy:trade:russia',
+                    'economy:trade:russia', 'Действие', 'decrease',
+                    'hardening', 'wave:alignment:action', 'confirmed', 0.9, 0.9,
+                    NOW(), 'alignment-test'
+                ) RETURNING id
+            """)
+            action_id = cursor.fetchone()[0]
+            cursor.execute("""
+                INSERT INTO radar_contour_links(
+                    public_id, media_trend_id, action_trend_id, status
+                ) VALUES (
+                    '30000000-0000-0000-0000-000000000003', %s, %s, 'aligned'
+                )
+            """, (media_id, action_id))
+
+            with pytest.raises(psycopg2.errors.CheckViolation):
+                cursor.execute("""
+                    UPDATE radar_trends
+                    SET alignment_direction = 'warming'
+                    WHERE id = %s
+                """, (action_id,))
+
+            cursor.execute("""
+                INSERT INTO radar_trends(
+                    public_id, scope, contour, country_code, subject_key,
+                    alignment_subject, title_ru, direction,
+                    alignment_direction, wave_key, state, confidence,
+                    coverage_confidence, first_observed_at, detector_version
+                ) VALUES (
+                    '30000000-0000-0000-0000-000000000004', 'country',
+                    'action', 'XZ', 'diplomacy:un_alignment:russia',
+                    'diplomacy:un_alignment:russia', 'Другое действие',
+                    'increase', 'warming', 'wave:alignment:mismatch',
+                    'confirmed', 0.9, 0.9, NOW(), 'alignment-test'
+                ) RETURNING id
+            """)
+            mismatch_id = cursor.fetchone()[0]
+            with pytest.raises(psycopg2.errors.CheckViolation):
+                cursor.execute("""
+                    INSERT INTO radar_contour_links(
+                        public_id, media_trend_id, action_trend_id, status
+                    ) VALUES (
+                        '30000000-0000-0000-0000-000000000005', %s, %s,
+                        'divergent'
+                    )
+                """, (media_id, mismatch_id))
+    finally:
+        connection.close()
+
+
 def test_actual_runner_upgrades_old_019_and_recovers_invalid_shadows():
     dsn, psycopg2 = _requirements()
     connection = psycopg2.connect(dsn)
