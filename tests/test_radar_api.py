@@ -508,6 +508,43 @@ def test_sql_country_relation_filters_require_evidence_on_the_returned_wave(monk
     assert "evidence_member" not in sql
 
 
+def test_public_radar_lists_hide_internal_states_by_default(monkeypatch):
+    calls = []
+
+    class Rows:
+        def fetchall(self):
+            return []
+
+    class Session:
+        def execute(self, statement, params=None):
+            calls.append((str(statement), dict(params or {})))
+            return Rows()
+
+    @contextmanager
+    def read_session():
+        yield Session()
+
+    monkeypatch.setattr(radar_routes, "radar_read_session", read_session)
+    service = radar_routes.SqlRadarReadService()
+
+    service.list_trends(
+        filters=radar_routes.RadarFilters(), cursor=None, limit=20
+    )
+    meta_sql, meta_params = calls[-1]
+    service.country_trends(
+        "ES",
+        filters=radar_routes.RadarFilters(country="ES"),
+        cursor=None,
+        limit=20,
+    )
+    country_sql, country_params = calls[-1]
+
+    for sql, params in ((meta_sql, meta_params), (country_sql, country_params)):
+        assert params["state"] is None
+        assert params["public_states"] == ["emerging", "confirmed", "cooling"]
+        assert "trend.state = ANY(:public_states)" in sql
+
+
 def test_sql_trend_detail_scopes_evidence_to_direct_or_active_members(monkeypatch):
     calls = []
 

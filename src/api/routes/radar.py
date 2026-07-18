@@ -330,6 +330,7 @@ class SqlRadarReadService:
     def list_trends(self, *, filters: RadarFilters, cursor: dict[str, Any] | None, limit: int) -> dict[str, Any]:
         params: dict[str, Any] = {
             "state": filters.state,
+            "public_states": ["emerging", "confirmed", "cooling"],
             "contour": filters.contour,
             "country": filters.country,
             "story_id": filters.story_id,
@@ -353,7 +354,8 @@ class SqlRadarReadService:
                     WHEN 'candidate' THEN 3 WHEN 'resolved' THEN 4 ELSE 5 END AS state_rank
                   FROM radar_trends trend
                   WHERE trend.scope = 'meta'
-                    AND (:state IS NULL OR trend.state = :state)
+                    AND ((:state IS NOT NULL AND trend.state = :state)
+                      OR (:state IS NULL AND trend.state = ANY(:public_states)))
                     AND (:contour IS NULL OR EXISTS (
                       SELECT 1 FROM radar_trend_members member JOIN radar_trends wave ON wave.id = member.country_trend_id
                       WHERE member.meta_trend_id = trend.id AND member.left_at IS NULL AND wave.contour = :contour))
@@ -488,6 +490,7 @@ class SqlRadarReadService:
     def _country_page(self, filters: RadarFilters, cursor: dict[str, Any] | None, limit: int) -> dict[str, Any]:
         params: dict[str, Any] = {
             "state": filters.state,
+            "public_states": ["emerging", "confirmed", "cooling"],
             "contour": filters.contour,
             "country": filters.country,
             "story_id": filters.story_id,
@@ -508,7 +511,9 @@ class SqlRadarReadService:
                 WITH ranked AS (
                   SELECT trend.*, CASE trend.state WHEN 'confirmed' THEN 0 WHEN 'emerging' THEN 1 WHEN 'cooling' THEN 2 WHEN 'candidate' THEN 3 WHEN 'resolved' THEN 4 ELSE 5 END AS state_rank
                   FROM radar_trends trend WHERE trend.scope = 'country' AND trend.country_code = :country
-                    AND (:state IS NULL OR trend.state = :state) AND (:contour IS NULL OR trend.contour = :contour)
+                    AND ((:state IS NOT NULL AND trend.state = :state)
+                      OR (:state IS NULL AND trend.state = ANY(:public_states)))
+                    AND (:contour IS NULL OR trend.contour = :contour)
                     /* radar_related_story */
                     AND (:story_id IS NULL OR EXISTS (
                       SELECT 1 FROM radar_trend_evidence related

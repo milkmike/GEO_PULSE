@@ -63,6 +63,15 @@ describe("Radar list page", () => {
     apiMocks.radar.mockReset().mockResolvedValue({ items: [baseTrend], limit: 25, next_cursor: null });
   });
 
+  it("does not expose internal candidate or rejected states as public filters", async () => {
+    renderPage();
+
+    await screen.findByRole("heading", { name: "Радар перемен" });
+    const stateFilter = screen.getByLabelText(/состояние/i);
+    expect(stateFilter).not.toHaveTextContent("кандидат");
+    expect(stateFilter).not.toHaveTextContent("отклонён");
+  });
+
   it("fails closed and does not request radar data", () => {
     renderPage({ ...enabled, earlyWarningRadar: false });
     expect(screen.getByText(/раздел раннего предупреждения отключён/i)).toBeVisible();

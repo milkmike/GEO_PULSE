@@ -9,7 +9,7 @@ import { useFeatureFlags } from "@/components/FeatureFlagsProvider";
 import { api } from "@/lib/api";
 import type { RadarContour, RadarFilters, RadarTrend, RadarTrendState } from "@/lib/types";
 
-const STATES: Array<["" | RadarTrendState, string]> = [["", "все состояния"], ["confirmed", "подтверждён"], ["emerging", "зарождается"], ["cooling", "затухает"], ["candidate", "кандидат"], ["resolved", "завершён"]];
+const STATES: Array<["" | RadarTrendState, string]> = [["", "активные состояния"], ["confirmed", "подтверждён"], ["emerging", "зарождается"], ["cooling", "затухает"], ["resolved", "завершён"]];
 const CONTOURS: Array<["" | RadarContour, string]> = [["", "оба контура"], ["media", "медиаконтур"], ["action", "контур действий"]];
 const FILTER_IDS = ["radar-state", "radar-contour", "radar-country"];
 

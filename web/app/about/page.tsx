@@ -349,8 +349,8 @@ export default function AboutPage() {
         )}
       </>}
 
-      {/* ── 04 data ── */}
-      <SectionHead num="04" title="Откуда данные" />
+      {/* ── 05 data ── */}
+      <SectionHead num="05" title="Откуда данные" />
       <section className="prose-editorial">
         <ul className="mb-6 space-y-4">
           {[
