@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import datetime, time, timezone
+import re
 from typing import Any
 from uuid import UUID
 
@@ -38,22 +39,6 @@ _MEDIA_ROWS = text("""
       AND a.published_at >= :window_start
       AND a.published_at < :window_end
 """)
-
-
-_TOPIC_ALIGNMENT = {
-    "diplomacy": "diplomacy:un_alignment:russia",
-    "organizations": "diplomacy:un_alignment:russia",
-    "economy_trade": "economy:trade:russia",
-    "energy": "energy:imports:russia",
-    "sanctions": "policy:sanctions:russia",
-}
-
-_SUBJECT_ALIGNMENT_TERMS = {
-    "diplomacy:un_alignment:russia": ("diplomacy", "diplomatic", "un-vote", "un_vote"),
-    "economy:trade:russia": ("trade", "commerce", "export", "import"),
-    "energy:imports:russia": ("energy", "fossil", "oil", "gas"),
-    "policy:sanctions:russia": ("sanction", "embargo"),
-}
 
 
 def _value(row: Any, name: str, default: Any = None) -> Any:
@@ -94,26 +79,32 @@ def _alignment_direction(direction: str) -> str:
 
 
 def _alignment_subject(subject: str, rows: list[Any]) -> str:
-    """Return a conservative shared domain, falling back on general Russia coverage."""
+    """Align only an event key that names Russia and the structured dataset domain.
 
-    candidates = {
-        _TOPIC_ALIGNMENT[str(topic)]
-        for row in rows
-        for topic in (_value(row, "topics", ()) or ())
-        if str(topic) in _TOPIC_ALIGNMENT
-    }
-    if len(candidates) == 1:
-        return next(iter(candidates))
-    if candidates:
+    Topic labels are intentionally insufficient: generic energy or diplomacy
+    coverage must not corroborate a fossil-import or UN-vote action.
+    """
+
+    del rows  # Reserved for future explicit, verified event metadata.
+    tokens = set(re.findall(r"[a-z0-9]+", subject.casefold()))
+    if not tokens.intersection({"russia", "russian", "ru"}):
         return "russia:general"
-
-    normalized_subject = subject.casefold()
-    subject_candidates = {
-        alignment
-        for alignment, terms in _SUBJECT_ALIGNMENT_TERMS.items()
-        if any(term in normalized_subject for term in terms)
-    }
-    return next(iter(subject_candidates)) if len(subject_candidates) == 1 else "russia:general"
+    if tokens.intersection({"sanction", "sanctions", "embargo"}):
+        return "policy:sanctions:russia"
+    flow_terms = {"import", "imports", "export", "exports"}
+    if (
+        tokens.intersection({"energy", "fossil", "oil", "gas"})
+        and tokens.intersection(flow_terms)
+    ):
+        return "energy:imports:russia"
+    if tokens.intersection({"trade", "commerce"}) or tokens.intersection(flow_terms):
+        return "economy:trade:russia"
+    if (
+        tokens.intersection({"un", "united", "nations"})
+        and tokens.intersection({"vote", "votes", "voting", "alignment"})
+    ):
+        return "diplomacy:un_alignment:russia"
+    return "russia:general"
 
 
 def _coverage_confidence(*, article_count: int, source_count: int, family_count: int) -> float:
@@ -122,12 +113,15 @@ def _coverage_confidence(*, article_count: int, source_count: int, family_count:
     article_breadth = min(article_count / 5, 1.0)
     source_breadth = min(source_count / 3, 1.0)
     family_breadth = min(family_count / 2, 1.0)
-    return round(
+    confidence = round(
         0.25 * article_breadth
         + 0.25 * source_breadth
         + 0.5 * family_breadth,
         4,
     )
+    if source_count <= 1 or family_count <= 1:
+        return min(confidence, 0.5)
+    return confidence
 
 
 def _canonical_entities(entity_ids: tuple[str, ...]) -> tuple[UUID, ...]:

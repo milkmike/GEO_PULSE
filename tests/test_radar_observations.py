@@ -169,8 +169,70 @@ def test_single_source_media_stays_critical_and_exposes_alignment_contract():
     point = _only(build_media_observations(session, _window()), metric="attention_share")
 
     assert point.coverage_confidence <= 0.5
-    assert point.evidence["alignment_subject"] == "energy:imports:russia"
+    assert point.evidence["alignment_subject"] == "russia:general"
     assert point.evidence["alignment_direction"] == "hardening"
+
+
+def test_many_articles_from_one_source_and_family_stay_critical():
+    session = _Session(media_rows=tuple(
+        _media_row(
+            ARTICLE_A + offset, 10, "example.es", sentiment=-0.5,
+            story_id=77,
+        )
+        for offset in range(6)
+    ))
+
+    point = _only(build_media_observations(session, _window()), metric="attention_share")
+
+    assert len(point.article_ids) == 6
+    assert point.source_count == 1
+    assert point.publisher_family_count == 1
+    assert point.coverage_confidence <= 0.5
+
+
+def test_many_sources_from_one_publisher_family_stay_critical():
+    session = _Session(media_rows=tuple(
+        _media_row(
+            ARTICLE_A + offset, 10 + offset, "example.es", sentiment=-0.5,
+            story_id=77,
+        )
+        for offset in range(6)
+    ))
+
+    point = _only(build_media_observations(session, _window()), metric="attention_share")
+
+    assert point.source_count == 6
+    assert point.publisher_family_count == 1
+    assert point.coverage_confidence <= 0.5
+
+
+@pytest.mark.parametrize("topic", ("energy", "diplomacy"))
+def test_generic_media_topic_does_not_claim_action_dataset_alignment(topic):
+    session = _Session(media_rows=(
+        _media_row(
+            ARTICLE_A, 10, "example.es", sentiment=-0.5,
+            topics=(topic,), event_key=f"general_{topic}",
+            story_event_keys=(), story_id=None,
+        ),
+    ))
+
+    [point] = build_media_observations(session, _window())
+
+    assert point.evidence["alignment_subject"] == "russia:general"
+
+
+def test_dataset_specific_media_event_key_can_align_with_action_domain():
+    session = _Session(media_rows=(
+        _media_row(
+            ARTICLE_A, 10, "example.es", sentiment=-0.5,
+            topics=("energy",), event_key="russia_fossil_imports",
+            story_event_keys=(), story_id=None,
+        ),
+    ))
+
+    [point] = build_media_observations(session, _window())
+
+    assert point.evidence["alignment_subject"] == "energy:imports:russia"
 
 
 def test_media_alignment_defaults_to_general_and_maps_sentiment_direction():
