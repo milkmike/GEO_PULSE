@@ -334,10 +334,12 @@ INSERT INTO radar_t0_revisions (
 
 _INSERT_OBSERVATION_EVIDENCE = text("""
 INSERT INTO radar_trend_evidence (
-  public_id, trend_id, observation_id, role, contribution, evidence
+  public_id, trend_id, observation_id, article_id, story_id, signal_id,
+  canonical_entity_id, role, contribution, evidence
 )
-SELECT :public_id, :trend_id, observation.id, :role, :contribution,
-       CAST(:evidence AS jsonb)
+SELECT :public_id, :trend_id, observation.id, observation.article_id,
+       observation.story_id, observation.signal_id, observation.canonical_entity_id,
+       :role, :contribution, CAST(:evidence AS jsonb)
 FROM radar_observations observation
 WHERE observation.input_hash = :input_hash
   AND NOT EXISTS (

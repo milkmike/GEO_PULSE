@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from uuid import UUID
 
 from src.radar.repository import make_observation
 from src.radar.grouping import CountryWave, MetaTrend
@@ -136,6 +137,32 @@ def test_sql_persistence_uses_wave_keys_and_reports_real_count_deltas(monkeypatc
     assert report.protected_row_counts["radar_observations"] == {"before": 0, "after": 2, "delta": 2}
     assert report.protected_row_counts["articles"]["delta"] == 0
     assert any("radar_observation_history" in sql for sql, _ in session.calls)
+
+
+def test_sql_evidence_copies_observation_roots_to_the_country_trend(monkeypatch):
+    import src.radar.service as service
+
+    entity_id = UUID("00000000-0000-0000-0000-000000000099")
+    observation = make_observation(
+        country_code="ES", contour="media", subject_key="event:energy", direction="negative",
+        metric="attention_share", observed_at=AS_OF.replace(day=10), evidence_ids=("article:101",),
+        value=0.8, publisher_family_count=2, source_count=2, coverage_confidence=1,
+        article_id=101, story_id=202, signal_id=303, canonical_entity_id=entity_id,
+        evidence={"article_ids": (101,), "story_ids": (202,), "signal_ids": (303,), "entity_ids": (str(entity_id),)},
+    )
+    monkeypatch.setattr(service, "build_media_observations", lambda *_: [observation])
+    monkeypatch.setattr(service, "build_action_observations", lambda *_: [])
+    session = _RecordingSqlSession()
+
+    run_radar_cycle(session, AS_OF, shadow=False)
+
+    observation_write = next(params for sql, params in session.calls if "INSERT INTO radar_observations" in sql)
+    evidence_sql, evidence_write = next((sql, params) for sql, params in session.calls if "INSERT INTO radar_trend_evidence" in sql)
+    assert (observation_write["article_id"], observation_write["story_id"], observation_write["signal_id"], observation_write["canonical_entity_id"]) == (101, 202, 303, entity_id)
+    assert evidence_write["trend_id"] == 1
+    assert evidence_write["input_hash"] == observation.input_hash
+    for root in ("article_id", "story_id", "signal_id", "canonical_entity_id"):
+        assert f"observation.{root}" in evidence_sql
 
 
 def test_lifecycle_uses_persisted_confirmed_state_and_timeline():
