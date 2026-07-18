@@ -5,6 +5,8 @@ import json
 from types import SimpleNamespace
 from uuid import UUID
 
+import pytest
+
 from src.radar.actions import build_action_observations
 from src.radar.media import build_media_observations
 from src.radar.repository import make_observation
@@ -104,6 +106,17 @@ def test_radar_shadow_creates_no_rows(monkeypatch):
 
     assert report.inserted_observations == 0
     assert session.radar_store == {"observations": [], "trends": [], "events": [], "revisions": []}
+
+
+@pytest.mark.parametrize("days", (89, 91))
+def test_radar_cycle_rejects_any_non_exact_lookback(monkeypatch, days):
+    import src.radar.service as service
+
+    monkeypatch.setattr(service, "build_media_observations", lambda *_: [])
+    monkeypatch.setattr(service, "build_action_observations", lambda *_: [])
+
+    with pytest.raises(ValueError, match="exactly 90"):
+        run_radar_cycle(_Session(), AS_OF, shadow=True, days=days)
 
 
 def test_replay_prefers_corrected_richer_observation_without_double_count(monkeypatch):
@@ -324,6 +337,33 @@ def test_lifecycle_uses_persisted_confirmed_state_and_timeline():
     assert decision.timeline.confirmed_at == ANALYST_T0
 
 
+def test_shadow_preserves_analyst_effective_t0_when_auto_t0_was_null(monkeypatch):
+    import src.radar.service as service
+
+    point = _media_point(AS_OF - timedelta(days=2), value=0.9, article_id=404)
+    previous = CountryWave(
+        country_code="ES", contour="media", subject_key=point.subject_key,
+        direction=point.direction, observations=(point,),
+        first_observed_at=point.observed_at,
+        last_observed_at=point.observed_at,
+        t0_auto=None, t0_effective=ANALYST_T0,
+        wave_key="analyst-override", state=TrendState.CONFIRMED,
+        detected_at=point.observed_at, confirmed_at=point.observed_at,
+        has_analyst_t0_override=True,
+    )
+    monkeypatch.setattr(service, "_previous_waves", lambda *_: (previous,))
+    monkeypatch.setattr(service, "build_media_observations", lambda *_: [point])
+    monkeypatch.setattr(service, "build_action_observations", lambda *_: [])
+
+    [wave] = run_radar_cycle(_Session(), AS_OF, shadow=True).country_waves
+
+    assert "radar_t0_revisions" in str(service._PRIOR_WAVES)
+    assert "has_analyst_t0_override" in str(service._PRIOR_WAVES)
+    assert wave.t0_auto is None
+    assert wave.t0_effective == ANALYST_T0
+    assert wave.has_analyst_t0_override is True
+
+
 def _media_point(at, *, subject="event:energy", value=0.1, article_id=1):
     return make_observation(
         country_code="ES", contour="media", subject_key=subject,
@@ -361,11 +401,147 @@ def test_cycle_runs_real_baseline_and_refines_t0_after_confirmation(monkeypatch)
     assert wave.baseline is not None
     assert wave.baseline.window_days == 90
     assert wave.baseline.acceleration_days == 7
-    assert wave.detected_at == AS_OF
-    assert wave.confirmed_at == AS_OF
+    assert wave.detected_at == observations[63].observed_at
+    assert wave.confirmed_at == observations[63].observed_at
     assert wave.t0_auto is not None
     assert start < wave.t0_auto < AS_OF
     assert wave.velocity > 0
+
+
+def test_replay_detection_time_is_first_historical_emerging_cutoff(monkeypatch):
+    import src.radar.service as service
+
+    low = _media_point(AS_OF - timedelta(days=20), value=0.1, article_id=901)
+    first_emerging = _media_point(
+        AS_OF - timedelta(days=10), value=0.8, article_id=902,
+    )
+    confirming = _media_point(
+        AS_OF - timedelta(days=9), value=0.9, article_id=903,
+    )
+    monkeypatch.setattr(
+        service, "build_media_observations",
+        lambda *_: [low, first_emerging, confirming],
+    )
+    monkeypatch.setattr(service, "build_action_observations", lambda *_: [])
+
+    report = run_radar_cycle(_Session(), AS_OF, shadow=True)
+
+    [wave] = report.country_waves
+    assert wave.detected_at == first_emerging.observed_at
+    assert wave.detected_at != AS_OF
+
+
+def test_new_media_wave_cannot_confirm_without_automatic_t0(monkeypatch):
+    import src.radar.service as service
+
+    points = [
+        _media_point(AS_OF - timedelta(days=2), value=0.8, article_id=911),
+        _media_point(AS_OF - timedelta(days=1), value=0.9, article_id=912),
+    ]
+    monkeypatch.setattr(service, "build_media_observations", lambda *_: points)
+    monkeypatch.setattr(service, "build_action_observations", lambda *_: [])
+
+    report = run_radar_cycle(_Session(), AS_OF, shadow=True)
+
+    [wave] = report.country_waves
+    assert wave.state is TrendState.EMERGING
+    assert wave.confirmed_at is None
+    assert wave.t0_auto is None
+    assert wave.lifecycle_reason == "automatic_t0_unresolved"
+    assert report.t0_sanity["violations"] == 0
+
+
+def test_cycle_json_report_has_exact_release_metrics_from_vertical_slice(monkeypatch):
+    import src.radar.service as service
+
+    media_first = _media_point(
+        AS_OF - timedelta(days=4), value=0.8, article_id=701,
+    )
+    media_second = _media_point(
+        AS_OF - timedelta(days=3), value=0.9, article_id=702,
+    )
+    action = make_observation(
+        country_code="ES", contour="action",
+        subject_key="energy:imports:russia", direction="decrease",
+        metric="import_value_delta", observed_at=AS_OF - timedelta(days=2),
+        evidence_ids=("fossil:701",), value=-10, authority="registry",
+        source_count=1, coverage_confidence=1.0,
+        evidence={
+            "dataset": "ru_fossil_imports", "source_id": "fossil:701",
+            "alignment_subject": "energy:imports:russia",
+            "alignment_direction": "hardening",
+        },
+    )
+    def invalid_point(days_ago, suffix):
+        return make_observation(
+            country_code="PT", contour="media", subject_key="event:invalid",
+            direction="negative", metric="attention_share",
+            observed_at=AS_OF - timedelta(days=days_ago),
+            evidence_ids=(f"opaque:{suffix}",), value=0.9,
+            publisher_family_count=2, source_count=2,
+            coverage_confidence=1.0,
+            evidence={
+                "alignment_subject": "russia:general",
+                "alignment_direction": "hardening",
+            },
+        )
+    invalid_first = invalid_point(2, "first")
+    invalid_second = invalid_point(1, "second")
+    previous_media = CountryWave(
+        "ES", "media", media_first.subject_key, media_first.direction,
+        (media_first,), media_first.observed_at, media_first.observed_at,
+        wave_key="existing-media", state=TrendState.CONFIRMED,
+        detected_at=media_first.observed_at,
+        confirmed_at=media_second.observed_at,
+        t0_effective=media_first.observed_at,
+    )
+    previous_media = replace(previous_media, t0_auto=media_first.observed_at)
+    previous_action = CountryWave(
+        "ES", "action", action.subject_key, action.direction,
+        (action,), action.observed_at, action.observed_at,
+        wave_key="existing-action", state=TrendState.CONFIRMED,
+        detected_at=action.observed_at, confirmed_at=action.observed_at,
+        t0_effective=action.observed_at,
+    )
+    monkeypatch.setattr(
+        service, "_previous_waves", lambda *_: (previous_media, previous_action),
+    )
+    monkeypatch.setattr(
+        service, "build_media_observations",
+        lambda *_: [media_first, media_second, invalid_first, invalid_second],
+    )
+    monkeypatch.setattr(service, "build_action_observations", lambda *_: [action])
+
+    payload = run_radar_cycle(_Session(), AS_OF, shadow=True).json_report()
+
+    all_states = {
+        "candidate": 0, "emerging": 0, "confirmed": 0,
+        "cooling": 0, "resolved": 0, "rejected": 0,
+    }
+    assert payload["as_of"] == AS_OF.isoformat()
+    assert payload["shadow"] is True
+    assert payload["detector_version"] == "radar-wave-1"
+    assert payload["lookback_days"] == 90
+    assert payload["observation_count"] == 5
+    assert payload["country_trend_count"] == 3
+    assert payload["meta_trend_count"] == 3
+    assert payload["country_state_counts"] == {
+        **all_states, "candidate": 1, "confirmed": 2,
+    }
+    assert payload["meta_state_counts"] == {
+        **all_states, "candidate": 1, "emerging": 2,
+    }
+    assert payload["evidence_validity"] == {
+        "total": 5, "valid": 3, "invalid": 2, "ratio": 0.6,
+    }
+    assert payload["collector_suppressed"] == 1
+    assert payload["confirmed_below_coverage_gate"] == 0
+    assert payload["t0_sanity"] == {
+        "automatic": 4, "unresolved": 2, "violations": 0,
+    }
+    assert payload["contour_completeness"] == {
+        "possible_pairs": 1, "linked_pairs": 1, "ratio": 1.0,
+    }
 
 
 def test_cycle_zero_fills_only_a_healthy_collection_day(monkeypatch):
@@ -424,6 +600,97 @@ def test_collection_gap_cannot_manufacture_cooling(monkeypatch):
     assert wave.confirmed_at == previous.confirmed_at
 
 
+def test_independent_media_health_uses_verified_non_duplicate_country_articles():
+    import src.radar.service as service
+
+    class _HealthSession:
+        def __init__(self):
+            self.sql = ""
+
+        def execute(self, statement, params=None):
+            self.sql = str(statement)
+            return _Result(rows=[{
+                "country_code": "ES",
+                "healthy_day": AS_OF - timedelta(days=1),
+            }])
+
+    session = _HealthSession()
+    window = ObservationWindow(AS_OF - timedelta(days=90), AS_OF)
+
+    health = service._media_collection_health(session, window)
+
+    assert health == {"ES": {89}}
+    assert "article_country_facts" in session.sql
+    assert "articles" in session.sql
+    assert "is_duplicate = FALSE" in session.sql
+    assert "AT TIME ZONE 'UTC'" in session.sql
+    assert "analysis" not in session.sql
+    assert "is_relevant" not in session.sql
+
+
+def _stale_previous_media(state, days_ago):
+    observed_at = AS_OF - timedelta(days=days_ago)
+    return CountryWave(
+        country_code="ES", contour="media", subject_key="event:stale",
+        direction="negative", observations=(),
+        first_observed_at=observed_at, last_observed_at=observed_at,
+        t0_auto=observed_at, t0_effective=observed_at,
+        wave_key="stale-wave", state=state,
+        detected_at=observed_at, confirmed_at=observed_at,
+    )
+
+
+def test_unmatched_previous_media_wave_cools_with_continuous_country_health(monkeypatch):
+    import src.radar.service as service
+
+    previous = _stale_previous_media(TrendState.CONFIRMED, 8)
+    monkeypatch.setattr(service, "_previous_waves", lambda *_: (previous,))
+    monkeypatch.setattr(service, "build_media_observations", lambda *_: [])
+    monkeypatch.setattr(service, "build_action_observations", lambda *_: [])
+    monkeypatch.setattr(
+        service, "_media_collection_health", lambda *_: {"ES": set(range(83, 90))},
+    )
+
+    report = run_radar_cycle(_Session(), AS_OF, shadow=True)
+
+    [wave] = report.country_waves
+    assert wave.wave_key == previous.wave_key
+    assert wave.state is TrendState.COOLING
+    assert wave.lifecycle_reason == "quiet_window_elapsed"
+
+
+def test_unmatched_previous_media_wave_resolves_after_thirty_healthy_days(monkeypatch):
+    import src.radar.service as service
+
+    previous = _stale_previous_media(TrendState.COOLING, 31)
+    monkeypatch.setattr(service, "_previous_waves", lambda *_: (previous,))
+    monkeypatch.setattr(service, "build_media_observations", lambda *_: [])
+    monkeypatch.setattr(service, "build_action_observations", lambda *_: [])
+    monkeypatch.setattr(
+        service, "_media_collection_health", lambda *_: {"ES": set(range(60, 90))},
+    )
+
+    [wave] = run_radar_cycle(_Session(), AS_OF, shadow=True).country_waves
+
+    assert wave.state is TrendState.RESOLVED
+    assert wave.lifecycle_reason == "quiet_window_elapsed"
+
+
+def test_unmatched_previous_media_wave_stays_confirmed_without_collection_health(monkeypatch):
+    import src.radar.service as service
+
+    previous = _stale_previous_media(TrendState.CONFIRMED, 8)
+    monkeypatch.setattr(service, "_previous_waves", lambda *_: (previous,))
+    monkeypatch.setattr(service, "build_media_observations", lambda *_: [])
+    monkeypatch.setattr(service, "build_action_observations", lambda *_: [])
+    monkeypatch.setattr(service, "_media_collection_health", lambda *_: {})
+
+    [wave] = run_radar_cycle(_Session(), AS_OF, shadow=True).country_waves
+
+    assert wave.state is TrendState.CONFIRMED
+    assert wave.lifecycle_reason == "collection_gap"
+
+
 def test_analyst_meta_t0_override_is_append_only():
     class _OverrideSession:
         def __init__(self):
@@ -472,6 +739,42 @@ def test_sql_persistence_keeps_anchor_separated_meta_keys():
     assert {params["meta_key"] for params in meta_inserts} == {
         "anchor:story:1:energy:increase", "anchor:story:2:trade:increase",
     }
+
+
+def test_meta_persistence_uses_member_detection_and_second_country_confirmation():
+    import src.radar.service as service
+
+    first = replace(
+        _episode_wave("media", AS_OF - timedelta(days=5), "first-country"),
+        country_code="ES", state=TrendState.CONFIRMED,
+        detected_at=AS_OF - timedelta(days=8),
+        confirmed_at=AS_OF - timedelta(days=5),
+    )
+    second = replace(
+        _episode_wave("media", AS_OF - timedelta(days=3), "second-country"),
+        country_code="PT", state=TrendState.CONFIRMED,
+        detected_at=AS_OF - timedelta(days=6),
+        confirmed_at=AS_OF - timedelta(days=3),
+    )
+    meta = MetaTrend(
+        "event:energy", "increase", (first, second), first.t0_auto,
+        meta_key="member-timeline",
+    )
+    wave_ids = {
+        (wave.country_code, wave.contour, wave.subject_key, wave.direction, wave.wave_key): trend_id
+        for trend_id, wave in enumerate((first, second), 10)
+    }
+    session = _RecordingSqlSession()
+
+    _persist_meta_and_contours(session, (meta,), wave_ids, AS_OF)
+
+    insert = next(
+        params for sql, params in session.calls
+        if "INSERT INTO radar_trends" in sql and params.get("meta_key") == "member-timeline"
+    )
+    assert insert["detected_at"] == first.detected_at
+    assert insert["confirmed_at"] == second.confirmed_at
+    assert "detected_at = COALESCE(trend.detected_at, :detected_at)" in str(service._UPDATE_META)
 
 
 def test_contour_alignment_pairs_each_recurrence_episode_separately():
@@ -555,9 +858,9 @@ def test_real_adapter_alignment_is_persisted_on_both_country_trends():
                     is_duplicate=False, country_code="ES", publisher_id=10,
                     publisher_name="Diario", publisher_url="https://diario.es",
                     publisher_config={"publisher_domain": "diario.es"},
-                    story_id=77, event_key="energy debate", sentiment=-0.5,
+                    story_id=77, event_key="russia fossil import energy debate", sentiment=-0.5,
                     is_relevant=True, topics=("energy",),
-                    story_event_keys=("energy-debate",), entity_ids=(), signal_ids=(),
+                    story_event_keys=("russia-fossil-import-energy-debate",), entity_ids=(), signal_ids=(),
                 ),))
             if "FROM ru_fossil_imports" in sql:
                 return _AdapterResult((SimpleNamespace(
@@ -619,6 +922,50 @@ def test_meta_persistence_closes_stale_members_before_reopening_current_ones():
     member_sql = next(sql for sql, _ in session.calls if "INSERT INTO radar_trend_members" in sql)
     assert "member.left_at IS NULL" in close_sql
     assert "left_at = NULL" in member_sql
+
+
+@pytest.mark.parametrize(
+    ("states", "countries", "expected"),
+    (
+        ((TrendState.CONFIRMED, TrendState.CONFIRMED), ("ES", "PT"), TrendState.CONFIRMED),
+        ((TrendState.CONFIRMED,), ("ES",), TrendState.EMERGING),
+        ((TrendState.EMERGING,), ("ES",), TrendState.EMERGING),
+        ((TrendState.COOLING, TrendState.CANDIDATE), ("ES", "PT"), TrendState.COOLING),
+        ((TrendState.RESOLVED, TrendState.RESOLVED), ("ES", "PT"), TrendState.RESOLVED),
+        ((TrendState.REJECTED, TrendState.REJECTED), ("ES", "PT"), TrendState.REJECTED),
+        ((TrendState.CANDIDATE,), ("ES",), TrendState.CANDIDATE),
+    ),
+)
+def test_meta_lifecycle_exposes_early_and_terminal_states(states, countries, expected):
+    import src.radar.service as service
+
+    waves = tuple(
+        replace(
+            _episode_wave("media", AS_OF, f"wave-{index}"),
+            state=state,
+            country_code=country,
+        )
+        for index, (state, country) in enumerate(zip(states, countries), 1)
+    )
+    meta = MetaTrend(
+        "event:energy", "increase", waves, AS_OF,
+        meta_key="meta-lifecycle",
+    )
+
+    assert service._meta_state(meta) is expected
+
+
+def test_contour_completeness_exposes_temporally_unlinked_possible_pair():
+    import src.radar.service as service
+
+    media = _episode_wave("media", AS_OF - timedelta(days=30), "media-old")
+    action = _episode_wave("action", AS_OF, "action-new")
+
+    assert service._contour_completeness((media, action)) == {
+        "possible_pairs": 1,
+        "linked_pairs": 0,
+        "ratio": 0.0,
+    }
 
 
 def test_contour_matching_maximizes_bounded_pairs_before_nearest_gap():

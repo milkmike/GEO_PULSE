@@ -37,6 +37,7 @@ class CountryWave:
     lifecycle_reason: str = "unscored"
     t0_status: str = "not_evaluated"
     velocity: float = 0.0
+    has_analyst_t0_override: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "contour", Contour(self.contour))
@@ -142,6 +143,9 @@ def _wave(
         detected_at=reused.detected_at if reused is not None else None,
         confirmed_at=reused.confirmed_at if reused is not None else None,
         t0_effective=reused.t0_effective if reused is not None else None,
+        has_analyst_t0_override=(
+            reused.has_analyst_t0_override if reused is not None else False
+        ),
     )
 
 

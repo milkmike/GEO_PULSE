@@ -40,6 +40,11 @@ SELECT trend.id, trend.wave_key, trend.country_code, trend.contour, trend.subjec
        trend.direction, trend.state, trend.first_observed_at, trend.detected_at,
        trend.confirmed_at,
        trend.t0_auto, trend.t0_effective,
+       EXISTS (
+         SELECT 1 FROM radar_t0_revisions revision
+         WHERE revision.trend_id = trend.id
+           AND revision.revision_kind = 'analyst'
+       ) AS has_analyst_t0_override,
        (SELECT max(observation.observed_at) FROM radar_trend_evidence evidence
         JOIN radar_observations observation ON observation.id = evidence.observation_id
         WHERE evidence.trend_id = trend.id) AS last_observed_at
@@ -64,6 +69,20 @@ SELECT public_id, input_hash, country_code, contour, subject_key, direction, met
        canonical_entity_id, baseline, evidence
 FROM radar_observations
 WHERE observed_at >= :history_start AND observed_at < :as_of
+""")
+
+_MEDIA_COLLECTION_HEALTH = text("""
+/* radar_media_collection_health */
+SELECT fact.country_code,
+       (date_trunc('day', article.published_at AT TIME ZONE 'UTC')
+         AT TIME ZONE 'UTC') AS healthy_day
+FROM articles article
+JOIN article_country_facts fact ON fact.article_id = article.id
+WHERE article.is_duplicate = FALSE
+  AND article.published_at >= :window_start
+  AND article.published_at < :window_end
+GROUP BY fact.country_code,
+         date_trunc('day', article.published_at AT TIME ZONE 'UTC')
 """)
 
 _PROTECTED_COUNTS = text("""
@@ -98,11 +117,30 @@ class RadarCycleReport:
     t0_distribution: dict[str, int]
     evidence_completeness: dict[str, int]
     protected_row_counts: dict[str, dict[str, int]]
+    lookback_days: int
+    observation_count: int
+    country_state_counts: dict[str, int]
+    meta_state_counts: dict[str, int]
+    evidence_validity: dict[str, int | float]
+    confirmed_below_coverage_gate: int
+    t0_sanity: dict[str, int]
+    contour_completeness: dict[str, int | float | None]
 
     def json_report(self) -> dict[str, object]:
         return {
             "as_of": self.as_of.isoformat(),
             "shadow": self.shadow,
+            "detector_version": DETECTOR_VERSION,
+            "lookback_days": self.lookback_days,
+            "observation_count": self.observation_count,
+            "country_trend_count": len(self.country_waves),
+            "meta_trend_count": len(self.meta_trends),
+            "country_state_counts": self.country_state_counts,
+            "meta_state_counts": self.meta_state_counts,
+            "evidence_validity": self.evidence_validity,
+            "confirmed_below_coverage_gate": self.confirmed_below_coverage_gate,
+            "t0_sanity": self.t0_sanity,
+            "contour_completeness": self.contour_completeness,
             "inserted_observations": self.inserted_observations,
             "updated_trends": self.updated_trends,
             "candidates": self.state_counts.get("candidate", 0),
@@ -157,6 +195,9 @@ def _previous_waves(session, as_of: datetime) -> tuple[CountryWave, ...]:
             state=_row_value(row, "state", TrendState.CANDIDATE),
             detected_at=_row_value(row, "detected_at"),
             confirmed_at=_row_value(row, "confirmed_at"),
+            has_analyst_t0_override=bool(
+                _row_value(row, "has_analyst_t0_override", False)
+            ),
         ))
     return tuple(waves)
 
@@ -188,6 +229,29 @@ def _history(session, as_of: datetime, days: int) -> tuple[Observation, ...]:
         except (TypeError, ValueError):
             continue
     return tuple(points)
+
+
+def _media_collection_health(
+    session, window: ObservationWindow,
+) -> dict[str, set[int]]:
+    """Verified national indexing health, independent of Russia relevance."""
+
+    if _store(session) is not None:
+        return {}
+    rows = session.execute(_MEDIA_COLLECTION_HEALTH, {
+        "window_start": window.start,
+        "window_end": window.end,
+    }).fetchall()
+    health: dict[str, set[int]] = defaultdict(set)
+    for row in rows:
+        country = str(_row_value(row, "country_code", "")).upper()
+        healthy_day = _row_value(row, "healthy_day")
+        if len(country) != 2 or not isinstance(healthy_day, datetime):
+            continue
+        index = _bucket_index(healthy_day, window.end)
+        if index is not None:
+            health[country].add(index)
+    return dict(health)
 
 
 def _protected_counts(session) -> dict[str, int]:
@@ -381,6 +445,152 @@ def _daily_points_for_wave(
     return tuple(points)
 
 
+def _positive_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def _valid_evidence_root(observation: Observation) -> bool:
+    """Require a typed, source-resolvable root rather than arbitrary JSON."""
+
+    if any(_positive_int(value) for value in (
+        observation.article_id,
+        observation.story_id,
+        observation.signal_id,
+    )):
+        return True
+    if isinstance(observation.canonical_entity_id, UUID):
+        return True
+    for key in ("article_ids", "story_ids", "signal_ids"):
+        values = observation.evidence.get(key)
+        if isinstance(values, (list, tuple, set, frozenset)) and any(
+            _positive_int(value) for value in values
+        ):
+            return True
+    source_id = observation.evidence.get("source_id")
+    return isinstance(source_id, str) and bool(source_id.strip())
+
+
+def _evidence_validity(observations: Iterable[Observation]) -> dict[str, int | float]:
+    points = tuple(observations)
+    valid = sum(_valid_evidence_root(point) for point in points)
+    total = len(points)
+    return {
+        "total": total,
+        "valid": valid,
+        "invalid": total - valid,
+        "ratio": valid / total if total else 0.0,
+    }
+
+
+def _effective_coverage(observations: tuple[Observation, ...]) -> float:
+    if not observations:
+        return 0.0
+    raw = fmean(point.coverage_confidence for point in observations)
+    valid_ratio = sum(_valid_evidence_root(point) for point in observations) / len(observations)
+    return min(raw, valid_ratio)
+
+
+def _signal_strength(points: tuple[DailyPoint, ...], wave: CountryWave, as_of: datetime) -> float:
+    recent_points = [
+        point for point in points
+        if point.at >= as_of - timedelta(days=7) and point.semantic_signal is not None
+    ]
+    return max(
+        (point.semantic_signal or 0.0 for point in recent_points),
+        default=max(
+            (min(1.0, abs(float(point.value or 0.0))) for point in wave.observations),
+            default=0.0,
+        ),
+    )
+
+
+def _wave_metrics(
+    wave: CountryWave,
+    *,
+    as_of: datetime,
+    points: tuple[DailyPoint, ...],
+    coverage: float,
+    timeline: TrendTimeline,
+    quiet_since: datetime | None = None,
+    missing_collection_cycles: int = 0,
+) -> TrendMetrics:
+    observed_indices = {
+        index for point in wave.observations
+        if (index := _bucket_index(point.observed_at, as_of)) is not None
+    }
+    authority_count = sum(
+        point.authority in {"registry", "formal"} for point in wave.observations
+    )
+    return TrendMetrics(
+        contour=wave.contour,
+        persistent=len(observed_indices) >= 2,
+        publisher_family_count=max(
+            (point.publisher_family_count for point in wave.observations),
+            default=0,
+        ),
+        coverage=coverage,
+        signal_strength=clamp01(_signal_strength(points, wave, as_of)),
+        authoritative=authority_count > 0,
+        authority="registry" if authority_count else None,
+        authoritative_source_count=authority_count,
+        as_of=as_of,
+        quiet_since=quiet_since,
+        missing_collection_cycles=missing_collection_cycles,
+        timeline=timeline,
+    )
+
+
+def _historical_timeline(wave: CountryWave, as_of: datetime) -> tuple[datetime | None, datetime | None]:
+    """Replay prefixes to recover the first detection without future leakage."""
+
+    if wave.detected_at is not None:
+        return wave.detected_at, wave.confirmed_at
+    detected_at: datetime | None = None
+    confirmed_at = wave.confirmed_at
+    state = TrendState.CANDIDATE
+    ordered_times = sorted({point.observed_at for point in wave.observations if point.observed_at < as_of})
+    for observed_at in ordered_times:
+        prefix = tuple(point for point in wave.observations if point.observed_at <= observed_at)
+        prefix_wave = replace(
+            wave,
+            observations=prefix,
+            last_observed_at=observed_at,
+            state=state,
+            detected_at=detected_at,
+            confirmed_at=confirmed_at,
+            baseline=None,
+        )
+        cutoff = min(as_of, observed_at + timedelta(microseconds=1))
+        healthy = {
+            index for point in prefix
+            if (index := _bucket_index(point.observed_at, cutoff)) is not None
+        }
+        points = _daily_points_for_wave(prefix_wave, cutoff, healthy)
+        coverage = _effective_coverage(prefix)
+        decision = decide_state(
+            _wave_metrics(
+                prefix_wave,
+                as_of=observed_at,
+                points=points,
+                coverage=coverage,
+                timeline=TrendTimeline(
+                    first_observed_at=wave.first_observed_at,
+                    detected_at=detected_at,
+                    confirmed_at=confirmed_at,
+                    t0_auto=wave.t0_auto,
+                    t0_effective=wave.t0_effective,
+                ),
+            ),
+            state,
+        )
+        state = decision.state
+        if state in (TrendState.EMERGING, TrendState.CONFIRMED) and detected_at is None:
+            detected_at = observed_at
+        if state is TrendState.CONFIRMED and confirmed_at is None:
+            confirmed_at = observed_at
+    return detected_at, confirmed_at
+
+
 def _baseline_velocity(baseline: BaselineResult) -> float:
     deltas = []
     for recent, historical in (
@@ -398,67 +608,66 @@ def _analyze_wave(
     healthy_buckets: set[int],
 ) -> CountryWave:
     points = _daily_points_for_wave(wave, as_of, healthy_buckets)
-    coverage = fmean(
-        point.coverage_confidence for point in wave.observations
-    ) if wave.observations else 0.0
+    coverage = _effective_coverage(wave.observations)
     baseline = calculate_baseline(points, as_of, coverage)
     observed_indices = sorted({
         index for point in wave.observations
         if (index := _bucket_index(point.observed_at, as_of)) is not None
     })
-    last_index = observed_indices[-1] if observed_indices else None
+    last_index = observed_indices[-1] if observed_indices else (
+        _bucket_index(wave.last_observed_at, as_of)
+        if wave.last_observed_at is not None else None
+    )
     trailing_indices = set(range((last_index + 1) if last_index is not None else 0, 90))
     missing_cycles = len(trailing_indices - healthy_buckets)
     quiet_since = wave.last_observed_at if (
-        last_index is not None and any(index > last_index for index in healthy_buckets)
+        wave.last_observed_at is not None
+        and any(index > (last_index if last_index is not None else -1) for index in healthy_buckets)
     ) else None
-    recent_points = [
-        point for point in points
-        if point.at >= as_of - timedelta(days=7) and point.semantic_signal is not None
-    ]
-    signal_strength = max(
-        (point.semantic_signal or 0.0 for point in recent_points),
-        default=max((min(1.0, abs(float(point.value or 0.0))) for point in wave.observations), default=0.0),
-    )
-    families = max((point.publisher_family_count for point in wave.observations), default=0)
-    authority_count = sum(
-        point.authority in {"registry", "formal"} for point in wave.observations
-    )
-    detected_at = wave.detected_at
-    if detected_at is None and baseline.confirmation_allowed and (
-        signal_strength >= 0.5 or wave.contour is Contour.ACTION
-    ):
-        detected_at = as_of
+    detected_at, historical_confirmed_at = _historical_timeline(wave, as_of)
     timeline = TrendTimeline(
         first_observed_at=wave.first_observed_at,
         detected_at=detected_at,
-        confirmed_at=wave.confirmed_at,
+        confirmed_at=historical_confirmed_at,
         t0_auto=wave.t0_auto,
         t0_effective=wave.t0_effective,
     )
-    decision = decide_state(TrendMetrics(
-        contour=wave.contour,
-        persistent=len(observed_indices) >= 2,
-        publisher_family_count=families,
-        coverage=baseline.coverage_confidence,
-        signal_strength=clamp01(signal_strength),
-        authoritative=authority_count > 0,
-        authority="registry" if authority_count else None,
-        authoritative_source_count=authority_count,
-        as_of=as_of,
-        quiet_since=quiet_since,
-        missing_collection_cycles=missing_cycles,
-        timeline=timeline,
-    ), wave.state)
+    decision = decide_state(
+        _wave_metrics(
+            wave,
+            as_of=as_of,
+            points=points,
+            coverage=baseline.coverage_confidence,
+            timeline=timeline,
+            quiet_since=quiet_since,
+            missing_collection_cycles=missing_cycles,
+        ),
+        wave.state,
+    )
 
     t0_auto = wave.t0_auto
     t0_status = "not_confirmed"
     if decision.state is TrendState.CONFIRMED and detected_at is not None:
-        t0_result = refine_t0(points, detected_at)
+        t0_result = refine_t0(points, as_of)
         t0_status = t0_result.status
-        if t0_result.t0_auto is not None:
+        if t0_result.t0_auto is not None and t0_result.t0_auto <= detected_at:
             t0_auto = t0_result.t0_auto
-    analyst_override = (
+        elif wave.contour is Contour.ACTION and wave.observations:
+            t0_auto = min(point.observed_at for point in wave.observations)
+            t0_status = "authoritative_event_time"
+    state = decision.state
+    confirmed_at = decision.timeline.confirmed_at
+    lifecycle_reason = decision.reason
+    if (
+        wave.contour is Contour.MEDIA
+        and wave.state in (TrendState.CANDIDATE, TrendState.EMERGING)
+        and state is TrendState.CONFIRMED
+        and t0_auto is None
+    ):
+        state = TrendState.EMERGING
+        confirmed_at = wave.confirmed_at
+        lifecycle_reason = "automatic_t0_unresolved"
+    analyst_override = wave.has_analyst_t0_override or (
         wave.t0_effective is not None
         and wave.t0_auto is not None
         and wave.t0_effective != wave.t0_auto
@@ -466,13 +675,13 @@ def _analyze_wave(
     t0_effective = wave.t0_effective if analyst_override else t0_auto
     return replace(
         wave,
-        state=decision.state,
+        state=state,
         detected_at=decision.timeline.detected_at,
-        confirmed_at=decision.timeline.confirmed_at,
+        confirmed_at=confirmed_at,
         t0_auto=t0_auto,
         t0_effective=t0_effective,
         baseline=baseline,
-        lifecycle_reason=decision.reason,
+        lifecycle_reason=lifecycle_reason,
         t0_status=t0_status,
         velocity=_baseline_velocity(baseline),
     )
@@ -534,7 +743,7 @@ def _persist_memory(session, observations: Iterable[Observation], waves: Iterabl
         if not any(row["identity"] == identity for row in store["trends"]):
             store["trends"].append({
                 "id": len(store["trends"]) + 1, "identity": identity,
-                "state": "confirmed" if len(meta.waves) >= 2 else "candidate",
+                "state": _meta_state(meta).value,
                 "t0_auto": meta.t0_auto, "t0_effective": meta.t0_auto,
             })
     return inserted, first_id, updated
@@ -695,6 +904,7 @@ _UPDATE_META = text("""
 UPDATE radar_trends trend SET
   state = :state, confidence = :confidence, coverage_confidence = :coverage_confidence,
   velocity = :velocity,
+  detected_at = COALESCE(trend.detected_at, :detected_at),
   confirmed_at = COALESCE(trend.confirmed_at, :confirmed_at), t0_auto = :t0_auto,
   t0_effective = CASE WHEN EXISTS (
     SELECT 1 FROM radar_t0_revisions revision
@@ -821,8 +1031,11 @@ def _persist_meta_and_contours(
         params = {"subject_key": meta.subject_key, "meta_key": meta.meta_key, "direction": meta.direction, "detector_version": DETECTOR_VERSION}
         existing = session.execute(_META_BY_IDENTITY, params).first()
         confirmed = tuple(wave for wave in meta.waves if wave.state is TrendState.CONFIRMED)
-        state = "confirmed" if len({wave.country_code for wave in confirmed}) >= 2 else "candidate"
-        coverage = min((point.coverage_confidence for wave in meta.waves for point in wave.observations), default=0.0)
+        state = _meta_state(meta).value
+        meta_detected_at, meta_confirmed_at = _meta_timeline(
+            meta, TrendState(state)
+        )
+        coverage = min((_wave_coverage(wave) for wave in meta.waves), default=0.0)
         velocity = fmean(_velocity(wave) for wave in meta.waves)
         explanation = {
             "member_countries": sorted({wave.country_code for wave in meta.waves}),
@@ -838,7 +1051,8 @@ def _persist_meta_and_contours(
                 "coverage_confidence": coverage,
                 "velocity": velocity,
                 "first_observed_at": min(wave.first_observed_at for wave in meta.waves),
-                "detected_at": as_of, "confirmed_at": as_of if state == "confirmed" else None,
+                "detected_at": meta_detected_at,
+                "confirmed_at": meta_confirmed_at,
                 "t0_auto": meta.t0_auto, "t0_effective": meta.t0_auto,
                 "baseline": json.dumps(baseline), "explanation": json.dumps(explanation),
             })
@@ -852,7 +1066,8 @@ def _persist_meta_and_contours(
                 "id": meta_id, "state": state, "confidence": coverage,
                 "coverage_confidence": coverage,
                 "velocity": velocity,
-                "confirmed_at": as_of if state == "confirmed" else None,
+                "detected_at": meta_detected_at,
+                "confirmed_at": meta_confirmed_at,
                 "t0_auto": meta.t0_auto, "t0_effective": meta.t0_auto,
                 "baseline": json.dumps(baseline), "explanation": json.dumps(explanation),
             })
@@ -865,6 +1080,8 @@ def _persist_meta_and_contours(
                     "evidence": json.dumps({"detector_version": DETECTOR_VERSION, "scope": "meta"}),
                 })
         for wave in meta.waves:
+            if wave.state in (TrendState.RESOLVED, TrendState.REJECTED):
+                continue
             country_id = wave_ids[(wave.country_code, wave.contour, wave.subject_key, wave.direction, wave.wave_key)]
             session.execute(_INSERT_MEMBER, {
                 "public_id": uuid5(NAMESPACE_URL, f"geo-pulse:radar-member:{meta_id}:{country_id}"),
@@ -1075,31 +1292,171 @@ def _alignment_identity(wave: CountryWave) -> tuple[str, str]:
     )
 
 
+def _state_distribution(states: Iterable[TrendState | str]) -> dict[str, int]:
+    values = [TrendState(state).value for state in states]
+    return {state.value: values.count(state.value) for state in TrendState}
+
+
+def _meta_state(meta: MetaTrend) -> TrendState:
+    states = tuple(wave.state for wave in meta.waves)
+    confirmed_countries = {
+        wave.country_code for wave in meta.waves
+        if wave.state is TrendState.CONFIRMED
+    }
+    if len(confirmed_countries) >= 2:
+        return TrendState.CONFIRMED
+    if any(state in (TrendState.EMERGING, TrendState.CONFIRMED) for state in states):
+        return TrendState.EMERGING
+    if states and all(state is TrendState.RESOLVED for state in states):
+        return TrendState.RESOLVED
+    if states and all(state is TrendState.REJECTED for state in states):
+        return TrendState.REJECTED
+    if any(state is TrendState.COOLING for state in states):
+        return TrendState.COOLING
+    return TrendState.CANDIDATE
+
+
+def _meta_timeline(
+    meta: MetaTrend, state: TrendState,
+) -> tuple[datetime | None, datetime | None]:
+    detected_at = min(
+        (wave.detected_at for wave in meta.waves if wave.detected_at is not None),
+        default=None,
+    )
+    if state is not TrendState.CONFIRMED:
+        return detected_at, None
+    first_confirmation_by_country: dict[str, datetime] = {}
+    for wave in meta.waves:
+        if wave.state is not TrendState.CONFIRMED or wave.confirmed_at is None:
+            continue
+        current = first_confirmation_by_country.get(wave.country_code)
+        if current is None or wave.confirmed_at < current:
+            first_confirmation_by_country[wave.country_code] = wave.confirmed_at
+    confirmations = sorted(first_confirmation_by_country.values())
+    confirmed_at = confirmations[1] if len(confirmations) >= 2 else None
+    return detected_at, confirmed_at
+
+
+def _confirmation_capable_without_coverage(wave: CountryWave) -> bool:
+    if wave.contour is Contour.ACTION:
+        authorities = sum(
+            point.authority in {"registry", "formal"}
+            for point in wave.observations
+        )
+        return authorities > 0
+    active_days = {point.observed_at.date() for point in wave.observations}
+    families = max(
+        (point.publisher_family_count for point in wave.observations),
+        default=0,
+    )
+    signal = max(
+        (min(1.0, abs(float(point.value or 0.0))) for point in wave.observations),
+        default=0.0,
+    )
+    return len(active_days) >= 2 and families >= 2 and signal >= 0.5
+
+
+def _collector_suppressed(waves: Iterable[CountryWave]) -> int:
+    return sum(
+        wave.state is not TrendState.CONFIRMED
+        and _wave_coverage(wave) <= 0.5
+        and _confirmation_capable_without_coverage(wave)
+        for wave in waves
+    )
+
+
+def _t0_sanity(
+    waves: tuple[CountryWave, ...], metas: tuple[MetaTrend, ...],
+) -> dict[str, int]:
+    entries: list[tuple[TrendState, datetime | None, datetime | None, datetime | None, datetime | None]] = [
+        (
+            wave.state,
+            wave.t0_auto,
+            wave.t0_effective,
+            wave.detected_at,
+            wave.confirmed_at,
+        )
+        for wave in waves
+    ]
+    for meta in metas:
+        state = _meta_state(meta)
+        detected, confirmed = _meta_timeline(meta, state)
+        entries.append((state, meta.t0_auto, meta.t0_auto, detected, confirmed))
+    automatic = sum(t0_auto is not None for _, t0_auto, _, _, _ in entries)
+    violations = sum(
+        (
+            state is TrendState.CONFIRMED and t0_auto is None
+        ) or (
+            t0_auto is not None and detected_at is not None and t0_auto > detected_at
+        ) or (
+            t0_auto is not None and confirmed_at is not None and t0_auto > confirmed_at
+        ) or (
+            t0_effective is not None and t0_auto is None
+        )
+        for state, t0_auto, t0_effective, detected_at, confirmed_at in entries
+    )
+    return {
+        "automatic": automatic,
+        "unresolved": len(entries) - automatic,
+        "violations": violations,
+    }
+
+
+def _contour_completeness(waves: tuple[CountryWave, ...]) -> dict[str, int | float | None]:
+    grouped: dict[tuple[str, str, str], list[tuple[int, CountryWave]]] = defaultdict(list)
+    for index, wave in enumerate(waves, 1):
+        subject, direction = _alignment_identity(wave)
+        grouped[(wave.country_code, subject, direction)].append((index, wave))
+    linked = 0
+    possible = 0
+    for members in grouped.values():
+        media = [(index, wave) for index, wave in members if wave.contour is Contour.MEDIA]
+        actions = [(index, wave) for index, wave in members if wave.contour is Contour.ACTION]
+        possible += min(len(media), len(actions))
+        linked += len(match_contour_episodes(media, actions))
+    return {
+        "possible_pairs": possible,
+        "linked_pairs": linked,
+        "ratio": linked / possible if possible else None,
+    }
+
+
 def run_radar_cycle(session, as_of: datetime, shadow: bool = True, *, days: int = 90) -> RadarCycleReport:
     """Build a replay report; writes happen only when ``shadow`` is false."""
 
     as_of = _utc(as_of)
-    if days <= 0:
-        raise ValueError("days must be positive")
+    if days != 90:
+        raise ValueError("Radar lookback must be exactly 90 days")
     window = ObservationWindow(as_of - timedelta(days=days), as_of)
     before_counts = _protected_counts(session)
     generated = [*build_media_observations(session, window), *build_action_observations(session, window)]
     history = _history(session, as_of, days)
     observations = _prefer_logical_observations(history, generated)
-    assignments = assign_country_waves(observations, _previous_waves(session, as_of))
+    previous_waves = _previous_waves(session, as_of)
+    assignments = assign_country_waves(observations, previous_waves)
+    assigned_keys = {wave.wave_key for wave in assignments.waves}
+    unmatched_previous = tuple(
+        wave for wave in previous_waves
+        if wave.wave_key not in assigned_keys
+        and wave.state not in (TrendState.RESOLVED, TrendState.REJECTED)
+    )
+    cycle_waves = (*assignments.waves, *unmatched_previous)
     healthy_buckets = _healthy_collection_buckets(observations, as_of)
+    for country, buckets in _media_collection_health(session, window).items():
+        healthy_buckets.setdefault((country, Contour.MEDIA), set()).update(buckets)
     scored_waves = tuple(
         _analyze_wave(
             wave,
             as_of,
             healthy_buckets.get((wave.country_code, wave.contour), set()),
         )
-        for wave in assignments.waves
+        for wave in cycle_waves
     )
     metas = assign_meta_trends(scored_waves, _story_anchors(session, as_of))
-    states = [wave.state.value for wave in scored_waves]
-    state_counts = {state: states.count(state) for state in TrendState}
-    state_counts = {state.value if isinstance(state, TrendState) else state: count for state, count in state_counts.items() if count}
+    state_counts = _state_distribution(wave.state for wave in scored_waves)
+    meta_state_counts = _state_distribution(
+        _meta_state(meta) for meta in metas.meta_trends
+    )
     inserted = 0
     updated = 0
     trend_id: int | None = None
@@ -1109,16 +1466,30 @@ def run_radar_cycle(session, as_of: datetime, shadow: bool = True, *, days: int 
         else:
             inserted, trend_id, updated = _persist_sql(session, generated, scored_waves, metas.meta_trends, as_of)
     after_counts = _protected_counts(session)
-    evidence_complete = sum(bool(point.evidence) for point in observations)
+    evidence_complete = sum(_valid_evidence_root(point) for point in observations)
     t0_count = sum(wave.t0_auto is not None for wave in scored_waves)
+    evidence_validity = _evidence_validity(observations)
+    collector_suppressed = _collector_suppressed(scored_waves)
+    confirmed_below_coverage_gate = sum(
+        wave.state is TrendState.CONFIRMED and _wave_coverage(wave) <= 0.5
+        for wave in scored_waves
+    )
     return RadarCycleReport(
         as_of=as_of, shadow=shadow, inserted_observations=inserted, updated_trends=updated,
         country_waves=scored_waves, meta_trends=metas.meta_trends, trend_id=trend_id,
-        state_counts=state_counts, collector_suppressed=0,
+        state_counts=state_counts, collector_suppressed=collector_suppressed,
         country_coverage=_coverage(observations),
         t0_distribution={"automatic": t0_count, "unresolved": len(scored_waves) - t0_count},
         evidence_completeness={"complete": evidence_complete, "incomplete": len(observations) - evidence_complete},
         protected_row_counts=_count_report(before_counts, after_counts),
+        lookback_days=days,
+        observation_count=len(observations),
+        country_state_counts=state_counts,
+        meta_state_counts=meta_state_counts,
+        evidence_validity=evidence_validity,
+        confirmed_below_coverage_gate=confirmed_below_coverage_gate,
+        t0_sanity=_t0_sanity(scored_waves, metas.meta_trends),
+        contour_completeness=_contour_completeness(scored_waves),
     )
 
 
