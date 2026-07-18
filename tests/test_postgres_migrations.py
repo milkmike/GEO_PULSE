@@ -419,27 +419,41 @@ def test_radar_alignment_migration_links_different_local_contour_identities():
     try:
         with connection.cursor() as cursor:
             _reset(cursor, initialize=True)
-            migration_sql = (
-                MIGRATIONS / "030_radar_contour_alignment_identity.sql"
-            ).read_text()
-            cursor.execute(migration_sql)
-            cursor.execute(migration_sql)
             cursor.execute("""
                 INSERT INTO countries(code, name_ru, name_en, iso3, region)
                 VALUES ('XZ', 'Тестовая страна', 'Test country', 'XZZ', 'test')
                 ON CONFLICT (code) DO NOTHING
             """)
+            # Simulate the pre-030 trigger: alignment columns did not yet belong
+            # to immutable identity, and existing rows had no canonical values.
+            cursor.execute("""
+                CREATE OR REPLACE FUNCTION public.reject_radar_trend_identity_mutation()
+                RETURNS trigger LANGUAGE plpgsql AS $$
+                BEGIN
+                  IF OLD.scope IS DISTINCT FROM NEW.scope
+                     OR OLD.contour IS DISTINCT FROM NEW.contour
+                     OR OLD.country_code IS DISTINCT FROM NEW.country_code
+                     OR OLD.subject_key IS DISTINCT FROM NEW.subject_key
+                     OR OLD.direction IS DISTINCT FROM NEW.direction
+                     OR OLD.wave_key IS DISTINCT FROM NEW.wave_key
+                     OR OLD.meta_key IS DISTINCT FROM NEW.meta_key
+                     OR OLD.detector_version IS DISTINCT FROM NEW.detector_version THEN
+                    RAISE EXCEPTION 'legacy radar identity is immutable'
+                      USING ERRCODE = '23514';
+                  END IF;
+                  RETURN NEW;
+                END;
+                $$
+            """)
             cursor.execute("""
                 INSERT INTO radar_trends(
                     public_id, scope, contour, country_code, subject_key,
-                    alignment_subject, title_ru, direction,
-                    alignment_direction, wave_key, state, confidence,
+                    title_ru, direction, wave_key, state, confidence,
                     coverage_confidence, first_observed_at, detector_version
                 ) VALUES (
                     '30000000-0000-0000-0000-000000000001', 'country',
-                    'media', 'XZ', 'story:local-media',
-                    'economy:trade:russia', 'Медиа-волна', 'negative',
-                    'hardening', 'wave:alignment:media', 'confirmed', 0.8, 0.8,
+                    'media', 'XZ', 'story:local-media', 'Медиа-волна',
+                    'negative', 'wave:alignment:media', 'confirmed', 0.8, 0.8,
                     NOW(), 'alignment-test'
                 ) RETURNING id
             """)
@@ -447,18 +461,55 @@ def test_radar_alignment_migration_links_different_local_contour_identities():
             cursor.execute("""
                 INSERT INTO radar_trends(
                     public_id, scope, contour, country_code, subject_key,
-                    alignment_subject, title_ru, direction,
-                    alignment_direction, wave_key, state, confidence,
+                    title_ru, direction, wave_key, state, confidence,
                     coverage_confidence, first_observed_at, detector_version
                 ) VALUES (
                     '30000000-0000-0000-0000-000000000002', 'country',
-                    'action', 'XZ', 'economy:trade:russia',
-                    'economy:trade:russia', 'Действие', 'decrease',
-                    'hardening', 'wave:alignment:action', 'confirmed', 0.9, 0.9,
+                    'action', 'XZ', 'economy:trade:russia', 'Действие',
+                    'decrease', 'wave:alignment:action', 'confirmed', 0.9, 0.9,
                     NOW(), 'alignment-test'
                 ) RETURNING id
             """)
             action_id = cursor.fetchone()[0]
+            cursor.execute("""
+                INSERT INTO radar_observations(
+                    public_id, input_hash, country_code, contour, subject_key,
+                    direction, metric, observed_at, coverage_confidence, evidence
+                ) VALUES
+                  ('31000000-0000-0000-0000-000000000001', repeat('a', 64),
+                   'XZ', 'media', 'story:local-media', 'negative', 'attention',
+                   NOW(), 0.8, jsonb_build_object(
+                     'alignment_subject', 'economy:trade:russia',
+                     'alignment_direction', 'hardening')),
+                  ('31000000-0000-0000-0000-000000000002', repeat('b', 64),
+                   'XZ', 'action', 'economy:trade:russia', 'decrease', 'trade',
+                   NOW(), 0.9, jsonb_build_object(
+                     'alignment_subject', 'economy:trade:russia',
+                     'alignment_direction', 'hardening'))
+                RETURNING id
+            """)
+            observation_ids = [row[0] for row in cursor.fetchall()]
+            cursor.execute("""
+                INSERT INTO radar_trend_evidence(
+                    public_id, trend_id, observation_id, role
+                ) VALUES
+                  ('32000000-0000-0000-0000-000000000001', %s, %s, 'trigger'),
+                  ('32000000-0000-0000-0000-000000000002', %s, %s, 'trigger')
+            """, (media_id, observation_ids[0], action_id, observation_ids[1]))
+
+            migration_sql = (
+                MIGRATIONS / "030_radar_contour_alignment_identity.sql"
+            ).read_text()
+            cursor.execute(migration_sql)
+            cursor.execute(migration_sql)
+            cursor.execute("""
+                SELECT alignment_subject, alignment_direction
+                FROM radar_trends WHERE id IN (%s, %s) ORDER BY id
+            """, (media_id, action_id))
+            assert cursor.fetchall() == [
+                ("economy:trade:russia", "hardening"),
+                ("economy:trade:russia", "hardening"),
+            ]
             cursor.execute("""
                 INSERT INTO radar_contour_links(
                     public_id, media_trend_id, action_trend_id, status

@@ -8,6 +8,31 @@ ALTER TABLE public.radar_trends
   ADD COLUMN IF NOT EXISTS alignment_subject TEXT,
   ADD COLUMN IF NOT EXISTS alignment_direction VARCHAR(24);
 
+WITH observed_identities AS (
+  SELECT evidence.trend_id,
+         NULLIF(observation.evidence->>'alignment_subject', '') AS subject,
+         NULLIF(observation.evidence->>'alignment_direction', '') AS direction,
+         count(DISTINCT observation.id) AS observations
+  FROM public.radar_trend_evidence evidence
+  JOIN public.radar_observations observation
+    ON observation.id = evidence.observation_id
+  WHERE observation.evidence->>'alignment_subject' IS NOT NULL
+    AND observation.evidence->>'alignment_direction' IS NOT NULL
+  GROUP BY evidence.trend_id, 2, 3
+), best_identity AS (
+  SELECT DISTINCT ON (trend_id) trend_id, subject, direction
+  FROM observed_identities
+  WHERE subject IS NOT NULL AND direction IS NOT NULL
+  ORDER BY trend_id, observations DESC, subject, direction
+)
+UPDATE public.radar_trends trend
+SET alignment_subject = identity.subject,
+    alignment_direction = identity.direction
+FROM best_identity identity
+WHERE trend.id = identity.trend_id
+  AND trend.scope = 'country'
+  AND (trend.alignment_subject IS NULL OR trend.alignment_direction IS NULL);
+
 UPDATE public.radar_trends
 SET alignment_subject = COALESCE(alignment_subject, subject_key),
     alignment_direction = COALESCE(alignment_direction, direction)

@@ -934,6 +934,38 @@ CREATE INDEX IF NOT EXISTS idx_radar_trend_evidence_canonical_entity_id_lookup
   ON radar_trend_evidence(canonical_entity_id, trend_id)
   WHERE canonical_entity_id IS NOT NULL;
 
+-- Upgrade an existing Radar installation from local contour identity to the
+-- canonical identity already stored on immutable observations. Fresh databases
+-- have no rows here; the fallback above remains sufficient for them.
+DROP TRIGGER IF EXISTS radar_trend_identity_immutable ON radar_trends;
+WITH observed_identities AS (
+  SELECT evidence.trend_id,
+         NULLIF(observation.evidence->>'alignment_subject', '') AS subject,
+         NULLIF(observation.evidence->>'alignment_direction', '') AS direction,
+         count(DISTINCT observation.id) AS observations
+  FROM radar_trend_evidence evidence
+  JOIN radar_observations observation ON observation.id = evidence.observation_id
+  WHERE observation.evidence->>'alignment_subject' IS NOT NULL
+    AND observation.evidence->>'alignment_direction' IS NOT NULL
+  GROUP BY evidence.trend_id, 2, 3
+), best_identity AS (
+  SELECT DISTINCT ON (trend_id) trend_id, subject, direction
+  FROM observed_identities
+  WHERE subject IS NOT NULL AND direction IS NOT NULL
+  ORDER BY trend_id, observations DESC, subject, direction
+)
+UPDATE radar_trends trend
+SET alignment_subject = identity.subject,
+    alignment_direction = identity.direction
+FROM best_identity identity
+WHERE trend.id = identity.trend_id
+  AND trend.scope = 'country'
+  AND trend.alignment_subject = trend.subject_key
+  AND trend.alignment_direction = trend.direction;
+CREATE TRIGGER radar_trend_identity_immutable
+  BEFORE UPDATE ON radar_trends
+  FOR EACH ROW EXECUTE FUNCTION public.reject_radar_trend_identity_mutation();
+
 -- These records intentionally model immutable historical decisions.
 CREATE TABLE IF NOT EXISTS radar_state_events (
   id BIGSERIAL PRIMARY KEY,
