@@ -44,6 +44,30 @@ Result: `136 passed, 2 warnings` in 4.48s. The warnings are pre-existing
 FastAPI `regex` deprecations in `src/api/main.py`; none originate from this
 task. Whitespace and bytecode compilation checks completed successfully.
 
+## Review correction pass
+
+- Annual UN/trade observations now use their stable December 31 dataset-period
+  timestamp and a period/value fingerprint; `updated_at` is not part of their
+  identity or effective time.
+- Fossil imports use `numeric` comparisons with the latest compatible Radar
+  observation or action event. Initial snapshots and canonical-equal values do
+  not emit actions; changes preserve numeric previous/current/delta evidence.
+- Media now uses transitive publisher-family merging, sorted multi-event
+  subject associations, and all verified national articles as its denominator.
+- Hashes now include top-level and evidence-contained article/story/entity/
+  signal/action roots.
+- Added regressions for all review findings.
+
+Final correction-pass verification:
+
+```text
+.venv/bin/python -m pytest tests/test_radar_observations.py tests/test_stories.py tests/test_signal_evidence.py -q
+git diff --check
+.venv/bin/python -m py_compile src/radar/types.py src/radar/media.py src/radar/actions.py src/radar/repository.py
+```
+
+Result: `143 passed, 2 warnings` in 7.32s.
+
 ## Commit
 
 `feat(radar): normalize media and action evidence`

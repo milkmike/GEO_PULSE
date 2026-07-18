@@ -8,7 +8,7 @@ from typing import Any
 
 from sqlalchemy import text
 
-from src.engine.health import _publisher_family_identities
+from src.engine.health import _publisher_families
 
 from .repository import make_observation
 from .types import Contour, Observation, ObservationWindow
@@ -19,7 +19,7 @@ _MEDIA_ROWS = text("""
            source.country_code, source.id AS publisher_id,
            source.name AS publisher_name, source.url AS publisher_url,
            publisher.config AS publisher_config,
-           story_link.story_id, analysis.event_key, analysis.sentiment,
+           story_link.story_id, analysis.event_key, analysis.sentiment, analysis.is_relevant,
            ARRAY(SELECT DISTINCT event.event_key FROM story_events event
                  WHERE event.story_id = story_link.story_id) AS story_event_keys,
            ARRAY(SELECT DISTINCT entity.entity_id FROM story_entities entity
@@ -35,7 +35,6 @@ _MEDIA_ROWS = text("""
     WHERE a.is_duplicate = FALSE
       AND a.published_at >= :window_start
       AND a.published_at < :window_end
-      AND (analysis.is_relevant IS DISTINCT FROM FALSE)
 """)
 
 
@@ -68,26 +67,40 @@ def _direction(sentiment: Any) -> str:
     return "neutral"
 
 
-def _publisher_family(row: Any) -> str:
-    source = {
-        "url": _value(row, "publisher_url"),
-        "config": _value(row, "publisher_config", {}) or {},
-    }
-    identities = _publisher_family_identities(source)
-    if identities:
-        return min(identities)
-    return f"publisher:{_value(row, 'publisher_id')}"
+def _subjects(row: Any) -> tuple[str, ...]:
+    """All persisted event associations, sorted before grouping for replayability."""
 
-
-def _subject(row: Any) -> str:
+    events = sorted({str(value) for value in (_value(row, "story_event_keys", ()) or ()) if value})
+    if events:
+        return tuple(f"event:{event}" for event in events)
     story_id = _value(row, "story_id")
     if story_id is not None:
-        return f"story:{int(story_id)}"
-    events = tuple(value for value in (_value(row, "story_event_keys", ()) or ()) if value)
-    event_key = events[0] if events else _value(row, "event_key")
+        return (f"story:{int(story_id)}",)
+    event_key = _value(row, "event_key")
     if event_key:
-        return f"event:{str(event_key)}"
-    return "media:coverage"
+        return (f"event:{str(event_key)}",)
+    return ("media:coverage",)
+
+
+def _publisher_family_labels(rows: list[Any]) -> tuple[str, ...]:
+    sources: dict[int, dict[str, Any]] = {}
+    for row in rows:
+        source_id = int(_value(row, "publisher_id"))
+        sources.setdefault(source_id, {
+            "id": source_id,
+            "url": _value(row, "publisher_url"),
+            "config": _value(row, "publisher_config", {}) or {},
+        })
+    families = _publisher_families(list(sources.values()))
+    assigned = {
+        int(source["id"])
+        for members in families.values()
+        for source in members
+        if source.get("id") is not None
+    }
+    labels = set(families)
+    labels.update(f"publisher:{source_id}" for source_id in sources if source_id not in assigned)
+    return tuple(sorted(labels))
 
 
 def build_media_observations(session, window: ObservationWindow) -> list[Observation]:
@@ -129,7 +142,10 @@ def build_media_observations(session, window: ObservationWindow) -> list[Observa
         day = _day_start(_value(row, "published_at"))
         article_id = int(_value(row, "article_id"))
         national_coverage[country, day].add(article_id)
-        grouped[country, _subject(row), _direction(_value(row, "sentiment")), "attention_share", day].append(row)
+        if _value(row, "is_relevant") is False:
+            continue
+        for subject in _subjects(row):
+            grouped[country, subject, _direction(_value(row, "sentiment")), "attention_share", day].append(row)
 
     observations: list[Observation] = []
     for (country, subject, direction, metric, day), members in sorted(grouped.items()):
@@ -138,9 +154,11 @@ def build_media_observations(session, window: ObservationWindow) -> list[Observa
         signal_ids = tuple(sorted({int(item) for row in members for item in (_value(row, "signal_ids", ()) or ())}))
         entity_ids = tuple(sorted({str(item) for row in members for item in (_value(row, "entity_ids", ()) or ())}))
         denominator = len(national_coverage[country, day])
-        families = {_publisher_family(row) for row in members}
+        families = _publisher_family_labels(members)
         evidence_ids = tuple(f"article:{article_id}" for article_id in article_ids) + tuple(
             f"signal:{signal_id}" for signal_id in signal_ids
+        ) + tuple(f"story:{story_id}" for story_id in story_ids) + tuple(
+            f"entity:{entity_id}" for entity_id in entity_ids
         )
         observations.append(make_observation(
             country_code=country,
@@ -163,7 +181,7 @@ def build_media_observations(session, window: ObservationWindow) -> list[Observa
                 "story_ids": story_ids,
                 "signal_ids": signal_ids,
                 "entity_ids": entity_ids,
-                "publisher_families": tuple(sorted(families)),
+                "publisher_families": families,
             },
             evidence_ids=evidence_ids,
         ))

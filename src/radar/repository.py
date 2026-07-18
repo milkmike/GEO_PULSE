@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import date, datetime
+from collections.abc import Mapping
 from typing import Iterable
 from uuid import NAMESPACE_URL, UUID, uuid5
 
@@ -39,6 +40,20 @@ def observation_input_hash(
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def _evidence_identity_references(evidence: Mapping[str, object]) -> set[str]:
+    """Extract all persisted roots which can change an observation's meaning."""
+
+    references: set[str] = set()
+    for key, value in evidence.items():
+        if key == "evidence_ids" or not (key.endswith("_id") or key.endswith("_ids")):
+            continue
+        values = value if key.endswith("_ids") and isinstance(value, (list, tuple, set, frozenset)) else (value,)
+        for item in values:
+            if item is not None:
+                references.add(f"{key}:{item}")
+    return references
+
+
 def make_observation(
     *, country_code: str, contour: Contour | str, subject_key: str,
     direction: str, metric: str, observed_at: datetime,
@@ -51,7 +66,17 @@ def make_observation(
     evidence: dict[str, object] | None = None,
 ) -> Observation:
     evidence_payload = dict(evidence or {})
-    normalized_evidence_ids = tuple(sorted(set(str(item) for item in evidence_ids)))
+    root_references = {
+        f"article_id:{article_id}" if article_id is not None else None,
+        f"story_id:{story_id}" if story_id is not None else None,
+        f"signal_id:{signal_id}" if signal_id is not None else None,
+        f"canonical_entity_id:{canonical_entity_id}" if canonical_entity_id is not None else None,
+    }
+    normalized_evidence_ids = tuple(sorted(
+        {str(item) for item in evidence_ids}
+        | _evidence_identity_references(evidence_payload)
+        | {item for item in root_references if item is not None}
+    ))
     evidence_payload["evidence_ids"] = normalized_evidence_ids
     input_hash = observation_input_hash(
         contour=contour, country_code=country_code, subject_key=subject_key,
