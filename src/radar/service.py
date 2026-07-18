@@ -192,6 +192,56 @@ def _count_report(before: dict[str, int], after: dict[str, int]) -> dict[str, di
     return {name: {"before": before.get(name, 0), "after": after.get(name, 0), "delta": after.get(name, 0) - before.get(name, 0)} for name in sorted(set(before) | set(after))}
 
 
+def _logical_observation_key(observation: Observation) -> tuple[object, ...]:
+    """Identity stable across representative-root normalization corrections."""
+
+    evidence = observation.evidence
+    if observation.contour is Contour.MEDIA:
+        source_identity: tuple[object, ...] = tuple(sorted(
+            int(value) for value in evidence.get("article_ids", ())
+        ))
+        if not source_identity:
+            source_identity = tuple(sorted(
+                int(value) for value in evidence.get("story_ids", ())
+            ))
+    else:
+        source_id = evidence.get("source_id") or evidence.get("source_record_id")
+        source_identity = (str(source_id),) if source_id is not None else ()
+    if not source_identity:
+        # Without a stable source record, retaining the immutable hash avoids
+        # weakening legitimate independent observations.
+        source_identity = ("input_hash", observation.input_hash)
+    return (
+        observation.contour.value, observation.country_code,
+        observation.subject_key, observation.direction, observation.metric,
+        observation.observed_at, source_identity,
+    )
+
+
+def _observation_richness(observation: Observation) -> tuple[int, int, str]:
+    roots = sum(value is not None for value in (
+        observation.article_id, observation.story_id, observation.signal_id,
+        observation.canonical_entity_id,
+    ))
+    evidence_roots = sum(len(tuple(observation.evidence.get(key, ()))) for key in (
+        "article_ids", "story_ids", "signal_ids", "entity_ids",
+    ))
+    return roots, evidence_roots, observation.input_hash
+
+
+def _prefer_logical_observations(observations: Iterable[Observation]) -> list[Observation]:
+    selected: dict[tuple[object, ...], Observation] = {}
+    for observation in observations:
+        key = _logical_observation_key(observation)
+        current = selected.get(key)
+        if current is None or _observation_richness(observation) > _observation_richness(current):
+            selected[key] = observation
+    return sorted(selected.values(), key=lambda point: (
+        point.observed_at, point.country_code, point.contour.value,
+        point.subject_key, point.direction, point.metric, point.input_hash,
+    ))
+
+
 def _state_for(wave: CountryWave, as_of: datetime):
     observations = wave.observations
     authority = any(point.authority in {"registry", "formal"} for point in observations)
@@ -662,7 +712,7 @@ def run_radar_cycle(session, as_of: datetime, shadow: bool = True, *, days: int 
     before_counts = _protected_counts(session)
     generated = [*build_media_observations(session, window), *build_action_observations(session, window)]
     history = _history(session, as_of, days)
-    observations = list({point.input_hash: point for point in [*history, *generated]}.values())
+    observations = _prefer_logical_observations([*history, *generated])
     assignments = assign_country_waves(observations, _previous_waves(session, as_of))
     scored_waves = tuple(
         replace(wave, state=decision.state, confirmed_at=decision.timeline.confirmed_at,

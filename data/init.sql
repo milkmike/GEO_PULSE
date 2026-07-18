@@ -908,8 +908,6 @@ CREATE TABLE IF NOT EXISTS radar_trend_evidence (
 );
 CREATE INDEX IF NOT EXISTS idx_radar_trend_evidence_trend_role
   ON radar_trend_evidence(trend_id, role, id);
-CREATE UNIQUE INDEX IF NOT EXISTS uq_radar_trend_evidence_observation
-  ON radar_trend_evidence(trend_id, observation_id);
 CREATE INDEX IF NOT EXISTS idx_radar_trend_evidence_article_id_lookup
   ON radar_trend_evidence(article_id, trend_id)
   WHERE article_id IS NOT NULL;

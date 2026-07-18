@@ -1002,9 +1002,6 @@ def test_radar_evidence_root_upsert_backfills_without_overwriting_decision():
     try:
         with connection.cursor() as cursor:
             _reset(cursor, initialize=True)
-            migration_sql = (MIGRATIONS / "028_radar_evidence_roots.sql").read_text()
-            cursor.execute(migration_sql)
-            cursor.execute(migration_sql)
             cursor.execute("""
                 INSERT INTO countries(code, name_ru, name_en, iso3, region)
                 VALUES ('XZ', 'Тест', 'Test', 'XZZ', 'test');
@@ -1040,8 +1037,14 @@ def test_radar_evidence_root_upsert_backfills_without_overwriting_decision():
                 ) VALUES (
                   '00000000-0000-0000-0000-000000000606', 505, 404,
                   'context', 0.25, '{"decision":"preserve"}'::jsonb
+                ), (
+                  '00000000-0000-0000-0000-000000000607', 505, 404,
+                  'support', 0.50, '{"decision":"also-preserve"}'::jsonb
                 );
             """)
+            migration_sql = (MIGRATIONS / "028_radar_evidence_roots.sql").read_text()
+            cursor.execute(migration_sql)
+            cursor.execute(migration_sql)
 
         engine = create_engine(dsn)
         Session = sessionmaker(bind=engine)
@@ -1062,15 +1065,21 @@ def test_radar_evidence_root_upsert_backfills_without_overwriting_decision():
 
         with connection.cursor() as cursor:
             cursor.execute("""
-                SELECT count(*), min(article_id), min(story_id), min(signal_id),
-                       min(canonical_entity_id::text), min(role), min(contribution),
-                       min(evidence->>'decision')
+                SELECT count(*), bool_and(article_id = 101), bool_and(story_id = 202),
+                       bool_and(signal_id = 303),
+                       bool_and(canonical_entity_id::text =
+                         '00000000-0000-0000-0000-000000000099'),
+                       array_agg(role ORDER BY id),
+                       array_agg(contribution ORDER BY id),
+                       array_agg(evidence->>'decision' ORDER BY id)
                 FROM radar_trend_evidence
                 WHERE trend_id = 505 AND observation_id = 404
             """)
             assert cursor.fetchone() == (
-                1, 101, 202, 303, "00000000-0000-0000-0000-000000000099",
-                "context", Decimal("0.25000"), "preserve",
+                2, True, True, True, True,
+                ["context", "support"],
+                [Decimal("0.25000"), Decimal("0.50000")],
+                ["preserve", "also-preserve"],
             )
     finally:
         connection.close()

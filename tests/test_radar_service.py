@@ -100,6 +100,54 @@ def test_radar_shadow_creates_no_rows(monkeypatch):
     assert session.radar_store == {"observations": [], "trends": [], "events": [], "revisions": []}
 
 
+def test_replay_prefers_corrected_richer_observation_without_double_count(monkeypatch):
+    import src.radar.service as service
+
+    entity_id = UUID("00000000-0000-0000-0000-000000000099")
+    common = dict(
+        country_code="ES", contour="media", subject_key="event:energy",
+        direction="negative", metric="attention_share", observed_at=AS_OF.replace(day=10),
+        evidence_ids=("article:101", "story:202", "signal:303", f"entity:{entity_id}"),
+        value=0.8, publisher_family_count=2, source_count=2, coverage_confidence=1,
+        article_id=101, story_id=202,
+        evidence={"article_ids": (101,), "story_ids": (202,), "signal_ids": (303,), "entity_ids": (str(entity_id),)},
+    )
+    pre_fix = make_observation(**common)
+    corrected = make_observation(**common, signal_id=303, canonical_entity_id=entity_id)
+    assert pre_fix.input_hash != corrected.input_hash
+    monkeypatch.setattr(service, "_history", lambda *_: (pre_fix,))
+    monkeypatch.setattr(service, "build_media_observations", lambda *_: [corrected])
+    monkeypatch.setattr(service, "build_action_observations", lambda *_: [])
+
+    report = run_radar_cycle(_Session(), AS_OF, shadow=True)
+
+    assert len(report.country_waves) == 1
+    assert report.country_waves[0].observations == (corrected,)
+
+
+def test_replay_keeps_legitimate_independent_observations(monkeypatch):
+    import src.radar.service as service
+
+    def observation(article_id):
+        return make_observation(
+            country_code="ES", contour="media", subject_key="event:energy",
+            direction="negative", metric="attention_share", observed_at=AS_OF.replace(day=10),
+            evidence_ids=(f"article:{article_id}",), value=0.8,
+            publisher_family_count=2, source_count=2, coverage_confidence=1,
+            article_id=article_id, evidence={"article_ids": (article_id,)},
+        )
+
+    first, second = observation(101), observation(102)
+    monkeypatch.setattr(service, "build_media_observations", lambda *_: [first, second])
+    monkeypatch.setattr(service, "build_action_observations", lambda *_: [])
+
+    report = run_radar_cycle(_Session(), AS_OF, shadow=True)
+
+    assert {point.input_hash for point in report.country_waves[0].observations} == {
+        first.input_hash, second.input_hash,
+    }
+
+
 def test_radar_apply_is_idempotent_and_preserves_t0_override(monkeypatch):
     import src.radar.service as service
 
