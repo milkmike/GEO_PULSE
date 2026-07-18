@@ -567,6 +567,7 @@ def test_sql_trend_detail_scopes_evidence_to_direct_or_active_members(monkeypatc
 
     sql, params = calls[-1]
     assert params == {"public_id": UUID(TREND_ID)}
+    assert "trend.state NOT IN ('candidate', 'rejected')" in sql
     assert sql.count("evidence.trend_id = trend.id") >= 2
     assert sql.count("trend.scope = 'meta'") >= 2
     assert sql.count("evidence_member.left_at IS NULL") >= 2
@@ -652,6 +653,8 @@ def test_radar_routes_reject_invalid_filters_and_return_not_found_for_missing_tr
     client = _client(FakeRadarService())
 
     assert client.get("/api/v2/radar", params={"state": "made_up"}).status_code == 422
+    assert client.get("/api/v2/radar", params={"state": "candidate"}).status_code == 422
+    assert client.get("/api/v2/radar", params={"state": "rejected"}).status_code == 422
     assert client.get("/api/v2/radar", params={"country": "x"}).status_code == 422
     assert client.get(f"/api/v2/radar/trends/{UUID(int=0)}").status_code == 404
     assert client.get(f"/api/v2/radar/trends/{UUID(int=0)}/timeline").status_code == 404

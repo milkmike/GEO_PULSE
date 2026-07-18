@@ -27,6 +27,7 @@ router = APIRouter(prefix="/api/v2", tags=["radar"])
 
 _CURSOR_VERSION = 1
 _STATES = frozenset({"candidate", "emerging", "confirmed", "cooling", "resolved", "rejected"})
+_PUBLIC_FILTER_STATES = frozenset({"emerging", "confirmed", "cooling", "resolved"})
 _CONTOURS = frozenset({"media", "action"})
 _STATE_RANK = {"confirmed": 0, "emerging": 1, "cooling": 2, "candidate": 3, "resolved": 4, "rejected": 5}
 RADAR_METHODOLOGY_UPDATED_AT = datetime(2026, 7, 18, tzinfo=timezone.utc)
@@ -266,7 +267,7 @@ def _validate_filters(
     normalized_state = state.strip().lower() if state else None
     normalized_contour = contour.strip().lower() if contour else None
     normalized_country = country.strip().upper() if country else None
-    if normalized_state and normalized_state not in _STATES:
+    if normalized_state and normalized_state not in _PUBLIC_FILTER_STATES:
         raise HTTPException(status_code=422, detail="invalid radar state")
     if normalized_contour and normalized_contour not in _CONTOURS:
         raise HTTPException(status_code=422, detail="invalid radar contour")
@@ -472,7 +473,9 @@ class SqlRadarReadService:
                        CASE WHEN trend.scope = 'meta'
                             THEN {self._preview_json('trend.id', include_active_members=True)}
                             ELSE {self._preview_json('trend.id', include_active_members=False)} END AS evidence_preview
-                FROM radar_trends trend WHERE trend.public_id = :public_id
+                FROM radar_trends trend
+                WHERE trend.public_id = :public_id
+                  AND trend.state NOT IN ('candidate', 'rejected')
             """), {"public_id": public_id}).first()
         return row
 
