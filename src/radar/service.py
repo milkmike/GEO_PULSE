@@ -337,15 +337,22 @@ INSERT INTO radar_trend_evidence (
   public_id, trend_id, observation_id, article_id, story_id, signal_id,
   canonical_entity_id, role, contribution, evidence
 )
-SELECT :public_id, :trend_id, observation.id, observation.article_id,
+SELECT COALESCE((
+         SELECT prior.public_id FROM radar_trend_evidence prior
+         WHERE prior.trend_id = :trend_id
+           AND prior.observation_id = observation.id
+         ORDER BY prior.id LIMIT 1
+       ), :public_id),
+       :trend_id, observation.id, observation.article_id,
        observation.story_id, observation.signal_id, observation.canonical_entity_id,
        :role, :contribution, CAST(:evidence AS jsonb)
 FROM radar_observations observation
 WHERE observation.input_hash = :input_hash
-  AND NOT EXISTS (
-    SELECT 1 FROM radar_trend_evidence prior
-    WHERE prior.trend_id = :trend_id AND prior.observation_id = observation.id
-  )
+ON CONFLICT (public_id) DO UPDATE SET
+  article_id = COALESCE(radar_trend_evidence.article_id, EXCLUDED.article_id),
+  story_id = COALESCE(radar_trend_evidence.story_id, EXCLUDED.story_id),
+  signal_id = COALESCE(radar_trend_evidence.signal_id, EXCLUDED.signal_id),
+  canonical_entity_id = COALESCE(radar_trend_evidence.canonical_entity_id, EXCLUDED.canonical_entity_id)
 """)
 
 _META_BY_IDENTITY = text("""

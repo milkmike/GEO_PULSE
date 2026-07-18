@@ -908,6 +908,20 @@ CREATE TABLE IF NOT EXISTS radar_trend_evidence (
 );
 CREATE INDEX IF NOT EXISTS idx_radar_trend_evidence_trend_role
   ON radar_trend_evidence(trend_id, role, id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_radar_trend_evidence_observation
+  ON radar_trend_evidence(trend_id, observation_id);
+CREATE INDEX IF NOT EXISTS idx_radar_trend_evidence_article_id_lookup
+  ON radar_trend_evidence(article_id, trend_id)
+  WHERE article_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_radar_trend_evidence_story_id_lookup
+  ON radar_trend_evidence(story_id, trend_id)
+  WHERE story_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_radar_trend_evidence_signal_id_lookup
+  ON radar_trend_evidence(signal_id, trend_id)
+  WHERE signal_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_radar_trend_evidence_canonical_entity_id_lookup
+  ON radar_trend_evidence(canonical_entity_id, trend_id)
+  WHERE canonical_entity_id IS NOT NULL;
 
 -- These records intentionally model immutable historical decisions.
 CREATE TABLE IF NOT EXISTS radar_state_events (

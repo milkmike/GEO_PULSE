@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import datetime, time, timezone
 from typing import Any
+from uuid import UUID
 
 from sqlalchemy import text
 
@@ -24,7 +25,7 @@ _MEDIA_ROWS = text("""
                  WHERE event.story_id = story_link.story_id) AS story_event_keys,
            ARRAY(SELECT DISTINCT entity.entity_id FROM story_entities entity
                  WHERE entity.story_id = story_link.story_id) AS entity_ids,
-           ARRAY(SELECT DISTINCT evidence.id FROM signal_evidence evidence
+           ARRAY(SELECT DISTINCT evidence.signal_id FROM signal_evidence evidence
                  WHERE a.id = ANY(evidence.article_ids)
                     OR story_link.story_id = ANY(evidence.story_ids)) AS signal_ids
     FROM articles a
@@ -65,6 +66,16 @@ def _direction(sentiment: Any) -> str:
     if value < 0:
         return "negative"
     return "neutral"
+
+
+def _canonical_entities(entity_ids: tuple[str, ...]) -> tuple[UUID, ...]:
+    parsed: set[UUID] = set()
+    for entity_id in entity_ids:
+        try:
+            parsed.add(UUID(entity_id))
+        except (TypeError, ValueError, AttributeError):
+            continue
+    return tuple(sorted(parsed, key=str))
 
 
 def _subjects(row: Any) -> tuple[str, ...]:
@@ -153,6 +164,7 @@ def build_media_observations(session, window: ObservationWindow) -> list[Observa
         story_ids = tuple(sorted({int(_value(row, "story_id")) for row in members if _value(row, "story_id") is not None}))
         signal_ids = tuple(sorted({int(item) for row in members for item in (_value(row, "signal_ids", ()) or ())}))
         entity_ids = tuple(sorted({str(item) for row in members for item in (_value(row, "entity_ids", ()) or ())}))
+        canonical_entities = _canonical_entities(entity_ids)
         denominator = len(national_coverage[country, day])
         families = _publisher_family_labels(members)
         evidence_ids = tuple(f"article:{article_id}" for article_id in article_ids) + tuple(
@@ -175,6 +187,7 @@ def build_media_observations(session, window: ObservationWindow) -> list[Observa
             article_id=article_ids[0] if article_ids else None,
             story_id=story_ids[0] if story_ids else None,
             signal_id=signal_ids[0] if signal_ids else None,
+            canonical_entity_id=canonical_entities[0] if canonical_entities else None,
             baseline={"national_indexed_article_count": denominator},
             evidence={
                 "article_ids": article_ids,

@@ -991,3 +991,86 @@ def test_radar_migration_is_idempotent_and_preserves_audit_history():
                 cursor.execute("DELETE FROM articles WHERE id = %s", (article_id,))
     finally:
         connection.close()
+
+
+def test_radar_evidence_root_upsert_backfills_without_overwriting_decision():
+    dsn, psycopg2 = _requirements()
+    from src.radar.service import _INSERT_OBSERVATION_EVIDENCE
+
+    connection = psycopg2.connect(dsn)
+    connection.autocommit = True
+    try:
+        with connection.cursor() as cursor:
+            _reset(cursor, initialize=True)
+            migration_sql = (MIGRATIONS / "028_radar_evidence_roots.sql").read_text()
+            cursor.execute(migration_sql)
+            cursor.execute(migration_sql)
+            cursor.execute("""
+                INSERT INTO countries(code, name_ru, name_en, iso3, region)
+                VALUES ('XZ', 'Тест', 'Test', 'XZZ', 'test');
+                INSERT INTO articles(id, title, url, published_at)
+                VALUES (101, 'Evidence', 'https://example.test/evidence', NOW());
+                INSERT INTO stories(id, slug, title_ru, lifecycle, first_seen, last_seen)
+                VALUES (202, 'evidence-story', 'Evidence', 'emerging', NOW(), NOW());
+                INSERT INTO signals(id, signal_type, country_code, dedup_key)
+                VALUES (303, 'test', 'XZ', 'evidence-signal');
+                INSERT INTO canonical_entities(id, kind, canonical_name, normalized_name)
+                VALUES ('00000000-0000-0000-0000-000000000099', 'event', 'Evidence', 'evidence');
+                INSERT INTO radar_observations(
+                  id, public_id, input_hash, country_code, contour, subject_key,
+                  direction, metric, observed_at, article_id, story_id, signal_id,
+                  canonical_entity_id
+                ) VALUES (
+                  404, '00000000-0000-0000-0000-000000000404',
+                  'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                  'XZ', 'media', 'event:evidence', 'negative', 'attention_share', NOW(),
+                  101, 202, 303, '00000000-0000-0000-0000-000000000099'
+                );
+                INSERT INTO radar_trends(
+                  id, public_id, scope, contour, country_code, subject_key,
+                  wave_key, title_ru, direction, state, confidence,
+                  coverage_confidence, first_observed_at, detector_version
+                ) VALUES (
+                  505, '00000000-0000-0000-0000-000000000505', 'country', 'media',
+                  'XZ', 'event:evidence', 'wave:evidence', 'Evidence', 'negative',
+                  'candidate', 0.5, 1, NOW(), 'test-v1'
+                );
+                INSERT INTO radar_trend_evidence(
+                  public_id, trend_id, observation_id, role, contribution, evidence
+                ) VALUES (
+                  '00000000-0000-0000-0000-000000000606', 505, 404,
+                  'context', 0.25, '{"decision":"preserve"}'::jsonb
+                );
+            """)
+
+        engine = create_engine(dsn)
+        Session = sessionmaker(bind=engine)
+        try:
+            with Session.begin() as session:
+                params = {
+                    "public_id": "00000000-0000-0000-0000-000000000707",
+                    "trend_id": 505,
+                    "input_hash": "a" * 64,
+                    "role": "trigger",
+                    "contribution": 1,
+                    "evidence": '{"decision":"replace"}',
+                }
+                session.execute(_INSERT_OBSERVATION_EVIDENCE, params)
+                session.execute(_INSERT_OBSERVATION_EVIDENCE, params)
+        finally:
+            engine.dispose()
+
+        with connection.cursor() as cursor:
+            cursor.execute("""
+                SELECT count(*), min(article_id), min(story_id), min(signal_id),
+                       min(canonical_entity_id::text), min(role), min(contribution),
+                       min(evidence->>'decision')
+                FROM radar_trend_evidence
+                WHERE trend_id = 505 AND observation_id = 404
+            """)
+            assert cursor.fetchone() == (
+                1, 101, 202, 303, "00000000-0000-0000-0000-000000000099",
+                "context", Decimal("0.25000"), "preserve",
+            )
+    finally:
+        connection.close()

@@ -8,7 +8,7 @@ from uuid import UUID
 import pytest
 
 from src.radar.actions import _FOSSIL, build_action_observations
-from src.radar.media import build_media_observations
+from src.radar.media import _MEDIA_ROWS, build_media_observations
 from src.radar.repository import observation_input_hash, make_observation, upsert_observations
 from src.radar.types import Contour, Observation, ObservationWindow
 
@@ -150,6 +150,25 @@ def test_media_observation_counts_publisher_families_not_feed_rows():
     assert point.publisher_family_count == 2
     assert point.article_ids == (ARTICLE_A, ARTICLE_B, ARTICLE_C)
     assert point.value == pytest.approx(1.0)
+
+
+def test_media_uses_signal_id_and_deterministic_representative_entity():
+    first_entity = UUID("00000000-0000-0000-0000-000000000010")
+    second_entity = UUID("00000000-0000-0000-0000-000000000020")
+    session = _Session(media_rows=(
+        _media_row(
+            ARTICLE_A, 10, "example.es", signal_ids=(902,),
+            entity_ids=(second_entity, first_entity),
+        ),
+    ))
+
+    point = _only(build_media_observations(session, _window()), metric="attention_share")
+
+    assert "evidence.signal_id" in str(_MEDIA_ROWS)
+    assert "evidence.id" not in str(_MEDIA_ROWS)
+    assert point.signal_id == 902
+    assert point.canonical_entity_id == first_entity
+    assert point.evidence["entity_ids"] == (str(first_entity), str(second_entity))
 
 
 def test_media_action_level_never_confirms_action_observation():

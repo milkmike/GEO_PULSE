@@ -163,6 +163,13 @@ def test_sql_evidence_copies_observation_roots_to_the_country_trend(monkeypatch)
     assert evidence_write["input_hash"] == observation.input_hash
     for root in ("article_id", "story_id", "signal_id", "canonical_entity_id"):
         assert f"observation.{root}" in evidence_sql
+        assert f"COALESCE(radar_trend_evidence.{root}, EXCLUDED.{root})" in evidence_sql
+    assert "ON CONFLICT (public_id) DO UPDATE" in evidence_sql
+    assert "prior.trend_id = :trend_id" in evidence_sql
+    assert "prior.observation_id = observation.id" in evidence_sql
+    assert "role =" not in evidence_sql.split("DO UPDATE", 1)[1]
+    assert "contribution =" not in evidence_sql.split("DO UPDATE", 1)[1]
+    assert "evidence =" not in evidence_sql.split("DO UPDATE", 1)[1]
 
 
 def test_lifecycle_uses_persisted_confirmed_state_and_timeline():

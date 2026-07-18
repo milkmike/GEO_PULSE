@@ -263,6 +263,17 @@ def test_radar_schema_is_additive_auditable_and_bootstrapped():
     assert "DELETE FROM articles" not in migration_sql
 
 
+def test_radar_evidence_root_backfill_has_unique_and_lookup_indexes():
+    migration_sql = migration("028_radar_evidence_roots.sql")
+    init_sql = (ROOT / "data" / "init.sql").read_text()
+    for sql in (migration_sql, init_sql):
+        assert "uq_radar_trend_evidence_observation" in sql
+        assert "ON radar_trend_evidence(trend_id, observation_id)" in sql
+        for root in ("article_id", "story_id", "signal_id", "canonical_entity_id"):
+            assert f"idx_radar_trend_evidence_{root}_lookup" in sql
+            assert f"WHERE {root} IS NOT NULL" in sql
+
+
 def test_google_news_publisher_attribution_orm_contract():
     from src.db import Article, ArticleDiscovery, PublisherDomain
 
