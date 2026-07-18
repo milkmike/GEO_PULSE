@@ -83,6 +83,8 @@ def test_radar_methodology_is_immutable_and_exposes_detector_contract():
     assert payload["coverage_hard_gate"]
     assert payload["action_independence"]
     assert payload["evidence_roles"] == ["trigger", "support", "context", "contradiction"]
+    assert any("temporary trend-derived proxy" in item for item in payload["limitations"])
+    assert any("collection-health snapshots" in item for item in payload["limitations"])
     assert payload["limitations"]
 
 

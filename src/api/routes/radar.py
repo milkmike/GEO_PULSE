@@ -6,16 +6,18 @@ import base64
 import binascii
 import json
 import math
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Protocol
+from urllib.parse import urlparse
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import text
 
 from src.api.public_urls import safe_public_url
-from src.db import get_session
+from src.db import SessionLocal
 from src.radar.service import DETECTOR_VERSION
 
 
@@ -49,6 +51,20 @@ class RadarReadService(Protocol):
     def coverage(self) -> dict[str, Any]: ...
 
 
+@contextmanager
+def radar_read_session():
+    """Open a dedicated public-read session that can never commit a request."""
+
+    session = SessionLocal()
+    try:
+        yield session
+    finally:
+        try:
+            session.rollback()
+        finally:
+            session.close()
+
+
 def _value(row: Any, name: str, default: Any = None) -> Any:
     if isinstance(row, dict):
         return row.get(name, default)
@@ -67,6 +83,32 @@ def _json_object(value: Any, default: Any) -> Any:
         except json.JSONDecodeError:
             return default
     return value if isinstance(value, type(default)) else default
+
+
+def _is_absolute_url(value: str) -> bool:
+    try:
+        return bool(urlparse(value).scheme)
+    except ValueError:
+        # Malformed absolute-looking values still pass through safe_public_url.
+        return ":" in value
+
+
+def sanitize_persisted_json(value: Any, *, field_name: str | None = None) -> Any:
+    """Recursively retain only safe public URLs from persisted JSON evidence."""
+
+    if isinstance(value, dict):
+        return {
+            key: sanitize_persisted_json(item, field_name=str(key))
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [sanitize_persisted_json(item, field_name=field_name) for item in value]
+    is_url_field = field_name is not None and any(
+        marker in field_name.lower() for marker in ("url", "href", "link")
+    )
+    if isinstance(value, str) and (is_url_field or _is_absolute_url(value)):
+        return safe_public_url(value)
+    return value
 
 
 def _as_iso(value: Any) -> str | None:
@@ -214,7 +256,7 @@ class SqlRadarReadService:
                 OR (state_rank = :cursor_state_rank AND velocity = :cursor_velocity AND first_observed_at < CAST(:cursor_first_observed_at AS timestamptz))
                 OR (state_rank = :cursor_state_rank AND velocity = :cursor_velocity AND first_observed_at = CAST(:cursor_first_observed_at AS timestamptz) AND public_id > CAST(:cursor_public_id AS uuid)))
             """
-        with get_session() as session:
+        with radar_read_session() as session:
             rows = session.execute(text(f"""
                 WITH ranked AS (
                   SELECT trend.*, CASE trend.state
@@ -285,7 +327,7 @@ class SqlRadarReadService:
         return {"items": items, "next_key": next_key}
 
     def trend(self, public_id: UUID) -> dict[str, Any] | None:
-        with get_session() as session:
+        with radar_read_session() as session:
             row = session.execute(text(f"""
                 SELECT trend.*, {self._wave_json('trend.id')} AS country_waves,
                        CASE WHEN trend.scope = 'country' THEN jsonb_build_object(trend.contour, jsonb_build_object('state', trend.state, 'status', 'insufficient'))
@@ -312,7 +354,7 @@ class SqlRadarReadService:
                 OR (state_rank = :cursor_state_rank AND velocity = :cursor_velocity AND first_observed_at < CAST(:cursor_first_observed_at AS timestamptz))
                 OR (state_rank = :cursor_state_rank AND velocity = :cursor_velocity AND first_observed_at = CAST(:cursor_first_observed_at AS timestamptz) AND public_id > CAST(:cursor_public_id AS uuid)))
             """
-        with get_session() as session:
+        with radar_read_session() as session:
             rows = session.execute(text(f"""
                 WITH ranked AS (
                   SELECT trend.*, CASE trend.state WHEN 'confirmed' THEN 0 WHEN 'emerging' THEN 1 WHEN 'cooling' THEN 2 WHEN 'candidate' THEN 3 WHEN 'resolved' THEN 4 ELSE 5 END AS state_rank
@@ -333,7 +375,7 @@ class SqlRadarReadService:
         if trend is None:
             return None
         trend_id = _value(trend, "id")
-        with get_session() as session:
+        with radar_read_session() as session:
             items = session.execute(text("""
                 SELECT 'state' AS kind, occurred_at AS at, to_state AS state, NULL::text AS contour, evidence
                 FROM radar_state_events WHERE trend_id = :trend_id
@@ -349,7 +391,7 @@ class SqlRadarReadService:
         if trend is None:
             return None
         params: dict[str, Any] = {"trend_id": _value(trend, "id"), "limit": limit + 1, "cursor_id": cursor["id"] if cursor else 0}
-        with get_session() as session:
+        with radar_read_session() as session:
             rows = session.execute(text("""
                 SELECT evidence.id, evidence.public_id, evidence.role, evidence.contribution, evidence.evidence,
                        COALESCE(article.title, observation.evidence->>'title', event.details->>'title') AS title,
@@ -365,7 +407,7 @@ class SqlRadarReadService:
         return {"items": items, "next_key": {"id": int(_value(items[-1], "id"))} if len(rows) > limit and items else None}
 
     def coverage(self) -> dict[str, Any]:
-        with get_session() as session:
+        with radar_read_session() as session:
             rows = session.execute(text("""
                 SELECT DISTINCT ON (country_code) country_code, coverage_confidence, updated_at
                 FROM radar_trends WHERE scope = 'country'
@@ -419,7 +461,7 @@ def get_radar_timeline(public_id: UUID, service: RadarReadService = Depends(get_
     payload = service.timeline(public_id)
     if payload is None:
         raise HTTPException(status_code=404, detail="radar trend not found")
-    return {"trend": serialize_trend(payload["trend"]), "items": [{"kind": _value(item, "kind"), "at": _as_iso(_value(item, "at")), "state": _value(item, "state"), "contour": _value(item, "contour"), "evidence": _json_object(_value(item, "evidence"), {})} for item in payload.get("items", [])]}
+    return {"trend": serialize_trend(payload["trend"]), "items": [{"kind": _value(item, "kind"), "at": _as_iso(_value(item, "at")), "state": _value(item, "state"), "contour": _value(item, "contour"), "evidence": sanitize_persisted_json(_json_object(_value(item, "evidence"), {}))} for item in payload.get("items", [])]}
 
 
 @router.get("/radar/trends/{public_id}/evidence")
@@ -437,7 +479,7 @@ def get_radar_evidence(
         role = _value(item, "role")
         if role not in {"trigger", "support", "context", "contradiction"}:
             continue
-        evidence = _json_object(_value(item, "evidence"), {})
+        evidence = sanitize_persisted_json(_json_object(_value(item, "evidence"), {}))
         items.append({"public_id": str(_value(item, "public_id")), "role": role, "contribution": _number(_value(item, "contribution")), "title": _value(item, "title"), "url": safe_public_url(_value(item, "url")), "evidence": evidence, "why_included": evidence.get("why_included") or f"{role}_evidence"})
     next_key = payload.get("next_key")
     return {"items": items, "limit": limit, "next_cursor": _encode_cursor(scope="radar_evidence", binding=binding, key=next_key) if next_key else None}
@@ -449,8 +491,8 @@ def get_radar_coverage(service: RadarReadService = Depends(get_radar_service)):
     countries = []
     for item in payload.get("countries", []):
         confidence = _number(_value(item, "coverage_confidence")) or 0.0
-        countries.append({"country_code": _value(item, "country_code"), "coverage_confidence": confidence, "state": "critical" if confidence <= 0.5 else "degraded" if confidence < 0.75 else "healthy", "blind_spots": _json_object(_value(item, "blind_spots"), [])})
-    return {"updated_at": _as_iso(payload.get("updated_at")), "countries": countries}
+        countries.append({"country_code": _value(item, "country_code"), "coverage_confidence": confidence, "state": "critical" if confidence <= 0.5 else "degraded" if confidence < 0.75 else "healthy", "blind_spots": sanitize_persisted_json(_json_object(_value(item, "blind_spots"), []))})
+    return {"updated_at": _as_iso(payload.get("updated_at")), "coverage_source": "temporary trend-derived proxy; not collection-health snapshots", "countries": countries}
 
 
 def radar_methodology_payload() -> dict[str, Any]:
@@ -465,7 +507,7 @@ def radar_methodology_payload() -> dict[str, Any]:
         "coverage_hard_gate": "coverage_confidence <= 0.5 suppresses confirmation while retaining the candidate",
         "action_independence": "analysis.action_level is media classification and never independently confirms action evidence",
         "evidence_roles": ["trigger", "support", "context", "contradiction"],
-        "limitations": ["Radar reads only persisted observations and trends.", "Insufficient action evidence remains explicitly insufficient.", "Critical collection gaps can suppress confirmation."],
+        "limitations": ["Radar reads only persisted observations and trends.", "Coverage is a temporary trend-derived proxy, not collection-health snapshots.", "Insufficient action evidence remains explicitly insufficient.", "Critical collection gaps can suppress confirmation."],
     }
 
 

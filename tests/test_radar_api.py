@@ -84,6 +84,16 @@ class FakeRadarService:
             "at": NOW,
             "state": "confirmed",
             "contour": "media",
+            "evidence": {
+                "nested_url": "https://news.example/timeline",
+                "unsafe_url": "javascript:alert(1)",
+                "credential_url": "https://user:secret@news.example/private",
+                "children": [
+                    {"href": "https://news.example/context"},
+                    {"url": "https://news.example/has whitespace"},
+                    {"url": "https://news.example/control\u0001"},
+                ],
+            },
         }]}
 
     def evidence(self, public_id, *, cursor, limit):
@@ -97,6 +107,11 @@ class FakeRadarService:
                 "title": "Безопасная ссылка",
                 "url": "https://news.example/trigger",
                 "why_included": "triggered_detection",
+                "evidence": {
+                    "chunk": {"url": "https://news.example/chunk"},
+                    "blocked": "javascript:alert(1)",
+                    "nested": [{"url": "https://news.example/clean"}],
+                },
             },
             {
                 "public_id": "3a853fac-3ac6-4a93-b0be-18f9c2aa2b6c",
@@ -105,6 +120,7 @@ class FakeRadarService:
                 "title": "Небезопасная ссылка",
                 "url": "javascript:alert(1)",
                 "why_included": "context_for_interpretation",
+                "evidence": {"url": "https://user:secret@news.example/private"},
             },
         ], "next_key": None}
 
@@ -171,6 +187,59 @@ def test_radar_routes_serialize_persisted_detail_timeline_evidence_and_coverage(
     assert evidence_items[0]["url"] == "https://news.example/trigger"
     assert evidence_items[1]["url"] is None
     assert coverage.json()["countries"][0]["state"] == "healthy"
+    assert coverage.json()["coverage_source"] == "temporary trend-derived proxy; not collection-health snapshots"
+
+
+def test_radar_recursively_sanitizes_persisted_evidence_and_timeline_urls():
+    client = _client(FakeRadarService())
+
+    timeline_evidence = client.get(f"/api/v2/radar/trends/{TREND_ID}/timeline").json()["items"][0]["evidence"]
+    evidence_items = client.get(f"/api/v2/radar/trends/{TREND_ID}/evidence").json()["items"]
+
+    assert timeline_evidence["nested_url"] == "https://news.example/timeline"
+    assert timeline_evidence["unsafe_url"] is None
+    assert timeline_evidence["credential_url"] is None
+    assert timeline_evidence["children"][0]["href"] == "https://news.example/context"
+    assert timeline_evidence["children"][1]["url"] is None
+    assert timeline_evidence["children"][2]["url"] is None
+    assert evidence_items[0]["evidence"]["chunk"]["url"] == "https://news.example/chunk"
+    assert evidence_items[0]["evidence"]["blocked"] is None
+    assert evidence_items[1]["evidence"]["url"] is None
+
+
+def test_sql_radar_read_session_rolls_back_and_closes_without_commit(monkeypatch):
+    class Rows:
+        def fetchall(self):
+            return []
+
+    class RecordingSession:
+        def __init__(self):
+            self.rollback_calls = 0
+            self.close_calls = 0
+            self.commit_calls = 0
+
+        def execute(self, statement, params=None):
+            return Rows()
+
+        def rollback(self):
+            self.rollback_calls += 1
+
+        def close(self):
+            self.close_calls += 1
+
+        def commit(self):
+            self.commit_calls += 1
+
+    session = RecordingSession()
+    monkeypatch.setattr(radar_routes, "SessionLocal", lambda: session)
+
+    assert radar_routes.SqlRadarReadService().coverage() == {
+        "updated_at": None,
+        "countries": [],
+    }
+    assert session.rollback_calls == 1
+    assert session.close_calls == 1
+    assert session.commit_calls == 0
 
 
 def test_radar_routes_reject_invalid_filters_and_return_not_found_for_missing_trends():
