@@ -46,6 +46,7 @@ class MetaTrend:
     direction: str
     waves: tuple[CountryWave, ...]
     t0_auto: datetime | None
+    meta_key: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,7 +130,7 @@ def _wave(
         direction=direction,
         observations=tuple(observations),
         first_observed_at=first,
-        t0_auto=first,
+        t0_auto=min((value for value in (first, reused.t0_auto if reused else None) if value is not None)),
         wave_key=wave_key,
         last_observed_at=last,
         state=reused.state if reused is not None else TrendState.CANDIDATE,
@@ -156,7 +157,7 @@ def assign_meta_trends(
         anchor = _wave_anchor(wave, anchors)
         grouped.setdefault((wave.subject_key, wave.direction, anchor), []).append(wave)
     meta_trends: list[MetaTrend] = []
-    for (subject, direction, _anchor), members in sorted(grouped.items()):
+    for (subject, direction, anchor), members in sorted(grouped.items()):
         ordered = tuple(sorted(members, key=lambda wave: (
             wave.country_code, wave.contour.value, wave.first_observed_at,
         )))
@@ -169,6 +170,7 @@ def assign_meta_trends(
             direction=direction,
             waves=ordered,
             t0_auto=min(t0_candidates) if t0_candidates else None,
+            meta_key=_meta_key(subject, direction, anchor),
         ))
     return MetaTrendAssignment(tuple(meta_trends))
 
@@ -196,5 +198,18 @@ def _wave_anchor(wave: CountryWave, anchors: dict[int, str]) -> str:
         int(story_id) for point in wave.observations
         for story_id in point.evidence.get("story_ids", ())
     }
-    resolved = sorted({anchors[story_id] for story_id in story_ids if story_id in anchors})
+    resolved = sorted(
+        f"story:{story_id}:{anchors[story_id]}"
+        for story_id in story_ids if story_id in anchors
+    )
     return "|".join(resolved) if resolved else wave.subject_key
+
+
+def _meta_key(subject: str, direction: str, anchor: str) -> str:
+    """A durable meta identity: canonical subject, or an explicit story anchor."""
+
+    if subject.startswith(("event:", "policy:", "diplomacy:", "economy:", "energy:")):
+        source = f"canonical:{subject}:{direction}"
+    else:
+        source = f"anchor:{anchor}:{direction}"
+    return source

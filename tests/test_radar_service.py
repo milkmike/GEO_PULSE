@@ -1,9 +1,9 @@
 from datetime import datetime, timezone
 
 from src.radar.repository import make_observation
-from src.radar.grouping import CountryWave
-from src.radar.service import _state_for, record_analyst_t0_override, run_radar_cycle
-from src.radar.types import TrendState
+from src.radar.grouping import CountryWave, MetaTrend
+from src.radar.service import _persist_meta_and_contours, _state_for, record_analyst_t0_override, run_radar_cycle
+from src.radar.types import Contour, TrendState
 
 
 AS_OF = datetime(2026, 7, 18, tzinfo=timezone.utc)
@@ -169,3 +169,51 @@ def test_analyst_meta_t0_override_is_append_only():
 
     assert any("INSERT INTO radar_t0_revisions" in sql and params["trend_id"] == 99 for sql, params in session.calls)
     assert any("UPDATE radar_trends SET t0_effective" in sql for sql, _ in session.calls)
+
+
+def _episode_wave(contour, at, wave_key):
+    observation = make_observation(
+        country_code="ES", contour=contour, subject_key="event:energy", direction="increase",
+        metric="delta", observed_at=at, evidence_ids=(f"{contour}:{wave_key}",),
+        value=1, authority="registry" if contour == "action" else None,
+        source_count=2, coverage_confidence=1, publisher_family_count=2,
+        evidence={"story_ids": (1,)},
+    )
+    return CountryWave("ES", contour, "event:energy", "increase", (observation,), at, at, wave_key=wave_key)
+
+
+def test_sql_persistence_keeps_anchor_separated_meta_keys():
+    session = _RecordingSqlSession()
+    first = _episode_wave("media", AS_OF, "first")
+    second = _episode_wave("media", AS_OF, "second")
+    metas = (
+        MetaTrend("media:coverage", "increase", (first,), AS_OF, meta_key="anchor:story:1:energy:increase"),
+        MetaTrend("media:coverage", "increase", (second,), AS_OF, meta_key="anchor:story:2:trade:increase"),
+    )
+    wave_ids = {
+        (first.country_code, first.contour, first.subject_key, first.direction, first.wave_key): 10,
+        (second.country_code, second.contour, second.subject_key, second.direction, second.wave_key): 11,
+    }
+
+    _persist_meta_and_contours(session, metas, wave_ids, AS_OF)
+
+    meta_inserts = [params for sql, params in session.calls if "INSERT INTO radar_trends" in sql]
+    assert {params["meta_key"] for params in meta_inserts} == {
+        "anchor:story:1:energy:increase", "anchor:story:2:trade:increase",
+    }
+
+
+def test_contour_alignment_pairs_each_recurrence_episode_separately():
+    session = _RecordingSqlSession()
+    first_media = _episode_wave("media", AS_OF.replace(day=1), "media-1")
+    first_action = _episode_wave("action", AS_OF.replace(day=2), "action-1")
+    second_media = _episode_wave("media", AS_OF.replace(day=25), "media-2")
+    second_action = _episode_wave("action", AS_OF.replace(day=26), "action-2")
+    meta = MetaTrend("event:energy", "increase", (first_media, first_action, second_media, second_action), AS_OF, meta_key="canonical:event:energy:increase")
+    waves = (first_media, first_action, second_media, second_action)
+    wave_ids = {(wave.country_code, wave.contour, wave.subject_key, wave.direction, wave.wave_key): index for index, wave in enumerate(waves, 1)}
+
+    _persist_meta_and_contours(session, (meta,), wave_ids, AS_OF)
+
+    links = [params for sql, params in session.calls if "INSERT INTO radar_contour_links" in sql]
+    assert {(params["media_trend_id"], params["action_trend_id"]) for params in links} == {(1, 2), (3, 4)}

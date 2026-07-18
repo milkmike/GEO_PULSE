@@ -269,7 +269,7 @@ def _persist_memory(session, observations: Iterable[Observation], waves: Iterabl
     # Meta rows preserve member-local lifecycle fields: the member itself is
     # never mutated because it participates in a cross-country grouping.
     for meta in metas:
-        identity = ("meta", meta.subject_key, meta.direction, DETECTOR_VERSION)
+        identity = ("meta", meta.subject_key, meta.meta_key, meta.direction, DETECTOR_VERSION)
         if not any(row["identity"] == identity for row in store["trends"]):
             store["trends"].append({
                 "id": len(store["trends"]) + 1, "identity": identity,
@@ -346,18 +346,19 @@ WHERE observation.input_hash = :input_hash
 """)
 
 _META_BY_IDENTITY = text("""
-SELECT id, state, confirmed_at, t0_auto, t0_effective FROM radar_trends
+SELECT id, state, confirmed_at, t0_auto, t0_effective, meta_key FROM radar_trends
 WHERE scope = 'meta' AND subject_key = :subject_key AND direction = :direction
+  AND meta_key = :meta_key
   AND detector_version = :detector_version
 """)
 
 _INSERT_META = text("""
 INSERT INTO radar_trends (
-  public_id, scope, subject_key, title_ru, direction, state, confidence,
+  public_id, scope, subject_key, meta_key, title_ru, direction, state, confidence,
   coverage_confidence, velocity, first_observed_at, detected_at, confirmed_at,
   t0_auto, t0_effective, detector_version, baseline, explanation
 ) VALUES (
-  :public_id, 'meta', :subject_key, :title_ru, :direction, :state, 1.0,
+  :public_id, 'meta', :subject_key, :meta_key, :title_ru, :direction, :state, 1.0,
   :coverage_confidence, 0, :first_observed_at, :detected_at, :confirmed_at,
   :t0_auto, :t0_effective, :detector_version, CAST(:baseline AS jsonb), CAST(:explanation AS jsonb)
 ) RETURNING id
@@ -461,7 +462,7 @@ def _persist_meta_and_contours(
     """Persist meta membership and cross-contour alignment without state edits."""
 
     for meta in metas:
-        params = {"subject_key": meta.subject_key, "direction": meta.direction, "detector_version": DETECTOR_VERSION}
+        params = {"subject_key": meta.subject_key, "meta_key": meta.meta_key, "direction": meta.direction, "detector_version": DETECTOR_VERSION}
         existing = session.execute(_META_BY_IDENTITY, params).first()
         confirmed = tuple(wave for wave in meta.waves if wave.state is TrendState.CONFIRMED)
         state = "confirmed" if len({wave.country_code for wave in confirmed}) >= 2 else "candidate"
@@ -471,7 +472,7 @@ def _persist_meta_and_contours(
         if existing is None:
             result = session.execute(_INSERT_META, {
                 **params,
-                "public_id": uuid5(NAMESPACE_URL, f"geo-pulse:radar-meta:{meta.subject_key}:{meta.direction}:{DETECTOR_VERSION}"),
+                "public_id": uuid5(NAMESPACE_URL, f"geo-pulse:radar-meta:{meta.meta_key}:{DETECTOR_VERSION}"),
                 "title_ru": meta.subject_key, "state": state,
                 "coverage_confidence": coverage,
                 "first_observed_at": min(wave.first_observed_at for wave in meta.waves),
@@ -507,33 +508,65 @@ def _persist_meta_and_contours(
                 "meta_trend_id": meta_id, "country_trend_id": country_id,
                 "evidence": json.dumps({"subject_key": meta.subject_key, "direction": meta.direction}),
             })
-    grouped: dict[tuple[str, str, str], dict[Contour, tuple[int, CountryWave]]] = {}
+    grouped: dict[tuple[str, str, str], list[tuple[int, CountryWave]]] = {}
     wave_by_identity = {
         (wave.country_code, wave.contour, wave.subject_key, wave.direction, wave.wave_key): wave
         for meta in metas for wave in meta.waves
     }
     for (country, contour, subject, direction, wave_key), trend_id in wave_ids.items():
-        grouped.setdefault((country, subject, direction), {})[contour] = (
+        grouped.setdefault((country, subject, direction), []).append((
             trend_id, wave_by_identity[(country, contour, subject, direction, wave_key)],
+        ))
+    for (country, subject, direction), members in grouped.items():
+        media_members = sorted(
+            ((trend_id, wave) for trend_id, wave in members if wave.contour is Contour.MEDIA),
+            key=lambda item: item[1].first_observed_at,
         )
-    for (country, subject, direction), contours in grouped.items():
-        media, action = contours.get(Contour.MEDIA), contours.get(Contour.ACTION)
-        if media is None or action is None:
-            continue
-        media_id, media_wave = media
-        action_id, action_wave = action
-        if media_wave.t0_auto is None or action_wave.t0_auto is None:
-            status = "insufficient"
-        elif abs(media_wave.t0_auto - action_wave.t0_auto) <= timedelta(days=14):
-            status = "aligned"
-        else:
-            status = "divergent"
-        session.execute(_UPSERT_CONTOUR_LINK, {
-            "public_id": uuid5(NAMESPACE_URL, f"geo-pulse:radar-contour:{media_id}:{action_id}"),
-            "media_trend_id": media_id, "action_trend_id": action_id,
-            "status": status, "evidence": json.dumps({"country_code": country, "subject_key": subject, "direction": direction}),
-            "evaluated_at": as_of,
-        })
+        remaining_actions = sorted(
+            ((trend_id, wave) for trend_id, wave in members if wave.contour is Contour.ACTION),
+            key=lambda item: item[1].first_observed_at,
+        )
+        for media_id, media_wave in media_members:
+            candidates = [
+                (episode_distance(media_wave, action_wave), action_id, action_wave)
+                for action_id, action_wave in remaining_actions
+            ]
+            candidates = [candidate for candidate in candidates if candidate[0] <= timedelta(days=14)]
+            if not candidates:
+                continue
+            _, action_id, action_wave = min(candidates, key=lambda candidate: (candidate[0], candidate[2].first_observed_at, candidate[1]))
+            remaining_actions.remove((action_id, action_wave))
+            _persist_contour_link(session, country, subject, direction, media_id, media_wave, action_id, action_wave, as_of)
+
+
+def episode_distance(left: CountryWave, right: CountryWave) -> timedelta:
+    """Zero for overlap, otherwise the gap between two bounded episodes."""
+
+    left_end = left.last_observed_at or left.first_observed_at
+    right_end = right.last_observed_at or right.first_observed_at
+    if left.first_observed_at <= right_end and right.first_observed_at <= left_end:
+        return timedelta()
+    if left_end < right.first_observed_at:
+        return right.first_observed_at - left_end
+    return left.first_observed_at - right_end
+
+
+def _persist_contour_link(
+    session, country: str, subject: str, direction: str, media_id: int,
+    media_wave: CountryWave, action_id: int, action_wave: CountryWave, as_of: datetime,
+) -> None:
+    if media_wave.t0_auto is None or action_wave.t0_auto is None:
+        status = "insufficient"
+    elif abs(media_wave.t0_auto - action_wave.t0_auto) <= timedelta(days=14):
+        status = "aligned"
+    else:
+        status = "divergent"
+    session.execute(_UPSERT_CONTOUR_LINK, {
+        "public_id": uuid5(NAMESPACE_URL, f"geo-pulse:radar-contour:{media_id}:{action_id}"),
+        "media_trend_id": media_id, "action_trend_id": action_id,
+        "status": status, "evidence": json.dumps({"country_code": country, "subject_key": subject, "direction": direction}),
+        "evaluated_at": as_of,
+    })
 
 
 def _insert_state_event(

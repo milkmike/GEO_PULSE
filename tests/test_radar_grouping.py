@@ -91,6 +91,20 @@ def test_moving_replay_window_keeps_previous_active_wave_identity():
     assert replay.waves[0].wave_key == first.wave_key
 
 
+def test_moving_replay_window_keeps_original_automatic_t0():
+    first = assign_country_waves([
+        _observation("ES", at=DAY_1),
+        _observation("ES", at=DAY_1 + timedelta(days=10)),
+    ], []).waves[0]
+
+    replay = assign_country_waves([
+        _observation("ES", at=DAY_1 + timedelta(days=10)),
+        _observation("ES", at=DAY_1 + timedelta(days=20)),
+    ], [first]).waves[0]
+
+    assert replay.t0_auto == DAY_1
+
+
 def test_meta_t0_uses_earliest_confirmed_member_only():
     candidate = _wave("ES", t0=DAY_1)
     candidate = CountryWave(
@@ -124,3 +138,4 @@ def test_story_event_anchors_prevent_generic_subject_merge():
     result = assign_meta_trends(waves, [{"id": 1, "event_key": "energy"}, {"id": 2, "event_key": "trade"}])
 
     assert len(result.meta_trends) == 2
+    assert len({meta.meta_key for meta in result.meta_trends}) == 2
