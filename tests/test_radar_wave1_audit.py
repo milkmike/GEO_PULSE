@@ -139,6 +139,22 @@ def test_compare_reports_fails_when_public_get_snapshot_changes():
     assert "public_get_wrote_rows" in {failure["code"] for failure in comparison["failures"]}
 
 
+def test_after_gate_rejects_protected_updates_during_bounded_apply():
+    before = _report(phase="before")
+    after = _report(phase="after")
+    after["write_activity"]["articles"]["stats"]["n_tup_upd"] += 1
+    # The public-GET baseline is intentionally captured after apply, so it can
+    # remain unchanged while the apply itself mutated a protected table.
+    after["public_get_write_verification"]["status"] = "unchanged"
+
+    comparison = audit.compare_reports(before, after, evidence_minimum=0.95)
+
+    assert comparison["passed"] is False
+    assert "protected_write_activity_changed" in {
+        failure["code"] for failure in comparison["failures"]
+    }
+
+
 @pytest.mark.parametrize("mutation", ("count", "counter"))
 def test_shadow_replay_must_leave_radar_tables_and_write_counters_unchanged(mutation):
     before = _report(phase="before")

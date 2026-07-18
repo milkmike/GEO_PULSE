@@ -1082,6 +1082,23 @@ def compare_reports(
                 _failure("write_activity_unavailable", f"PostgreSQL write counters are unavailable for {table}.", table=table)
             )
 
+    if phase == "after" and before is not None:
+        before_activity = before.get("write_activity", {})
+        changed_protected = sorted(
+            table
+            for table in PROTECTED_TABLES
+            if not isinstance(before_activity, Mapping)
+            or before_activity.get(table) != write_activity.get(table)
+        )
+        if changed_protected:
+            failures.append(
+                _failure(
+                    "protected_write_activity_changed",
+                    "Bounded Radar apply changed a protected table or its PostgreSQL stats identity.",
+                    changed_tables=changed_protected,
+                )
+            )
+
     if phase == "shadow" and before is not None:
         before_radar_tables = before.get("radar", {}).get("tables", {})
         current_radar_tables = radar.get("tables", {})
