@@ -6,7 +6,7 @@
 
 **Architecture:** Add an isolated `src/radar` domain beside existing stories, signals, Thermometer, and RRI. Background workers read current immutable evidence, persist versioned observations and trend state, and public GET routes only read saved results. Existing product tables and formulas remain untouched; all schema is additive and every trend decision is replayable.
 
-**Tech Stack:** Python 3.12, FastAPI, SQLAlchemy 2, PostgreSQL/TimescaleDB, pgvector, River 0.25.0, ruptures 1.1.10, Next.js/React/TypeScript, Plotly, pytest, Vitest.
+**Tech Stack:** Python 3.12, FastAPI, SQLAlchemy 2, PostgreSQL/TimescaleDB, pgvector, River 0.23.0, ruptures 1.1.10, Next.js/React/TypeScript, Plotly, pytest, Vitest.
 
 ## Global Constraints
 
@@ -211,7 +211,7 @@ Expected: FAIL because `src.radar` does not exist.
 Append to `requirements-temperature.txt`:
 
 ```text
-river==0.25.0
+river==0.23.0
 ruptures==1.1.10
 ```
 
