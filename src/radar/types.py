@@ -5,7 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import Enum
-from typing import Optional
+from types import MappingProxyType
+from typing import Mapping, Optional
+from uuid import UUID
+import re
 
 
 class Contour(str, Enum):
@@ -26,6 +29,71 @@ class CoverageGate(str, Enum):
     HEALTHY = "healthy"
     DEGRADED = "degraded"
     CRITICAL = "critical"
+
+
+@dataclass(frozen=True, slots=True)
+class ObservationWindow:
+    """The exact half-open source interval used to produce an observation."""
+
+    start: datetime
+    end: datetime
+
+    def __post_init__(self) -> None:
+        _require_aware(self.start, "start")
+        _require_aware(self.end, "end")
+        if self.start > self.end:
+            raise ValueError("start must not be after end")
+
+
+@dataclass(frozen=True, slots=True)
+class Observation:
+    """Immutable normalized evidence suitable for ``radar_observations``."""
+
+    public_id: UUID
+    input_hash: str
+    country_code: str
+    contour: Contour
+    subject_key: str
+    direction: str
+    metric: str
+    observed_at: datetime
+    window: ObservationWindow | None
+    value: float | None
+    publisher_family_count: int = 0
+    source_count: int = 0
+    coverage_confidence: float = 0.0
+    authority: str | None = None
+    article_id: int | None = None
+    story_id: int | None = None
+    signal_id: int | None = None
+    canonical_entity_id: UUID | None = None
+    baseline: Mapping[str, object] = field(default_factory=dict)
+    evidence: Mapping[str, object] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "contour", Contour(self.contour))
+        if not re.fullmatch(r"[0-9a-f]{64}", self.input_hash):
+            raise ValueError("input_hash must be a 64-character lowercase hex SHA-256")
+        if not re.fullmatch(r"[A-Z]{2}", self.country_code):
+            raise ValueError("country_code must be a two-letter uppercase code")
+        _require_aware(self.observed_at, "observed_at")
+        if self.publisher_family_count < 0 or self.source_count < 0:
+            raise ValueError("source counts must be non-negative")
+        _bounded(self.coverage_confidence, "coverage_confidence")
+        object.__setattr__(self, "baseline", MappingProxyType(dict(self.baseline)))
+        object.__setattr__(self, "evidence", MappingProxyType(dict(self.evidence)))
+
+    @property
+    def article_ids(self) -> tuple[int, ...]:
+        """Exact contributing articles retained in immutable evidence JSON."""
+
+        return tuple(self.evidence.get("article_ids", ()))  # type: ignore[arg-type]
+
+    @property
+    def story_ids(self) -> tuple[int, ...]:
+        """Exact contributing stories retained in immutable evidence JSON."""
+
+        return tuple(self.evidence.get("story_ids", ()))  # type: ignore[arg-type]
 
 
 def _require_aware(value: datetime, field: str) -> None:
