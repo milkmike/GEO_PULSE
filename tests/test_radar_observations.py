@@ -272,6 +272,12 @@ def test_media_uses_signal_foreign_key_not_signal_evidence_row_id():
     assert point.evidence["entity_ids"] == (str(first_entity), str(second_entity))
 
 
+def test_media_query_excludes_articles_collected_after_replay_cutoff():
+    sql = str(_MEDIA_ROWS)
+
+    assert "a.collected_at < :window_end" in sql
+
+
 def test_media_action_level_never_confirms_action_observation():
     session = _Session(media_rows=(
         _media_row(ARTICLE_A, 10, "example.es", action_level=6),

@@ -127,7 +127,7 @@ def test_release_metrics_exclude_detector_context_before_exact_90_day_window(mon
         direction="negative", metric="attention_share",
         observed_at=AS_OF - timedelta(days=95),
         evidence_ids=("opaque:context",), value=0.1,
-        publisher_family_count=2, source_count=2, coverage_confidence=1.0,
+        publisher_family_count=2, source_count=2, coverage_confidence=0.2,
         evidence={},
     )
     audited = _media_point(
@@ -145,6 +145,7 @@ def test_release_metrics_exclude_detector_context_before_exact_90_day_window(mon
         "total": 1, "valid": 1, "invalid": 0, "ratio": 1.0,
     }
     assert report.evidence_completeness == {"complete": 1, "incomplete": 0}
+    assert report.country_coverage == {"ES": 1.0}
 
 
 def test_replay_prefers_corrected_richer_observation_without_double_count(monkeypatch):
@@ -690,6 +691,7 @@ def test_independent_media_health_uses_verified_non_duplicate_country_articles()
     assert "is_duplicate = FALSE" in session.sql
     assert "is_backfill = FALSE" in session.sql
     assert "collected_at <= article.published_at + INTERVAL '24 hours'" in session.sql
+    assert "article.collected_at < :window_end" in session.sql
     assert "AT TIME ZONE 'UTC'" in session.sql
     assert "analysis" not in session.sql
     assert "is_relevant" not in session.sql
@@ -833,6 +835,21 @@ def test_analyst_meta_t0_override_is_append_only():
 
     assert any("INSERT INTO radar_t0_revisions" in sql and params["trend_id"] == 99 for sql, params in session.calls)
     assert any("UPDATE radar_trends SET t0_effective" in sql for sql, _ in session.calls)
+
+
+def test_analyst_t0_override_rejects_future_or_post_detection_time():
+    session = _Session()
+    session.radar_store["trends"].append({
+        "id": 99,
+        "t0_effective": ANALYST_T0,
+        "detected_at": AS_OF - timedelta(days=2),
+        "confirmed_at": AS_OF - timedelta(days=1),
+    })
+
+    with pytest.raises(ValueError, match="not be later"):
+        record_analyst_t0_override(
+            session, 99, AS_OF + timedelta(days=1), "future override",
+        )
 
 
 def _episode_wave(contour, at, wave_key):
@@ -1054,7 +1071,7 @@ def test_meta_persistence_uses_prior_state_to_prevent_lifecycle_regression():
     class _ExistingMetaSession(_RecordingSqlSession):
         def execute(self, statement, params=None):
             sql = str(statement)
-            if "scope = 'meta'" in sql and "SELECT id, state" in sql:
+            if "scope = 'meta'" in sql and "has_analyst_t0_override" in sql:
                 self.calls.append((sql, params or {}))
                 return _Result(rows=[{
                     "id": 99,
@@ -1163,6 +1180,116 @@ def test_meta_lifecycle_does_not_regress_after_cooling():
     )
 
     assert service._meta_state(meta, TrendState.COOLING) is TrendState.COOLING
+
+
+def test_terminal_meta_reopens_when_two_countries_confirm_a_new_wave():
+    import src.radar.service as service
+
+    waves = tuple(
+        replace(
+            _episode_wave("media", AS_OF, f"confirmed-{country}"),
+            country_code=country,
+            state=TrendState.CONFIRMED,
+            detected_at=AS_OF - timedelta(days=2),
+            confirmed_at=AS_OF - timedelta(days=1),
+        )
+        for country in ("ES", "PT")
+    )
+    meta = MetaTrend(
+        "event:energy", "increase", waves, AS_OF,
+        meta_key="canonical:event:energy:increase",
+    )
+
+    assert service._meta_state(meta, TrendState.RESOLVED) is TrendState.CONFIRMED
+
+
+def test_confirmed_meta_accepts_independent_member_analyst_t0_overrides():
+    import src.radar.service as service
+
+    waves = tuple(
+        replace(
+            _episode_wave("media", AS_OF - timedelta(days=2), f"override-{country}"),
+            country_code=country,
+            state=TrendState.CONFIRMED,
+            detected_at=AS_OF - timedelta(days=2),
+            confirmed_at=AS_OF - timedelta(days=1),
+            t0_auto=None,
+            t0_effective=ANALYST_T0,
+            has_analyst_t0_override=True,
+        )
+        for country in ("ES", "PT")
+    )
+    meta = MetaTrend(
+        "event:energy", "increase", waves, None,
+        meta_key="canonical:event:energy:increase",
+    )
+
+    sanity = service._t0_sanity(
+        waves, (meta,), (TrendState.CONFIRMED,),
+    )
+
+    assert sanity["violations"] == 0
+
+
+def test_t0_sanity_rejects_chronologically_impossible_analyst_override():
+    import src.radar.service as service
+
+    wave = replace(
+        _episode_wave("media", AS_OF - timedelta(days=2), "future-t0"),
+        state=TrendState.CONFIRMED,
+        detected_at=AS_OF - timedelta(days=2),
+        confirmed_at=AS_OF - timedelta(days=1),
+        t0_auto=None,
+        t0_effective=AS_OF + timedelta(days=1),
+        has_analyst_t0_override=True,
+    )
+
+    sanity = service._t0_sanity((wave,), (), as_of=AS_OF)
+
+    assert sanity["violations"] == 1
+
+
+def test_persisted_meta_analyst_override_is_honoured_by_release_sanity():
+    import src.radar.service as service
+
+    waves = tuple(
+        replace(
+            _episode_wave("media", AS_OF - timedelta(days=2), f"persisted-{country}"),
+            country_code=country,
+            state=TrendState.CONFIRMED,
+            detected_at=AS_OF - timedelta(days=2),
+            confirmed_at=AS_OF - timedelta(days=1),
+            t0_auto=ANALYST_T0,
+            t0_effective=ANALYST_T0,
+        )
+        for country in ("ES", "PT")
+    )
+    meta = MetaTrend(
+        "event:energy", "increase", waves, None,
+        meta_key="canonical:event:energy:increase",
+    )
+    session = _Session()
+    session.radar_store["trends"].append({
+        "id": 99,
+        "identity": (
+            "meta", meta.subject_key, meta.meta_key, meta.direction,
+            service.DETECTOR_VERSION,
+        ),
+        "state": TrendState.CONFIRMED.value,
+        "t0_auto": None,
+        "t0_effective": ANALYST_T0,
+    })
+    session.radar_store["revisions"].append({
+        "trend_id": 99, "revision_kind": "analyst",
+    })
+
+    contexts = service._previous_meta_contexts(session, (meta,))
+    sanity = service._t0_sanity(
+        waves, (meta,), (TrendState.CONFIRMED,),
+        meta_contexts=contexts, as_of=AS_OF,
+    )
+
+    assert sanity["violations"] == 0
 
 
 def test_shadow_report_uses_persisted_meta_state_for_monotonic_lifecycle(monkeypatch):

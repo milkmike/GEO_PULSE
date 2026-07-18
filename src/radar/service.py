@@ -86,6 +86,7 @@ JOIN sources publisher ON publisher.id = fact.id
 WHERE article.is_duplicate = FALSE
   AND article.is_backfill = FALSE
   AND article.collected_at <= article.published_at + INTERVAL '24 hours'
+  AND article.collected_at < :window_end
   AND article.published_at >= :window_start
   AND article.published_at < :window_end
 """)
@@ -160,6 +161,14 @@ class RadarCycleReport:
             "country_wave_count": len(self.country_waves),
             "meta_trend_count": len(self.meta_trends),
         }
+
+
+@dataclass(frozen=True, slots=True)
+class _PreviousMetaContext:
+    state: TrendState
+    t0_auto: datetime | None
+    t0_effective: datetime | None
+    has_analyst_t0_override: bool
 
 
 def _utc(value: datetime) -> datetime:
@@ -929,7 +938,14 @@ def _persist_observation_evidence(
 
 
 _META_BY_IDENTITY = text("""
-SELECT id, state, confirmed_at, t0_auto, t0_effective, meta_key FROM radar_trends
+SELECT trend.id, trend.state, trend.confirmed_at, trend.t0_auto,
+       trend.t0_effective, trend.meta_key,
+       EXISTS (
+         SELECT 1 FROM radar_t0_revisions revision
+         WHERE revision.trend_id = trend.id
+           AND revision.revision_kind = 'analyst'
+       ) AS has_analyst_t0_override
+FROM radar_trends trend
 WHERE scope = 'meta' AND subject_key = :subject_key AND direction = :direction
   AND meta_key = :meta_key
   AND detector_version = :detector_version
@@ -1369,7 +1385,10 @@ def _meta_state(
     if previous_state is None:
         return current
     previous = TrendState(previous_state)
-    if previous in (TrendState.RESOLVED, TrendState.REJECTED):
+    if (
+        previous in (TrendState.RESOLVED, TrendState.REJECTED)
+        and current not in (TrendState.EMERGING, TrendState.CONFIRMED)
+    ):
         return previous
     if previous is TrendState.COOLING and current is not TrendState.RESOLVED:
         return TrendState.COOLING
@@ -1386,18 +1405,26 @@ def _meta_identity(meta: MetaTrend) -> tuple[str, str, str]:
     return meta.subject_key, meta.meta_key, meta.direction
 
 
-def _previous_meta_states(
+def _previous_meta_contexts(
     session, metas: tuple[MetaTrend, ...],
-) -> dict[tuple[str, str, str], TrendState]:
+) -> dict[tuple[str, str, str], _PreviousMetaContext]:
     store = _store(session)
     if store is not None:
-        previous: dict[tuple[str, str, str], TrendState] = {}
+        previous: dict[tuple[str, str, str], _PreviousMetaContext] = {}
         for row in store["trends"]:
             identity = row.get("identity", ())
             if len(identity) != 5 or identity[0] != "meta":
                 continue
-            previous[(identity[1], identity[2], identity[3])] = TrendState(
-                row["state"]
+            has_override = any(
+                revision.get("trend_id") == row.get("id")
+                and revision.get("revision_kind") == "analyst"
+                for revision in store["revisions"]
+            )
+            previous[(identity[1], identity[2], identity[3])] = _PreviousMetaContext(
+                state=TrendState(row["state"]),
+                t0_auto=row.get("t0_auto"),
+                t0_effective=row.get("t0_effective"),
+                has_analyst_t0_override=has_override,
             )
         return previous
 
@@ -1411,7 +1438,14 @@ def _previous_meta_states(
         }
         row = session.execute(_META_BY_IDENTITY, params).first()
         if row is not None:
-            previous[_meta_identity(meta)] = TrendState(_row_value(row, "state"))
+            previous[_meta_identity(meta)] = _PreviousMetaContext(
+                state=TrendState(_row_value(row, "state")),
+                t0_auto=_row_value(row, "t0_auto"),
+                t0_effective=_row_value(row, "t0_effective"),
+                has_analyst_t0_override=bool(
+                    _row_value(row, "has_analyst_t0_override", False)
+                ),
+            )
     return previous
 
 
@@ -1467,6 +1501,9 @@ def _collector_suppressed(waves: Iterable[CountryWave]) -> int:
 def _t0_sanity(
     waves: tuple[CountryWave, ...], metas: tuple[MetaTrend, ...],
     meta_states: tuple[TrendState, ...] | None = None,
+    *,
+    meta_contexts: dict[tuple[str, str, str], _PreviousMetaContext] | None = None,
+    as_of: datetime | None = None,
 ) -> dict[str, int]:
     entries: list[tuple[TrendState, datetime | None, datetime | None, datetime | None, datetime | None, bool]] = [
         (
@@ -1482,7 +1519,27 @@ def _t0_sanity(
     for index, meta in enumerate(metas):
         state = meta_states[index] if meta_states is not None else _meta_state(meta)
         detected, confirmed = _meta_timeline(meta, state)
-        entries.append((state, meta.t0_auto, meta.t0_auto, detected, confirmed, False))
+        effective_t0 = meta.t0_auto
+        inherited_analyst_override = False
+        context = (meta_contexts or {}).get(_meta_identity(meta))
+        if context is not None and context.has_analyst_t0_override:
+            effective_t0 = context.t0_effective
+            inherited_analyst_override = effective_t0 is not None
+        elif state is TrendState.CONFIRMED and meta.t0_auto is None:
+            member_overrides = {
+                wave.country_code: wave.t0_effective
+                for wave in meta.waves
+                if wave.state is TrendState.CONFIRMED
+                and wave.has_analyst_t0_override
+                and wave.t0_effective is not None
+            }
+            if len(member_overrides) >= 2:
+                effective_t0 = min(member_overrides.values())
+                inherited_analyst_override = True
+        entries.append((
+            state, meta.t0_auto, effective_t0, detected, confirmed,
+            inherited_analyst_override,
+        ))
     automatic = sum(t0_auto is not None for _, t0_auto, _, _, _, _ in entries)
     violations = sum(
         (
@@ -1495,6 +1552,17 @@ def _t0_sanity(
         ) or (
             t0_effective is not None and t0_auto is None
             and not has_analyst_override
+        ) or (
+            t0_effective is not None and detected_at is not None
+            and t0_effective > detected_at
+        ) or (
+            t0_effective is not None and confirmed_at is not None
+            and t0_effective > confirmed_at
+        ) or (
+            as_of is not None and (
+                (t0_auto is not None and t0_auto > as_of)
+                or (t0_effective is not None and t0_effective > as_of)
+            )
         )
         for (
             state, t0_auto, t0_effective, detected_at, confirmed_at,
@@ -1564,9 +1632,13 @@ def run_radar_cycle(session, as_of: datetime, shadow: bool = True, *, days: int 
     )
     metas = assign_meta_trends(scored_waves, _story_anchors(session, as_of))
     state_counts = _state_distribution(wave.state for wave in scored_waves)
-    previous_meta_states = _previous_meta_states(session, metas.meta_trends)
+    previous_meta_contexts = _previous_meta_contexts(session, metas.meta_trends)
     meta_states = tuple(
-        _meta_state(meta, previous_meta_states.get(_meta_identity(meta)))
+        _meta_state(
+            meta,
+            previous_meta_contexts.get(_meta_identity(meta)).state
+            if _meta_identity(meta) in previous_meta_contexts else None,
+        )
         for meta in metas.meta_trends
     )
     meta_state_counts = _state_distribution(meta_states)
@@ -1591,7 +1663,7 @@ def run_radar_cycle(session, as_of: datetime, shadow: bool = True, *, days: int 
         as_of=as_of, shadow=shadow, inserted_observations=inserted, updated_trends=updated,
         country_waves=scored_waves, meta_trends=metas.meta_trends, trend_id=trend_id,
         state_counts=state_counts, collector_suppressed=collector_suppressed,
-        country_coverage=_coverage(observations),
+        country_coverage=_coverage(audited_observations),
         t0_distribution={"automatic": t0_count, "unresolved": len(scored_waves) - t0_count},
         evidence_completeness={
             "complete": evidence_complete,
@@ -1604,7 +1676,10 @@ def run_radar_cycle(session, as_of: datetime, shadow: bool = True, *, days: int 
         meta_state_counts=meta_state_counts,
         evidence_validity=evidence_validity,
         confirmed_below_coverage_gate=confirmed_below_coverage_gate,
-        t0_sanity=_t0_sanity(scored_waves, metas.meta_trends, meta_states),
+        t0_sanity=_t0_sanity(
+            scored_waves, metas.meta_trends, meta_states,
+            meta_contexts=previous_meta_contexts, as_of=as_of,
+        ),
         contour_completeness=_contour_completeness(scored_waves),
     )
 
@@ -1613,17 +1688,44 @@ def record_analyst_t0_override(session, trend_id: int, revised_t0: datetime, rea
     """Append an analyst decision and set the current effective T0 once."""
 
     revised_t0 = _utc(revised_t0)
+    if not reason.strip():
+        raise ValueError("analyst T0 override reason must not be empty")
     store = _store(session)
     if store is not None:
         trend = trend_by_id(session, trend_id)
         if trend is None:
             raise ValueError("unknown radar trend")
+        limits = [
+            value for value in (
+                trend.get("detected_at"), trend.get("confirmed_at"),
+                datetime.now(timezone.utc),
+            )
+            if isinstance(value, datetime)
+        ]
+        if any(revised_t0 > _utc(limit) for limit in limits):
+            raise ValueError(
+                "analyst T0 override must not be later than detection, confirmation, or current time"
+            )
         store["revisions"].append({"trend_id": trend_id, "previous_t0": trend["t0_effective"], "revised_t0": revised_t0, "revision_kind": "analyst", "reason": reason, "revised_by": revised_by})
         trend["t0_effective"] = revised_t0
         return
-    row = session.execute(text("SELECT t0_effective FROM radar_trends WHERE id = :id"), {"id": trend_id}).first()
+    row = session.execute(text("""
+        SELECT t0_effective, detected_at, confirmed_at
+        FROM radar_trends WHERE id = :id
+    """), {"id": trend_id}).first()
     if row is None:
         raise ValueError("unknown radar trend")
+    limits = [
+        value for value in (
+            _row_value(row, "detected_at"), _row_value(row, "confirmed_at"),
+            datetime.now(timezone.utc),
+        )
+        if isinstance(value, datetime)
+    ]
+    if any(revised_t0 > _utc(limit) for limit in limits):
+        raise ValueError(
+            "analyst T0 override must not be later than detection, confirmation, or current time"
+        )
     previous = _row_value(row, "t0_effective")
     session.execute(text("""
         INSERT INTO radar_t0_revisions (public_id, trend_id, previous_t0, revised_t0, revision_kind, reason, evidence, revised_by)

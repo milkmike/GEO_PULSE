@@ -38,6 +38,7 @@ _MEDIA_ROWS = text("""
     WHERE a.is_duplicate = FALSE
       AND a.published_at >= :window_start
       AND a.published_at < :window_end
+      AND a.collected_at < :window_end
 """)
 
 
