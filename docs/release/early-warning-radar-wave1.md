@@ -99,6 +99,97 @@ restart_writers() {
   test -z "$running_writers" || docker compose start $running_writers >/dev/null
 }
 
+write_stats_signature() {
+  docker compose exec -T db psql -U thermo -d cis_thermometer -X -Atqc "
+    WITH RECURSIVE watched(name) AS (VALUES
+      ('articles'), ('analysis'), ('temperature'), ('ru_index'),
+      ('signals'), ('briefs'), ('threads'), ('thread_articles'),
+      ('stories'), ('story_articles'), ('radar_observations'),
+      ('action_events'), ('radar_trends'), ('radar_trend_members'),
+      ('radar_trend_evidence'), ('radar_state_events'),
+      ('radar_t0_revisions'), ('radar_contour_links'),
+      ('analysis_runs'), ('notification_events')
+    ), roots(name, relid) AS (
+      SELECT name, pg_catalog.to_regclass(
+        pg_catalog.format('%I.%I', 'public', name)
+      )::oid
+      FROM watched
+    ), relations(name, relid) AS (
+      SELECT name, relid FROM roots WHERE relid IS NOT NULL
+      UNION
+      SELECT parent.name, inheritance.inhrelid
+      FROM relations parent
+      JOIN pg_catalog.pg_inherits inheritance
+        ON inheritance.inhparent = parent.relid
+    ), aggregated AS (
+      SELECT root.name,
+             (root.relid IS NULL OR
+              count(relation.relid) <> count(table_stats.relid))::integer AS missing,
+             COALESCE(sum(table_stats.n_tup_ins), 0)::bigint AS inserted,
+             COALESCE(sum(table_stats.n_tup_upd), 0)::bigint AS updated,
+             COALESCE(sum(table_stats.n_tup_del), 0)::bigint AS deleted
+      FROM roots root
+      LEFT JOIN relations relation ON relation.name = root.name
+      LEFT JOIN pg_catalog.pg_stat_all_tables table_stats
+        ON table_stats.relid = relation.relid
+      GROUP BY root.name, root.relid
+    ), database_identity AS (
+      SELECT COALESCE(database_stats.stats_reset,
+                      pg_catalog.pg_postmaster_start_time())::text AS value
+      FROM pg_catalog.pg_stat_database database_stats
+      WHERE database_stats.datname = pg_catalog.current_database()
+    ), activity AS (
+      SELECT count(*) AS active_xids
+      FROM pg_catalog.pg_stat_activity
+      WHERE datname = pg_catalog.current_database()
+        AND pid <> pg_catalog.pg_backend_pid()
+        AND backend_xid IS NOT NULL
+    ), prepared AS (
+      SELECT count(*) AS prepared_xacts
+      FROM pg_catalog.pg_prepared_xacts
+      WHERE database = pg_catalog.current_database()
+    )
+    SELECT count(*) FILTER (WHERE missing <> 0) || '|' ||
+           (SELECT active_xids FROM activity) || '|' ||
+           (SELECT prepared_xacts FROM prepared) || '|' ||
+           (SELECT value FROM database_identity) || '|' ||
+           pg_catalog.md5(pg_catalog.string_agg(
+             pg_catalog.format('%s:%s:%s:%s', name, inserted, updated, deleted),
+             '|' ORDER BY name
+           ))
+    FROM aggregated
+  "
+}
+
+wait_for_write_stats_quiescence() {
+  previous=""
+  initial_reset=""
+  stable_samples=0
+  for attempt in $(seq 1 30); do
+    current="$(write_stats_signature)"
+    IFS='|' read -r missing active_xids prepared_xacts reset_identity counters <<< "$current"
+    test -n "$counters" || return 1
+    test -n "$reset_identity" || return 1
+    test "$missing" = 0 || return 1
+    if test -n "$initial_reset" && test "$reset_identity" != "$initial_reset"; then
+      return 1
+    fi
+    initial_reset="${initial_reset:-$reset_identity}"
+    if test "$active_xids" != 0 || test "$prepared_xacts" != 0; then
+      previous=""
+      stable_samples=0
+    elif test "$current" = "$previous"; then
+      stable_samples=$((stable_samples + 1))
+    else
+      previous="$current"
+      stable_samples=1
+    fi
+    test "$stable_samples" -ge 3 && return 0
+    sleep 2
+  done
+  return 1
+}
+
 fail_closed() {
   status=$?
   trap - EXIT HUP INT TERM
@@ -115,6 +206,10 @@ fail_closed() {
 
 trap 'fail_closed' EXIT HUP INT TERM
 test -z "$running_writers" || docker compose stop $running_writers
+active_services="$(docker compose ps --status running --services)"
+active_writers="$(printf '%s\n' "$active_services" | grep -E "^($(printf '%s' "$candidates" | tr ' ' '|'))$" || true)"
+test -z "$active_writers"
+wait_for_write_stats_quiescence
 RADAR_AS_OF="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
 
 radar_run() {
@@ -127,7 +222,8 @@ radar_run python scripts/audit_radar_wave1.py \
   --phase before --json --out "/app/$RELEASE_DIR/authoritative-before.json"
 
 # Exactly 90 days, no persistence; the audit validates the enriched replay contract.
-radar_run sh -c "umask 077; exec python scripts/build_radar.py --shadow --days 90 --as-of '$RADAR_AS_OF' --json-report '/app/$RELEASE_DIR/shadow-replay.json'"
+radar_run sh -c "umask 077; export PGOPTIONS='-c default_transaction_read_only=on -c lock_timeout=30s'; exec python scripts/build_radar.py --shadow --days 90 --as-of '$RADAR_AS_OF' --json-report '/app/$RELEASE_DIR/shadow-replay.json'"
+wait_for_write_stats_quiescence
 radar_run python scripts/audit_radar_wave1.py \
   --phase shadow \
   --compare "/app/$RELEASE_DIR/authoritative-before.json" \
@@ -139,6 +235,7 @@ radar_run python scripts/audit_radar_wave1.py \
 radar_run sh -c "umask 077; exec python scripts/build_radar.py --apply --days 90 --as-of '$RADAR_AS_OF' --json-report '/app/$RELEASE_DIR/bounded-apply.json'"
 radar_run python -c "import json; from scripts.audit_radar_wave1 import validate_replay_report; validate_replay_report(json.load(open('/app/$RELEASE_DIR/bounded-apply.json', encoding='utf-8')), expected_shadow=False)"
 docker compose stop radar-worker >/dev/null 2>&1 || true
+wait_for_write_stats_quiescence
 
 # Fresh PostgreSQL write-counter and exact row snapshot after apply, before any GET.
 radar_run python scripts/audit_radar_wave1.py \
@@ -154,7 +251,7 @@ test -n "$trend_id" && test -n "$country" && test -n "$story_id" && test -n "$si
 for path in "/api/v2/radar?limit=1" "/api/v2/radar/trends/$trend_id" "/api/v2/radar/trends/$trend_id/timeline" "/api/v2/radar/trends/$trend_id/evidence?limit=10" "/api/v2/countries/$country/radar?limit=1" "/api/v2/radar/coverage" "/api/v2/methodology/radar"; do
   curl -fsS -o /dev/null "http://127.0.0.1:8100$path"
 done
-sleep 2
+wait_for_write_stats_quiescence
 radar_run python scripts/audit_radar_wave1.py \
   --phase after \
   --compare "/app/$RELEASE_DIR/authoritative-before.json" \
@@ -186,7 +283,7 @@ printf '%s\n' \
 read -r -p 'After all seven pages render feature-specific content, type BROWSER_SMOKE_PASSED: ' browser_gate
 test "$browser_gate" = BROWSER_SMOKE_PASSED
 
-sleep 2
+wait_for_write_stats_quiescence
 radar_run python scripts/audit_radar_wave1.py \
   --phase after \
   --compare "/app/$RELEASE_DIR/authoritative-before.json" \

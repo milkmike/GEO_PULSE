@@ -893,9 +893,37 @@ def _write_activity_snapshot(
             connection,
             """
             /* audit_table_write_stats */
-            SELECT n_tup_ins, n_tup_upd, n_tup_del
-            FROM pg_catalog.pg_stat_user_tables
-            WHERE schemaname = 'public' AND relname = %s
+            WITH RECURSIVE audited_relations(relid) AS (
+              SELECT root_relation.oid
+              FROM pg_catalog.pg_class root_relation
+              JOIN pg_catalog.pg_namespace root_namespace
+                ON root_namespace.oid = root_relation.relnamespace
+              WHERE root_namespace.nspname = 'public' AND root_relation.relname = %s
+              UNION
+              SELECT inheritance.inhrelid
+              FROM pg_catalog.pg_inherits inheritance
+              JOIN audited_relations parent_relation
+                ON parent_relation.relid = inheritance.inhparent
+            )
+            SELECT
+              CASE
+                WHEN COUNT(*) = COUNT(table_stats.relid)
+                 AND COUNT(*) = COUNT(table_stats.n_tup_ins)
+                THEN SUM(table_stats.n_tup_ins)
+              END,
+              CASE
+                WHEN COUNT(*) = COUNT(table_stats.relid)
+                 AND COUNT(*) = COUNT(table_stats.n_tup_upd)
+                THEN SUM(table_stats.n_tup_upd)
+              END,
+              CASE
+                WHEN COUNT(*) = COUNT(table_stats.relid)
+                 AND COUNT(*) = COUNT(table_stats.n_tup_del)
+                THEN SUM(table_stats.n_tup_del)
+              END
+            FROM audited_relations
+            LEFT JOIN pg_catalog.pg_stat_user_tables table_stats
+              ON table_stats.relid = audited_relations.relid
             """,
             (table,),
         )

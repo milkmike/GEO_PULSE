@@ -515,6 +515,100 @@ def test_public_get_stats_reset_identity_change_fails():
     assert result["reset_identity_changed"] is True
 
 
+class _InheritedWriteStatsCursor:
+    def __init__(self, connection):
+        self.connection = connection
+        self.rows = []
+
+    def execute(self, statement, parameters=None):
+        sql = str(statement)
+        self.connection.calls.append((sql, parameters))
+        if "audit_stats_reset_identity" in sql:
+            self.rows = [
+                (datetime(2026, 7, 18, 12, 30, tzinfo=timezone.utc),)
+            ]
+        elif "audit_table_write_stats" in sql:
+            recursively_aggregates = (
+                "WITH RECURSIVE" in sql
+                and "pg_catalog.pg_inherits" in sql
+                and "SUM(" in sql.upper()
+                and re.search(r"\bUNION\b(?!\s+ALL)", sql, re.IGNORECASE)
+            )
+            rejects_incomplete_stats = "LEFT JOIN" in sql and "COUNT(" in sql.upper()
+            if self.connection.missing_descendant_stats and rejects_incomplete_stats:
+                self.rows = [(None, None, None)]
+            else:
+                self.rows = [(11, 22, 33)] if recursively_aggregates else [(1, 2, 3)]
+        else:
+            self.rows = []
+
+    def fetchone(self):
+        return self.rows[0] if self.rows else None
+
+    def fetchall(self):
+        return list(self.rows)
+
+    def close(self):
+        pass
+
+
+class _InheritedWriteStatsConnection:
+    def __init__(self, *, missing_descendant_stats=False):
+        self.calls = []
+        self.missing_descendant_stats = missing_descendant_stats
+
+    def cursor(self):
+        return _InheritedWriteStatsCursor(self)
+
+
+def test_write_activity_aggregates_root_and_all_inheritance_descendants():
+    connection = _InheritedWriteStatsConnection()
+    table_counts = {
+        table: {"status": "unavailable", "count": None}
+        for table in audit.WRITE_SNAPSHOT_TABLES
+    }
+    table_counts["articles"] = {"status": "available", "count": 5}
+
+    snapshot = audit._write_activity_snapshot(connection, table_counts)
+
+    assert snapshot["articles"] == {
+        "status": "available",
+        "count": 5,
+        "stats": {
+            "reset_identity": "2026-07-18T12:30:00.000000Z",
+            "n_tup_ins": 11,
+            "n_tup_upd": 22,
+            "n_tup_del": 33,
+        },
+    }
+    stats_sql, parameters = next(
+        (sql, params)
+        for sql, params in connection.calls
+        if "audit_table_write_stats" in sql
+    )
+    assert "WITH RECURSIVE" in stats_sql
+    assert "pg_catalog.pg_inherits" in stats_sql
+    assert re.search(r"\bUNION\b(?!\s+ALL)", stats_sql, re.IGNORECASE)
+    assert parameters == ("articles",)
+
+
+def test_write_activity_fails_closed_when_any_descendant_has_no_stats_row():
+    connection = _InheritedWriteStatsConnection(missing_descendant_stats=True)
+    table_counts = {
+        table: {"status": "unavailable", "count": None}
+        for table in audit.WRITE_SNAPSHOT_TABLES
+    }
+    table_counts["articles"] = {"status": "available", "count": 5}
+
+    snapshot = audit._write_activity_snapshot(connection, table_counts)
+
+    assert snapshot["articles"] == {
+        "status": "stats_unavailable",
+        "count": 5,
+        "stats": None,
+    }
+
+
 def test_postgres_stats_reset_identity_preserves_utc_microseconds():
     first = datetime(2026, 7, 18, 12, 30, 1, 1, tzinfo=timezone.utc)
     second = first + timedelta(microseconds=1)
@@ -741,6 +835,28 @@ def test_runbook_is_one_quiesced_fail_closed_sequence():
     assert 'RADAR_AS_OF="$(date -u' in runbook
     assert runbook.count("--as-of '$RADAR_AS_OF'") == 2
     assert "bounded-apply.json', encoding='utf-8')), expected_shadow=False" in runbook
+
+
+def test_runbook_stabilizes_postgres_write_stats_before_authoritative_baseline():
+    runbook = (ROOT / "docs/release/early-warning-radar-wave1.md").read_text(
+        encoding="utf-8"
+    )
+
+    stop = runbook.index("docker compose stop $running_writers")
+    definition = runbook.index("wait_for_write_stats_quiescence()")
+    barrier = runbook.index("\nwait_for_write_stats_quiescence\n", stop)
+    baseline = runbook.index("--phase before", barrier)
+
+    assert stop < barrier < baseline
+    assert "pg_catalog.pg_stat_all_tables" in runbook
+    assert "pg_catalog.pg_stat_database" in runbook
+    assert "count(relation.relid) <> count(table_stats.relid)" in runbook
+    assert "for attempt in $(seq 1 30)" in runbook
+    assert 'test "$stable_samples" -ge 3' in runbook
+    assert definition < stop
+    assert "sleep 2" in runbook[definition:stop]
+    assert "default_transaction_read_only=on" in runbook
+    assert runbook.count("\nwait_for_write_stats_quiescence\n") == 5
 
 
 def test_audit_output_uses_private_process_umask():
