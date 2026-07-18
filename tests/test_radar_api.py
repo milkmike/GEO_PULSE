@@ -710,8 +710,8 @@ def test_postgres_relation_filters_match_direct_and_active_member_evidence(monke
               (8,'10000000-0000-0000-0000-000000000008',108,NULL,501,601,'trigger',1,'{}'),
               (9,'10000000-0000-0000-0000-000000000009',102,201,NULL,NULL,'contradiction',-0.5,'{}'),
               (10,'10000000-0000-0000-0000-000000000010',2,202,NULL,NULL,'support',0.25,'{}'),
-              (11,'10000000-0000-0000-0000-000000000011',102,201,502,601,'trigger',1,'{"_relation_only":true}'),
-              (12,'10000000-0000-0000-0000-000000000012',102,201,501,602,'trigger',1,'{"_relation_only":true}'),
+              (11,'10000000-0000-0000-0000-000000000011',102,201,502,601,'trigger',1,jsonb_build_object('_relation_only', true)),
+              (12,'10000000-0000-0000-0000-000000000012',102,201,501,602,'trigger',1,jsonb_build_object('_relation_only', true)),
               (13,'10000000-0000-0000-0000-000000000013',107,NULL,NULL,NULL,'contradiction',-0.5,'{}');
         """))
         connection.commit()
