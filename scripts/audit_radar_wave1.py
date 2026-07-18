@@ -605,34 +605,46 @@ def _database_evidence(connection, available: set[str], minimum: float) -> dict[
             observation.canonical_entity_id IS NULL OR entity.id IS NOT NULL AS direct_entity_valid,
             CASE WHEN observation.evidence ? 'article_ids' THEN
               CASE WHEN jsonb_typeof(observation.evidence->'article_ids') = 'array' THEN
-              jsonb_array_length(observation.evidence->'article_ids') > 0 AND NOT EXISTS (
+              NOT EXISTS (
                 SELECT 1 FROM jsonb_array_elements(observation.evidence->'article_ids') item(value)
                 LEFT JOIN public.articles root ON root.id = CASE
                   WHEN jsonb_typeof(item.value) = 'number' AND item.value #>> '{}' ~ '^[1-9][0-9]*$'
                   THEN (item.value #>> '{}')::bigint END
                 WHERE root.id IS NULL
               ) ELSE false END ELSE false END AS article_array_valid,
+            CASE WHEN observation.evidence ? 'article_ids' THEN
+              CASE WHEN jsonb_typeof(observation.evidence->'article_ids') = 'array' THEN
+              jsonb_array_length(observation.evidence->'article_ids') > 0
+              ELSE false END ELSE false END AS article_array_has_root,
             CASE WHEN observation.evidence ? 'story_ids' THEN
               CASE WHEN jsonb_typeof(observation.evidence->'story_ids') = 'array' THEN
-              jsonb_array_length(observation.evidence->'story_ids') > 0 AND NOT EXISTS (
+              NOT EXISTS (
                 SELECT 1 FROM jsonb_array_elements(observation.evidence->'story_ids') item(value)
                 LEFT JOIN public.stories root ON root.id = CASE
                   WHEN jsonb_typeof(item.value) = 'number' AND item.value #>> '{}' ~ '^[1-9][0-9]*$'
                   THEN (item.value #>> '{}')::bigint END
                 WHERE root.id IS NULL
               ) ELSE false END ELSE false END AS story_array_valid,
+            CASE WHEN observation.evidence ? 'story_ids' THEN
+              CASE WHEN jsonb_typeof(observation.evidence->'story_ids') = 'array' THEN
+              jsonb_array_length(observation.evidence->'story_ids') > 0
+              ELSE false END ELSE false END AS story_array_has_root,
             CASE WHEN observation.evidence ? 'signal_ids' THEN
               CASE WHEN jsonb_typeof(observation.evidence->'signal_ids') = 'array' THEN
-              jsonb_array_length(observation.evidence->'signal_ids') > 0 AND NOT EXISTS (
+              NOT EXISTS (
                 SELECT 1 FROM jsonb_array_elements(observation.evidence->'signal_ids') item(value)
                 LEFT JOIN public.signals root ON root.id = CASE
                   WHEN jsonb_typeof(item.value) = 'number' AND item.value #>> '{}' ~ '^[1-9][0-9]*$'
                   THEN (item.value #>> '{}')::bigint END
                 WHERE root.id IS NULL
               ) ELSE false END ELSE false END AS signal_array_valid,
+            CASE WHEN observation.evidence ? 'signal_ids' THEN
+              CASE WHEN jsonb_typeof(observation.evidence->'signal_ids') = 'array' THEN
+              jsonb_array_length(observation.evidence->'signal_ids') > 0
+              ELSE false END ELSE false END AS signal_array_has_root,
             CASE WHEN observation.evidence ? 'entity_ids' THEN
               CASE WHEN jsonb_typeof(observation.evidence->'entity_ids') = 'array' THEN
-              jsonb_array_length(observation.evidence->'entity_ids') > 0 AND NOT EXISTS (
+              NOT EXISTS (
                 SELECT 1 FROM jsonb_array_elements(observation.evidence->'entity_ids') item(value)
                 LEFT JOIN public.canonical_entities root ON root.id = CASE
                   WHEN jsonb_typeof(item.value) = 'string'
@@ -640,6 +652,10 @@ def _database_evidence(connection, available: set[str], minimum: float) -> dict[
                   THEN (item.value #>> '{}')::uuid END
                 WHERE root.id IS NULL
               ) ELSE false END ELSE false END AS entity_array_valid,
+            CASE WHEN observation.evidence ? 'entity_ids' THEN
+              CASE WHEN jsonb_typeof(observation.evidence->'entity_ids') = 'array' THEN
+              jsonb_array_length(observation.evidence->'entity_ids') > 0
+              ELSE false END ELSE false END AS entity_array_has_root,
             CASE WHEN observation.evidence ? 'source_id' THEN
               jsonb_typeof(observation.evidence->'source_id') IN ('string','number')
               AND btrim(observation.evidence->>'source_id') <> '' ELSE false END AS source_id_valid,
@@ -672,7 +688,10 @@ def _database_evidence(connection, available: set[str], minimum: float) -> dict[
           AND (NOT has_source_id OR source_id_valid)
           AND (NOT has_source_record_id OR source_record_id_valid)
           AND (has_direct_article OR has_direct_story OR has_direct_signal OR has_direct_entity
-               OR article_array_valid OR story_array_valid OR signal_array_valid OR entity_array_valid
+               OR (article_array_valid AND article_array_has_root)
+               OR (story_array_valid AND story_array_has_root)
+               OR (signal_array_valid AND signal_array_has_root)
+               OR (entity_array_valid AND entity_array_has_root)
                OR source_id_valid OR source_record_id_valid)
         )
         FROM validated

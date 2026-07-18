@@ -1641,11 +1641,17 @@ def run_radar_cycle(session, as_of: datetime, shadow: bool = True, *, days: int 
     window = ObservationWindow(as_of - timedelta(days=days), as_of)
     before_counts = _protected_counts(session)
     generated = [*build_media_observations(session, window), *build_action_observations(session, window)]
+    current_generated_hashes = frozenset(
+        observation.input_hash for observation in generated
+    )
     history = _history(session, as_of, days)
     observations = _prefer_logical_observations(history, generated)
     audited_observations = tuple(
         point for point in observations
-        if window.start <= _utc(point.observed_at) < window.end
+        if (
+            point.input_hash in current_generated_hashes
+            or window.start <= _utc(point.observed_at) < window.end
+        )
     )
     previous_waves = _previous_waves(session, as_of)
     assignments = assign_country_waves(observations, previous_waves)

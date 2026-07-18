@@ -148,6 +148,43 @@ def test_release_metrics_exclude_detector_context_before_exact_90_day_window(mon
     assert report.country_coverage == {"ES": 1.0}
 
 
+def test_release_metrics_include_current_window_generated_day_bucket_but_not_history(monkeypatch):
+    import src.radar.service as service
+
+    as_of = AS_OF + timedelta(hours=12)
+    window_start = as_of - timedelta(days=90)
+    generated = _media_point(
+        window_start.replace(hour=0, minute=0, second=0, microsecond=0),
+        article_id=910,
+    )
+    historical = _media_point(
+        window_start - timedelta(microseconds=1),
+        article_id=911,
+    )
+    assert generated.observed_at < window_start
+    assert historical.observed_at < window_start
+
+    monkeypatch.setattr(service, "_history", lambda *_: (historical,))
+    monkeypatch.setattr(service, "build_media_observations", lambda *_: [generated])
+    monkeypatch.setattr(service, "build_action_observations", lambda *_: [])
+
+    shadow = run_radar_cycle(_Session(), as_of, shadow=True)
+    applied = run_radar_cycle(_Session(), as_of, shadow=False)
+
+    for report in (shadow, applied):
+        assert sum(len(wave.observations) for wave in report.country_waves) == 2
+        assert report.observation_count == 1
+        assert report.evidence_validity == {
+            "total": 1, "valid": 1, "invalid": 0, "ratio": 1.0,
+        }
+        assert report.evidence_completeness == {"complete": 1, "incomplete": 0}
+        assert report.country_coverage == {"ES": 1.0}
+
+    assert shadow.observation_count == applied.observation_count
+    assert shadow.evidence_validity == applied.evidence_validity
+    assert applied.inserted_observations == applied.observation_count == 1
+
+
 def test_replay_prefers_corrected_richer_observation_without_double_count(monkeypatch):
     import src.radar.service as service
 

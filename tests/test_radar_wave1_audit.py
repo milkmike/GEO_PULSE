@@ -722,6 +722,47 @@ def test_evidence_queries_require_typed_traceable_and_existing_roots():
     assert "source_record_id" in source
 
 
+@pytest.mark.parametrize(
+    ("field", "alias"),
+    [
+        ("article_ids", "article"),
+        ("story_ids", "story"),
+        ("signal_ids", "signal"),
+        ("entity_ids", "entity"),
+    ],
+)
+def test_observation_evidence_allows_empty_optional_arrays_without_treating_them_as_roots(
+    field, alias
+):
+    source = (ROOT / "scripts/audit_radar_wave1.py").read_text(encoding="utf-8")
+    observation_sql = source.split("/* audit_observation_evidence */", 1)[1].split(
+        "/* audit_trend_evidence */", 1
+    )[0]
+    validation = re.search(
+        rf"CASE WHEN observation\.evidence \? '{field}'.*?AS {alias}_array_valid",
+        observation_sql,
+        re.DOTALL,
+    )
+
+    assert validation is not None
+    validation_sql = validation.group(0)
+    # Empty optional arrays are well-formed. A populated array is valid only
+    # when every referenced row exists, so malformed values and orphans still
+    # fail closed through the anti-join.
+    assert f"jsonb_array_length(observation.evidence->'{field}') > 0 AND" not in validation_sql
+    assert "NOT EXISTS" in validation_sql
+    assert "WHERE root.id IS NULL" in validation_sql
+
+    # Well-formedness is deliberately separate from evidence existence: an
+    # empty optional array must not make an otherwise rootless observation valid.
+    assert f"{alias}_array_has_root" in observation_sql
+    assert re.search(
+        rf"{alias}_array_valid\s+AND\s+{alias}_array_has_root"
+        rf"|{alias}_array_has_root\s+AND\s+{alias}_array_valid",
+        observation_sql,
+    )
+
+
 def test_all_application_tables_are_public_schema_qualified():
     source = (ROOT / "scripts/audit_radar_wave1.py").read_text(encoding="utf-8")
     names = PROTECTED + audit.RADAR_TABLES + ("schema_migrations", "canonical_entities")
