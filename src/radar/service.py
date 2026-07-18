@@ -551,11 +551,13 @@ WHERE scope = 'country' AND contour = :contour AND country_code = :country_code
 _INSERT_TREND = text("""
 INSERT INTO radar_trends (
   public_id, scope, contour, country_code, subject_key, wave_key, title_ru, direction,
+  alignment_subject, alignment_direction,
   state, confidence, coverage_confidence, velocity, first_observed_at,
   detected_at, confirmed_at, t0_auto, t0_effective, detector_version,
   baseline, explanation
 ) VALUES (
   :public_id, 'country', :contour, :country_code, :subject_key, :wave_key, :title_ru, :direction,
+  :alignment_subject, :alignment_direction,
   :state, :confidence, :coverage_confidence, :velocity, :first_observed_at,
   :detected_at, :confirmed_at, :t0_auto, :t0_effective, :detector_version,
   CAST(:baseline AS jsonb), CAST(:explanation AS jsonb)
@@ -733,9 +735,12 @@ def _persist_sql(session, observations: list[Observation], waves: Iterable[Count
     updated = 0
     wave_ids: dict[tuple[str, Contour, str, str, str], int] = {}
     for wave in waves:
+        alignment_subject, alignment_direction = _alignment_identity(wave)
         params = {
             "contour": wave.contour.value, "country_code": wave.country_code,
             "subject_key": wave.subject_key, "direction": wave.direction,
+            "alignment_subject": alignment_subject,
+            "alignment_direction": alignment_direction,
             "wave_key": wave.wave_key,
             "detector_version": DETECTOR_VERSION,
         }

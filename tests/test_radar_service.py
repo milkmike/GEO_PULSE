@@ -1,12 +1,16 @@
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 import json
+from types import SimpleNamespace
 from uuid import UUID
 
+from src.radar.actions import build_action_observations
+from src.radar.media import build_media_observations
 from src.radar.repository import make_observation
 from src.radar.grouping import CountryWave, MetaTrend
-from src.radar.service import _persist_meta_and_contours, _state_for, match_contour_episodes, record_analyst_t0_override, run_radar_cycle
-from src.radar.types import Contour, TrendState
+from src.radar.service import _persist_meta_and_contours, _persist_sql, _state_for, match_contour_episodes, record_analyst_t0_override, run_radar_cycle
+from src.radar.types import Contour, ObservationWindow, TrendState
 
 
 AS_OF = datetime(2026, 7, 18, tzinfo=timezone.utc)
@@ -526,6 +530,81 @@ def test_contour_alignment_uses_shared_evidence_identity_across_local_keys():
     links = [params for sql, params in session.calls if "INSERT INTO radar_contour_links" in sql]
     assert [(params["media_trend_id"], params["action_trend_id"]) for params in links] == [(1, 2)]
     assert json.loads(links[0]["evidence"])["direction"] == "hardening"
+
+
+def test_real_adapter_alignment_is_persisted_on_both_country_trends():
+    class _AdapterResult:
+        def __init__(self, rows=(), scalar_value=False):
+            self.rows = list(rows)
+            self.scalar_value = scalar_value
+
+        def fetchall(self):
+            return self.rows
+
+        def scalar(self):
+            return self.scalar_value
+
+    class _AdapterSession:
+        def execute(self, statement, params=None):
+            sql = str(statement)
+            if "radar_registered_country_codes" in sql:
+                return _AdapterResult((SimpleNamespace(code="ES"),))
+            if "FROM articles" in sql:
+                return _AdapterResult((SimpleNamespace(
+                    article_id=501, published_at=AS_OF - timedelta(hours=2),
+                    is_duplicate=False, country_code="ES", publisher_id=10,
+                    publisher_name="Diario", publisher_url="https://diario.es",
+                    publisher_config={"publisher_domain": "diario.es"},
+                    story_id=77, event_key="energy debate", sentiment=-0.5,
+                    is_relevant=True, topics=("energy",),
+                    story_event_keys=("energy-debate",), entity_ids=(), signal_ids=(),
+                ),))
+            if "FROM ru_fossil_imports" in sql:
+                return _AdapterResult((SimpleNamespace(
+                    country_code="ES", current_value=Decimal("90"),
+                    previous_value=Decimal("100"), value=Decimal("-10"),
+                    observed_at=AS_OF - timedelta(hours=1),
+                ),))
+            return _AdapterResult()
+
+    window = ObservationWindow(AS_OF - timedelta(days=1), AS_OF)
+    adapter_session = _AdapterSession()
+    [media] = build_media_observations(adapter_session, window)
+    actions = build_action_observations(adapter_session, window)
+    [action] = [point for point in actions if point.subject_key == "energy:imports:russia"]
+    media_wave = CountryWave(
+        "ES", "media", media.subject_key, media.direction, (media,),
+        media.observed_at, media.observed_at, wave_key="media-real",
+    )
+    action_wave = CountryWave(
+        "ES", "action", action.subject_key, action.direction, (action,),
+        action.observed_at, action.observed_at, wave_key="action-real",
+    )
+    metas = (
+        MetaTrend(media.subject_key, media.direction, (media_wave,), media_wave.t0_auto, meta_key="media-real-meta"),
+        MetaTrend(action.subject_key, action.direction, (action_wave,), action_wave.t0_auto, meta_key="action-real-meta"),
+    )
+    persistence = _RecordingSqlSession()
+
+    _persist_sql(
+        persistence, [media, action], (media_wave, action_wave), metas, AS_OF,
+    )
+
+    inserts = [
+        (sql, params) for sql, params in persistence.calls
+        if "INSERT INTO radar_trends" in sql and "wave_key" in params
+    ]
+    assert len(inserts) == 2
+    assert {params["alignment_subject"] for _, params in inserts} == {"energy:imports:russia"}
+    assert {params["alignment_direction"] for _, params in inserts} == {"hardening"}
+    assert {params["subject_key"] for _, params in inserts} == {
+        media.subject_key, action.subject_key,
+    }
+    assert {params["direction"] for _, params in inserts} == {
+        media.direction, action.direction,
+    }
+    assert all("alignment_subject" in sql and "alignment_direction" in sql for sql, _ in inserts)
+    assert any("INSERT INTO radar_contour_links" in sql for sql, _ in persistence.calls)
 
 
 def test_meta_persistence_closes_stale_members_before_reopening_current_ones():
