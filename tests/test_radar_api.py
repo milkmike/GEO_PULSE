@@ -641,6 +641,11 @@ def test_sql_timeline_keeps_revision_kind_out_of_lifecycle_state(monkeypatch):
     assert params == {"trend_id": 2}
     assert "NULL::text AS state" in sql
     assert "revision_kind" in sql
+    assert "'country_joined' AS kind" in sql
+    assert "'country_left' AS kind" in sql
+    assert "'contour_evaluation' AS kind" in sql
+    assert "member.meta_trend_id = :trend_id" in sql
+    assert "link.status" in sql
 
 
 def test_radar_routes_reject_invalid_filters_and_return_not_found_for_missing_trends():

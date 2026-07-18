@@ -546,7 +546,42 @@ class SqlRadarReadService:
                 SELECT 't0_revision' AS kind, created_at AS at, NULL::text AS state,
                        NULL::text AS contour, revision_kind, evidence
                 FROM radar_t0_revisions WHERE trend_id = :trend_id
-                ORDER BY at ASC
+                UNION ALL
+                SELECT 'country_joined' AS kind, member.joined_at AS at,
+                       wave.state, wave.contour, NULL::text AS revision_kind,
+                       COALESCE(member.evidence, '{}'::jsonb) || jsonb_build_object(
+                         'country_code', wave.country_code,
+                         'country_trend_public_id', wave.public_id)
+                FROM radar_trend_members member
+                JOIN radar_trends wave ON wave.id = member.country_trend_id
+                WHERE member.meta_trend_id = :trend_id
+                UNION ALL
+                SELECT 'country_left' AS kind, member.left_at AS at,
+                       wave.state, wave.contour, NULL::text AS revision_kind,
+                       COALESCE(member.evidence, '{}'::jsonb) || jsonb_build_object(
+                         'country_code', wave.country_code,
+                         'country_trend_public_id', wave.public_id)
+                FROM radar_trend_members member
+                JOIN radar_trends wave ON wave.id = member.country_trend_id
+                WHERE member.meta_trend_id = :trend_id AND member.left_at IS NOT NULL
+                UNION ALL
+                SELECT 'contour_evaluation' AS kind, link.evaluated_at AS at,
+                       NULL::text AS state, NULL::text AS contour,
+                       NULL::text AS revision_kind,
+                       COALESCE(link.evidence, '{}'::jsonb) || jsonb_build_object(
+                         'status', link.status,
+                         'country_code', media.country_code,
+                         'media_trend_public_id', media.public_id,
+                         'action_trend_public_id', action.public_id)
+                FROM radar_contour_links link
+                JOIN radar_trends media ON media.id = link.media_trend_id
+                JOIN radar_trends action ON action.id = link.action_trend_id
+                WHERE EXISTS (
+                  SELECT 1 FROM radar_trend_members member
+                  WHERE member.meta_trend_id = :trend_id
+                    AND member.country_trend_id IN (
+                      link.media_trend_id, link.action_trend_id))
+                ORDER BY at ASC, kind ASC
             """), {"trend_id": trend_id}).fetchall()
         return {"trend": trend, "items": items}
 

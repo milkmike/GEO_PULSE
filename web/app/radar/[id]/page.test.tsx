@@ -39,6 +39,8 @@ const trend: RadarTrend = {
 const timeline: RadarTimeline = { trend, items: [
   { kind: "state", at: "2026-07-16T00:00:00Z", state: "confirmed", contour: "media", evidence: {} },
   { kind: "t0_revision", at: "2026-07-16T03:00:00Z", state: null, contour: null, evidence: { revision_kind: "automatic" } },
+  { kind: "country_joined", at: "2026-07-16T04:00:00Z", state: "emerging", contour: "action", evidence: { country_code: "ES" } },
+  { kind: "contour_evaluation", at: "2026-07-16T05:00:00Z", state: null, contour: null, evidence: { country_code: "ES", status: "aligned" } },
 ] };
 const evidence: RadarEvidencePage = { items: [
   { public_id: "safe", role: "trigger", contribution: 0.8, title: "Надёжное доказательство", url: "https://example.test/safe", evidence: {}, why_included: "trigger_evidence" },
@@ -75,6 +77,8 @@ describe("Radar investigation page", () => {
       "04 · Что произошло в контуре действий?",
     ]);
     expect(screen.getByRole("list", { name: /хронология тренда/i })).toHaveTextContent(/confirmed.*media/i);
+    expect(screen.getByRole("list", { name: /хронология тренда/i })).toHaveTextContent(/волна страны ES вошла.*action/i);
+    expect(screen.getByRole("list", { name: /хронология тренда/i })).toHaveTextContent(/контуры ES.*aligned/i);
     expect(screen.queryByText("Надёжное доказательство")).not.toBeInTheDocument();
     expect(screen.queryByText(/критический пробел покрытия/i)).not.toBeInTheDocument();
   });

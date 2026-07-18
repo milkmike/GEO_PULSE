@@ -40,6 +40,8 @@ const RADAR_CONTOURS = new Set<RadarContour>(["media", "action"]);
 type ValidatedTimelineRow =
   | { category: "state"; at: string | null; state: RadarTrendState | null; contour: RadarContour | null }
   | { category: "t0_revision"; at: string | null; revisionKind: "automatic" | "analyst" | null }
+  | { category: "membership"; at: string | null; joined: boolean; countryCode: string; state: RadarTrendState | null; contour: RadarContour | null }
+  | { category: "contour_evaluation"; at: string | null; countryCode: string; status: "aligned" | "divergent" | "insufficient" | null }
   | { category: "unknown"; at: string | null; rawKind: string; state: RadarTrendState | null };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -79,6 +81,27 @@ function validateTimelineRow(item: RadarTimelineItem): ValidatedTimelineRow {
       revisionKind: revisionKind === "automatic" || revisionKind === "analyst" ? revisionKind : null,
     };
   }
+  if (kind === "country_joined" || kind === "country_left") {
+    const evidence = isRecord(raw.evidence) ? raw.evidence : {};
+    return {
+      category: "membership",
+      at,
+      joined: kind === "country_joined",
+      countryCode: typeof evidence.country_code === "string" ? evidence.country_code : "страна не указана",
+      state: isRadarTrendState(raw.state) ? raw.state : null,
+      contour: isRadarContour(raw.contour) ? raw.contour : null,
+    };
+  }
+  if (kind === "contour_evaluation") {
+    const evidence = isRecord(raw.evidence) ? raw.evidence : {};
+    const status = evidence.status;
+    return {
+      category: "contour_evaluation",
+      at,
+      countryCode: typeof evidence.country_code === "string" ? evidence.country_code : "страна не указана",
+      status: status === "aligned" || status === "divergent" || status === "insufficient" ? status : null,
+    };
+  }
   return {
     category: "unknown",
     at,
@@ -93,6 +116,12 @@ function timelineLabel(item: ValidatedTimelineRow): string {
     if (item.revisionKind === "automatic") return "автоматическая ревизия T0 · без контура";
     if (item.revisionKind === "analyst") return "аналитическая ревизия T0 · без контура";
     return "ревизия T0 · тип не указан · без контура";
+  }
+  if (item.category === "membership") {
+    return `волна страны ${item.countryCode} ${item.joined ? "вошла в метатренд" : "вышла из метатренда"} · ${item.contour ?? "без контура"} · ${item.state ?? "состояние не распознано"}`;
+  }
+  if (item.category === "contour_evaluation") {
+    return `контуры ${item.countryCode} · ${item.status ?? "статус не распознан"}`;
   }
   return `неизвестное событие · ${item.rawKind}${item.state ? ` · ${item.state}` : ""}`;
 }
