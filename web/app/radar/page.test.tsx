@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { FeatureFlagsProvider } from "@/components/FeatureFlagsProvider";
@@ -110,6 +110,29 @@ describe("Radar list page", () => {
     await waitFor(() => expect(screen.queryByText(oldTrend.thesis)).not.toBeInTheDocument());
   });
 
+  it("keeps retained trends visible when load-more fails and retries locally", async () => {
+    const nextTrend = { ...baseTrend, public_id: "next-page", thesis: "Тренд со следующей страницы" };
+    apiMocks.radar
+      .mockResolvedValueOnce({ items: [baseTrend], limit: 25, next_cursor: "next" })
+      .mockRejectedValueOnce(new Error("page unavailable"))
+      .mockResolvedValueOnce({ items: [nextTrend], limit: 25, next_cursor: null });
+    const user = userEvent.setup();
+
+    renderPage();
+    expect(await screen.findByText(baseTrend.thesis)).toBeVisible();
+    await user.click(screen.getByRole("button", { name: /следующие тренды/i }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(/следующую страницу трендов загрузить не удалось/i);
+    expect(screen.getByText(baseTrend.thesis)).toBeVisible();
+    expect(screen.queryByText(/не удалось загрузить радар/i)).not.toBeInTheDocument();
+
+    await user.click(within(alert).getByRole("button", { name: /повторить/i }));
+    expect(await screen.findByText(nextTrend.thesis)).toBeVisible();
+    expect(screen.getByText(baseTrend.thesis)).toBeVisible();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   it("writes filter changes to a shareable URL and presents honest empty and error states", async () => {
     apiMocks.radar.mockResolvedValueOnce({ items: [], limit: 25, next_cursor: null });
     const user = userEvent.setup();
@@ -131,6 +154,55 @@ describe("Radar list page", () => {
     expect(screen.queryByText(ordinaryEmerging.thesis)).not.toBeInTheDocument();
     expect(screen.getByText(criticalEmerging.thesis)).toBeVisible();
     expect(screen.getByText(baseTrend.thesis)).toBeVisible();
+  });
+
+  it("paginates compact relation placements until it finds enough priority trends", async () => {
+    const ordinary = { ...baseTrend, public_id: "ordinary-page", state: "emerging" as const, velocity: 0.4, thesis: "Обычная волна" };
+    apiMocks.radar
+      .mockResolvedValueOnce({ items: [ordinary], limit: 12, next_cursor: "compact-next" })
+      .mockResolvedValueOnce({ items: [baseTrend], limit: 12, next_cursor: null });
+
+    render(<FeatureFlagsProvider flags={enabled}><EarlyWarningPanel filters={{ storyId: 42 }} limit={1} /></FeatureFlagsProvider>);
+
+    expect(await screen.findByText(baseTrend.thesis)).toBeVisible();
+    expect(apiMocks.radar).toHaveBeenCalledTimes(2);
+    expect(apiMocks.radar.mock.calls[0][0]).toMatchObject({ storyId: 42, limit: 12 });
+    expect(apiMocks.radar.mock.calls[0][1]).toBeNull();
+    expect(apiMocks.radar.mock.calls[1][0]).toMatchObject({ storyId: 42, limit: 12 });
+    expect(apiMocks.radar.mock.calls[1][1]).toBe("compact-next");
+    expect(screen.getByRole("link", { name: /весь радар/i })).toHaveAttribute("href", "/radar?story_id=42");
+  });
+
+  it("distinguishes capped partial compact searches from exhausted searches", async () => {
+    const ordinary = { ...baseTrend, public_id: "ordinary", state: "emerging" as const, velocity: 0.4, thesis: "Неприоритетная волна" };
+    apiMocks.radar
+      .mockResolvedValueOnce({ items: [ordinary], limit: 12, next_cursor: "page-2" })
+      .mockResolvedValueOnce({ items: [{ ...ordinary, public_id: "ordinary-2" }], limit: 12, next_cursor: "page-3" })
+      .mockResolvedValueOnce({ items: [{ ...ordinary, public_id: "ordinary-3" }], limit: 12, next_cursor: "page-4" });
+
+    const partial = render(<FeatureFlagsProvider flags={enabled}><EarlyWarningPanel filters={{ signalId: 17 }} limit={1} /></FeatureFlagsProvider>);
+    expect(await screen.findByText(/в проверенной части радара приоритетных трендов пока нет/i)).toBeVisible();
+    expect(apiMocks.radar).toHaveBeenCalledTimes(3);
+    for (const call of apiMocks.radar.mock.calls) expect(call[0]).toMatchObject({ signalId: 17, limit: 12 });
+    expect(screen.getByRole("link", { name: /весь радар/i })).toHaveAttribute("href", "/radar?signal_id=17");
+    partial.unmount();
+
+    apiMocks.radar.mockReset().mockResolvedValueOnce({ items: [ordinary], limit: 12, next_cursor: null });
+    render(<FeatureFlagsProvider flags={enabled}><EarlyWarningPanel filters={{ signalId: 17 }} limit={1} /></FeatureFlagsProvider>);
+    expect(await screen.findByText(/среди всех сохранённых трендов приоритетных сейчас нет/i)).toBeVisible();
+    expect(apiMocks.radar).toHaveBeenCalledOnce();
+  });
+
+  it("does not restart a compact relation request when an equivalent filter object rerenders", async () => {
+    const pending = new Promise<never>(() => {});
+    apiMocks.radar.mockReturnValue(pending);
+    const { rerender } = render(<FeatureFlagsProvider flags={enabled}><EarlyWarningPanel filters={{ storyId: 42 }} /></FeatureFlagsProvider>);
+    await waitFor(() => expect(apiMocks.radar).toHaveBeenCalledOnce());
+
+    rerender(<FeatureFlagsProvider flags={enabled}><EarlyWarningPanel filters={{ storyId: 42 }} /></FeatureFlagsProvider>);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(apiMocks.radar).toHaveBeenCalledOnce();
+    expect((apiMocks.radar.mock.calls[0][2] as AbortSignal).aborted).toBe(false);
   });
 
   it("supports arrow-key navigation across filter controls", async () => {

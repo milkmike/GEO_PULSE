@@ -31,11 +31,13 @@ export default function RadarTrendPage({ params }: { params: Promise<{ id: strin
   const [evidenceLoadError, setEvidenceLoadError] = useState(false);
   const evidencePageController = useRef<AbortController | null>(null);
   const requestGeneration = useRef(0);
+  const evidencePageGeneration = useRef(0);
 
   useEffect(() => {
     if (!earlyWarningRadar) return;
     const controller = new AbortController();
     const generation = ++requestGeneration.current;
+    evidencePageGeneration.current += 1;
     evidencePageController.current?.abort();
     evidencePageController.current = null;
     setEvidenceLoadingMore(false); setEvidenceLoadError(false); setState("loading"); setPayload(null);
@@ -48,6 +50,15 @@ export default function RadarTrendPage({ params }: { params: Promise<{ id: strin
     return () => { controller.abort(); evidencePageController.current?.abort(); };
   }, [earlyWarningRadar, id, reload]);
 
+  useEffect(() => {
+    if (view === "evidence") return;
+    evidencePageGeneration.current += 1;
+    evidencePageController.current?.abort();
+    evidencePageController.current = null;
+    setEvidenceLoadingMore(false);
+    setEvidenceLoadError(false);
+  }, [view]);
+
   function setView(nextView: RadarView) {
     const next = new URLSearchParams(query);
     next.set("view", nextView);
@@ -57,18 +68,19 @@ export default function RadarTrendPage({ params }: { params: Promise<{ id: strin
 
   async function loadMoreEvidence() {
     const cursor = payload?.evidence.next_cursor;
-    if (!cursor || evidenceLoadingMore) return;
+    if (view !== "evidence" || !cursor || evidenceLoadingMore) return;
     const controller = new AbortController();
     const generation = requestGeneration.current;
+    const pageGeneration = evidencePageGeneration.current;
     evidencePageController.current?.abort();
     evidencePageController.current = controller;
     setEvidenceLoadingMore(true);
     setEvidenceLoadError(false);
     try {
       const nextPage = await api.radarEvidence(id, cursor, 25, controller.signal);
-      if (controller.signal.aborted || requestGeneration.current !== generation || evidencePageController.current !== controller) return;
+      if (controller.signal.aborted || requestGeneration.current !== generation || evidencePageGeneration.current !== pageGeneration || evidencePageController.current !== controller) return;
       setPayload((current) => {
-        if (!current || requestGeneration.current !== generation) return current;
+        if (!current || requestGeneration.current !== generation || evidencePageGeneration.current !== pageGeneration) return current;
         const existing = new Set(current.evidence.items.map((item) => item.public_id));
         return {
           ...current,
@@ -79,7 +91,7 @@ export default function RadarTrendPage({ params }: { params: Promise<{ id: strin
         };
       });
     } catch (reason) {
-      if (!controller.signal.aborted && requestGeneration.current === generation && !isAbort(reason)) setEvidenceLoadError(true);
+      if (!controller.signal.aborted && requestGeneration.current === generation && evidencePageGeneration.current === pageGeneration && !isAbort(reason)) setEvidenceLoadError(true);
     } finally {
       if (evidencePageController.current === controller) {
         evidencePageController.current = null;

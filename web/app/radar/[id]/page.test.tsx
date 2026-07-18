@@ -13,7 +13,9 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(navigation.query),
 }));
 vi.mock("@/components/SiteHeader", () => ({ default: () => <nav>header</nav> }));
-vi.mock("@/components/Plot", () => ({ default: () => <div data-testid="plot" /> }));
+vi.mock("@/components/Plot", () => ({
+  default: ({ data }: { data: Array<{ y?: unknown[] }> }) => <div data-testid="plot" data-y={JSON.stringify(data[0]?.y ?? [])} />,
+}));
 
 const apiMocks = vi.hoisted(() => ({
   radarTrend: vi.fn(), radarTimeline: vi.fn(), radarEvidence: vi.fn(), radarCoverage: vi.fn(), radarMethodology: vi.fn(),
@@ -34,7 +36,10 @@ const trend: RadarTrend = {
   evidence_preview: { public_id: "preview", role: "trigger", title: "Стартовая публикация", url: "https://example.test/start" },
   why_included: "prioritized_by_state_and_velocity",
 };
-const timeline: RadarTimeline = { trend, items: [{ kind: "state", at: "2026-07-16T00:00:00Z", state: "confirmed", contour: "media", evidence: {} }] };
+const timeline: RadarTimeline = { trend, items: [
+  { kind: "state", at: "2026-07-16T00:00:00Z", state: "confirmed", contour: "media", evidence: {} },
+  { kind: "t0_revision", at: "2026-07-16T03:00:00Z", state: null, contour: null, evidence: { revision_kind: "automatic" } },
+] };
 const evidence: RadarEvidencePage = { items: [
   { public_id: "safe", role: "trigger", contribution: 0.8, title: "Надёжное доказательство", url: "https://example.test/safe", evidence: {}, why_included: "trigger_evidence" },
   { public_id: "contra", role: "contradiction", contribution: -0.2, title: "Противоречащий материал", url: "javascript:alert(1)", evidence: {}, why_included: "contradiction_evidence" },
@@ -43,10 +48,10 @@ const coverage: RadarCoverage = { updated_at: "2026-07-18T00:00:00Z", coverage_s
 const methodology: RadarMethodology = { detector_version: "radar-wave-1", updated_at: "2026-07-18T00:00:00Z", baseline: { window_days: 90, acceleration_days: 7 }, lifecycle_gates: { media: {}, action: {} }, t0_fields: ["t0_auto", "t0_effective"], confidence_factors: ["semantic_shift", "coverage_health"], coverage_hard_gate: "coverage_confidence <= 0.5 suppresses confirmation", action_independence: "media classification never confirms action", evidence_roles: ["trigger", "support", "context", "contradiction"], limitations: ["Coverage proxy"] };
 const flags: FeatureFlags = { searchNavigation: false, storiesNavigation: false, investigation: false, signalDetail: false, earlyWarningRadar: true };
 
-async function renderPage() {
+async function renderPage(params = Promise.resolve({ id: "trend-1" })) {
   let result!: ReturnType<typeof render>;
   await act(async () => {
-    result = render(<FeatureFlagsProvider flags={flags}><RadarTrendPage params={Promise.resolve({ id: "trend-1" })} /></FeatureFlagsProvider>);
+    result = render(<FeatureFlagsProvider flags={flags}><RadarTrendPage params={params} /></FeatureFlagsProvider>);
   });
   return result;
 }
@@ -72,6 +77,25 @@ describe("Radar investigation page", () => {
     expect(screen.getByRole("list", { name: /хронология тренда/i })).toHaveTextContent(/confirmed.*media/i);
     expect(screen.queryByText("Надёжное доказательство")).not.toBeInTheDocument();
     expect(screen.queryByText(/критический пробел покрытия/i)).not.toBeInTheDocument();
+  });
+
+  it("validates unknown timeline rows and renders T0 revision kinds without plotting them as states", async () => {
+    apiMocks.radarTimeline.mockResolvedValueOnce({
+      trend,
+      items: [
+        { kind: "state", at: "2026-07-16T00:00:00Z", state: "confirmed", contour: null, evidence: {} },
+        { kind: "t0_revision", at: "2026-07-16T03:00:00Z", state: null, contour: null, evidence: { revision_kind: "analyst" } },
+        { kind: "state", at: "not-a-date", state: "future_state", contour: "future_contour", evidence: null },
+        { kind: "future_event", at: "2026-07-17T00:00:00Z", state: null, contour: null, evidence: {} },
+      ],
+    } as unknown as RadarTimeline);
+
+    await renderPage();
+    const history = await screen.findByRole("list", { name: /хронология тренда/i });
+    expect(history).toHaveTextContent(/аналитическая ревизия T0/i);
+    expect(history).toHaveTextContent(/неизвестное событие · future_event/i);
+    expect(history).toHaveTextContent(/состояние не распознано/i);
+    expect(screen.getByTestId("plot")).toHaveAttribute("data-y", "[3]");
   });
 
   it("separates contours, country waves and effective T0", async () => {
@@ -124,10 +148,39 @@ describe("Radar investigation page", () => {
     expect(apiMocks.radarEvidence).toHaveBeenLastCalledWith("trend-1", "evidence-next", 25, expect.any(AbortSignal));
   });
 
+  it("aborts and ignores evidence pagination when history changes away from evidence", async () => {
+    let resolveOldPage!: (value: RadarEvidencePage) => void;
+    const oldPage = new Promise<RadarEvidencePage>((resolve) => { resolveOldPage = resolve; });
+    const firstPage = { items: [evidence.items[0]], limit: 1, next_cursor: "evidence-next" };
+    const staleItem = { ...evidence.items[1], public_id: "stale-contradiction", title: "Устаревшее противоречие" };
+    apiMocks.radarEvidence.mockReset().mockResolvedValueOnce(firstPage).mockReturnValueOnce(oldPage);
+    navigation.query = "view=evidence";
+    const user = userEvent.setup();
+    const params = Promise.resolve({ id: "trend-1" });
+    const { rerender } = await renderPage(params);
+    await user.click(await screen.findByRole("button", { name: /загрузить ещё доказательства/i }));
+    const loadMoreSignal = apiMocks.radarEvidence.mock.calls[1][3] as AbortSignal;
+
+    navigation.query = "view=coverage";
+    rerender(<FeatureFlagsProvider flags={flags}><RadarTrendPage params={params} /></FeatureFlagsProvider>);
+    await waitFor(() => expect(loadMoreSignal.aborted).toBe(true));
+    resolveOldPage({ items: [staleItem], limit: 1, next_cursor: null });
+
+    navigation.query = "view=evidence";
+    rerender(<FeatureFlagsProvider flags={flags}><RadarTrendPage params={params} /></FeatureFlagsProvider>);
+    expect(await screen.findByText(/в загруженных доказательствах противоречий/i)).toBeVisible();
+    expect(screen.queryByText("Устаревшее противоречие")).not.toBeInTheDocument();
+  });
+
   it("keeps the selected view in the URL and supports keyboard tab navigation", async () => {
     await renderPage();
     const propagation = await screen.findByRole("tab", { name: /распространение/i });
     const evidenceTab = screen.getByRole("tab", { name: /доказательства/i });
+    const panel = screen.getByRole("tabpanel");
+    expect(propagation).toHaveAttribute("aria-controls", panel.id);
+    expect(panel).toHaveAttribute("aria-labelledby", propagation.id);
+    expect(propagation.id).not.toBe("");
+    expect(panel.id).not.toBe("");
     propagation.focus();
     fireEvent.keyDown(propagation, { key: "ArrowRight" });
     expect(evidenceTab).toHaveFocus();

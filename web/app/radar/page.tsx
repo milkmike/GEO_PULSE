@@ -25,6 +25,7 @@ function RadarPageContent() {
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
   const [loadingMore, setLoadingMore] = useState(false);
+  const [loadMoreError, setLoadMoreError] = useState(false);
   const [reload, setReload] = useState(0);
   const pageController = useRef<AbortController | null>(null);
   const loadMoreController = useRef<AbortController | null>(null);
@@ -58,7 +59,7 @@ function RadarPageContent() {
     loadMoreController.current?.abort();
     pageController.current = controller;
     loadMoreController.current = null;
-    setLoadingMore(false); setState("loading"); setItems([]); setNextCursor(null);
+    setLoadingMore(false); setLoadMoreError(false); setState("loading"); setItems([]); setNextCursor(null);
     api.radar(filters, null, controller.signal).then((payload) => {
       if (!controller.signal.aborted && requestGeneration.current === generation) { setItems(payload.items); setNextCursor(payload.next_cursor); setState("ready"); }
     }).catch((reason: unknown) => { if (!controller.signal.aborted && requestGeneration.current === generation && !isAbort(reason)) setState("error"); });
@@ -87,17 +88,20 @@ function RadarPageContent() {
     loadMoreController.current?.abort();
     loadMoreController.current = controller;
     setLoadingMore(true);
+    setLoadMoreError(false);
+    let failed = false;
     try {
       const payload = await api.radar(filters, nextCursor, controller.signal);
       if (!controller.signal.aborted && requestGeneration.current === generation && loadMoreController.current === controller) {
         setItems((current) => [...current, ...payload.items.filter((item) => !current.some((existing) => existing.public_id === item.public_id))]);
         setNextCursor(payload.next_cursor);
       }
-    } catch (reason) { if (!controller.signal.aborted && requestGeneration.current === generation && !isAbort(reason)) setState("error"); }
+    } catch (reason) { if (!controller.signal.aborted && requestGeneration.current === generation && !isAbort(reason)) failed = true; }
     finally {
       if (loadMoreController.current === controller) {
         loadMoreController.current = null;
         setLoadingMore(false);
+        setLoadMoreError(failed);
       }
     }
   }
@@ -120,7 +124,8 @@ function RadarPageContent() {
       {state === "error" && <div role="alert" className="border-y border-ru-red/40 py-12 text-center"><CircleAlert size={20} className="mx-auto mb-3 text-ru-red" aria-hidden="true" /><p className="text-sm text-dim">Не удалось загрузить радар.</p><button type="button" onClick={() => setReload((value) => value + 1)} className="mt-3 min-h-11 text-accent underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">повторить</button></div>}
       {state === "ready" && items.length === 0 && <p className="border-y border-line py-14 text-center text-sm text-dim">По выбранным фильтрам трендов нет. Это не означает отсутствия изменений — только отсутствие сохранённых трендов, прошедших эти условия.</p>}
       {state === "ready" && items.length > 0 && <section aria-label="Тренды радара" className="divide-y divide-line border-y border-line">{items.map((trend) => <TrendCard key={trend.public_id} trend={trend} />)}</section>}
-      {nextCursor && <button type="button" disabled={loadingMore} onClick={loadMore} className="mt-6 min-h-11 rounded-md border border-line px-5 text-xs uppercase tracking-wide hover:border-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:opacity-50">{loadingMore ? "загружаем…" : "следующие тренды"}</button>}
+      {state === "ready" && loadMoreError && <div role="alert" className="mt-4 border-l-2 border-ru-red px-4 py-2 text-xs text-dim">Следующую страницу трендов загрузить не удалось. <button type="button" onClick={loadMore} className="ml-1 min-h-11 text-accent underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent sm:min-h-0">повторить</button></div>}
+      {nextCursor && !loadMoreError && <button type="button" disabled={loadingMore} onClick={loadMore} className="mt-6 min-h-11 rounded-md border border-line px-5 text-xs uppercase tracking-wide hover:border-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:opacity-50">{loadingMore ? "загружаем…" : "следующие тренды"}</button>}
     </main>
   );
 }

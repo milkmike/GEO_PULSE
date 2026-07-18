@@ -6,9 +6,10 @@ import { LoaderCircle, Radar } from "lucide-react";
 import { useFeatureFlags } from "./FeatureFlagsProvider";
 import TrendCard from "./TrendCard";
 import { api } from "@/lib/api";
-import type { RadarFilters, RadarTrend } from "@/lib/types";
+import type { RadarFilters, RadarTrend, RadarTrendPage } from "@/lib/types";
 
 const EMPTY_FILTERS: Omit<RadarFilters, "limit"> = {};
+const MAX_COMPACT_PAGES = 3;
 
 export function isPriorityRadarTrend(trend: RadarTrend): boolean {
   return trend.state === "confirmed" || (
@@ -35,30 +36,62 @@ export default function EarlyWarningPanel({
   const { earlyWarningRadar } = useFeatureFlags();
   const [loaded, setLoaded] = useState<RadarTrend[]>([]);
   const [state, setState] = useState<"loading" | "ready" | "error">(trends ? "ready" : "loading");
+  const [searchScope, setSearchScope] = useState<"unknown" | "exhausted" | "partial">("unknown");
   const [reload, setReload] = useState(0);
   const shouldFetch = trends === undefined && earlyWarningRadar;
+  const filterState = filters.state;
+  const filterContour = filters.contour;
+  const filterCountry = filters.country;
+  const storyId = filters.storyId;
+  const signalId = filters.signalId;
 
   useEffect(() => {
     if (!shouldFetch) return;
     const controller = new AbortController();
-    setState("loading");
-    const hasExactRelation = Boolean(filters.storyId || filters.signalId);
-    const request = countryCode && !hasExactRelation
-      ? api.countryRadar(countryCode, { limit: Math.max(limit * 3, 12) }, null, controller.signal)
-      : api.radar({ ...filters, limit: Math.max(limit * 3, 12) }, null, controller.signal);
-    request.then((payload) => {
-      if (!controller.signal.aborted) { setLoaded(payload.items); setState("ready"); }
-    }).catch((reason: unknown) => {
+    const pageLimit = Math.max(limit * 3, 12);
+    const requestFilters: RadarFilters = {
+      ...(filterState ? { state: filterState } : {}),
+      ...(filterContour ? { contour: filterContour } : {}),
+      ...(filterCountry ? { country: filterCountry } : {}),
+      ...(storyId ? { storyId } : {}),
+      ...(signalId ? { signalId } : {}),
+      limit: pageLimit,
+    };
+    const hasExactRelation = Boolean(storyId || signalId);
+    setState("loading"); setLoaded([]); setSearchScope("unknown");
+
+    async function loadPriorityPages() {
+      let cursor: string | null = null;
+      let collected: RadarTrend[] = [];
+      let nextCursor: string | null = null;
+      for (let page = 0; page < MAX_COMPACT_PAGES; page += 1) {
+        const payload: RadarTrendPage = countryCode && !hasExactRelation
+          ? await api.countryRadar(countryCode, requestFilters, cursor, controller.signal)
+          : await api.radar(requestFilters, cursor, controller.signal);
+        if (controller.signal.aborted) return;
+        const known = new Set(collected.map((item) => item.public_id));
+        collected = [...collected, ...payload.items.filter((item) => !known.has(item.public_id))];
+        nextCursor = payload.next_cursor;
+        if (collected.filter(isPriorityRadarTrend).length >= limit || nextCursor === null) break;
+        cursor = nextCursor;
+      }
+      if (controller.signal.aborted) return;
+      setLoaded(collected);
+      setSearchScope(nextCursor === null ? "exhausted" : "partial");
+      setState("ready");
+    }
+
+    loadPriorityPages().catch((reason: unknown) => {
       if (!controller.signal.aborted && !(reason instanceof DOMException && reason.name === "AbortError")) setState("error");
     });
     return () => controller.abort();
-  }, [countryCode, filters, limit, reload, shouldFetch]);
+  }, [countryCode, filterContour, filterCountry, filterState, limit, reload, shouldFetch, signalId, storyId]);
 
   const items = useMemo(() => (trends ?? loaded).filter(isPriorityRadarTrend).slice(0, limit), [loaded, limit, trends]);
   if (trends === undefined && !earlyWarningRadar) return null;
   const relationParams = new URLSearchParams();
-  if (filters.storyId) relationParams.set("story_id", String(filters.storyId));
-  if (filters.signalId) relationParams.set("signal_id", String(filters.signalId));
+  if (storyId) relationParams.set("story_id", String(storyId));
+  if (signalId) relationParams.set("signal_id", String(signalId));
   if (!relationParams.size && countryCode) relationParams.set("country", countryCode.toUpperCase());
   const radarHref = relationParams.size ? `/radar?${relationParams.toString()}` : "/radar";
 
@@ -73,8 +106,11 @@ export default function EarlyWarningPanel({
       </div>
       {state === "loading" && <p role="status" className="flex items-center gap-2 px-4 py-7 text-xs text-dim"><LoaderCircle size={14} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />сверяем подтверждённые волны…</p>}
       {state === "error" && <div role="alert" className="px-4 py-6 text-xs text-dim">Радар сейчас недоступен. <button type="button" onClick={() => setReload((value) => value + 1)} className="ml-1 min-h-11 text-accent underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent sm:min-h-0">повторить</button></div>}
-      {state === "ready" && items.length === 0 && <p className="px-4 py-7 text-xs text-dim">Подтверждённых или исключительных ранних трендов сейчас нет.</p>}
+      {state === "ready" && items.length === 0 && searchScope === "partial" && <p className="px-4 py-7 text-xs text-dim">В проверенной части радара приоритетных трендов пока нет. Полный список доступен в радаре.</p>}
+      {state === "ready" && items.length === 0 && searchScope === "exhausted" && <p className="px-4 py-7 text-xs text-dim">Среди всех сохранённых трендов приоритетных сейчас нет.</p>}
+      {state === "ready" && items.length === 0 && searchScope === "unknown" && <p className="px-4 py-7 text-xs text-dim">В переданной выборке приоритетных трендов нет.</p>}
       {state === "ready" && items.length > 0 && <div className="divide-y divide-line">{items.map((trend) => <TrendCard key={trend.public_id} trend={trend} compact />)}</div>}
+      {state === "ready" && items.length > 0 && searchScope === "partial" && <p className="border-t border-line px-4 py-3 text-[11px] text-dim">Показаны приоритетные тренды из проверенной части радара.</p>}
     </section>
   );
 }

@@ -1,14 +1,16 @@
 "use client";
 
-import type { KeyboardEvent } from "react";
+import { useId, type KeyboardEvent } from "react";
 import { ArrowUpRight, CircleAlert, LoaderCircle, ShieldAlert } from "lucide-react";
 import Plot from "./Plot";
 import type {
   RadarCoverage,
+  RadarContour,
   RadarEvidenceItem,
   RadarEvidencePage,
   RadarMethodology,
   RadarTimeline,
+  RadarTimelineItem,
   RadarTrend,
   RadarTrendState,
 } from "@/lib/types";
@@ -32,8 +34,71 @@ const STATE_RANK: Record<RadarTrendState, number> = {
   resolved: 1,
 };
 
+const RADAR_STATES = new Set<RadarTrendState>(["candidate", "emerging", "confirmed", "cooling", "resolved", "rejected"]);
+const RADAR_CONTOURS = new Set<RadarContour>(["media", "action"]);
+
+type ValidatedTimelineRow =
+  | { category: "state"; at: string | null; state: RadarTrendState | null; contour: RadarContour | null }
+  | { category: "t0_revision"; at: string | null; revisionKind: "automatic" | "analyst" | null }
+  | { category: "unknown"; at: string | null; rawKind: string; state: RadarTrendState | null };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isRadarTrendState(value: unknown): value is RadarTrendState {
+  return typeof value === "string" && RADAR_STATES.has(value as RadarTrendState);
+}
+
+function isRadarContour(value: unknown): value is RadarContour {
+  return typeof value === "string" && RADAR_CONTOURS.has(value as RadarContour);
+}
+
+function validDate(value: unknown): string | null {
+  return typeof value === "string" && value.trim() !== "" && Number.isFinite(Date.parse(value)) ? value : null;
+}
+
+function validateTimelineRow(item: RadarTimelineItem): ValidatedTimelineRow {
+  const raw = isRecord(item) ? item as unknown as Record<string, unknown> : {};
+  const kind = typeof raw.kind === "string" ? raw.kind : "";
+  const at = validDate(raw.at);
+  if (kind === "state") {
+    return {
+      category: "state",
+      at,
+      state: isRadarTrendState(raw.state) ? raw.state : null,
+      contour: isRadarContour(raw.contour) ? raw.contour : null,
+    };
+  }
+  if (kind === "t0_revision") {
+    const evidence = isRecord(raw.evidence) ? raw.evidence : {};
+    const revisionKind = evidence.revision_kind;
+    return {
+      category: "t0_revision",
+      at,
+      revisionKind: revisionKind === "automatic" || revisionKind === "analyst" ? revisionKind : null,
+    };
+  }
+  return {
+    category: "unknown",
+    at,
+    rawKind: kind || "тип не указан",
+    state: isRadarTrendState(raw.state) ? raw.state : null,
+  };
+}
+
+function timelineLabel(item: ValidatedTimelineRow): string {
+  if (item.category === "state") return `изменение состояния · ${item.state ?? "состояние не распознано"} · ${item.contour ?? "без контура"}`;
+  if (item.category === "t0_revision") {
+    if (item.revisionKind === "automatic") return "автоматическая ревизия T0 · без контура";
+    if (item.revisionKind === "analyst") return "аналитическая ревизия T0 · без контура";
+    return "ревизия T0 · тип не указан · без контура";
+  }
+  return `неизвестное событие · ${item.rawKind}${item.state ? ` · ${item.state}` : ""}`;
+}
+
 const date = (value: string | null) => value
-  ? new Intl.DateTimeFormat("ru-RU", {
+  && Number.isFinite(Date.parse(value)) ? new Intl.DateTimeFormat("ru-RU", {
     day: "numeric", month: "short", year: "numeric", timeZone: "UTC",
   }).format(new Date(value))
   : "не установлено";
@@ -78,17 +143,21 @@ export default function TrendInvestigation({
   evidenceLoadingMore?: boolean;
   evidenceLoadError?: boolean;
 }) {
+  const tabsId = useId();
   const contradictions = evidence.items.filter((item) => item.role === "contradiction");
   const support = evidence.items.filter((item) => item.role !== "contradiction");
   const evidenceComplete = evidence.next_cursor === null;
   const relevantCoverage = coverage.countries.filter((item) => (
     trend.country_waves.some((wave) => wave.country_code === item.country_code)
   ));
-  const timelinePoints = timeline.items.filter((item) => item.at && item.state);
+  const timelineRows = timeline.items.map(validateTimelineRow);
+  const timelinePoints = timelineRows.filter((item): item is Extract<ValidatedTimelineRow, { category: "state" }> & { at: string; state: RadarTrendState } => (
+    item.category === "state" && item.at !== null && item.state !== null
+  ));
   const timelineData = [{
     x: timelinePoints.map((item) => item.at),
-    y: timelinePoints.map((item) => STATE_RANK[item.state!]),
-    text: timelinePoints.map((item) => `${item.kind} · ${item.state} · ${item.contour ?? "оба контура"}`),
+    y: timelinePoints.map((item) => STATE_RANK[item.state]),
+    text: timelinePoints.map((item) => timelineLabel(item)),
     mode: "lines+markers",
     line: { color: "#d94f43", width: 2 },
     marker: { color: "#fbbf24", size: 8 },
@@ -103,7 +172,7 @@ export default function TrendInvestigation({
       : event.key === "End"
         ? VIEWS.length - 1
         : (current + (event.key === "ArrowRight" ? 1 : -1) + VIEWS.length) % VIEWS.length;
-    document.getElementById(`radar-view-${VIEWS[next].id}`)?.focus();
+    document.getElementById(`${tabsId}-radar-tab-${VIEWS[next].id}`)?.focus();
   };
 
   return (
@@ -112,10 +181,11 @@ export default function TrendInvestigation({
         {VIEWS.map((item, index) => (
           <button
             key={item.id}
-            id={`radar-view-${item.id}`}
+            id={`${tabsId}-radar-tab-${item.id}`}
             type="button"
             role="tab"
             aria-selected={view === item.id}
+            aria-controls={`${tabsId}-radar-panel-${item.id}`}
             tabIndex={view === item.id ? 0 : -1}
             onKeyDown={(event) => onTabKey(event, index)}
             onClick={() => onViewChange(item.id)}
@@ -126,7 +196,7 @@ export default function TrendInvestigation({
         ))}
       </div>
 
-      {view === "propagation" && <>
+      {view === "propagation" && <div id={`${tabsId}-radar-panel-propagation`} role="tabpanel" aria-labelledby={`${tabsId}-radar-tab-propagation`} tabIndex={0} className="space-y-4">
         <section className="card p-5">
           <h2 className="display text-[23px]">01 · Что меняется?</h2>
           <p className="mt-3 max-w-4xl text-sm leading-6 text-dim">{trend.thesis}</p>
@@ -138,10 +208,10 @@ export default function TrendInvestigation({
           <p className="mt-3 text-sm text-dim">Эффективный T0: <time className="tnum text-fg" dateTime={trend.t0_effective ?? undefined}>{date(trend.t0_effective)}</time>. Волны сохраняют собственные локальные T0 и состояние.</p>
           {timelinePoints.length > 0 && <Plot data={timelineData} layout={{ height: 220, margin: { t: 24, b: 35, l: 30, r: 20 }, paper_bgcolor: "transparent", plot_bgcolor: "transparent", xaxis: { color: "#74808f", gridcolor: "#1e2836" }, yaxis: { visible: false }, showlegend: false }} className="mt-3 w-full" />}
           <ol aria-label="Хронология тренда" className="mt-4 divide-y divide-line border-y border-line text-xs">
-            {timeline.items.map((item, index) => (
-              <li key={`${item.kind}-${item.at}-${index}`} className="grid gap-1 py-2 sm:grid-cols-[8rem_1fr]">
+            {timelineRows.map((item, index) => (
+              <li key={`${item.category}-${item.at}-${index}`} className="grid gap-1 py-2 sm:grid-cols-[8rem_1fr]">
                 <time className="tnum text-dim" dateTime={item.at ?? undefined}>{date(item.at)}</time>
-                <span>{item.kind} · {item.state ?? "без состояния"} · {item.contour ?? "оба контура"}</span>
+                <span>{timelineLabel(item)}</span>
               </li>
             ))}
           </ol>
@@ -158,9 +228,9 @@ export default function TrendInvestigation({
 
         <section className="card p-5"><h2 className="display text-[23px]">03 · Что произошло в медиаконтуре?</h2><p className="mt-3 text-sm text-dim">Медиаконтур: <strong className="text-fg">{trend.contours.media.state}</strong> · связь контуров {trend.contours.media.status}. Он измеряет сдвиг внимания, тона и тезисов в публикациях.</p></section>
         <section className="card p-5"><h2 className="display text-[23px]">04 · Что произошло в контуре действий?</h2><p className="mt-3 text-sm text-dim">Контур действий: <strong className="text-fg">{trend.contours.action.state}</strong> · связь контуров {trend.contours.action.status}. Медийная классификация не заменяет авторитетное подтверждение действия.</p></section>
-      </>}
+      </div>}
 
-      {view === "evidence" && <>
+      {view === "evidence" && <div id={`${tabsId}-radar-panel-evidence`} role="tabpanel" aria-labelledby={`${tabsId}-radar-tab-evidence`} tabIndex={0} className="space-y-4">
         <section className="card p-5">
           <h2 className="display text-[23px]">05 · Почему система в это верит?</h2>
           {support.length ? <ul className="mt-3 divide-y divide-line">{support.map((item) => <EvidenceRow key={item.public_id} item={item} />)}</ul> : <p className="mt-3 text-sm text-dim">{evidenceComplete ? "Среди всех сохранённых доказательств прямых подтверждений нет." : "В загруженных доказательствах прямых подтверждений пока нет."}</p>}
@@ -181,10 +251,11 @@ export default function TrendInvestigation({
           )}
           {evidenceLoadError && <p role="alert" className="mt-3 text-xs text-ru-red">Следующую страницу доказательств загрузить не удалось.</p>}
         </section>
-      </>}
+      </div>}
 
       {view === "coverage" && (
-        <section className="card p-5">
+        <div id={`${tabsId}-radar-panel-coverage`} role="tabpanel" aria-labelledby={`${tabsId}-radar-tab-coverage`} tabIndex={0}>
+          <section className="card p-5">
           <h2 className="display text-[23px]">07 · Достаточно ли покрытие?</h2>
           <div className="mt-3 grid gap-2 sm:grid-cols-2">
             {relevantCoverage.length ? relevantCoverage.map((item) => (
@@ -198,11 +269,13 @@ export default function TrendInvestigation({
           <p className="mt-3 flex gap-2 text-[11px] leading-5 text-dim"><ShieldAlert size={14} className="mt-0.5 shrink-0" aria-hidden="true" />{coverage.coverage_source}</p>
           <h3 className="card-title mt-5">Ограничения интерпретации</h3>
           <ul className="mt-3 list-disc space-y-1 pl-5 text-xs text-dim">{methodology.limitations.map((item) => <li key={item}>{item}</li>)}</ul>
-        </section>
+          </section>
+        </div>
       )}
 
       {view === "method" && (
-        <section className="card p-5">
+        <div id={`${tabsId}-radar-panel-method`} role="tabpanel" aria-labelledby={`${tabsId}-radar-tab-method`} tabIndex={0}>
+          <section className="card p-5">
           <h2 className="display text-[23px]">08 · Как рассчитаны baseline, T0, уверенность и состояние?</h2>
           <dl className="mt-4 grid gap-px overflow-hidden rounded-md border border-line bg-line text-xs sm:grid-cols-4">
             <div className="bg-panel2 p-3"><dt className="text-dim">Baseline</dt><dd className="tnum mt-1">{methodology.baseline.window_days} дней</dd></div>
@@ -212,7 +285,8 @@ export default function TrendInvestigation({
           </dl>
           <p className="mt-3 text-xs leading-5 text-dim">Версия {methodology.detector_version}. Факторы уверенности: {methodology.confidence_factors.join(", ")}.</p>
           <p className="mt-2 text-xs leading-5 text-cooling">{methodology.coverage_hard_gate}</p>
-        </section>
+          </section>
+        </div>
       )}
     </article>
   );
