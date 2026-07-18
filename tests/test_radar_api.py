@@ -88,6 +88,7 @@ class FakeRadarService:
                 "nested_url": "https://news.example/timeline",
                 "unsafe_url": "javascript:alert(1)",
                 "credential_url": "https://user:secret@news.example/private",
+                "neutral": {"value": "//news.example/protocol-relative"},
                 "children": [
                     {"href": "https://news.example/context"},
                     {"url": "https://news.example/has whitespace"},
@@ -199,6 +200,7 @@ def test_radar_recursively_sanitizes_persisted_evidence_and_timeline_urls():
     assert timeline_evidence["nested_url"] == "https://news.example/timeline"
     assert timeline_evidence["unsafe_url"] is None
     assert timeline_evidence["credential_url"] is None
+    assert timeline_evidence["neutral"]["value"] is None
     assert timeline_evidence["children"][0]["href"] == "https://news.example/context"
     assert timeline_evidence["children"][1]["url"] is None
     assert timeline_evidence["children"][2]["url"] is None

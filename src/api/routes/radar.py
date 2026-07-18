@@ -87,7 +87,8 @@ def _json_object(value: Any, default: Any) -> Any:
 
 def _is_absolute_url(value: str) -> bool:
     try:
-        return bool(urlparse(value).scheme)
+        parsed = urlparse(value)
+        return bool(parsed.scheme or parsed.netloc)
     except ValueError:
         # Malformed absolute-looking values still pass through safe_public_url.
         return ":" in value
