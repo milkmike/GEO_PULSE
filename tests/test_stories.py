@@ -26,6 +26,7 @@ from src.stories import (
     resolve_story_copy,
     score_story_match,
     should_merge,
+    story_confirmation_routes,
     transition_lifecycle,
     _filter_story_cluster_articles,
     _story_slug,
@@ -170,7 +171,7 @@ def test_concrete_event_threshold_rejects_point_649_even_with_high_legacy_score(
     assert merge_rejection_reasons(similarity) == ("missing_concrete_event_anchor",)
 
 
-def test_semantic_entities_and_topics_cannot_admit_without_concrete_event():
+def test_semantic_entities_and_topics_admit_without_concrete_event():
     left = replace(
         candidate(
             "KZ",
@@ -193,8 +194,83 @@ def test_semantic_entities_and_topics_cannot_admit_without_concrete_event():
 
     assert similarity.total >= 0.65
     assert {"semantic", "entities", "topics"}.issubset(similarity.matched_features)
+    assert should_merge(similarity)
+    assert story_confirmation_routes(similarity) == frozenset({"semantic"})
+
+
+@pytest.mark.parametrize(
+    ("entities", "topics", "semantic_score"),
+    (
+        (frozenset(), frozenset({"sanctions"}), 0.91),
+        (frozenset({"entity-actor"}), frozenset(), 0.91),
+        (frozenset({"entity-actor"}), frozenset({"sanctions"}), 0.859),
+    ),
+)
+def test_semantic_route_rejects_missing_corroboration(
+    entities,
+    topics,
+    semantic_score,
+):
+    left = replace(
+        candidate(
+            "AM",
+            event_key="правительство обсудило новый вопрос",
+            entities=entities,
+            topics=topics,
+        ),
+        thread_id=8101,
+        semantic_matches=((8102, semantic_score),),
+    )
+    right = replace(
+        candidate(
+            "GE",
+            event_key="кабинет рассмотрел другую формулировку",
+            entities=entities,
+            topics=topics,
+        ),
+        thread_id=8102,
+    )
+
+    similarity = score_story_match(left, right)
+
+    assert story_confirmation_routes(similarity) == frozenset()
     assert not should_merge(similarity)
-    assert "missing_concrete_event_anchor" in merge_rejection_reasons(similarity)
+
+
+def test_semantic_route_keeps_country_and_time_gates():
+    old = replace(
+        candidate(
+            "AM",
+            event_key="правительство обсудило новый вопрос",
+            entities=frozenset({"entity-actor"}),
+            topics=frozenset({"sanctions"}),
+            first_seen=NOW - timedelta(days=20),
+            last_seen=NOW - timedelta(days=15, seconds=1),
+        ),
+        thread_id=8201,
+        semantic_matches=((8202, 0.93),),
+    )
+    recent = replace(
+        candidate(
+            "GE",
+            event_key="кабинет рассмотрел другую формулировку",
+            entities=frozenset({"entity-actor"}),
+            topics=frozenset({"sanctions"}),
+        ),
+        thread_id=8202,
+    )
+
+    across_time = score_story_match(old, recent)
+    same_country = score_story_match(
+        replace(old, country_code="GE", last_seen=NOW, first_seen=NOW),
+        recent,
+    )
+
+    assert story_confirmation_routes(across_time) == frozenset({"semantic"})
+    assert not should_merge(across_time)
+    assert "time_window_exceeded" in merge_rejection_reasons(across_time)
+    assert not should_merge(same_country)
+    assert "same_country_pair" in merge_rejection_reasons(same_country)
 
 
 def test_generic_event_key_cannot_admit_even_with_identical_keys():
@@ -320,6 +396,118 @@ def test_thread_pair_drops_when_own_article_events_are_different():
             "KG source",
             event_key="заседание совета глав правительств шос",
             source_id=51,
+        ),),
+    )
+
+    assert should_merge(score_story_match(left, right))
+    assert _filter_story_cluster_articles((left, right)) is None
+
+
+def test_semantic_story_filter_keeps_only_corroborated_article_endpoints():
+    shared_entities = frozenset({"entity-actor"})
+    shared_topics = frozenset({"sanctions"})
+    left_supported = StoryArticle(
+        551,
+        "AM",
+        "Armenian report",
+        None,
+        NOW,
+        "AM source",
+        event_key="правительство представило новые меры",
+        entity_ids=shared_entities,
+        topics=shared_topics,
+        source_id=51,
+    )
+    left_dirty = StoryArticle(
+        552,
+        "AM",
+        "Unrelated AM report",
+        None,
+        NOW,
+        "AM source 2",
+        event_key="открытие нового городского парка",
+        entity_ids=frozenset({"entity-city"}),
+        topics=frozenset({"culture"}),
+        source_id=52,
+    )
+    right_supported = StoryArticle(
+        651,
+        "GE",
+        "Georgian report",
+        None,
+        NOW - timedelta(hours=4),
+        "GE source",
+        event_key="кабинет объявил об ограничениях",
+        entity_ids=shared_entities,
+        topics=shared_topics,
+        source_id=61,
+    )
+    left = replace(
+        candidate(
+            "AM",
+            event_key="правительство представило новые меры",
+            entities=shared_entities,
+            topics=shared_topics,
+        ),
+        thread_id=8551,
+        article_ids=(551, 552),
+        articles=(left_supported, left_dirty),
+        semantic_matches=((8651, 0.92),),
+    )
+    right = replace(
+        candidate(
+            "GE",
+            event_key="кабинет объявил об ограничениях",
+            entities=shared_entities,
+            topics=shared_topics,
+        ),
+        thread_id=8651,
+        article_ids=(651,),
+        articles=(right_supported,),
+    )
+
+    assert story_confirmation_routes(score_story_match(left, right)) == frozenset(
+        {"semantic"}
+    )
+
+    filtered = _filter_story_cluster_articles((left, right))
+
+    assert filtered is not None
+    assert [item.article_ids for item in filtered] == [(551,), (651,)]
+
+
+def test_semantic_story_filter_rejects_thread_evidence_without_article_evidence():
+    shared_entities = frozenset({"entity-actor"})
+    shared_topics = frozenset({"sanctions"})
+    left = replace(
+        candidate("AM", entities=shared_entities, topics=shared_topics),
+        thread_id=8751,
+        articles=(StoryArticle(
+            751,
+            "AM",
+            "AM report",
+            None,
+            NOW,
+            "AM source",
+            event_key="правительство представило новые меры",
+            entity_ids=shared_entities,
+            topics=frozenset({"sanctions"}),
+        ),),
+        semantic_matches=((8851, 0.94),),
+    )
+    right = replace(
+        candidate("GE", entities=shared_entities, topics=shared_topics),
+        thread_id=8851,
+        articles=(StoryArticle(
+            851,
+            "GE",
+            "GE report",
+            None,
+            NOW,
+            "GE source",
+            event_key="кабинет объявил об ограничениях",
+            entity_ids=shared_entities,
+            topics=frozenset({"diplomacy"}),
         ),),
     )
 
@@ -3117,6 +3305,9 @@ def test_membership_evidence_reproduces_score_and_names_peer():
         assert evidence["peer_thread_id"] != evidence["thread_id"]
         assert evidence["effective_components"]
         assert evidence["weights"]
+        assert evidence["confirmation_routes"] == ["event_key"]
+        assert evidence["shared_entities"]
+        assert evidence["shared_topics"]
         assert evidence["action_level_snapshot"] == 3
         assert evidence["membership_confidence_snapshot"] == pytest.approx(
             next(

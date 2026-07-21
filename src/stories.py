@@ -52,6 +52,7 @@ STORY_COMPONENT_WEIGHTS = {
     "semantic": 0.30,
 }
 SEMANTIC_MATCH_THRESHOLD = 0.82
+SEMANTIC_CONFIRMATION_THRESHOLD = 0.86
 MIN_SEMANTIC_THREAD_COVERAGE = 0.30
 
 
@@ -233,6 +234,39 @@ def _has_specific_event_evidence(similarity: StorySimilarity) -> bool:
     )
 
 
+def story_confirmation_routes(
+    similarity: StorySimilarity,
+) -> frozenset[str]:
+    """Return the independently supported routes for one country pair."""
+
+    countries = similarity.evidence.get("countries", ())
+    if not isinstance(countries, (list, tuple)) or len(set(countries)) < 2:
+        return frozenset()
+
+    routes: set[str] = set()
+    if (
+        similarity.components.get("event_key", 0.0)
+        >= CONCRETE_EVENT_MATCH_THRESHOLD
+        and _has_specific_event_evidence(similarity)
+    ):
+        routes.add("event_key")
+
+    shared_entities = similarity.evidence.get("shared_entities", ())
+    shared_topics = similarity.evidence.get("shared_topics", ())
+    if (
+        similarity.components.get("semantic", 0.0)
+        >= SEMANTIC_CONFIRMATION_THRESHOLD
+        and "entities" in similarity.matched_features
+        and "topics" in similarity.matched_features
+        and isinstance(shared_entities, (list, tuple))
+        and bool(shared_entities)
+        and isinstance(shared_topics, (list, tuple))
+        and bool(shared_topics)
+    ):
+        routes.add("semantic")
+    return frozenset(routes)
+
+
 def score_story_match(left: StoryCandidate, right: StoryCandidate) -> StorySimilarity:
     """Score whether two country threads describe one concrete global story.
 
@@ -337,10 +371,12 @@ def merge_rejection_reasons(
         similarity.components.get("event_key", 0.0)
         >= CONCRETE_EVENT_MATCH_THRESHOLD
     )
-    if not concrete_event_match:
-        reasons.append("missing_concrete_event_anchor")
-    elif not _has_specific_event_evidence(similarity):
-        reasons.append("generic_event_key")
+    confirmation_routes = story_confirmation_routes(similarity)
+    if not confirmation_routes:
+        if concrete_event_match and not _has_specific_event_evidence(similarity):
+            reasons.append("generic_event_key")
+        else:
+            reasons.append("missing_concrete_event_anchor")
     if similarity.gap_days > MAX_MERGE_GAP_DAYS:
         if not explicit_reactivation:
             reasons.append("time_window_exceeded")
@@ -1104,6 +1140,9 @@ def _membership_evidence(
         ),
         "weights": best.evidence.get("weights", STORY_COMPONENT_WEIGHTS),
         "matched_features": sorted(best.matched_features),
+        "confirmation_routes": sorted(story_confirmation_routes(best)),
+        "shared_entities": list(best.evidence.get("shared_entities", ())),
+        "shared_topics": list(best.evidence.get("shared_topics", ())),
         "gap_days": round(best.gap_days, 3),
         "explicit_reactivation": explicit_reactivation,
         "non_merge_reasons": list(merge_rejection_reasons(
@@ -1944,19 +1983,21 @@ def _filter_story_cluster_articles(
         for right in cluster[left_index + 1:]:
             if left.country_code == right.country_code:
                 continue
+            thread_similarity = score_story_match(left, right)
+            if not should_merge(thread_similarity):
+                return None
+            thread_routes = story_confirmation_routes(thread_similarity)
             pair_supported = False
             for left_article in left.articles:
                 if (
                     left_article.country_code != left.country_code
                     or left_article.published_at is None
-                    or not _specific_event_key(left_article.event_key)
                 ):
                     continue
                 for right_article in right.articles:
                     if (
                         right_article.country_code != right.country_code
                         or right_article.published_at is None
-                        or not _specific_event_key(right_article.event_key)
                     ):
                         continue
                     gap_days = abs(
@@ -1965,12 +2006,23 @@ def _filter_story_cluster_articles(
                             - _as_utc(right_article.published_at)
                         ).total_seconds()
                     ) / 86400.0
-                    if (
-                        gap_days <= MAX_MERGE_GAP_DAYS
+                    event_supported = (
+                        "event_key" in thread_routes
+                        and _specific_event_key(left_article.event_key)
+                        and _specific_event_key(right_article.event_key)
                         and trigram_similarity(
                             left_article.event_key,
                             right_article.event_key,
                         ) >= CONCRETE_EVENT_MATCH_THRESHOLD
+                    )
+                    semantic_supported = (
+                        "semantic" in thread_routes
+                        and bool(left_article.entity_ids & right_article.entity_ids)
+                        and bool(left_article.topics & right_article.topics)
+                    )
+                    if (
+                        gap_days <= MAX_MERGE_GAP_DAYS
+                        and (event_supported or semantic_supported)
                     ):
                         pair_supported = True
                         supported_ids.setdefault(left.thread_id, set()).add(
