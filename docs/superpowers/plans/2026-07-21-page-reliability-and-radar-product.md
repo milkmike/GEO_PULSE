@@ -30,7 +30,7 @@
 
 **Interfaces:**
 - Consumes: существующие `api.*(..., signal?: AbortSignal)` методы.
-- Produces: `DEFAULT_REQUEST_TIMEOUT_MS = 15000`; общий `get<T>` отклоняет запрос `TimeoutError` через 15 секунд; `/entities` игнорирует JSON не-массивы.
+- Produces: `DEFAULT_REQUEST_TIMEOUT_MS = 30000`; общий `get<T>` отклоняет запрос `TimeoutError` через 30 секунд; `/entities` игнорирует JSON не-массивы. Порог учитывает наблюдаемый холодный ответ странового досье до 22 секунд.
 
 - [ ] **Step 1: Написать падающий CSS-регрессионный тест**
 
@@ -71,7 +71,7 @@ it("aborts a stalled public request after 15 seconds", async () => {
     options.signal?.addEventListener("abort", () => reject(options.signal?.reason), { once: true });
   })));
   const pending = api.meta();
-  await vi.advanceTimersByTimeAsync(15_000);
+  await vi.advanceTimersByTimeAsync(30_000);
   await expect(pending).rejects.toMatchObject({ name: "TimeoutError" });
   vi.useRealTimers();
 });
@@ -86,7 +86,7 @@ Expected: FAIL, promise остаётся pending.
 - [ ] **Step 6: Реализовать единый таймаут с сохранением внешней отмены**
 
 ```ts
-export const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
+export const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 
 async function get<T>(path: string, signal?: AbortSignal): Promise<T> {
   const controller = new AbortController();

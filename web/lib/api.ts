@@ -17,7 +17,7 @@ export function apiBase(): string {
   return "http://localhost:8100";
 }
 
-export const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
+export const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 
 async function get<T>(path: string, signal?: AbortSignal): Promise<T> {
   const controller = new AbortController();
