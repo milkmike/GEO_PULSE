@@ -417,7 +417,12 @@ def premerge_special_cases(cc_clusters: list[tuple[str, list[dict]]]) -> tuple[l
 
 # ── Step 2: Clustering ──────────────────────────────────
 
-def cluster_pass1_embeddings(session, articles: list[dict]) -> dict[str, list[dict]]:
+def cluster_pass1_embeddings(
+    session,
+    articles: list[dict],
+    *,
+    use_llm_pair_judge: bool = True,
+) -> dict[str, list[dict]]:
     """Pass 1: Cluster articles by embedding cosine similarity.
 
     Uses pgvector's <=> operator for cosine distance.
@@ -487,7 +492,7 @@ def cluster_pass1_embeddings(session, articles: list[dict]) -> dict[str, list[di
                 maybe_pairs.append(p)
 
         # LLM judge for borderline pairs (cosine 0.72-0.82)
-        if maybe_pairs:
+        if maybe_pairs and use_llm_pair_judge:
             _llm_judge_pairs(session, cc, embedded, maybe_pairs, union)
 
         # Group articles into clusters
@@ -1500,12 +1505,14 @@ def rebuild_recent_stories(
     )
 
 
-def rebuild_recent_threads_and_stories(
+def rebuild_recent_threads(
     days: int = 30,
     *,
     now: datetime | None = None,
-) -> None:
-    """Additively refresh recent threads/stories without global maintenance."""
+    use_llm_dedup: bool = True,
+    use_llm_pair_judge: bool = True,
+) -> set[int]:
+    """Additively refresh recent threads without global maintenance."""
 
     if days < 1:
         raise ValueError("days must be positive")
@@ -1516,14 +1523,19 @@ def rebuild_recent_threads_and_stories(
     with get_session() as session:
         articles = fetch_articles(session, days=days)
         if not articles:
-            return
+            return thread_ids
 
         embedded_count = sum(1 for article in articles if article["has_embedding"])
         if embedded_count > len(articles) * 0.3:
-            clusters = cluster_pass1_embeddings(session, articles)
+            clusters = cluster_pass1_embeddings(
+                session,
+                articles,
+                use_llm_pair_judge=use_llm_pair_judge,
+            )
         else:
             clusters = cluster_pass1_trgm(session, articles)
-        clusters = cluster_pass2_llm(clusters)
+        if use_llm_dedup:
+            clusters = cluster_pass2_llm(clusters)
 
         for cluster_id, cluster_articles in clusters.items():
             cc = cluster_id.split(":")[0]
@@ -1545,7 +1557,48 @@ def rebuild_recent_threads_and_stories(
             if thread_id is not None:
                 thread_ids.add(thread_id)
 
+    return thread_ids
+
+
+def rebuild_recent_threads_and_stories(
+    days: int = 30,
+    *,
+    now: datetime | None = None,
+) -> None:
+    """Additively refresh recent threads/stories without global maintenance."""
+
+    if days < 1:
+        raise ValueError("days must be positive")
+    now = now or datetime.now(timezone.utc)
+    scope_start = now - timedelta(days=days)
+    thread_ids = rebuild_recent_threads(days=days, now=now)
+
     run_scoped_story_builder(thread_ids, scope_start=scope_start)
+
+
+def run_incremental_thread_story_cycle(
+    *,
+    thread_days: int = 3,
+    story_days: int = 30,
+    now: datetime | None = None,
+) -> None:
+    """Fast hourly refresh: recent threads first, wider stories second."""
+
+    if thread_days < 1 or story_days < 1:
+        raise ValueError("thread_days and story_days must be positive")
+    cycle_now = now or datetime.now(timezone.utc)
+    logger.info(
+        "Starting incremental thread/story cycle "
+        f"(threads={thread_days}d, stories={story_days}d)"
+    )
+    rebuild_recent_threads(
+        days=thread_days,
+        now=cycle_now,
+        use_llm_dedup=False,
+        use_llm_pair_judge=False,
+    )
+    rebuild_recent_stories(days=story_days, now=cycle_now)
+    logger.info("Incremental thread/story cycle complete")
 
 
 def build_threads():
@@ -1612,7 +1665,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="GeoPulse — Narrative Threads v2")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--loop", action="store_true")
+    mode.add_argument("--incremental-loop", action="store_true")
     parser.add_argument("--interval", type=int, default=3600)
+    parser.add_argument("--thread-days", type=int, default=3)
+    parser.add_argument("--story-days", type=int, default=30)
     mode.add_argument(
         "--recent-days",
         type=int,
@@ -1638,6 +1694,28 @@ def main():
         rebuild_recent_stories(args.stories_only_recent_days)
     elif args.recent_days is not None:
         rebuild_recent_threads_and_stories(args.recent_days)
+    elif args.incremental_loop:
+        logger.info(
+            "Starting incremental threads v2 "
+            f"(interval: {args.interval}s, threads: {args.thread_days}d, "
+            f"stories: {args.story_days}d)"
+        )
+        run_incremental_thread_story_cycle(
+            thread_days=args.thread_days,
+            story_days=args.story_days,
+        )
+        while True:
+            time.sleep(args.interval)
+            try:
+                run_incremental_thread_story_cycle(
+                    thread_days=args.thread_days,
+                    story_days=args.story_days,
+                )
+            except Exception as e:
+                logger.error(
+                    f"Incremental thread/story cycle error: {e}",
+                    exc_info=True,
+                )
     elif args.loop:
         logger.info(f"Starting threads v2 (interval: {args.interval}s)")
         build_threads()

@@ -139,7 +139,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.temperature
-    command: python scripts/build_threads.py --loop --interval 3600
+    command: python scripts/build_threads.py --incremental-loop --thread-days 3 --story-days 30 --interval 3600
     environment:
       DATABASE_URL: ${DATABASE_URL}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}

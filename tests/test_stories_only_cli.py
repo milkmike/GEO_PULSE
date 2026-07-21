@@ -253,3 +253,79 @@ def test_stories_only_recent_days_must_be_positive():
 
     with pytest.raises(ValueError, match="days must be positive"):
         build_threads.rebuild_recent_stories(days=0, now=NOW)
+
+
+def test_incremental_cycle_uses_fast_thread_window_and_wider_story_window(
+    monkeypatch,
+):
+    import scripts.build_threads as build_threads
+
+    calls = []
+    monkeypatch.setattr(
+        build_threads,
+        "rebuild_recent_threads",
+        lambda days, *, now, use_llm_dedup, use_llm_pair_judge: calls.append(
+            (
+                "threads",
+                days,
+                now,
+                use_llm_dedup,
+                use_llm_pair_judge,
+            )
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        build_threads,
+        "rebuild_recent_stories",
+        lambda days, *, now: calls.append(("stories", days, now)),
+    )
+
+    build_threads.run_incremental_thread_story_cycle(
+        thread_days=3,
+        story_days=30,
+        now=NOW,
+    )
+
+    assert calls == [
+        ("threads", 3, NOW, False, False),
+        ("stories", 30, NOW),
+    ]
+
+
+def test_incremental_loop_cli_routes_to_bounded_cycle(monkeypatch):
+    import scripts.build_threads as build_threads
+
+    class RoutedToIncrementalLoop(Exception):
+        pass
+
+    monkeypatch.setattr(build_threads, "wait_for_db", lambda: None)
+    monkeypatch.setattr(
+        build_threads,
+        "run_incremental_thread_story_cycle",
+        lambda *, thread_days, story_days: (_ for _ in ()).throw(
+            RoutedToIncrementalLoop((thread_days, story_days))
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        build_threads,
+        "build_threads",
+        lambda: pytest.fail("incremental loop ran global rebuild"),
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "build_threads.py",
+            "--incremental-loop",
+            "--thread-days",
+            "3",
+            "--story-days",
+            "30",
+        ],
+    )
+
+    with pytest.raises(RoutedToIncrementalLoop) as exc_info:
+        build_threads.main()
+
+    assert exc_info.value.args == ((3, 30),)
