@@ -520,14 +520,16 @@ def _dedupe_story_candidates(
 
     canonical_thread_ids: dict[int, int] = {}
     for duplicates in grouped.values():
-        canonical_thread_id = min(item.thread_id for item in duplicates)
+        # Higher thread IDs are the latest corrected projection when legacy
+        # rebuilds left multiple rows pointing at the exact same article set.
+        canonical_thread_id = max(item.thread_id for item in duplicates)
         canonical_thread_ids.update({
             item.thread_id: canonical_thread_id for item in duplicates
         })
 
     deduped: list[StoryCandidate] = []
     for duplicates in grouped.values():
-        canonical = min(duplicates, key=lambda item: item.thread_id)
+        canonical = max(duplicates, key=lambda item: item.thread_id)
         semantic_matches: dict[int, float] = {}
         for duplicate in duplicates:
             for thread_id, score in duplicate.semantic_matches:

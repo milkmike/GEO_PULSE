@@ -851,9 +851,9 @@ def test_cluster_builder_collapses_duplicate_country_thread_projections():
     ])
 
     assert len(clusters) == 1
-    assert sorted(item.thread_id for item in clusters[0]) == [20, 30]
+    assert sorted(item.thread_id for item in clusters[0]) == [21, 31]
     tm_candidate = next(item for item in clusters[0] if item.country_code == "TM")
-    assert tm_candidate.semantic_matches == ((30, 0.95),)
+    assert tm_candidate.semantic_matches == ((31, 0.95),)
 
 
 def test_same_thread_candidates_are_rejected_before_scoring(monkeypatch):
