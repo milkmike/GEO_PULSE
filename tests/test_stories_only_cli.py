@@ -30,6 +30,37 @@ class _RecentThreadSession:
         return _ThreadIdResult()
 
 
+def test_hourly_story_builder_is_bounded_to_recent_non_destructive_scope(
+    monkeypatch,
+):
+    import scripts.build_threads as build_threads
+
+    observed = {}
+    monkeypatch.setattr(
+        build_threads,
+        "get_session",
+        lambda: _session_context(object()),
+    )
+    monkeypatch.setattr(
+        build_threads,
+        "build_global_stories",
+        lambda _session, **kwargs: observed.update(kwargs)
+        or SimpleNamespace(
+            clusters=0,
+            stories_upserted=0,
+            article_memberships=0,
+        ),
+    )
+    monkeypatch.setattr(build_threads, "track_api_call", lambda **_kwargs: None)
+
+    build_threads.run_story_builder(recent_days=30, now=NOW)
+
+    assert observed["candidate_article_start"] == NOW - timedelta(days=30)
+    assert observed["minimum_existing_last_seen"] == NOW - timedelta(days=30)
+    assert observed["non_destructive"] is True
+    assert observed["refresh_lifecycles"] is True
+
+
 def test_stories_only_recent_rebuild_queries_canonical_bounded_threads(monkeypatch):
     import scripts.build_threads as build_threads
 

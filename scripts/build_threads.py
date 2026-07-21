@@ -176,12 +176,29 @@ def generate_story_copy(payload: dict) -> dict | None:
     return result
 
 
-def run_story_builder() -> None:
-    """Run global stories without allowing failures to stop country threads."""
+def run_story_builder(
+    *,
+    recent_days: int = 30,
+    now: datetime | None = None,
+) -> None:
+    """Run a bounded story refresh without stopping country threads."""
+
+    if recent_days < 1:
+        raise ValueError("recent_days must be positive")
+    scope_start = (now or datetime.now(timezone.utc)) - timedelta(
+        days=recent_days,
+    )
     try:
         with track_duration() as timer:
             with get_session() as session:
-                result = build_global_stories(session, summarizer=generate_story_copy)
+                result = build_global_stories(
+                    session,
+                    summarizer=generate_story_copy,
+                    candidate_article_start=scope_start,
+                    minimum_existing_last_seen=scope_start,
+                    non_destructive=True,
+                    refresh_lifecycles=True,
+                )
         logger.info(
             "Global stories built: %s clusters, %s stories, %s memberships",
             result.clusters,
