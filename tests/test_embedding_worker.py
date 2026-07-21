@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import gc
 from pathlib import Path
+import weakref
 
 import pytest
 import yaml
@@ -114,6 +116,38 @@ def test_embedding_loop_continues_after_one_failed_cycle():
     assert attempts == 2
     assert sleeps == [4.5]
     assert reports == [{"error": "provider unavailable"}, {"indexed": 3}]
+
+
+def test_unbounded_embedding_loop_does_not_retain_prior_reports():
+    from scripts.run_embedding_worker import run_loop
+
+    class Report(dict):
+        pass
+
+    class StopLoop(Exception):
+        pass
+
+    refs = []
+
+    def cycle():
+        report = Report(indexed=len(refs) + 1)
+        refs.append(weakref.ref(report))
+        return report
+
+    def stop_after_second_cycle(_seconds):
+        if len(refs) < 2:
+            return
+        gc.collect()
+        assert refs[0]() is None
+        raise StopLoop
+
+    with pytest.raises(StopLoop):
+        run_loop(
+            interval=5,
+            cycle=cycle,
+            sleep=stop_after_second_cycle,
+            monotonic=iter((0.0, 0.5, 5.0, 5.5)).__next__,
+        )
 
 
 def test_embedding_worker_is_in_analyzer_image_and_production_compose():

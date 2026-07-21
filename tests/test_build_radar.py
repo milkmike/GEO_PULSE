@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import os
+import gc
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 import subprocess
 import sys
-from types import SimpleNamespace
+import weakref
 
 import pytest
 import yaml
@@ -193,6 +194,38 @@ def test_radar_loop_uses_a_fresh_as_of_for_each_cycle():
         datetime(2026, 7, 21, 13, tzinfo=timezone.utc),
     ]
     assert [report["shadow"] for report in reports] == [False, False]
+
+
+def test_unbounded_radar_loop_does_not_retain_prior_reports():
+    args = parse_args(["--apply", "--loop", "--interval", "3600"])
+
+    class Report(dict):
+        pass
+
+    class StopLoop(Exception):
+        pass
+
+    refs = []
+
+    def one_cycle(_args):
+        report = Report(shadow=False, sequence=len(refs) + 1)
+        refs.append(weakref.ref(report))
+        return report
+
+    def stop_after_second_cycle(_seconds):
+        if len(refs) < 2:
+            return
+        gc.collect()
+        assert refs[0]() is None
+        raise StopLoop
+
+    with pytest.raises(StopLoop):
+        run_loop(
+            args,
+            run_once_fn=one_cycle,
+            sleep=stop_after_second_cycle,
+            monotonic=iter((0.0, 1.0, 3600.0, 3601.0)).__next__,
+        )
 
 
 def test_production_radar_worker_is_persisted_hourly_and_always_enabled():

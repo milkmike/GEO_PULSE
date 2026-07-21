@@ -131,17 +131,20 @@ def run_loop(
         raise ValueError("max_cycles must be positive")
 
     reports: list[dict[str, object]] = []
-    while max_cycles is None or len(reports) < max_cycles:
+    cycle_count = 0
+    while max_cycles is None or cycle_count < max_cycles:
         started = monotonic()
         try:
             payload = run_once_fn(args)
         except Exception as exc:
             logger.exception("Radar cycle failed")
             payload = {"shadow": not args.apply, "error": str(exc)}
-        reports.append(payload)
+        cycle_count += 1
+        if max_cycles is not None:
+            reports.append(payload)
         print(json.dumps(payload, ensure_ascii=False, sort_keys=True), flush=True)
 
-        if max_cycles is not None and len(reports) >= max_cycles:
+        if max_cycles is not None and cycle_count >= max_cycles:
             break
         elapsed = max(0.0, monotonic() - started)
         sleep(max(0.0, args.interval - elapsed))

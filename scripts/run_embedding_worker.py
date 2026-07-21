@@ -70,7 +70,8 @@ def run_loop(
         _positive("max_cycles", max_cycles)
 
     reports: list[dict[str, object]] = []
-    while max_cycles is None or len(reports) < max_cycles:
+    cycle_count = 0
+    while max_cycles is None or cycle_count < max_cycles:
         started = monotonic()
         try:
             report = cycle()
@@ -78,9 +79,11 @@ def run_loop(
         except Exception as exc:
             logger.exception("Embedding cycle failed")
             report = {"error": str(exc)}
-        reports.append(report)
+        cycle_count += 1
+        if max_cycles is not None:
+            reports.append(report)
 
-        if max_cycles is not None and len(reports) >= max_cycles:
+        if max_cycles is not None and cycle_count >= max_cycles:
             break
         elapsed = max(0.0, monotonic() - started)
         sleep(max(0.0, interval - elapsed))
