@@ -56,6 +56,8 @@ SEMANTIC_CONFIRMATION_THRESHOLD = 0.86
 STRICT_SEMANTIC_TOPIC_THRESHOLD = 0.90
 STRICT_SEMANTIC_MIN_SHARED_TOPICS = 2
 STRICT_SEMANTIC_LEXICAL_THRESHOLD = 0.20
+MAX_SEMANTIC_CANDIDATE_ARTICLES = 25
+MAX_SEMANTIC_CANDIDATE_SPAN_DAYS = 14.0
 MIN_SEMANTIC_THREAD_COVERAGE = 0.30
 
 
@@ -257,6 +259,8 @@ def story_confirmation_routes(
     shared_entities = similarity.evidence.get("shared_entities", ())
     shared_topics = similarity.evidence.get("shared_topics", ())
     if (
+        similarity.evidence.get("semantic_scope_bounded") is True
+        and
         similarity.components.get("semantic", 0.0)
         >= SEMANTIC_CONFIRMATION_THRESHOLD
         and "entities" in similarity.matched_features
@@ -274,6 +278,8 @@ def story_confirmation_routes(
     # very high vector similarity, two shared topics, and lexical corroboration
     # must all agree on the same cross-country pair.
     if (
+        similarity.evidence.get("semantic_scope_bounded") is True
+        and
         similarity.components.get("semantic", 0.0)
         >= STRICT_SEMANTIC_TOPIC_THRESHOLD
         and not shared_entities
@@ -353,6 +359,29 @@ def score_story_match(left: StoryCandidate, right: StoryCandidate) -> StorySimil
     if components["semantic"] >= SEMANTIC_MATCH_THRESHOLD:
         matched_features.add("semantic")
 
+    candidate_spans = [
+        max(
+            0.0,
+            (
+                _as_utc(candidate.last_seen)
+                - _as_utc(candidate.first_seen)
+            ).total_seconds() / 86400.0,
+        )
+        if candidate.first_seen is not None and candidate.last_seen is not None
+        else 0.0
+        for candidate in (left, right)
+    ]
+    candidate_article_counts = [len(left.article_ids), len(right.article_ids)]
+    semantic_scope_bounded = (
+        all(
+            article_count <= MAX_SEMANTIC_CANDIDATE_ARTICLES
+            for article_count in candidate_article_counts
+        )
+        and all(
+            span <= MAX_SEMANTIC_CANDIDATE_SPAN_DAYS
+            for span in candidate_spans
+        )
+    )
     evidence = {
         "countries": sorted({left.country_code, right.country_code}),
         "shared_entities": sorted(left.entities & right.entities),
@@ -361,6 +390,9 @@ def score_story_match(left: StoryCandidate, right: StoryCandidate) -> StorySimil
         "raw_entity_overlap": raw_entity_overlap,
         "raw_topic_overlap": raw_topic_overlap,
         "title_used_as_fallback": effective_components["title"] > 0,
+        "candidate_article_counts": candidate_article_counts,
+        "candidate_activity_spans_days": candidate_spans,
+        "semantic_scope_bounded": semantic_scope_bounded,
         "semantic_threshold": SEMANTIC_MATCH_THRESHOLD,
         "effective_components": effective_components,
         "weights": STORY_COMPONENT_WEIGHTS,

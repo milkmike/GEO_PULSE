@@ -256,6 +256,40 @@ def test_strict_semantic_topics_route_still_rejects_broad_topic_similarity():
     assert not should_merge(similarity)
 
 
+def test_semantic_routes_reject_oversized_country_superthreads():
+    left = replace(
+        candidate(
+            "KZ",
+            entities=frozenset({"entity-eaeu"}),
+            topics=frozenset({"economy_trade", "organizations"}),
+        ),
+        thread_id=88953,
+        article_ids=tuple(range(1, 61)),
+        semantic_matches=((89022, 0.95),),
+    )
+    right = replace(
+        candidate(
+            "KG",
+            entities=frozenset({"entity-eaeu"}),
+            topics=frozenset({"economy_trade", "organizations"}),
+        ),
+        thread_id=89022,
+        article_ids=tuple(range(101, 131)),
+    )
+
+    similarity = score_story_match(left, right)
+
+    assert similarity.evidence["semantic_scope_bounded"] is False
+    assert story_confirmation_routes(similarity) == frozenset({"event_key"})
+
+    different_events = replace(
+        similarity,
+        components={**similarity.components, "event_key": 0.1},
+    )
+    assert story_confirmation_routes(different_events) == frozenset()
+    assert not should_merge(different_events)
+
+
 @pytest.mark.parametrize(
     ("entities", "topics", "semantic_score"),
     (
