@@ -1150,6 +1150,14 @@ WHERE meta.id = member.meta_trend_id
   AND member.left_at IS NULL
 """)
 
+_CLOSE_STALE_META_MEMBERS = text("""
+UPDATE radar_trend_members
+SET left_at = :as_of
+WHERE meta_trend_id = :meta_id
+  AND left_at IS NULL
+  AND NOT (country_trend_id = ANY(CAST(:active_country_ids AS bigint[])))
+""")
+
 _UPSERT_CONTOUR_LINK = text("""
 INSERT INTO radar_contour_links (public_id, media_trend_id, action_trend_id, status, evidence, evaluated_at)
 VALUES (:public_id, :media_trend_id, :action_trend_id, :status, CAST(:evidence AS jsonb), :evaluated_at)
@@ -1322,14 +1330,22 @@ def _persist_meta_and_contours(
                     "trend_id": meta_id, "previous_t0": prior_t0, "revised_t0": meta.t0_auto,
                     "evidence": json.dumps({"detector_version": DETECTOR_VERSION, "scope": "meta"}),
                 })
+        active_country_ids: list[int] = []
         for wave in meta.waves:
             if wave.state in (TrendState.RESOLVED, TrendState.REJECTED):
                 continue
             country_id = wave_ids[(wave.country_code, wave.contour, wave.subject_key, wave.direction, wave.wave_key)]
+            active_country_ids.append(country_id)
             session.execute(_INSERT_MEMBER, {
                 "public_id": uuid5(NAMESPACE_URL, f"geo-pulse:radar-member:{meta_id}:{country_id}"),
                 "meta_trend_id": meta_id, "country_trend_id": country_id,
                 "evidence": json.dumps({"subject_key": meta.subject_key, "direction": meta.direction}),
+            })
+        if incremental and active_country_ids:
+            session.execute(_CLOSE_STALE_META_MEMBERS, {
+                "meta_id": meta_id,
+                "active_country_ids": active_country_ids,
+                "as_of": as_of,
             })
     grouped: dict[tuple[str, str, str], list[tuple[int, CountryWave]]] = {}
     wave_by_identity = {

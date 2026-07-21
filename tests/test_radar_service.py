@@ -1154,6 +1154,51 @@ def test_meta_persistence_closes_stale_members_before_reopening_current_ones():
     assert "left_at = NULL" in member_sql
 
 
+def test_incremental_meta_refresh_closes_only_stale_members_of_current_meta():
+    class _ExistingMetaSession(_RecordingSqlSession):
+        def execute(self, statement, params=None):
+            sql = str(statement)
+            if "scope = 'meta'" in sql and "has_analyst_t0_override" in sql:
+                self.calls.append((sql, params or {}))
+                return _Result(rows=[{
+                    "id": 77,
+                    "state": TrendState.EMERGING.value,
+                    "confirmed_at": None,
+                    "t0_auto": AS_OF,
+                    "t0_effective": AS_OF,
+                    "meta_key": "current-meta",
+                }])
+            return super().execute(statement, params)
+
+    first = replace(_episode_wave("media", AS_OF, "first"), country_code="ES")
+    second = replace(_episode_wave("media", AS_OF, "second"), country_code="PT")
+    meta = MetaTrend(
+        "event:energy", "increase", (first, second), AS_OF,
+        meta_key="current-meta",
+    )
+    wave_ids = {
+        (wave.country_code, wave.contour, wave.subject_key, wave.direction, wave.wave_key): trend_id
+        for trend_id, wave in zip((901, 902), (first, second), strict=True)
+    }
+    session = _ExistingMetaSession()
+
+    _persist_meta_and_contours(
+        session, (meta,), wave_ids, AS_OF, incremental=True,
+    )
+
+    sql, params = next(
+        (sql, params) for sql, params in session.calls
+        if "UPDATE radar_trend_members" in sql
+        and "meta_trend_id = :meta_id" in sql
+    )
+    assert params == {
+        "meta_id": 77,
+        "active_country_ids": [901, 902],
+        "as_of": AS_OF,
+    }
+    assert "detector_version" not in params
+
+
 def test_meta_persistence_uses_prior_state_to_prevent_lifecycle_regression():
     class _ExistingMetaSession(_RecordingSqlSession):
         def execute(self, statement, params=None):
