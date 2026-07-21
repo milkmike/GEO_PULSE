@@ -65,7 +65,7 @@ export default function TrendCard({ trend, compact = false }: { trend: RadarTren
       {(visibleCountries.length > 0 || trend.country_code) && <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] uppercase tracking-[0.1em] text-dim">
         {visibleCountries.map((country) => <span key={country} className="rounded-full border border-line px-2 py-1">{country}</span>)}
         {visibleCountries.length === 0 && trend.country_code && <span className="rounded-full border border-line px-2 py-1">{trend.country_code}</span>}
-        {remainingCountries > 0 && <span className="rounded-full border border-line px-2 py-1">+{remainingCountries} стран</span>}
+        {remainingCountries > 0 && <span className="rounded-full border border-line px-2 py-1">+{countriesLabel(remainingCountries)}</span>}
       </div>}
       <dl className="mt-3 grid grid-cols-2 gap-px overflow-hidden rounded-md border border-line bg-line text-[11px]">
         {(["media", "action"] as const).map((contour) => (

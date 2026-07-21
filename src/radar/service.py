@@ -1341,7 +1341,7 @@ def _persist_meta_and_contours(
                 "meta_trend_id": meta_id, "country_trend_id": country_id,
                 "evidence": json.dumps({"subject_key": meta.subject_key, "direction": meta.direction}),
             })
-        if incremental and active_country_ids:
+        if incremental:
             session.execute(_CLOSE_STALE_META_MEMBERS, {
                 "meta_id": meta_id,
                 "active_country_ids": active_country_ids,

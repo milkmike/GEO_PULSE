@@ -84,6 +84,25 @@ def test_serialize_trend_humanizes_and_compacts_cross_country_wave():
     assert payload["thesis"] == "Торговые связи с Россией ослабевают"
 
 
+def test_serialize_story_trend_uses_evidence_title_instead_of_internal_key():
+    payload = radar_routes.serialize_trend(
+        _trend(
+            title_ru="story:77",
+            subject_key="story:77",
+            direction="increase",
+            evidence_preview={
+                "public_id": "00000000-0000-0000-0000-000000000077",
+                "role": "trigger",
+                "title": "Переговоры о новых ограничениях расширяются",
+                "url": "https://news.example/story",
+            },
+        )
+    )
+
+    assert payload["thesis"] == "Межстрановой сюжет: Переговоры о новых ограничениях расширяются"
+    assert "story" not in payload["thesis"].lower()
+
+
 class FakeRadarService:
     def __init__(self):
         self.list_calls = []

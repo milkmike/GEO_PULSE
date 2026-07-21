@@ -60,4 +60,38 @@ describe("TrendCard", () => {
     expect(screen.getByText("медиа пока не подтверждает")).toBeVisible();
     expect(screen.getByText("действия подтверждают")).toBeVisible();
   });
+
+  it("declines the remaining country count", () => {
+    const trend = {
+      public_id: "trend-2",
+      scope: "meta" as const,
+      state: "confirmed" as const,
+      thesis: "Новая волна",
+      subject_key: "event:new-wave",
+      direction: "increase",
+      confidence: 0.9,
+      coverage_confidence: 0.8,
+      velocity: 0.5,
+      first_observed_at: null,
+      detected_at: null,
+      confirmed_at: null,
+      t0_auto: null,
+      t0_effective: null,
+      country_code: null,
+      country_count: 6,
+      wave_count: 6,
+      country_waves: ["ES", "PT", "FR", "DE", "IT"].map(wave),
+      contours: {
+        media: { state: "confirmed" as const, status: "aligned" as const },
+        action: { state: "confirmed" as const, status: "aligned" as const },
+      },
+      contradiction_marker: false,
+      evidence_preview: null,
+      why_included: "quality_gate",
+    };
+
+    render(<TrendCard trend={trend} />);
+
+    expect(screen.getByText("+1 страна")).toBeVisible();
+  });
 });

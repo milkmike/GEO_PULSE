@@ -1199,6 +1199,52 @@ def test_incremental_meta_refresh_closes_only_stale_members_of_current_meta():
     assert "detector_version" not in params
 
 
+def test_incremental_meta_refresh_closes_all_members_when_no_wave_is_active():
+    class _ExistingMetaSession(_RecordingSqlSession):
+        def execute(self, statement, params=None):
+            sql = str(statement)
+            if "scope = 'meta'" in sql and "has_analyst_t0_override" in sql:
+                self.calls.append((sql, params or {}))
+                return _Result(rows=[{
+                    "id": 78,
+                    "state": TrendState.CONFIRMED.value,
+                    "confirmed_at": AS_OF - timedelta(days=1),
+                    "t0_auto": AS_OF - timedelta(days=2),
+                    "t0_effective": AS_OF - timedelta(days=2),
+                    "meta_key": "resolved-meta",
+                }])
+            return super().execute(statement, params)
+
+    resolved = replace(
+        _episode_wave("media", AS_OF, "resolved"),
+        country_code="ES",
+        state=TrendState.RESOLVED,
+    )
+    meta = MetaTrend(
+        "event:energy", "increase", (resolved,), AS_OF,
+        meta_key="resolved-meta",
+    )
+    wave_ids = {
+        (resolved.country_code, resolved.contour, resolved.subject_key, resolved.direction, resolved.wave_key): 903,
+    }
+    session = _ExistingMetaSession()
+
+    _persist_meta_and_contours(
+        session, (meta,), wave_ids, AS_OF, incremental=True,
+    )
+
+    _, params = next(
+        (sql, params) for sql, params in session.calls
+        if "UPDATE radar_trend_members" in sql
+        and "meta_trend_id = :meta_id" in sql
+    )
+    assert params == {
+        "meta_id": 78,
+        "active_country_ids": [],
+        "as_of": AS_OF,
+    }
+
+
 def test_meta_persistence_uses_prior_state_to_prevent_lifecycle_regression():
     class _ExistingMetaSession(_RecordingSqlSession):
         def execute(self, statement, params=None):

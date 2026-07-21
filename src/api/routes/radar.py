@@ -229,7 +229,12 @@ def _serialize_evidence_preview(value: Any) -> dict[str, Any] | None:
     }
 
 
-def _humanize_thesis(subject_key: str, direction: str, stored_title: str | None = None) -> str:
+def _humanize_thesis(
+    subject_key: str,
+    direction: str,
+    stored_title: str | None = None,
+    evidence_title: str | None = None,
+) -> str:
     labels = {
         ("economy:trade:russia", "increase"): "Торговые связи с Россией усиливаются",
         ("economy:trade:russia", "decrease"): "Торговые связи с Россией ослабевают",
@@ -243,7 +248,15 @@ def _humanize_thesis(subject_key: str, direction: str, stored_title: str | None 
         return mapped
     if stored_title and stored_title != subject_key:
         return stored_title
-    return subject_key.removeprefix("event:").replace(":", " · ")
+    if evidence_title:
+        if subject_key.startswith(("story:", "event:")):
+            return f"Межстрановой сюжет: {evidence_title}"
+        return evidence_title
+    if subject_key.startswith("story:"):
+        return "Межстрановой сюжет"
+    if subject_key.startswith("event:"):
+        return "Новое событие, влияющее на отношение к России"
+    return "Изменение отношения к России"
 
 
 def serialize_trend(row: Any, *, wave_limit: int | None = None) -> dict[str, Any]:
@@ -260,11 +273,17 @@ def serialize_trend(row: Any, *, wave_limit: int | None = None) -> dict[str, Any
     visible_waves = waves[:wave_limit] if wave_limit is not None else waves
     subject_key = str(_value(row, "subject_key") or "")
     direction = str(_value(row, "direction") or "")
+    evidence_preview = _serialize_evidence_preview(_value(row, "evidence_preview"))
     return {
         "public_id": str(_value(row, "public_id")),
         "scope": _value(row, "scope"),
         "state": _value(row, "state"),
-        "thesis": _humanize_thesis(subject_key, direction, _value(row, "title_ru")),
+        "thesis": _humanize_thesis(
+            subject_key,
+            direction,
+            _value(row, "title_ru"),
+            evidence_preview.get("title") if evidence_preview else None,
+        ),
         "subject_key": subject_key,
         "direction": direction,
         "confidence": _number(_value(row, "confidence")),
@@ -281,7 +300,7 @@ def serialize_trend(row: Any, *, wave_limit: int | None = None) -> dict[str, Any
         "country_waves": [_serialize_country_wave(item) for item in visible_waves],
         "contours": _contours(_value(row, "contours")),
         "contradiction_marker": bool(_value(row, "contradiction_marker", False)),
-        "evidence_preview": _serialize_evidence_preview(_value(row, "evidence_preview")),
+        "evidence_preview": evidence_preview,
         "why_included": _value(row, "why_included") or "prioritized_by_state_and_velocity",
     }
 
