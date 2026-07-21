@@ -2028,11 +2028,11 @@ def _project_candidate_articles(
             article.action_level for article in confirming_articles
         ),
         articles=confirming_articles,
-        semantic_matches=(
-            candidate.semantic_matches
-            if len(confirming_articles) == len(candidate.articles)
-            else ()
-        ),
+        # The caller has already required article-level corroboration for each
+        # semantic pair.  Retain the thread-centroid score so the persistence
+        # cohesion guard can revalidate the same accepted route after noisy
+        # articles are removed.
+        semantic_matches=candidate.semantic_matches,
     )
 
 

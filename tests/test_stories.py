@@ -532,6 +532,7 @@ def test_semantic_story_filter_keeps_only_corroborated_article_endpoints():
 
     assert filtered is not None
     assert [item.article_ids for item in filtered] == [(551,), (651,)]
+    assert should_merge(score_story_match(*filtered))
 
 
 def test_semantic_story_filter_rejects_thread_evidence_without_article_evidence():
