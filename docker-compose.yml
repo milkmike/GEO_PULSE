@@ -125,7 +125,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.temperature
-    command: python scripts/build_radar.py --apply --days 90 --loop --interval 3600
+    command: python scripts/build_radar.py --apply --days 90 --generation-days 3 --loop --interval 3600
     environment:
       DATABASE_URL: ${DATABASE_URL}
     depends_on:

@@ -24,6 +24,17 @@ def test_radar_cli_accepts_only_the_audited_90_day_window():
         parse_args(["--days", "91", "--apply"])
 
 
+def test_radar_cli_accepts_bounded_incremental_generation_window():
+    args = parse_args(["--days", "90", "--generation-days", "3", "--apply"])
+
+    assert args.generation_days == 3
+
+    with pytest.raises(SystemExit):
+        parse_args(["--generation-days", "0", "--apply"])
+    with pytest.raises(SystemExit):
+        parse_args(["--generation-days", "91", "--apply"])
+
+
 def test_radar_cli_help_does_not_require_database_configuration():
     root = Path(__file__).resolve().parents[1]
     environment = {
@@ -144,6 +155,22 @@ def test_apply_cycle_owns_advisory_lock_and_commits_once():
     assert session.commits == 1
 
 
+def test_incremental_cycle_forwards_generation_window():
+    args = parse_args(["--apply", "--generation-days", "3"])
+    session = _Session(acquired=True)
+    observed = {}
+
+    run_once(
+        args,
+        now_factory=lambda: datetime(2026, 7, 21, 13, tzinfo=timezone.utc),
+        session_factory=_session_factory(session),
+        cycle_runner=lambda _session, as_of, **options: observed.update(options)
+        or _Report(as_of, shadow=options["shadow"]),
+    )
+
+    assert observed["generation_days"] == 3
+
+
 def test_apply_cycle_skips_when_another_worker_owns_the_lock():
     args = parse_args(["--apply"])
     session = _Session(acquired=False)
@@ -236,7 +263,7 @@ def test_production_radar_worker_is_persisted_hourly_and_always_enabled():
 
     assert worker["command"] == (
         "python scripts/build_radar.py --apply --days 90 "
-        "--loop --interval 3600"
+        "--generation-days 3 --loop --interval 3600"
     )
     assert "profiles" not in worker
     assert worker["restart"] == "unless-stopped"

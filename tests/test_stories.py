@@ -198,6 +198,64 @@ def test_semantic_entities_and_topics_admit_without_concrete_event():
     assert story_confirmation_routes(similarity) == frozenset({"semantic"})
 
 
+def test_strict_semantic_topics_route_recovers_missing_entity_mentions():
+    left = replace(
+        candidate(
+            "TM",
+            event_key="anwar oil gas partnership in russia and turkmenistan",
+            title="Anwar's oil and gas breakthroughs in Russia and Turkmenistan",
+            entities=frozenset(),
+            topics=frozenset({"economy_trade", "energy", "diplomacy"}),
+        ),
+        thread_id=65865,
+        semantic_matches=((88448, 0.9074),),
+    )
+    right = replace(
+        candidate(
+            "MY",
+            event_key="malaysian delegation joins asean russia summit",
+            title="Anwar leads Malaysian delegation to the ASEAN-Russia summit",
+            entities=frozenset(),
+            topics=frozenset({"economy_trade", "energy"}),
+        ),
+        thread_id=88448,
+    )
+
+    similarity = score_story_match(left, right)
+
+    assert story_confirmation_routes(similarity) == frozenset({"semantic_topics"})
+    assert should_merge(similarity)
+
+
+def test_strict_semantic_topics_route_still_rejects_broad_topic_similarity():
+    left = replace(
+        candidate(
+            "KZ",
+            event_key="regional policy report",
+            title="Kazakhstan reviews regional policy",
+            entities=frozenset(),
+            topics=frozenset({"economy_trade", "diplomacy"}),
+        ),
+        thread_id=65866,
+        semantic_matches=((88449, 0.8999),),
+    )
+    right = replace(
+        candidate(
+            "KG",
+            event_key="regional economic report",
+            title="Kyrgyzstan publishes an economic report",
+            entities=frozenset(),
+            topics=frozenset({"economy_trade", "diplomacy"}),
+        ),
+        thread_id=88449,
+    )
+
+    similarity = score_story_match(left, right)
+
+    assert story_confirmation_routes(similarity) == frozenset()
+    assert not should_merge(similarity)
+
+
 @pytest.mark.parametrize(
     ("entities", "topics", "semantic_score"),
     (
@@ -741,6 +799,26 @@ def test_cluster_builder_emits_only_cross_country_stories():
     assert len(cross_country) == 1
     assert {item.country_code for item in cross_country[0]} == {"AZ", "KZ"}
     assert same_country == []
+
+
+def test_cluster_builder_collapses_duplicate_country_thread_projections():
+    left = replace(candidate("TM"), thread_id=20, article_ids=(101,))
+    duplicate_left = replace(
+        left,
+        thread_id=21,
+        semantic_matches=((31, 0.95),),
+    )
+    right = replace(candidate("MY"), thread_id=30, article_ids=(201,))
+    duplicate_right = replace(right, thread_id=31)
+
+    clusters = cluster_story_candidates([
+        left, duplicate_left, right, duplicate_right,
+    ])
+
+    assert len(clusters) == 1
+    assert sorted(item.thread_id for item in clusters[0]) == [20, 30]
+    tm_candidate = next(item for item in clusters[0] if item.country_code == "TM")
+    assert tm_candidate.semantic_matches == ((30, 0.95),)
 
 
 def test_same_thread_candidates_are_rejected_before_scoring(monkeypatch):

@@ -55,7 +55,15 @@ route for cross-country pairs inside the existing fourteen-day time gate:
 - the pair shares at least one normalized topic;
 - both candidates have the required active embedding coverage.
 
-Either the concrete-event route or the semantic route may admit a pair. Same-
+Production validation added a stricter fallback for fresh multilingual reports
+whose canonical entities have not yet been extracted: semantic similarity must
+be at least `0.90`, at least two normalized topics must match, and the title or
+event wording must independently clear a `0.20` lexical corroboration gate.
+Exact duplicate country-thread projections are collapsed before clustering and
+their vector evidence is remapped to the canonical projection.
+
+Any of the concrete-event, entity-semantic, or strict topic-semantic routes may
+admit a pair. Same-
 country pairs, same-thread pairs, generic event keys, and pairs outside the time
 window remain rejected. The final article filter must use the same accepted pair
 evidence instead of re-imposing event-key-only confirmation. Every persisted
@@ -74,8 +82,10 @@ with `shadow=False` only when `--apply` is set, commits one complete cycle, and
 sleeps. A PostgreSQL advisory lock prevents overlapping apply cycles.
 
 The production Compose service is always enabled, runs hourly with `--apply`, and
-uses `restart: unless-stopped`. Shadow mode stays the default for manual commands
-and audits.
+uses `restart: unless-stopped`. Hourly cycles regenerate only the latest three
+days, join those identities to the retained ninety-day observation baseline,
+and never close unrelated meta-trend memberships. Shadow mode stays the default
+for manual commands and audits.
 
 ## Safety and observability
 

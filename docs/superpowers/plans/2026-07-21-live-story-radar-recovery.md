@@ -4,7 +4,7 @@
 
 **Goal:** Restore continuous story-candidate embeddings, conservative hybrid cross-country story formation, and hourly persisted Radar cycles.
 
-**Architecture:** A bounded embedding worker reuses the existing idempotent job store and active provider profile. Story clustering keeps the exact-event route and adds a corroborated semantic route that requires shared canonical entities and topics at both thread and article level. Radar gains a lock-protected loop while retaining shadow as the safe manual default.
+**Architecture:** A bounded embedding worker reuses the existing idempotent job store and active provider profile. Story clustering keeps the exact-event route, adds an entity/topic semantic route, and uses a stricter vector/topic/lexical fallback when fresh entity extraction is incomplete. Radar gains a lock-protected incremental loop while retaining the ninety-day baseline and shadow as the safe manual default.
 
 **Tech Stack:** Python 3.12, SQLAlchemy 2, PostgreSQL/pgvector, OpenRouter embeddings, Docker Compose, pytest.
 
@@ -12,10 +12,10 @@
 
 - Preserve every existing article, analysis, temperature, signal, brief, thread, story, and radar history row.
 - Do not lower the concrete event-key threshold or remove the fourteen-day time gate.
-- Semantic story admission requires similarity `>= 0.86`, a shared canonical entity, and a shared normalized topic.
+- Semantic story admission requires either similarity `>= 0.86` with a shared canonical entity and topic, or similarity `>= 0.90` with two shared topics and independent lexical corroboration.
 - Embedding work is bounded, idempotent, and uses the one active 1,024-dimensional profile.
 - Manual Radar invocation remains shadow unless `--apply` is explicit.
-- Production Radar runs hourly with a PostgreSQL advisory transaction lock.
+- Production Radar runs hourly with a PostgreSQL advisory transaction lock, regenerates three recent days, and joins only affected identities to the ninety-day history.
 - Initial production story recovery uses the thirty-day non-destructive scoped builder.
 
 ---

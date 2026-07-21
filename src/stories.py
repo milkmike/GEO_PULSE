@@ -53,6 +53,9 @@ STORY_COMPONENT_WEIGHTS = {
 }
 SEMANTIC_MATCH_THRESHOLD = 0.82
 SEMANTIC_CONFIRMATION_THRESHOLD = 0.86
+STRICT_SEMANTIC_TOPIC_THRESHOLD = 0.90
+STRICT_SEMANTIC_MIN_SHARED_TOPICS = 2
+STRICT_SEMANTIC_LEXICAL_THRESHOLD = 0.20
 MIN_SEMANTIC_THREAD_COVERAGE = 0.30
 
 
@@ -264,6 +267,24 @@ def story_confirmation_routes(
         and bool(shared_topics)
     ):
         routes.add("semantic")
+
+    # Canonical entity extraction is intentionally conservative and therefore
+    # incomplete for fresh multilingual reports.  A stricter independent path
+    # keeps those reports recoverable without allowing broad topical matches:
+    # very high vector similarity, two shared topics, and lexical corroboration
+    # must all agree on the same cross-country pair.
+    if (
+        similarity.components.get("semantic", 0.0)
+        >= STRICT_SEMANTIC_TOPIC_THRESHOLD
+        and not shared_entities
+        and isinstance(shared_topics, (list, tuple))
+        and len(shared_topics) >= STRICT_SEMANTIC_MIN_SHARED_TOPICS
+        and max(
+            similarity.components.get("event_key", 0.0),
+            similarity.components.get("title", 0.0),
+        ) >= STRICT_SEMANTIC_LEXICAL_THRESHOLD
+    ):
+        routes.add("semantic_topics")
     return frozenset(routes)
 
 
@@ -455,6 +476,45 @@ def _candidate_pair_should_merge(
     )
 
 
+def _dedupe_story_candidates(
+    candidates: Sequence[StoryCandidate],
+) -> list[StoryCandidate]:
+    """Collapse duplicate thread projections without losing vector evidence."""
+
+    grouped: dict[tuple[str, tuple[int, ...]], list[StoryCandidate]] = {}
+    for candidate in candidates:
+        key = (candidate.country_code, tuple(sorted(candidate.article_ids)))
+        grouped.setdefault(key, []).append(candidate)
+
+    canonical_thread_ids: dict[int, int] = {}
+    for duplicates in grouped.values():
+        canonical_thread_id = min(item.thread_id for item in duplicates)
+        canonical_thread_ids.update({
+            item.thread_id: canonical_thread_id for item in duplicates
+        })
+
+    deduped: list[StoryCandidate] = []
+    for duplicates in grouped.values():
+        canonical = min(duplicates, key=lambda item: item.thread_id)
+        semantic_matches: dict[int, float] = {}
+        for duplicate in duplicates:
+            for thread_id, score in duplicate.semantic_matches:
+                canonical_target_id = canonical_thread_ids.get(
+                    thread_id, thread_id,
+                )
+                if canonical_target_id == canonical.thread_id:
+                    continue
+                semantic_matches[canonical_target_id] = max(
+                    semantic_matches.get(canonical_target_id, 0.0),
+                    float(score),
+                )
+        deduped.append(replace(
+            canonical,
+            semantic_matches=tuple(sorted(semantic_matches.items())),
+        ))
+    return deduped
+
+
 def cluster_story_candidates(
     candidates: Sequence[StoryCandidate],
     *,
@@ -462,7 +522,10 @@ def cluster_story_candidates(
 ) -> list[tuple[StoryCandidate, ...]]:
     """Cluster country threads globally, returning cross-country groups only."""
 
-    ordered = sorted(candidates, key=lambda item: (item.country_code, item.thread_id))
+    ordered = sorted(
+        _dedupe_story_candidates(candidates),
+        key=lambda item: (item.country_code, item.thread_id),
+    )
     grouped: list[list[StoryCandidate]] = []
     for candidate in ordered:
         for cluster in grouped:
@@ -2020,9 +2083,18 @@ def _filter_story_cluster_articles(
                         and bool(left_article.entity_ids & right_article.entity_ids)
                         and bool(left_article.topics & right_article.topics)
                     )
+                    strict_semantic_topics_supported = (
+                        "semantic_topics" in thread_routes
+                        and len(left_article.topics & right_article.topics)
+                        >= STRICT_SEMANTIC_MIN_SHARED_TOPICS
+                    )
                     if (
                         gap_days <= MAX_MERGE_GAP_DAYS
-                        and (event_supported or semantic_supported)
+                        and (
+                            event_supported
+                            or semantic_supported
+                            or strict_semantic_topics_supported
+                        )
                     ):
                         pair_supported = True
                         supported_ids.setdefault(left.thread_id, set()).add(

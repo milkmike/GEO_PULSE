@@ -119,6 +119,42 @@ def test_radar_cycle_rejects_any_non_exact_lookback(monkeypatch, days):
         run_radar_cycle(_Session(), AS_OF, shadow=True, days=days)
 
 
+def test_incremental_cycle_generates_three_days_but_keeps_90_day_lookback(
+    monkeypatch,
+):
+    import src.radar.service as service
+
+    generated = _media_point(
+        AS_OF - timedelta(days=1), value=0.8, article_id=920,
+    )
+    windows = []
+
+    def media(_session, window):
+        windows.append(window)
+        return [generated]
+
+    monkeypatch.setattr(service, "build_media_observations", media)
+    monkeypatch.setattr(service, "build_action_observations", lambda *_: [])
+
+    report = run_radar_cycle(
+        _Session(), AS_OF, shadow=True, generation_days=3,
+    )
+
+    assert windows[0].start == AS_OF - timedelta(days=3)
+    assert windows[0].end == AS_OF
+    assert report.lookback_days == 90
+    assert report.observation_count == 1
+
+
+@pytest.mark.parametrize("generation_days", (0, 91))
+def test_incremental_generation_window_must_fit_lookback(generation_days):
+    with pytest.raises(ValueError, match="generation window"):
+        run_radar_cycle(
+            _Session(), AS_OF, shadow=True,
+            generation_days=generation_days,
+        )
+
+
 def test_release_metrics_exclude_detector_context_before_exact_90_day_window(monkeypatch):
     import src.radar.service as service
 
@@ -920,6 +956,19 @@ def test_sql_persistence_keeps_anchor_separated_meta_keys():
     assert {params["meta_key"] for params in meta_inserts} == {
         "anchor:story:1:energy:increase", "anchor:story:2:trade:increase",
     }
+
+
+def test_incremental_meta_persistence_does_not_close_unrelated_memberships():
+    session = _RecordingSqlSession()
+
+    _persist_meta_and_contours(
+        session, (), {}, AS_OF, incremental=True,
+    )
+
+    assert not any(
+        "UPDATE radar_trend_members" in sql
+        for sql, _params in session.calls
+    )
 
 
 def test_meta_persistence_uses_member_detection_and_second_country_confirmation():

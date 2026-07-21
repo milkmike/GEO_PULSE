@@ -51,6 +51,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build replayable Radar waves")
     parser.add_argument("--as-of", help="ISO-8601 UTC cutoff (defaults to now)")
     parser.add_argument("--days", type=int, default=90, help="audited lookback window (must be 90)")
+    parser.add_argument(
+        "--generation-days",
+        type=_positive_int,
+        default=90,
+        help="recent source window regenerated each cycle (1..90)",
+    )
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--shadow", action="store_true", help="dry-run (the default)")
     mode.add_argument("--apply", action="store_true", help="persist immutable observations and trends")
@@ -60,6 +66,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     args = parser.parse_args(argv)
     if args.days != 90:
         parser.error("--days must be exactly 90 for Radar Wave 1")
+    if args.generation_days > args.days:
+        parser.error("--generation-days cannot exceed --days")
     if args.loop and args.as_of:
         parser.error("--as-of cannot be fixed in loop mode")
     if args.loop and args.json_report:
@@ -109,10 +117,30 @@ def run_once(
                 "shadow": False,
                 "skipped": "lock_not_acquired",
             }
-        report = cycle_runner(session, as_of, shadow=shadow, days=args.days)
+        cycle_options: dict[str, object] = {
+            "shadow": shadow,
+            "days": args.days,
+        }
+        if args.generation_days != args.days:
+            cycle_options["generation_days"] = args.generation_days
+        logger.info(
+            "Radar cycle starting: as_of=%s lookback_days=%s generation_days=%s shadow=%s",
+            as_of.isoformat(),
+            args.days,
+            args.generation_days,
+            shadow,
+        )
+        report = cycle_runner(session, as_of, **cycle_options)
         if args.apply:
             session.commit()
-    return report.json_report()
+    payload = report.json_report()
+    logger.info(
+        "Radar cycle completed: observations=%s inserted=%s updated_trends=%s",
+        payload.get("observation_count"),
+        payload.get("inserted_observations"),
+        payload.get("updated_trends"),
+    )
+    return payload
 
 
 def run_loop(

@@ -53,6 +53,39 @@ WHERE trend.scope = 'country' AND trend.detector_version = :detector_version
   AND trend.first_observed_at < :as_of
 """)
 
+_PRIOR_WAVES_FOR_IDENTITIES = text("""
+/* radar_prior_waves_incremental */
+WITH active_identity AS (
+  SELECT *
+  FROM UNNEST(
+    CAST(:identity_countries AS text[]),
+    CAST(:identity_contours AS text[]),
+    CAST(:identity_subjects AS text[]),
+    CAST(:identity_directions AS text[])
+  ) AS identity(country_code, contour, subject_key, direction)
+)
+SELECT trend.id, trend.wave_key, trend.country_code, trend.contour, trend.subject_key,
+       trend.direction, trend.state, trend.first_observed_at, trend.detected_at,
+       trend.confirmed_at,
+       trend.t0_auto, trend.t0_effective,
+       EXISTS (
+         SELECT 1 FROM radar_t0_revisions revision
+         WHERE revision.trend_id = trend.id
+           AND revision.revision_kind = 'analyst'
+       ) AS has_analyst_t0_override,
+       (SELECT max(observation.observed_at) FROM radar_trend_evidence evidence
+        JOIN radar_observations observation ON observation.id = evidence.observation_id
+        WHERE evidence.trend_id = trend.id) AS last_observed_at
+FROM radar_trends trend
+JOIN active_identity identity
+  ON identity.country_code = trend.country_code
+ AND identity.contour = trend.contour::text
+ AND identity.subject_key = trend.subject_key
+ AND identity.direction = trend.direction
+WHERE trend.scope = 'country' AND trend.detector_version = :detector_version
+  AND trend.first_observed_at < :as_of
+""")
+
 _STORY_ANCHORS = text("""
 /* radar_story_anchors */
 SELECT story.id, event.event_key, story.meta->>'subject_key' AS subject_key
@@ -69,6 +102,36 @@ SELECT public_id, input_hash, country_code, contour, subject_key, direction, met
        canonical_entity_id, baseline, evidence
 FROM radar_observations
 WHERE observed_at >= :history_start AND observed_at < :as_of
+""")
+
+_HISTORY_FOR_IDENTITIES = text("""
+/* radar_observation_history_incremental */
+WITH active_identity AS (
+  SELECT *
+  FROM UNNEST(
+    CAST(:identity_countries AS text[]),
+    CAST(:identity_contours AS text[]),
+    CAST(:identity_subjects AS text[]),
+    CAST(:identity_directions AS text[])
+  ) AS identity(country_code, contour, subject_key, direction)
+)
+SELECT observation.public_id, observation.input_hash,
+       observation.country_code, observation.contour,
+       observation.subject_key, observation.direction, observation.metric,
+       observation.observed_at, observation.value,
+       observation.publisher_family_count, observation.source_count,
+       observation.coverage_confidence, observation.authority,
+       observation.article_id, observation.story_id, observation.signal_id,
+       observation.canonical_entity_id, observation.baseline,
+       observation.evidence
+FROM radar_observations observation
+JOIN active_identity identity
+  ON identity.country_code = observation.country_code
+ AND identity.contour = observation.contour::text
+ AND identity.subject_key = observation.subject_key
+ AND identity.direction = observation.direction
+WHERE observation.observed_at >= :history_start
+  AND observation.observed_at < :as_of
 """)
 
 _MEDIA_COLLECTION_HEALTH = text("""
@@ -191,10 +254,7 @@ def _store(session) -> dict[str, list[dict[str, Any]]] | None:
     return store if isinstance(store, dict) else None
 
 
-def _previous_waves(session, as_of: datetime) -> tuple[CountryWave, ...]:
-    if _store(session) is not None:
-        return ()
-    rows = session.execute(_PRIOR_WAVES, {"detector_version": DETECTOR_VERSION, "as_of": as_of}).fetchall()
+def _waves_from_rows(rows: Iterable[Any]) -> tuple[CountryWave, ...]:
     waves: list[CountryWave] = []
     for row in rows:
         first = _row_value(row, "first_observed_at")
@@ -216,16 +276,61 @@ def _previous_waves(session, as_of: datetime) -> tuple[CountryWave, ...]:
     return tuple(waves)
 
 
+def _previous_waves(session, as_of: datetime) -> tuple[CountryWave, ...]:
+    if _store(session) is not None:
+        return ()
+    rows = session.execute(_PRIOR_WAVES, {
+        "detector_version": DETECTOR_VERSION,
+        "as_of": as_of,
+    }).fetchall()
+    return _waves_from_rows(rows)
+
+
+def _identity_params(
+    observations: Iterable[Observation],
+) -> dict[str, list[str]]:
+    identities = sorted({
+        (
+            observation.country_code,
+            observation.contour.value,
+            observation.subject_key,
+            observation.direction,
+        )
+        for observation in observations
+    })
+    return {
+        "identity_countries": [identity[0] for identity in identities],
+        "identity_contours": [identity[1] for identity in identities],
+        "identity_subjects": [identity[2] for identity in identities],
+        "identity_directions": [identity[3] for identity in identities],
+    }
+
+
+def _previous_waves_for_identities(
+    session: Any,
+    as_of: datetime,
+    observations: Iterable[Observation],
+) -> tuple[CountryWave, ...]:
+    if _store(session) is not None:
+        return ()
+    params = _identity_params(observations)
+    if not params["identity_countries"]:
+        return ()
+    rows = session.execute(_PRIOR_WAVES_FOR_IDENTITIES, {
+        **params,
+        "detector_version": DETECTOR_VERSION,
+        "as_of": as_of,
+    }).fetchall()
+    return _waves_from_rows(rows)
+
+
 def _story_anchors(session, as_of: datetime) -> tuple[object, ...]:
     if _store(session) is not None:
         return ()
     return tuple(session.execute(_STORY_ANCHORS, {"as_of": as_of}).fetchall())
 
 
-def _history(session, as_of: datetime, days: int) -> tuple[Observation, ...]:
-    if _store(session) is not None:
-        return ()
-    rows = session.execute(_HISTORY, {"history_start": as_of - timedelta(days=days + 14), "as_of": as_of}).fetchall()
+def _observations_from_rows(rows: Iterable[Any]) -> tuple[Observation, ...]:
     points: list[Observation] = []
     for row in rows:
         try:
@@ -243,6 +348,35 @@ def _history(session, as_of: datetime, days: int) -> tuple[Observation, ...]:
         except (TypeError, ValueError):
             continue
     return tuple(points)
+
+
+def _history(session, as_of: datetime, days: int) -> tuple[Observation, ...]:
+    if _store(session) is not None:
+        return ()
+    rows = session.execute(_HISTORY, {
+        "history_start": as_of - timedelta(days=days + 14),
+        "as_of": as_of,
+    }).fetchall()
+    return _observations_from_rows(rows)
+
+
+def _history_for_identities(
+    session: Any,
+    as_of: datetime,
+    days: int,
+    observations: Iterable[Observation],
+) -> tuple[Observation, ...]:
+    if _store(session) is not None:
+        return ()
+    params = _identity_params(observations)
+    if not params["identity_countries"]:
+        return ()
+    rows = session.execute(_HISTORY_FOR_IDENTITIES, {
+        **params,
+        "history_start": as_of - timedelta(days=days + 14),
+        "as_of": as_of,
+    }).fetchall()
+    return _observations_from_rows(rows)
 
 
 def _media_collection_health(
@@ -1025,7 +1159,15 @@ ON CONFLICT (media_trend_id, action_trend_id) DO UPDATE SET
 """)
 
 
-def _persist_sql(session, observations: list[Observation], waves: Iterable[CountryWave], metas: Iterable[MetaTrend], as_of: datetime) -> tuple[int, int | None, int]:
+def _persist_sql(
+    session,
+    observations: list[Observation],
+    waves: Iterable[CountryWave],
+    metas: Iterable[MetaTrend],
+    as_of: datetime,
+    *,
+    incremental: bool = False,
+) -> tuple[int, int | None, int]:
     inserted = upsert_observations(session, observations)
     first_id: int | None = None
     updated = 0
@@ -1098,21 +1240,30 @@ def _persist_sql(session, observations: list[Observation], waves: Iterable[Count
             )
         wave_ids[(wave.country_code, wave.contour, wave.subject_key, wave.direction, wave.wave_key)] = trend_id
         first_id = first_id or trend_id
-    _persist_meta_and_contours(session, metas, wave_ids, as_of)
+    _persist_meta_and_contours(
+        session,
+        metas,
+        wave_ids,
+        as_of,
+        incremental=incremental,
+    )
     return inserted, first_id, updated
 
 
 def _persist_meta_and_contours(
     session, metas: Iterable[MetaTrend],
     wave_ids: dict[tuple[str, Contour, str, str, str], int], as_of: datetime,
+    *,
+    incremental: bool = False,
 ) -> None:
     """Persist meta membership and cross-contour alignment without state edits."""
 
     metas = tuple(metas)
-    session.execute(_CLOSE_ACTIVE_MEMBERS, {
-        "as_of": as_of,
-        "detector_version": DETECTOR_VERSION,
-    })
+    if not incremental:
+        session.execute(_CLOSE_ACTIVE_MEMBERS, {
+            "as_of": as_of,
+            "detector_version": DETECTOR_VERSION,
+        })
     for meta in metas:
         params = {"subject_key": meta.subject_key, "meta_key": meta.meta_key, "direction": meta.direction, "detector_version": DETECTOR_VERSION}
         existing = session.execute(_META_BY_IDENTITY, params).first()
@@ -1632,19 +1783,41 @@ def _contour_completeness(waves: tuple[CountryWave, ...]) -> dict[str, int | flo
     }
 
 
-def run_radar_cycle(session, as_of: datetime, shadow: bool = True, *, days: int = 90) -> RadarCycleReport:
+def run_radar_cycle(
+    session,
+    as_of: datetime,
+    shadow: bool = True,
+    *,
+    days: int = 90,
+    generation_days: int | None = None,
+) -> RadarCycleReport:
     """Build a replay report; writes happen only when ``shadow`` is false."""
 
     as_of = _utc(as_of)
     if days != 90:
         raise ValueError("Radar lookback must be exactly 90 days")
+    generation_days = days if generation_days is None else generation_days
+    if not 1 <= generation_days <= days:
+        raise ValueError("Radar generation window must fit the 90-day lookback")
+    incremental = generation_days < days
     window = ObservationWindow(as_of - timedelta(days=days), as_of)
+    generation_window = ObservationWindow(
+        as_of - timedelta(days=generation_days),
+        as_of,
+    )
     before_counts = _protected_counts(session)
-    generated = [*build_media_observations(session, window), *build_action_observations(session, window)]
+    generated = [
+        *build_media_observations(session, generation_window),
+        *build_action_observations(session, generation_window),
+    ]
     current_generated_hashes = frozenset(
         observation.input_hash for observation in generated
     )
-    history = _history(session, as_of, days)
+    history = (
+        _history_for_identities(session, as_of, days, generated)
+        if incremental
+        else _history(session, as_of, days)
+    )
     observations = _prefer_logical_observations(history, generated)
     audited_observations = tuple(
         point for point in observations
@@ -1653,7 +1826,11 @@ def run_radar_cycle(session, as_of: datetime, shadow: bool = True, *, days: int 
             or window.start <= _utc(point.observed_at) < window.end
         )
     )
-    previous_waves = _previous_waves(session, as_of)
+    previous_waves = (
+        _previous_waves_for_identities(session, as_of, generated)
+        if incremental
+        else _previous_waves(session, as_of)
+    )
     assignments = assign_country_waves(observations, previous_waves)
     assigned_keys = {wave.wave_key for wave in assignments.waves}
     unmatched_previous = tuple(
@@ -1663,7 +1840,8 @@ def run_radar_cycle(session, as_of: datetime, shadow: bool = True, *, days: int 
     )
     cycle_waves = (*assignments.waves, *unmatched_previous)
     healthy_buckets = _healthy_collection_buckets(observations, as_of)
-    for country, buckets in _media_collection_health(session, window).items():
+    health_window = generation_window if incremental else window
+    for country, buckets in _media_collection_health(session, health_window).items():
         healthy_buckets.setdefault((country, Contour.MEDIA), set()).update(buckets)
     scored_waves = tuple(
         _analyze_wave(
@@ -1692,7 +1870,14 @@ def run_radar_cycle(session, as_of: datetime, shadow: bool = True, *, days: int 
         if _store(session) is not None:
             inserted, trend_id, updated = _persist_memory(session, generated, scored_waves, metas.meta_trends, as_of)
         else:
-            inserted, trend_id, updated = _persist_sql(session, generated, scored_waves, metas.meta_trends, as_of)
+            inserted, trend_id, updated = _persist_sql(
+                session,
+                generated,
+                scored_waves,
+                metas.meta_trends,
+                as_of,
+                incremental=incremental,
+            )
     after_counts = _protected_counts(session)
     evidence_complete = sum(_valid_evidence_root(point) for point in audited_observations)
     t0_count = sum(wave.t0_auto is not None for wave in scored_waves)
