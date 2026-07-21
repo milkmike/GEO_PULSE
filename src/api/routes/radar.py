@@ -229,17 +229,44 @@ def _serialize_evidence_preview(value: Any) -> dict[str, Any] | None:
     }
 
 
-def serialize_trend(row: Any) -> dict[str, Any]:
+def _humanize_thesis(subject_key: str, direction: str, stored_title: str | None = None) -> str:
+    labels = {
+        ("economy:trade:russia", "increase"): "Торговые связи с Россией усиливаются",
+        ("economy:trade:russia", "decrease"): "Торговые связи с Россией ослабевают",
+        ("diplomacy:un_alignment:russia", "increase"): "Голосования сближаются с позицией России",
+        ("diplomacy:un_alignment:russia", "decrease"): "Голосования расходятся с позицией России",
+        ("energy:imports:russia", "increase"): "Импорт российских энергоресурсов растёт",
+        ("energy:imports:russia", "decrease"): "Импорт российских энергоресурсов сокращается",
+    }
+    mapped = labels.get((subject_key, direction))
+    if mapped:
+        return mapped
+    if stored_title and stored_title != subject_key:
+        return stored_title
+    return subject_key.removeprefix("event:").replace(":", " · ")
+
+
+def serialize_trend(row: Any, *, wave_limit: int | None = None) -> dict[str, Any]:
     """Serialize saved trend rows without deriving a new detector result."""
 
     waves = _json_object(_value(row, "country_waves"), [])
+    country_codes = {
+        str(_value(item, "country_code"))
+        for item in waves if _value(item, "country_code")
+    }
+    country_code = _value(row, "country_code")
+    if country_code:
+        country_codes.add(str(country_code))
+    visible_waves = waves[:wave_limit] if wave_limit is not None else waves
+    subject_key = str(_value(row, "subject_key") or "")
+    direction = str(_value(row, "direction") or "")
     return {
         "public_id": str(_value(row, "public_id")),
         "scope": _value(row, "scope"),
         "state": _value(row, "state"),
-        "thesis": _value(row, "title_ru"),
-        "subject_key": _value(row, "subject_key"),
-        "direction": _value(row, "direction"),
+        "thesis": _humanize_thesis(subject_key, direction, _value(row, "title_ru")),
+        "subject_key": subject_key,
+        "direction": direction,
         "confidence": _number(_value(row, "confidence")),
         "coverage_confidence": _number(_value(row, "coverage_confidence")),
         "velocity": _number(_value(row, "velocity")),
@@ -248,8 +275,10 @@ def serialize_trend(row: Any) -> dict[str, Any]:
         "confirmed_at": _as_iso(_value(row, "confirmed_at")),
         "t0_auto": _as_iso(_value(row, "t0_auto")),
         "t0_effective": _as_iso(_value(row, "t0_effective")),
-        "country_code": _value(row, "country_code"),
-        "country_waves": [_serialize_country_wave(item) for item in waves],
+        "country_code": country_code,
+        "country_count": len(country_codes),
+        "wave_count": len(waves),
+        "country_waves": [_serialize_country_wave(item) for item in visible_waves],
         "contours": _contours(_value(row, "contours")),
         "contradiction_marker": bool(_value(row, "contradiction_marker", False)),
         "evidence_preview": _serialize_evidence_preview(_value(row, "evidence_preview")),
@@ -355,10 +384,26 @@ class SqlRadarReadService:
                     WHEN 'candidate' THEN 3 WHEN 'resolved' THEN 4 ELSE 5 END AS state_rank
                   FROM radar_trends trend
                   WHERE trend.scope = 'meta'
+                    AND trend.subject_key <> 'media:coverage'
+                    AND ABS(COALESCE(trend.velocity, 0)) >= 0.05
                     AND EXISTS (
                       SELECT 1 FROM radar_trend_members active_member
                       WHERE active_member.meta_trend_id = trend.id
                         AND active_member.left_at IS NULL)
+                    AND (SELECT COUNT(DISTINCT quality_wave.country_code) >= 2
+                      FROM radar_trend_members quality_member
+                      JOIN radar_trends quality_wave
+                        ON quality_wave.id = quality_member.country_trend_id
+                      WHERE quality_member.meta_trend_id = trend.id
+                        AND quality_member.left_at IS NULL)
+                    AND EXISTS (
+                      SELECT 1 FROM radar_trend_evidence quality_evidence
+                      WHERE quality_evidence.evidence->>'_relation_only' IS DISTINCT FROM 'true'
+                        AND (quality_evidence.trend_id = trend.id OR EXISTS (
+                          SELECT 1 FROM radar_trend_members quality_evidence_member
+                          WHERE quality_evidence_member.meta_trend_id = trend.id
+                            AND quality_evidence_member.country_trend_id = quality_evidence.trend_id
+                            AND quality_evidence_member.left_at IS NULL)))
                     AND ((:state IS NOT NULL AND trend.state = :state)
                       OR (:state IS NULL AND trend.state = ANY(:public_states)))
                     AND (:contour IS NULL OR EXISTS (
@@ -655,7 +700,7 @@ def get_radar_service() -> RadarReadService:
 
 def _page_response(page: dict[str, Any], *, scope: str, binding: dict[str, Any], limit: int) -> dict[str, Any]:
     next_key = page.get("next_key")
-    return {"items": [serialize_trend(item) for item in page.get("items", [])], "limit": limit, "next_cursor": _encode_cursor(scope=scope, binding=binding, key=next_key) if next_key else None}
+    return {"items": [serialize_trend(item, wave_limit=8) for item in page.get("items", [])], "limit": limit, "next_cursor": _encode_cursor(scope=scope, binding=binding, key=next_key) if next_key else None}
 
 
 @router.get("/radar")

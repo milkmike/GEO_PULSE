@@ -753,6 +753,8 @@ export interface RadarTrend {
   t0_auto: string | null;
   t0_effective: string | null;
   country_code: string | null;
+  country_count: number;
+  wave_count: number;
   country_waves: RadarCountryWave[];
   contours: Record<RadarContour, { state: RadarTrendState | "insufficient"; status: RadarContourStatus }>;
   contradiction_marker: boolean;

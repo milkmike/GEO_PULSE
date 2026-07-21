@@ -34,6 +34,8 @@ const baseTrend: RadarTrend = {
   t0_auto: "2026-07-15T10:00:00Z",
   t0_effective: "2026-07-15T10:00:00Z",
   country_code: null,
+  country_count: 0,
+  wave_count: 0,
   country_waves: [],
   contours: {
     media: { state: "confirmed", status: "aligned" },
@@ -146,7 +148,8 @@ describe("Radar list page", () => {
     apiMocks.radar.mockResolvedValueOnce({ items: [], limit: 25, next_cursor: null });
     const user = userEvent.setup();
     const { unmount } = renderPage();
-    expect(await screen.findByText(/по выбранным фильтрам трендов нет/i)).toBeVisible();
+    expect(await screen.findByText(/сейчас нет трендов, прошедших проверку/i)).toBeVisible();
+    expect(screen.getByText(/минимум в двух странах/i)).toBeVisible();
     await user.selectOptions(screen.getByLabelText(/состояние/i), "confirmed");
     expect(navigation.replace).toHaveBeenCalledWith("/radar?state=confirmed");
     unmount();

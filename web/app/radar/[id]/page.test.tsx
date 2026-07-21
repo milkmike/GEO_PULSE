@@ -27,6 +27,7 @@ const trend: RadarTrend = {
   direction: "restrictive", confidence: 0.88, coverage_confidence: 0.48, velocity: 2.5,
   first_observed_at: "2026-07-14T00:00:00Z", detected_at: "2026-07-15T00:00:00Z", confirmed_at: "2026-07-16T00:00:00Z",
   t0_auto: "2026-07-14T00:00:00Z", t0_effective: "2026-07-13T00:00:00Z", country_code: null,
+  country_count: 2, wave_count: 2,
   country_waves: [
     { public_id: "wave-es", country_code: "ES", contour: "media", state: "confirmed", confidence: 0.9, coverage_confidence: 0.8, velocity: 2.2, first_observed_at: "2026-07-14T00:00:00Z", detected_at: "2026-07-15T00:00:00Z", confirmed_at: "2026-07-16T00:00:00Z", t0_auto: "2026-07-14T00:00:00Z", t0_effective: "2026-07-14T00:00:00Z" },
     { public_id: "wave-pt", country_code: "PT", contour: "action", state: "emerging", confidence: 0.75, coverage_confidence: 0.7, velocity: 1.3, first_observed_at: "2026-07-16T00:00:00Z", detected_at: "2026-07-17T00:00:00Z", confirmed_at: null, t0_auto: "2026-07-16T00:00:00Z", t0_effective: "2026-07-16T00:00:00Z" },
@@ -142,6 +143,8 @@ describe("Radar investigation page", () => {
       ...trend,
       scope: "country",
       country_code: "ES",
+      country_count: 1,
+      wave_count: 0,
       country_waves: [],
     };
     apiMocks.radarTrend.mockResolvedValueOnce(countryTrend);

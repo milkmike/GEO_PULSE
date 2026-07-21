@@ -57,6 +57,33 @@ def _trend(**overrides):
     return payload
 
 
+def test_serialize_trend_humanizes_and_compacts_cross_country_wave():
+    waves = [
+        {
+            "public_id": f"00000000-0000-0000-0000-{index:012d}",
+            "country_code": f"X{index}",
+            "contour": "action",
+            "state": "confirmed",
+        }
+        for index in range(12)
+    ]
+
+    payload = radar_routes.serialize_trend(
+        _trend(
+            title_ru="economy:trade:russia",
+            subject_key="economy:trade:russia",
+            direction="decrease",
+            country_waves=waves,
+        ),
+        wave_limit=8,
+    )
+
+    assert payload["country_count"] == 12
+    assert payload["wave_count"] == 12
+    assert len(payload["country_waves"]) == 8
+    assert payload["thesis"] == "Торговые связи с Россией ослабевают"
+
+
 class FakeRadarService:
     def __init__(self):
         self.list_calls = []
@@ -459,6 +486,10 @@ def test_sql_meta_relation_filters_use_direct_or_member_evidence_and_require_bot
     assert "related_member.country_trend_id = related.trend_id" in sql
     assert "active_member.meta_trend_id = trend.id" in sql
     assert "active_member.left_at IS NULL" in sql
+    assert "trend.subject_key <> 'media:coverage'" in sql
+    assert "ABS(COALESCE(trend.velocity, 0)) >= 0.05" in sql
+    assert "COUNT(DISTINCT quality_wave.country_code) >= 2" in sql
+    assert "radar_trend_evidence quality_evidence" in sql
     assert sql.count("related_member.left_at IS NULL") == 2
     assert sql.index("/* radar_related_story */") < sql.index("/* radar_related_signal */")
     assert "AND (:story_id IS NULL OR EXISTS" in sql
