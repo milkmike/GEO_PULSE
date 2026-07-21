@@ -2521,6 +2521,7 @@ def test_story_list_filters_cursor_and_primary_url(monkeypatch):
     assert "rf.country_codes" in list_sql
     assert "JOIN article_country_facts src ON src.article_id = ar.id" in list_sql
     assert "COUNT(DISTINCT src.id)::integer AS source_count" in list_sql
+    assert "canary_quarantined_at" in list_sql
 
 
 def test_story_detail_includes_evidence_and_country_primary_urls(monkeypatch):

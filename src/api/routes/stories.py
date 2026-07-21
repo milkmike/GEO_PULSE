@@ -1101,6 +1101,8 @@ def _list_stories(
         "rf.country_count >= 2",
         "st.clustering_confidence >= :min_confidence",
         "NOT (COALESCE(st.meta, '{}'::jsonb) ? 'merged_into_story_id')",
+        "NOT (COALESCE(st.meta, '{}'::jsonb) ?| "
+        "ARRAY['quarantined_at', 'canary_quarantined_at'])",
     ]
     params: dict[str, Any] = {
         "min_confidence": min_confidence,
