@@ -87,6 +87,24 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  embedding-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.analyzer
+    command: python scripts/run_embedding_worker.py --loop --interval 300 --days 30 --prepare-limit 500 --batch 50 --index-limit 500
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      OPENROUTER_EMBEDDING_MODEL: ${OPENROUTER_EMBEDDING_MODEL:-openai/text-embedding-3-small}
+      OPENROUTER_EMBEDDING_DIMENSIONS: ${OPENROUTER_EMBEDDING_DIMENSIONS:-1024}
+      HTTPS_PROXY: ${HTTPS_PROXY:-}
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
   temperature:
     build:
       context: .
