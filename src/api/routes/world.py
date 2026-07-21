@@ -213,6 +213,7 @@ def country_entities(code: str, days: int = Query(30, ge=1, le=180)):
                 WHERE s.country_code = :cc AND a.is_relevant = TRUE
                   AND a.entities IS NOT NULL
                   AND ar.published_at > NOW() - make_interval(days => :days)
+                  AND jsonb_typeof(a.entities) = 'array'
                 GROUP BY ek ORDER BY n DESC LIMIT 25
             """),
             {"cc": code, "days": days},

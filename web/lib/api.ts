@@ -17,10 +17,29 @@ export function apiBase(): string {
   return "http://localhost:8100";
 }
 
+export const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
+
 async function get<T>(path: string, signal?: AbortSignal): Promise<T> {
-  const res = await fetch(`${apiBase()}${path}`, { cache: "no-store", signal });
-  if (!res.ok) throw new Error(`${res.status} ${path}`);
-  return res.json() as Promise<T>;
+  const controller = new AbortController();
+  const forwardAbort = () => controller.abort(signal?.reason);
+  if (signal?.aborted) forwardAbort();
+  else signal?.addEventListener("abort", forwardAbort, { once: true });
+  const timeout = setTimeout(
+    () => controller.abort(new DOMException("API request timed out", "TimeoutError")),
+    DEFAULT_REQUEST_TIMEOUT_MS,
+  );
+
+  try {
+    const res = await fetch(`${apiBase()}${path}`, {
+      cache: "no-store",
+      signal: controller.signal,
+    });
+    if (!res.ok) throw new Error(`${res.status} ${path}`);
+    return await res.json() as T;
+  } finally {
+    clearTimeout(timeout);
+    signal?.removeEventListener("abort", forwardAbort);
+  }
 }
 
 /** Thrown when the admin key is missing/wrong (401/403). */

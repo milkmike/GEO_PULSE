@@ -35,6 +35,22 @@ class SequentialSession:
         return QueryResult(rows)
 
 
+def test_country_entities_only_expands_json_arrays(monkeypatch):
+    session = SequentialSession([[]])
+
+    @contextmanager
+    def session_factory():
+        yield session
+
+    monkeypatch.setattr(world, "get_session", session_factory)
+
+    result = world.country_entities("es", days=30)
+
+    assert result == {"country_code": "ES", "days": 30, "entities": []}
+    sql = " ".join(session.calls[0][0].split())
+    assert "jsonb_typeof(a.entities) = 'array'" in sql
+
+
 def test_country_dossier_history_uses_utc_daily_last_persisted_points(monkeypatch):
     selected_time = datetime(
         2026,
