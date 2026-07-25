@@ -1246,10 +1246,18 @@ def test_verified_publishers_drive_briefs_threads_and_story_candidates():
     assert "ce.status = 'ready'" in statement
     assert "ce.content_hash = encode" in statement
     assert "digest(" in statement
+    assert "embedding_article.id = ce.object_id::integer" in statement
+    assert "embedding_article.id::text = ce.object_id" not in statement
     assert "ar.is_duplicate = FALSE" in statement
     assert "an.embedding IS NOT NULL" not in statement
 
-    candidates = fetch_story_candidates(PublisherAttributionFixtureSession())
+    story_session = PublisherAttributionFixtureSession()
+    candidates = fetch_story_candidates(story_session)
+    semantic_statement = next(
+        sql for sql in story_session.statements if "semantic_story_pairs" in sql
+    )
+    assert "embedding_article.id = ce.object_id::integer" in semantic_statement
+    assert "embedding_article.id::text = ce.object_id" not in semantic_statement
     assert [
         (item.country_code, item.sources, item.source_ids)
         for item in candidates

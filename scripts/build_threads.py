@@ -287,7 +287,7 @@ def fetch_articles(session, days: int = 30) -> list[dict]:
             FROM content_embeddings ce
             JOIN active_profile ap ON ap.profile_id = ce.profile_id
             JOIN articles embedding_article
-              ON embedding_article.id::text = ce.object_id
+              ON embedding_article.id = ce.object_id::integer
             WHERE ce.object_type = 'article'
               AND ce.status = 'ready'
               AND ce.embedding IS NOT NULL
@@ -500,7 +500,7 @@ def cluster_pass1_embeddings(
                     FROM content_embeddings ce
                     JOIN active_profile ap ON ap.profile_id = ce.profile_id
                     JOIN articles embedding_article
-                      ON embedding_article.id::text = ce.object_id
+                      ON embedding_article.id = ce.object_id::integer
                     WHERE ce.object_type = 'article'
                       AND ce.status = 'ready'
                       AND ce.embedding IS NOT NULL
@@ -1205,7 +1205,7 @@ def link_related_threads(session):
                 FROM content_embeddings ce
                 JOIN active_profile ap ON ap.profile_id = ce.profile_id
                 JOIN articles embedding_article
-                  ON embedding_article.id::text = ce.object_id
+                  ON embedding_article.id = ce.object_id::integer
                 WHERE ce.object_type = 'article'
                   AND ce.status = 'ready'
                   AND ce.embedding IS NOT NULL
@@ -1367,7 +1367,7 @@ def cleanup_duplicate_threads(session):
                     FROM content_embeddings ce
                     JOIN active_profile ap ON ap.profile_id = ce.profile_id
                     JOIN articles embedding_article
-                      ON embedding_article.id::text = ce.object_id
+                      ON embedding_article.id = ce.object_id::integer
                     WHERE ce.object_type = 'article'
                       AND ce.status = 'ready'
                       AND ce.embedding IS NOT NULL
