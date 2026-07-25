@@ -9,7 +9,13 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def _fake_deploy_env(tmp_path, *, head="aaaaaaaa", fail_first_migration=False):
+def _fake_deploy_env(
+    tmp_path,
+    *,
+    head="aaaaaaaa",
+    fail_first_migration=False,
+    fail_health=False,
+):
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     calls = tmp_path / "calls.log"
@@ -65,6 +71,14 @@ def _fake_deploy_env(tmp_path, *, head="aaaaaaaa", fail_first_migration=False):
     ionice.write_text("#!/usr/bin/env bash\nshift\nexec \"$@\"\n")
     ionice.chmod(0o755)
 
+    curl = fake_bin / "curl"
+    curl.write_text(
+        "#!/usr/bin/env bash\n"
+        "if [ \"${DEPLOY_TEST_FAIL_HEALTH:-0}\" = 1 ]; then exit 22; fi\n"
+        "exit 0\n"
+    )
+    curl.chmod(0o755)
+
     flock = fake_bin / "flock"
     flock.write_text(
         "#!/usr/bin/env python3\n"
@@ -86,6 +100,7 @@ def _fake_deploy_env(tmp_path, *, head="aaaaaaaa", fail_first_migration=False):
         "DEPLOY_TEST_HEAD": str(head_file),
         "DEPLOY_TEST_GIT_CALLS": str(git_calls),
         "DEPLOY_TEST_FAIL_FIRST": "1" if fail_first_migration else "0",
+        "DEPLOY_TEST_FAIL_HEALTH": "1" if fail_health else "0",
         "DEPLOY_TEST_BLOCK_FIRST": "0",
         "DEPLOY_TEST_ENTERED": str(tmp_path / "migration-entered"),
         "DEPLOY_TEST_RELEASE": str(tmp_path / "migration-release"),
@@ -151,6 +166,30 @@ def test_auto_update_without_marker_deploys_current_head_once(tmp_path):
     second = _run_auto_update(tmp_path, env)
     assert second.returncode == 0
     assert len(calls.read_text().splitlines()) == 3
+
+
+def test_auto_update_does_not_record_success_until_api_is_healthy(tmp_path):
+    env, calls, _ = _fake_deploy_env(
+        tmp_path,
+        head="bbbbbbbb",
+        fail_health=True,
+    )
+    marker = tmp_path / ".deploy-state" / "last-successful-commit"
+
+    result = _run_auto_update(tmp_path, env)
+
+    assert result.returncode != 0
+    assert not marker.exists()
+    assert calls.read_text().splitlines() == [
+        "compose run --rm migrate",
+        "compose build",
+        "compose up -d",
+        "compose ps api",
+        "compose logs --tail 120 api",
+    ]
+    assert "FAILED: API health check did not pass" in (
+        tmp_path / "deploy.log"
+    ).read_text()
 
 
 def test_auto_update_skips_overlapping_invocation_before_git_or_docker(tmp_path):

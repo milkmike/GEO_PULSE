@@ -18,6 +18,7 @@ APP_DIR="${APP_DIR:-/opt/geopulse}"
 LOG="${DEPLOY_LOG:-/var/log/geopulse-deploy.log}"
 STATE_FILE="${DEPLOY_STATE_FILE:-${APP_DIR}/.deploy-state/last-successful-commit}"
 LOCK_FILE="${DEPLOY_LOCK_FILE:-${APP_DIR}/.deploy-state/auto-update.lock}"
+HEALTH_URL="${DEPLOY_HEALTH_URL:-http://127.0.0.1:8100/docs}"
 
 log() { echo "$(date -Is) $*" >> "$LOG"; }
 
@@ -74,6 +75,24 @@ docker compose run --rm migrate >>"$LOG" 2>&1
 # swap containers — compose only recreates changed services.
 nice -n 19 ionice -c3 docker compose build >/dev/null 2>&1
 docker compose up -d >/dev/null 2>&1
+
+# Compose can return success while a newly created API has not actually
+# reached the running/listening state. Never advance the durable marker until
+# the reverse-proxy upstream is accepting requests.
+if ! curl \
+    --retry 20 \
+    --retry-delay 2 \
+    --retry-max-time 60 \
+    --retry-connrefused \
+    --connect-timeout 2 \
+    --max-time 5 \
+    -fsS \
+    "$HEALTH_URL" >/dev/null; then
+    log "FAILED: API health check did not pass for ${AFTER:0:8}"
+    docker compose ps api >>"$LOG" 2>&1 || true
+    docker compose logs --tail 120 api >>"$LOG" 2>&1 || true
+    exit 1
+fi
 
 # Record success only after migrations, build, and container swap all succeed.
 # A same-directory rename makes the marker update atomic across cron retries.
