@@ -693,6 +693,8 @@ def test_story_eligible_loader_selects_verified_relevant_originals_and_excludes_
     assert "job.status = 'failed'" in session.statement
     assert session.statement.index("WHERE current_ready.content_hash IS NULL") < session.statement.index("LIMIT :limit")
     assert "ready_content_hashes" in session.statement
+    assert "ARRAY(" in session.statement
+    assert "ARRAY[" not in session.statement
     assert session.statement.index("WHERE current_ready.content_hash IS NULL") < session.statement.index("LIMIT :limit")
     assert session.params == {"days": 30, "limit": 500, "profile_id": 4}
 

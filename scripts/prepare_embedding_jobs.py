@@ -116,11 +116,11 @@ def load_story_eligible_articles(
                   )
             )
             SELECT eligible.id, eligible.title, eligible.body, eligible.summary,
-                   ARRAY[
+                   ARRAY(
                        SELECT ready.content_hash
                        FROM current_ready ready
                        WHERE ready.object_id = eligible.id::text
-                   ] AS ready_content_hashes
+                   ) AS ready_content_hashes
             FROM eligible_articles eligible
             LEFT JOIN current_ready current_ready
               ON current_ready.object_id = eligible.id::text
