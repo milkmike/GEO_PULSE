@@ -93,21 +93,27 @@ healthy, but their absence must not block current story recovery.
 ### 4. Evidence-bearing two-contour radar
 
 Radar publication must distinguish a static structural baseline from a changing
-trend. Meta velocity is derived from current member-wave motion and cannot
-remain zero merely because the subject is structural. Publication still
-requires two countries, non-zero measurable motion, public evidence, and a
-public lifecycle state.
+trend. The existing non-zero velocity gate remains: annual trade and voting
+snapshots with zero motion must stay hidden even if that means the honest public
+result is temporarily empty. Incremental cycles replay persisted action history
+across the full lookback so a short generation window does not make the action
+side disappear.
 
-The action contour is populated only from persisted, attributable action facts:
-sanctions, trade, UN voting, diplomatic/security events, and other existing
-structured loaders. Each action observation retains its source record and
-effective time. Media/action links require a matching normalized subject and
-time window; a missing action contour is reported as insufficient, never
-invented.
+The action contour is populated only from persisted, attributable action facts.
+Each action observation retains its source record and real period/effective
+time; a dataset's loader `updated_at` is never presented as the event time.
+Existing action observations are additively materialized into `action_events`
+and evidence obtains both observation and action roots. The current generic
+jurisdiction-wide sanctions dataset is not treated as Russia-specific action
+evidence. Media/action links require a matching canonical subject and time
+window; a missing action contour is reported as insufficient, never invented.
 
-Candidate lifecycle maintenance closes or rejects stale rows and memberships
-without deleting them. Repeated hourly cycles must not create a new candidate
-identity for unchanged input.
+Media observations require a canonical story or analysis event key; generic
+`story:<id>` and `media:coverage` subjects are internal coverage signals, not
+product trends. Candidate lifecycle maintenance closes or rejects stale rows
+and memberships without deleting them, and new one-day candidates are not
+persisted before admission. Repeated hourly cycles must not create a new
+candidate identity for unchanged input.
 
 ### 5. Safe rollout and operational headroom
 
