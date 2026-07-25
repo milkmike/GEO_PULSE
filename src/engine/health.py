@@ -12,6 +12,7 @@ goes dark, the temperature drifts toward the remaining tiers' tone. The
 summary therefore reports per-country tier coverage and an overall verdict:
 HEALTHY / WARNING / DEGRADED / UNHEALTHY.
 """
+import json
 import logging
 from collections import Counter, defaultdict
 from collections.abc import Mapping
@@ -37,6 +38,27 @@ DEAD_DAYS = 7
 # GDELT groups: a country's gdelt_daily row should refresh at least daily;
 # the collector runs every 6h
 GDELT_STALE_HOURS = 26
+_CACHE_TTL_SECONDS = 300
+_HEALTH_CACHE_KEY = "cache:v2:health"
+_SOURCE_COVERAGE_CACHE_KEY = "cache:v2:health:source-coverage"
+
+
+def _cache_get(key: str):
+    """Read a JSON cache entry; cache outages must never hide live health data."""
+    try:
+        from src.queue import get_redis
+        payload = get_redis().get(key)
+        return json.loads(payload) if payload else None
+    except Exception:
+        return None
+
+
+def _cache_set(key: str, payload: dict, ttl: int = _CACHE_TTL_SECONDS) -> None:
+    try:
+        from src.queue import get_redis
+        get_redis().setex(key, ttl, json.dumps(payload))
+    except Exception:
+        pass
 
 
 def source_health() -> list[dict]:
@@ -204,7 +226,12 @@ def _publisher_families(sources: list[dict]) -> dict[str, list[dict]]:
 
 def source_coverage(sources: list[dict] | None = None) -> dict:
     """Report distinct, working direct-publisher coverage by country."""
-    sources = source_health() if sources is None else sources
+    cacheable = sources is None
+    if cacheable:
+        cached = _cache_get(_SOURCE_COVERAGE_CACHE_KEY)
+        if cached is not None:
+            return cached
+        sources = source_health()
     grouped = defaultdict(list)
     for source in sources:
         grouped[str(source["country_code"]).strip().upper()].append(source)
@@ -256,7 +283,10 @@ def source_coverage(sources: list[dict] | None = None) -> dict:
             ),
             "target_state": state,
         })
-    return {"summary": dict(states), "countries": countries}
+    payload = {"summary": dict(states), "countries": countries}
+    if cacheable:
+        _cache_set(_SOURCE_COVERAGE_CACHE_KEY, payload, _CACHE_TTL_SECONDS)
+    return payload
 
 
 def gdelt_health() -> dict:
@@ -288,6 +318,9 @@ def gdelt_health() -> dict:
 
 def health_summary() -> dict:
     """Aggregated verdict: per-country coverage + overall state."""
+    cached = _cache_get(_HEALTH_CACHE_KEY)
+    if cached is not None:
+        return cached
     sources = source_health()
 
     by_country: dict[str, dict] = {}
@@ -335,7 +368,7 @@ def health_summary() -> dict:
     else:
         verdict = "UNHEALTHY"
 
-    return {
+    payload = {
         "verdict": verdict,
         "checked_at": datetime.now(timezone.utc).isoformat(),
         "sources_total": total,
@@ -346,3 +379,5 @@ def health_summary() -> dict:
         "gdelt": gdelt,
         "countries": countries,
     }
+    _cache_set(_HEALTH_CACHE_KEY, payload, _CACHE_TTL_SECONDS)
+    return payload

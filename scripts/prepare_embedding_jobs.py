@@ -57,6 +57,141 @@ def load_eligible_articles(
     return [_mapping(row) for row in rows]
 
 
+def _embedding_content_sql() -> str:
+    """Return the SQL expression matching ``prepare_embedding_text`` exactly."""
+    return """
+        CASE
+            WHEN COALESCE(a.summary, '') <> '' THEN
+                COALESCE(a.title, '') || E'\\n' || a.summary
+            WHEN COALESCE(a.body, '') <> '' THEN
+                COALESCE(a.title, '') || E'\\n' || LEFT(a.body, 1000)
+            ELSE COALESCE(a.title, '')
+        END
+    """
+
+
+def load_story_eligible_articles(
+    session: Any,
+    *,
+    days: int,
+    limit: int,
+    profile_id: int | None,
+) -> list[Any]:
+    """Load the next missing embeddings from the normal story-eligible pool.
+
+    The active content hash is checked in SQL *before* the bounded limit, so
+    completed recent rows cannot starve older missing rows on every cycle.
+    """
+    content = _embedding_content_sql()
+    rows = session.execute(
+        text(
+            f"""
+            WITH eligible_articles AS MATERIALIZED (
+                SELECT a.id, a.title, a.body, a.summary, a.published_at,
+                       {content} AS embedding_content
+                FROM articles a
+                JOIN analysis an ON an.article_id = a.id
+                WHERE an.is_relevant = TRUE
+                  AND a.is_duplicate = FALSE
+                  AND a.geo_country_code IS NOT NULL
+                  AND a.published_at >= now() - make_interval(days => :days)
+            ), current_ready AS (
+                SELECT ce.object_id, ce.content_hash
+                FROM content_embeddings ce
+                WHERE ce.profile_id = :profile_id
+                  AND ce.object_type = 'article'
+                  AND ce.status = 'ready'
+                  AND ce.embedding IS NOT NULL
+            ), current_jobs AS (
+                SELECT job.object_id, job.content_hash
+                FROM embedding_jobs job
+                WHERE job.profile_id = :profile_id
+                  AND job.object_type = 'article'
+                  AND (
+                    job.status IN ('pending', 'processing', 'completed')
+                    OR (
+                      job.status = 'failed'
+                      AND job.updated_at >= now() - INTERVAL '6 hours'
+                    )
+                  )
+            )
+            SELECT eligible.id, eligible.title, eligible.body, eligible.summary,
+                   ARRAY[
+                       SELECT ready.content_hash
+                       FROM current_ready ready
+                       WHERE ready.object_id = eligible.id::text
+                   ] AS ready_content_hashes
+            FROM eligible_articles eligible
+            LEFT JOIN current_ready current_ready
+              ON current_ready.object_id = eligible.id::text
+             AND current_ready.content_hash = encode(
+                 digest(eligible.embedding_content, 'sha256'), 'hex'
+             )
+            LEFT JOIN current_jobs job
+              ON job.object_id = eligible.id::text
+             AND job.content_hash = encode(
+                 digest(eligible.embedding_content, 'sha256'), 'hex'
+             )
+            WHERE current_ready.content_hash IS NULL
+              AND job.content_hash IS NULL
+            ORDER BY eligible.published_at DESC, eligible.id DESC
+            LIMIT :limit
+            """
+        ),
+        {"days": days, "limit": limit, "profile_id": profile_id},
+    ).fetchall()
+    return [_mapping(row) for row in rows]
+
+
+def load_story_embedding_coverage(
+    session: Any,
+    *,
+    days: int,
+    profile_id: int | None,
+) -> dict[str, int]:
+    """Count the same story-eligible population used by job preparation."""
+    content = _embedding_content_sql()
+    row = session.execute(
+        text(
+            f"""
+            WITH eligible_articles AS MATERIALIZED (
+                SELECT a.id, {content} AS embedding_content
+                FROM articles a
+                JOIN analysis an ON an.article_id = a.id
+                WHERE an.is_relevant = TRUE
+                  AND a.is_duplicate = FALSE
+                  AND a.geo_country_code IS NOT NULL
+                  AND a.published_at >= now() - make_interval(days => :days)
+            ), current_ready AS (
+                SELECT ce.object_id, ce.content_hash
+                FROM content_embeddings ce
+                WHERE ce.profile_id = :profile_id
+                  AND ce.object_type = 'article'
+                  AND ce.status = 'ready'
+                  AND ce.embedding IS NOT NULL
+            )
+            SELECT COUNT(*)::integer AS eligible,
+                   COUNT(current_ready.content_hash)::integer AS ready_current,
+                   (COUNT(*) - COUNT(current_ready.content_hash))::integer
+                       AS missing_current
+            FROM eligible_articles eligible
+            LEFT JOIN current_ready current_ready
+              ON current_ready.object_id = eligible.id::text
+             AND current_ready.content_hash = encode(
+                 digest(eligible.embedding_content, 'sha256'), 'hex'
+             )
+            """
+        ),
+        {"days": days, "profile_id": profile_id},
+    ).fetchone()
+    mapped = _mapping(row)
+    return {
+        "eligible": int(mapped["eligible"] or 0),
+        "ready_current": int(mapped["ready_current"] or 0),
+        "missing_current": int(mapped["missing_current"] or 0),
+    }
+
+
 def load_story_candidate_articles(
     session: Any,
     *,
@@ -203,16 +338,20 @@ def prepare_jobs(
     limit: int = 500,
     dry_run: bool = False,
     story_candidates: bool = False,
+    story_eligible_articles: bool = False,
     store: EmbeddingStore | None = None,
     session_factory: Callable[[], Any] = get_session,
     profile_factory: Callable[[], EmbeddingProfile] = configured_profile,
     article_loader: Callable[..., list[Any]] | None = None,
+    coverage_loader: Callable[..., dict[str, int]] = load_story_embedding_coverage,
 ) -> dict[str, int | str | bool]:
     """Prepare one idempotent job per profile, article, and content hash."""
     if days < 1:
         raise ValueError("days must be positive")
     if limit < 1:
         raise ValueError("limit must be positive")
+    if story_candidates and story_eligible_articles:
+        raise ValueError("story candidate and eligible modes are mutually exclusive")
 
     store = store or EmbeddingStore()
     configured = profile_factory()
@@ -232,12 +371,18 @@ def prepare_jobs(
             profile = store.ensure_active_profile(session, configured)
 
         loader = article_loader or (
-            load_story_candidate_articles if story_candidates else load_eligible_articles
+            load_story_candidate_articles if story_candidates
+            else load_story_eligible_articles if story_eligible_articles
+            else load_eligible_articles
         )
         loader_options: dict[str, Any] = {"days": days, "limit": limit}
-        if story_candidates:
+        if story_candidates or story_eligible_articles:
             loader_options["profile_id"] = profile.id
         loaded_rows = list(loader(session, **loader_options))
+        coverage = (
+            coverage_loader(session, days=days, profile_id=profile.id)
+            if story_eligible_articles else None
+        )
 
         for raw in loaded_rows:
             row = _mapping(raw)
@@ -247,7 +392,7 @@ def prepare_jobs(
                 row["summary"] or "",
             )
             if content.strip():
-                if story_candidates and content_hash(content) in set(
+                if (story_candidates or story_eligible_articles) and content_hash(content) in set(
                     row.get("ready_content_hashes") or []
                 ):
                     ready_current += 1
@@ -269,7 +414,7 @@ def prepare_jobs(
                 )
 
     result: dict[str, int | str | bool] = {
-        "eligible": len(prepared),
+        "eligible": coverage["eligible"] if coverage is not None else len(prepared),
         "enqueued": 0 if dry_run else len(prepared),
         "profile": profile.profile_key,
         "dry_run": dry_run,
@@ -295,6 +440,15 @@ def prepare_jobs(
                 "missing_current": len(prepared),
             }
         )
+    if story_eligible_articles:
+        result.update(
+            {
+                "mode": "story_eligible_articles",
+                "candidate_articles": len(loaded_rows),
+                "ready_current": coverage["ready_current"],
+                "missing_current": coverage["missing_current"],
+            }
+        )
     return result
 
 
@@ -307,6 +461,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--story-candidates",
         action="store_true",
         help="prioritize recent canonical-country story candidate articles",
+    )
+    parser.add_argument(
+        "--story-eligible-articles",
+        action="store_true",
+        help="prepare all recent relevant verified country-attributed articles",
     )
     return parser
 
@@ -321,6 +480,7 @@ def main() -> None:
                 limit=args.limit,
                 dry_run=args.dry_run,
                 story_candidates=args.story_candidates,
+                story_eligible_articles=args.story_eligible_articles,
             ),
             ensure_ascii=False,
             sort_keys=True,

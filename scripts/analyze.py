@@ -3,7 +3,7 @@ import argparse
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import text
 
@@ -22,6 +22,11 @@ logging.basicConfig(
 logger = logging.getLogger("analyzer")
 
 MAX_WORKERS = 5
+QUEUE_PROCESSED = "processed"
+QUEUE_EMPTY = "empty"
+QUEUE_UNAVAILABLE = "unavailable"
+EMPTY_QUEUE_FALLBACK_INTERVAL = timedelta(hours=1)
+_last_empty_queue_fallback_at: datetime | None = None
 
 # Redis integration (optional, graceful fallback)
 _redis_available = False
@@ -154,19 +159,19 @@ def _analyze_article_by_id(article_id: int) -> bool:
     return False
 
 
-def process_from_queue() -> bool:
-    """Process one article from Redis queue. Returns True if processed."""
+def process_from_queue() -> str:
+    """Process one Redis job and report whether its transport had work."""
     if not _redis_available:
-        return False
+        return QUEUE_UNAVAILABLE
 
     try:
         job = dequeue(Q_RAW_ARTICLES, timeout=5)
     except Exception as e:
         logger.warning(f"Redis dequeue failed: {e}")
-        return False
+        return QUEUE_UNAVAILABLE
 
     if not job:
-        return False
+        return QUEUE_EMPTY
 
     article_id = job["article_id"]
     try:
@@ -178,32 +183,78 @@ def process_from_queue() -> bool:
             r.set("stats:analyzer:last_run", datetime.now(timezone.utc).isoformat())
         except Exception:
             pass  # Stats update is non-critical
-        return True
+        return QUEUE_PROCESSED
     except Exception as e:
         logger.error(f"Failed to analyze article {article_id}: {e}")
         try:
             enqueue(Q_DEAD_LETTER, {**job, "error": str(e)})
         except Exception:
             pass
-        return False
+        # A dequeued job means the queue was not empty, even if its work failed.
+        return QUEUE_PROCESSED
+
+
+def load_unanalyzed_candidate_ids(
+    session,
+    *,
+    batch_size: int,
+    scan_limit: int,
+) -> list[int]:
+    """Return a bounded newest-first ID window without touching analysis history."""
+    if batch_size < 1 or scan_limit < batch_size:
+        raise ValueError("scan_limit must be at least batch_size and both must be positive")
+    rows = session.execute(
+        text(f"""
+            WITH candidate_ids AS MATERIALIZED (
+                SELECT ar.id, ar.collected_at
+                FROM articles ar
+                WHERE ar.is_duplicate = FALSE
+                  AND ar.geo_country_code IS NOT NULL
+                  AND ar.geo_status IN ('source_verified', 'publisher_verified', 'publisher_reassigned')
+                ORDER BY ar.collected_at DESC, ar.id DESC
+                LIMIT :scan_limit
+            )
+            SELECT candidate_ids.id
+            FROM candidate_ids
+            WHERE NOT EXISTS (
+                SELECT 1 FROM analysis an WHERE an.article_id = candidate_ids.id
+            )
+            ORDER BY candidate_ids.collected_at DESC, candidate_ids.id DESC
+            LIMIT {batch_size}
+        """),
+        {"scan_limit": scan_limit},
+    ).fetchall()
+    return [int(row.id if hasattr(row, "id") else row[0]) for row in rows]
+
+
+def load_unanalyzed_rows(session, article_ids: list[int]) -> list:
+    """Load selected IDs only after the bounded scan, with canonical attribution."""
+    if not article_ids:
+        return []
+    return session.execute(
+        text("""
+            SELECT ar.id, ar.title, ar.body, ar.source_id,
+                   source.name AS source_name, source.country_code, source.weight
+            FROM articles ar
+            JOIN article_country_facts source ON source.article_id = ar.id
+            WHERE ar.id = ANY(CAST(:article_ids AS integer[]))
+              AND NOT EXISTS (SELECT 1 FROM analysis an WHERE an.article_id = ar.id)
+            ORDER BY ar.collected_at DESC, ar.id DESC
+        """),
+        {"article_ids": article_ids},
+    ).fetchall()
 
 
 def analyze_new_articles(batch_size: int = 100):
-    """Find and analyze articles that haven't been processed yet."""
+    """Find and analyze only a bounded recent window of unprocessed articles."""
+    scan_limit = max(batch_size * 20, 1000)
     with get_session() as session:
-        rows = session.execute(
-            text("""
-                SELECT ar.id, ar.title, ar.body, ar.source_id,
-                       source.name as source_name, source.country_code, source.weight
-                FROM articles ar
-                JOIN article_country_facts source ON source.article_id = ar.id
-                LEFT JOIN analysis an ON an.article_id = ar.id
-                WHERE an.id IS NULL AND ar.is_duplicate = FALSE
-                ORDER BY ar.collected_at DESC
-                LIMIT :batch
-            """),
-            {"batch": batch_size},
-        ).fetchall()
+        candidate_ids = load_unanalyzed_candidate_ids(
+            session,
+            batch_size=batch_size,
+            scan_limit=scan_limit,
+        )
+        rows = load_unanalyzed_rows(session, candidate_ids)
 
     if not rows:
         logger.info("No new articles to analyze")
@@ -253,6 +304,28 @@ def analyze_new_articles(batch_size: int = 100):
             pass
 
     return saved
+
+
+def run_loop_iteration(batch_size: int, *, now: datetime | None = None) -> int | None:
+    """Use the bounded DB fallback only after a confirmed, rate-limited empty queue."""
+    global _last_empty_queue_fallback_at
+
+    outcome = process_from_queue()
+    if outcome == QUEUE_PROCESSED:
+        return 1
+    if outcome == QUEUE_UNAVAILABLE:
+        logger.warning("Redis queue unavailable; skipping database fallback")
+        return None
+
+    now = now or datetime.now(timezone.utc)
+    if (
+        _last_empty_queue_fallback_at is not None
+        and now - _last_empty_queue_fallback_at < EMPTY_QUEUE_FALLBACK_INTERVAL
+    ):
+        logger.debug("Queue empty; bounded database fallback is rate-limited")
+        return None
+    _last_empty_queue_fallback_at = now
+    return analyze_new_articles(batch_size)
 
 
 def _generate_embeddings_for_articles(article_ids: list[int], rows: list):
@@ -311,16 +384,12 @@ def main():
         logger.info(f"Starting analyzer loop (interval: {args.interval}s, batch: {args.batch})")
         while True:
             try:
-                # Try Redis queue first
-                processed = process_from_queue()
-                if processed:
+                batch_processed = run_loop_iteration(args.batch)
+                if batch_processed == 1:
                     time.sleep(0.5)
                     continue
-
-                # Fallback: scan DB for unanalyzed articles
-                batch_processed = analyze_new_articles(args.batch)
                 # If we processed a full batch, there might be more - run again quickly
-                if batch_processed >= args.batch:
+                if batch_processed is not None and batch_processed >= args.batch:
                     logger.info("Full batch processed, running again immediately...")
                     continue
             except Exception as e:

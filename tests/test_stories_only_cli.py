@@ -281,16 +281,25 @@ def test_incremental_cycle_uses_fast_thread_window_and_wider_story_window(
         lambda days, *, now: calls.append(("stories", days, now)),
     )
 
-    build_threads.run_incremental_thread_story_cycle(
+    report = build_threads.run_incremental_thread_story_cycle(
         thread_days=3,
         story_days=30,
         now=NOW,
+        coverage_loader=lambda days: {
+            "eligible": 12, "ready_current": 9, "missing_current": 3,
+        },
     )
 
     assert calls == [
         ("threads", 3, NOW, False, False),
         ("stories", 30, NOW),
     ]
+    assert report == {
+        "thread_ids": 0,
+        "embedding_coverage": {
+            "eligible": 12, "ready_current": 9, "missing_current": 3,
+        },
+    }
 
 
 def test_incremental_loop_cli_routes_to_bounded_cycle(monkeypatch):

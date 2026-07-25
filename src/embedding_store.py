@@ -379,7 +379,43 @@ class EmbeddingStore:
                     VALUES
                         (:profile_id, :object_type, :object_id, :content_hash)
                     ON CONFLICT (profile_id, object_type, object_id, content_hash)
-                    DO UPDATE SET object_id = EXCLUDED.object_id
+                    DO UPDATE SET
+                        object_id = EXCLUDED.object_id,
+                        status = CASE
+                            WHEN embedding_jobs.status = 'failed'
+                             AND embedding_jobs.updated_at
+                                 < now() - INTERVAL '6 hours'
+                            THEN 'pending'
+                            ELSE embedding_jobs.status
+                        END,
+                        attempts = CASE
+                            WHEN embedding_jobs.status = 'failed'
+                             AND embedding_jobs.updated_at
+                                 < now() - INTERVAL '6 hours'
+                            THEN 0
+                            ELSE embedding_jobs.attempts
+                        END,
+                        available_at = CASE
+                            WHEN embedding_jobs.status = 'failed'
+                             AND embedding_jobs.updated_at
+                                 < now() - INTERVAL '6 hours'
+                            THEN now()
+                            ELSE embedding_jobs.available_at
+                        END,
+                        last_error = CASE
+                            WHEN embedding_jobs.status = 'failed'
+                             AND embedding_jobs.updated_at
+                                 < now() - INTERVAL '6 hours'
+                            THEN 'stale failed job requeued'
+                            ELSE embedding_jobs.last_error
+                        END,
+                        updated_at = CASE
+                            WHEN embedding_jobs.status = 'failed'
+                             AND embedding_jobs.updated_at
+                                 < now() - INTERVAL '6 hours'
+                            THEN now()
+                            ELSE embedding_jobs.updated_at
+                        END
                     RETURNING id
                     """
                 ),

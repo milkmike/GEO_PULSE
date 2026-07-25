@@ -921,10 +921,21 @@ def fetch_story_candidates(
                    ce.object_id, ce.embedding
             FROM content_embeddings ce
             JOIN active_profile ap ON ap.profile_id = ce.profile_id
+            JOIN articles embedding_article
+              ON embedding_article.id::text = ce.object_id
             WHERE ce.object_type = 'article'
               AND ce.status = 'ready'
               AND ce.embedding IS NOT NULL
               AND ce.object_id = ANY(:semantic_article_ids)
+              AND ce.content_hash = encode(digest(CASE
+                WHEN COALESCE(embedding_article.summary, '') <> '' THEN
+                  COALESCE(embedding_article.title, '') || E'\\n' ||
+                  embedding_article.summary
+                WHEN COALESCE(embedding_article.body, '') <> '' THEN
+                  COALESCE(embedding_article.title, '') || E'\\n' ||
+                  LEFT(embedding_article.body, 1000)
+                ELSE COALESCE(embedding_article.title, '') END,
+                'sha256'), 'hex')
             ORDER BY ce.object_id, ce.updated_at DESC, ce.id DESC
         ), thread_centroids AS (
             SELECT ca.thread_id,

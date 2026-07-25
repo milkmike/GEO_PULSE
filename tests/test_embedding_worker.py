@@ -11,7 +11,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_embedding_cycle_prepares_story_candidates_before_indexing():
+def test_embedding_cycle_prepares_all_story_eligible_articles_before_indexing():
     from scripts.run_embedding_worker import run_embedding_cycle
 
     calls: list[tuple[str, dict[str, object]]] = []
@@ -33,7 +33,7 @@ def test_embedding_cycle_prepares_story_candidates_before_indexing():
             {
                 "days": 30,
                 "limit": 500,
-                "story_candidates": True,
+                "story_eligible_articles": True,
             },
         ),
         ("index", {"batch_size": 50, "limit": 500}),

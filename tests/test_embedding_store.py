@@ -663,27 +663,70 @@ def test_prepare_embedding_jobs_cli_enables_story_candidate_mode():
     assert args.limit == 8000
 
 
-def test_article_loader_excludes_irrelevant_duplicates_and_old_articles():
+def test_story_eligible_loader_selects_verified_relevant_originals_and_excludes_ready_before_limit():
+    """Breaks if scheduled preparation again uses the thread-quota population."""
     expected = {
         "id": 42,
         "title": "Eligible",
         "body": "Body",
         "summary": "Summary",
+        "ready_content_hashes": [],
     }
     session = ArticleRowsSession([expected])
 
-    rows = _preparation_module().load_eligible_articles(
+    rows = _preparation_module().load_story_eligible_articles(
         session,
         days=30,
         limit=500,
+        profile_id=4,
     )
 
     assert rows == [expected]
     assert "JOIN analysis an ON an.article_id = a.id" in session.statement
     assert "an.is_relevant = TRUE" in session.statement
     assert "a.is_duplicate = FALSE" in session.statement
+    assert "a.geo_country_code IS NOT NULL" in session.statement
     assert "a.published_at >= now() - make_interval(days => :days)" in session.statement
-    assert session.params == {"days": 30, "limit": 500}
+    assert "ce.status = 'ready'" in session.statement
+    assert "embedding_jobs" in session.statement
+    assert "job.status IN ('pending', 'processing', 'completed')" in session.statement
+    assert "job.status = 'failed'" in session.statement
+    assert session.statement.index("WHERE current_ready.content_hash IS NULL") < session.statement.index("LIMIT :limit")
+    assert "ready_content_hashes" in session.statement
+    assert session.statement.index("WHERE current_ready.content_hash IS NULL") < session.statement.index("LIMIT :limit")
+    assert session.params == {"days": 30, "limit": 500, "profile_id": 4}
+
+
+def test_story_content_hash_sql_matches_empty_secondary_text_contract():
+    sql = " ".join(_preparation_module()._embedding_content_sql().split())
+
+    assert "WHEN COALESCE(a.body, '') <> ''" in sql
+    assert "ELSE COALESCE(a.title, '') END" in sql
+
+
+def test_enqueue_job_requeues_only_stale_failed_identity():
+    class EnqueueSession:
+        def __init__(self):
+            self.sql = ""
+
+        def execute(self, statement, _params):
+            self.sql = str(statement)
+            return ScalarResult(9)
+
+    session = EnqueueSession()
+    key = embedding_job_key(
+        profile_id=4,
+        object_type="article",
+        object_id="42",
+        digest="a" * 64,
+    )
+
+    assert EmbeddingStore().enqueue_job(session, key) == 9
+    sql = " ".join(session.sql.split())
+    assert "status = CASE" in sql
+    assert "embedding_jobs.status = 'failed'" in sql
+    assert "updated_at < now() - INTERVAL '6 hours'" in sql
+    assert "THEN 'pending'" in sql
 
 
 def test_story_candidate_loader_uses_canonical_country_and_bounded_priority():
@@ -768,7 +811,7 @@ def test_prepare_embedding_jobs_dry_run_does_not_mutate_profiles_or_jobs():
     assert store.jobs == {}
 
 
-def test_story_candidate_dry_run_skips_current_ready_and_reports_coverage():
+def test_story_eligible_dry_run_reports_ready_and_missing_current_coverage():
     module = _preparation_module()
     profile = configured_preparation_profile()
     ready_content = "Ready\nSummary"
@@ -804,22 +847,25 @@ def test_story_candidate_dry_run_skips_current_ready_and_reports_coverage():
         days=30,
         limit=8000,
         dry_run=True,
-        story_candidates=True,
+        story_eligible_articles=True,
         store=store,
         session_factory=PreparationSessionFactory(),
         profile_factory=lambda: profile,
         article_loader=lambda session, **kwargs: rows,
+        coverage_loader=lambda session, **kwargs: {
+            "eligible": 2,
+            "ready_current": 1,
+            "missing_current": 1,
+        },
     )
 
     assert result == {
-        "eligible": 1,
+        "eligible": 2,
         "enqueued": 0,
         "profile": profile.profile_key,
         "dry_run": True,
-        "mode": "story_candidates",
+        "mode": "story_eligible_articles",
         "candidate_articles": 2,
-        "candidate_threads": 2,
-        "cross_country_threads": 2,
         "ready_current": 1,
         "missing_current": 1,
     }

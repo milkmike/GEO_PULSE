@@ -123,6 +123,71 @@ _UPSERT = text("""
 """)
 
 
+_UPSERT_ACTION_EVENT = text("""
+    WITH inserted AS (
+      INSERT INTO action_events (
+        public_id, input_hash, country_code, subject_key, direction,
+        action_type, status, authority, effective_at, announced_at,
+        article_id, story_id, signal_id, canonical_entity_id, details, evidence
+      ) VALUES (
+        :public_id, :input_hash, :country_code, :subject_key, :direction,
+        :action_type, :status, :authority, :effective_at, :announced_at,
+        :article_id, :story_id, :signal_id, :canonical_entity_id,
+        CAST(:details AS jsonb), CAST(:evidence AS jsonb)
+      )
+      ON CONFLICT (input_hash) DO NOTHING
+      RETURNING id
+    )
+    SELECT id FROM inserted
+    UNION ALL
+    SELECT id FROM action_events WHERE input_hash = :input_hash
+    LIMIT 1
+""")
+
+
+def upsert_action_events(
+    session, observations: Iterable[Observation],
+) -> dict[str, int]:
+    """Materialize verified action observations as idempotent source events."""
+
+    event_ids: dict[str, int] = {}
+    for observation in observations:
+        if observation.contour is not Contour.ACTION:
+            continue
+        details = dict(observation.evidence)
+        status = str(details.get("status") or "verified")
+        result = session.execute(_UPSERT_ACTION_EVENT, {
+            "public_id": uuid5(
+                NAMESPACE_URL,
+                f"geo-pulse:radar-action:{observation.input_hash}",
+            ),
+            "input_hash": observation.input_hash,
+            "country_code": observation.country_code,
+            "subject_key": observation.subject_key,
+            "direction": observation.direction,
+            "action_type": str(
+                details.get("dataset") or observation.metric or "structured"
+            ),
+            "status": status,
+            "authority": observation.authority or "registry",
+            "effective_at": observation.observed_at,
+            "announced_at": details.get("updated_at"),
+            "article_id": observation.article_id,
+            "story_id": observation.story_id,
+            "signal_id": observation.signal_id,
+            "canonical_entity_id": observation.canonical_entity_id,
+            "details": json.dumps(details, default=_json_default),
+            "evidence": json.dumps({
+                "observation_input_hash": observation.input_hash,
+                "evidence_ids": tuple(observation.evidence.get("evidence_ids", ())),
+            }, default=_json_default),
+        })
+        event_id = result.scalar()
+        if event_id is not None:
+            event_ids[observation.input_hash] = int(event_id)
+    return event_ids
+
+
 def upsert_observations(session, observations: Iterable[Observation]) -> int:
     """Insert observations once; reruns are safe by immutable input hash."""
 

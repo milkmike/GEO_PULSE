@@ -165,13 +165,11 @@ def load_signal_article_previews(
                 SELECT DISTINCT country_code, context_start, context_end
                 FROM requested
                 WHERE context_eligible
-            ), context_pool_bounds AS (
-                SELECT MIN(context_start) AS global_start,
-                       MAX(context_end) AS global_end,
-                       ARRAY_AGG(DISTINCT country_code) AS country_codes
-                FROM context_windows
             ), context_article_pool AS MATERIALIZED (
-                SELECT ar.id AS article_id,
+                SELECT context_windows.country_code AS window_country_code,
+                       context_windows.context_start,
+                       context_windows.context_end,
+                       ar.id AS article_id,
                        ar.title,
                        COALESCE(NULLIF(ar.resolved_url, ''), ar.url) AS url,
                        ar.published_at,
@@ -180,16 +178,27 @@ def load_signal_article_previews(
                        analysis.action_level AS analysis_action_level,
                        ABS(analysis.sentiment) AS absolute_sentiment,
                        ar.reprint_count
-                FROM context_pool_bounds
-                JOIN articles ar ON TRUE
+                FROM context_windows
+                JOIN LATERAL (
+                    SELECT candidate.id
+                    FROM articles candidate
+                    JOIN analysis candidate_analysis
+                      ON candidate_analysis.article_id = candidate.id
+                    WHERE candidate.geo_country_code = context_windows.country_code
+                      AND candidate.geo_status IN (
+                        'source_verified', 'publisher_verified', 'publisher_reassigned'
+                      )
+                      AND candidate.published_at >= context_windows.context_start
+                      AND candidate.published_at < context_windows.context_end
+                      AND candidate.is_duplicate = FALSE
+                      AND candidate_analysis.is_relevant = TRUE
+                    ORDER BY candidate.published_at DESC, candidate.id DESC
+                    LIMIT 200
+                ) selected ON TRUE
+                JOIN articles ar ON ar.id = selected.id
                 JOIN article_country_facts source ON source.article_id = ar.id
                 JOIN analysis analysis ON analysis.article_id = ar.id
-                WHERE context_pool_bounds.global_start IS NOT NULL
-                  AND source.country_code = ANY(context_pool_bounds.country_codes)
-                  AND ar.published_at >= context_pool_bounds.global_start
-                  AND ar.published_at < context_pool_bounds.global_end
-                  AND ar.is_duplicate = FALSE
-                  AND analysis.is_relevant = TRUE
+                WHERE source.country_code = context_windows.country_code
             ), context_candidates AS (
                 SELECT context_windows.country_code AS window_country_code,
                        context_windows.context_start,
@@ -205,9 +214,9 @@ def load_signal_article_previews(
                        context_article_pool.reprint_count
                 FROM context_windows
                 JOIN context_article_pool
-                  ON context_article_pool.country_code = context_windows.country_code
-                 AND context_article_pool.published_at >= context_windows.context_start
-                 AND context_article_pool.published_at < context_windows.context_end
+                  ON context_article_pool.window_country_code = context_windows.country_code
+                 AND context_article_pool.context_start = context_windows.context_start
+                 AND context_article_pool.context_end = context_windows.context_end
             ), context_ranked AS (
                 SELECT context_candidates.*,
                        COUNT(*) OVER (

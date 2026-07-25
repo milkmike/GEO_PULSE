@@ -1,6 +1,7 @@
 -- Enable fuzzy matching
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 CREATE EXTENSION IF NOT EXISTS vector;
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 -- CIS Thermometer — DB Schema
 
@@ -351,6 +352,15 @@ CREATE INDEX IF NOT EXISTS idx_articles_language_published_id
 CREATE INDEX IF NOT EXISTS idx_articles_source_candidates
   ON articles (source_id, published_at DESC, id DESC)
   WHERE is_duplicate = FALSE;
+CREATE INDEX IF NOT EXISTS idx_articles_pending_scan
+  ON articles (collected_at DESC, id DESC)
+  WHERE is_duplicate = FALSE;
+CREATE INDEX IF NOT EXISTS idx_articles_geo_published_live
+  ON articles (geo_country_code, published_at DESC, id DESC)
+  WHERE is_duplicate = FALSE
+    AND geo_status IN (
+      'source_verified','publisher_verified','publisher_reassigned'
+    );
 
 -- === Structural data layer (see scripts/migrations/011_un_votes_trade.sql) ===
 

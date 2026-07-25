@@ -210,7 +210,10 @@ def country_entities(code: str, days: int = Query(30, ge=1, le=180)):
                 JOIN articles ar ON a.article_id = ar.id
                 JOIN article_country_facts s ON s.article_id = ar.id
                 CROSS JOIN LATERAL jsonb_array_elements_text(a.entities) AS ek
-                WHERE s.country_code = :cc AND a.is_relevant = TRUE
+                WHERE ar.geo_country_code = :cc
+                  AND ar.geo_status IN ('source_verified', 'publisher_verified', 'publisher_reassigned')
+                  AND ar.is_duplicate = FALSE
+                  AND s.country_code = :cc AND a.is_relevant = TRUE
                   AND a.entities IS NOT NULL
                   AND ar.published_at > NOW() - make_interval(days => :days)
                   AND jsonb_typeof(a.entities) = 'array'
@@ -291,7 +294,9 @@ def country_agreements(code: str, days: int = Query(180, ge=7, le=365)):
                 FROM analysis a
                 JOIN articles ar ON a.article_id = ar.id
                 JOIN article_country_facts s ON s.article_id = ar.id
-                WHERE s.country_code = :cc
+                WHERE ar.geo_country_code = :cc
+                  AND ar.geo_status IN ('source_verified', 'publisher_verified', 'publisher_reassigned')
+                  AND s.country_code = :cc
                   AND a.event_type IN ('diplomatic', 'economic')
                   AND a.action_level >= 3
                   AND a.event_key IS NOT NULL AND a.event_key != ''
@@ -452,7 +457,10 @@ def country_topics(code: str, days: int = Query(30, ge=1, le=365)):
                 JOIN articles ar ON a.article_id = ar.id
                 JOIN article_country_facts s ON s.article_id = ar.id
                 CROSS JOIN LATERAL unnest(a.topics) AS topic
-                WHERE s.country_code = :cc AND a.is_relevant = TRUE
+                WHERE ar.geo_country_code = :cc
+                  AND ar.geo_status IN ('source_verified', 'publisher_verified', 'publisher_reassigned')
+                  AND ar.is_duplicate = FALSE
+                  AND s.country_code = :cc AND a.is_relevant = TRUE
                   AND ar.published_at > NOW() - make_interval(days => :days)
                 GROUP BY topic ORDER BY n DESC
             """),
@@ -490,7 +498,10 @@ def country_headlines(code: str, days: int = Query(3, ge=1, le=30),
                 FROM analysis a
                 JOIN articles ar ON a.article_id = ar.id
                 JOIN article_country_facts s ON s.article_id = ar.id
-                WHERE s.country_code = :cc AND a.is_relevant = TRUE
+                WHERE ar.geo_country_code = :cc
+                  AND ar.geo_status IN ('source_verified', 'publisher_verified', 'publisher_reassigned')
+                  AND ar.is_duplicate = FALSE
+                  AND s.country_code = :cc AND a.is_relevant = TRUE
                   AND ar.published_at > NOW() - make_interval(days => :days)
                 ORDER BY ar.published_at DESC LIMIT :lim
             """),
@@ -567,7 +578,10 @@ def country_tier_divergence(code: str, days: int = Query(30, ge=1, le=180)):
                 FROM analysis a
                 JOIN articles ar ON a.article_id = ar.id
                 JOIN article_country_facts s ON s.article_id = ar.id
-                WHERE s.country_code = :cc AND a.is_relevant = TRUE
+                WHERE ar.geo_country_code = :cc
+                  AND ar.geo_status IN ('source_verified', 'publisher_verified', 'publisher_reassigned')
+                  AND ar.is_duplicate = FALSE
+                  AND s.country_code = :cc AND a.is_relevant = TRUE
                   AND a.sentiment IS NOT NULL
                   AND ar.published_at > NOW() - make_interval(days => :days)
                 GROUP BY COALESCE(s.tier, 'mainstream')
@@ -792,7 +806,11 @@ def world_headlines(hours: int = Query(24, ge=1, le=26280),
         conditions.append("s.tier = :tier")
         params["tier"] = tier
     if country:
-        conditions.append("s.country_code = :cc")
+        conditions.extend([
+            "ar.geo_country_code = :cc",
+            "ar.geo_status IN ('source_verified', 'publisher_verified', 'publisher_reassigned')",
+            "s.country_code = :cc",
+        ])
         params["cc"] = country.upper()
     if region:
         region_codes = [c for c, v in COUNTRIES.items() if v["region"] == region]

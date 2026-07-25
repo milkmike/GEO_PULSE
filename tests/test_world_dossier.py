@@ -51,6 +51,25 @@ def test_country_entities_only_expands_json_arrays(monkeypatch):
     assert "jsonb_typeof(a.entities) = 'array'" in sql
 
 
+def test_country_topics_prefilters_selective_geo_before_canonical_attribution(monkeypatch):
+    session = SequentialSession([[]])
+
+    @contextmanager
+    def session_factory():
+        yield session
+
+    monkeypatch.setattr(world, "get_session", session_factory)
+
+    assert world.country_topics("es") ["topics"] == []
+
+    sql = " ".join(session.calls[0][0].split())
+    assert "ar.geo_country_code = :cc" in sql
+    assert "ar.geo_status IN ('source_verified', 'publisher_verified', 'publisher_reassigned')" in sql
+    assert "ar.is_duplicate = FALSE" in sql
+    assert "JOIN article_country_facts s ON s.article_id = ar.id" in sql
+    assert "s.country_code = :cc" in sql
+
+
 def test_country_dossier_history_uses_utc_daily_last_persisted_points(monkeypatch):
     selected_time = datetime(
         2026,
@@ -300,17 +319,19 @@ def test_signal_list_includes_context_article_preview_in_one_batch(monkeypatch):
         preview_sql,
     )
     assert "context_article_pool AS MATERIALIZED" in preview_sql
-    assert "MIN(context_start) AS global_start" in preview_sql
-    assert "MAX(context_end) AS global_end" in preview_sql
-    assert "ar.published_at >= context_pool_bounds.global_start" in preview_sql
-    assert "ar.published_at < context_pool_bounds.global_end" in preview_sql
-    assert "context_article_pool.published_at >= context_windows.context_start" in preview_sql
-    assert "context_article_pool.published_at < context_windows.context_end" in preview_sql
+    assert "context_pool_bounds" not in preview_sql
+    assert "candidate.published_at >= context_windows.context_start" in preview_sql
+    assert "candidate.published_at < context_windows.context_end" in preview_sql
+    assert "context_article_pool.context_start = context_windows.context_start" in preview_sql
+    assert "context_article_pool.context_end = context_windows.context_end" in preview_sql
     assert "context_article_pool.published_at > context_windows.context_start" not in preview_sql
     assert "context_article_pool.published_at <= context_windows.context_end" not in preview_sql
-    assert "ar.is_duplicate = FALSE" in preview_sql
-    assert "analysis.is_relevant = TRUE" in preview_sql
-    assert "source.country_code = ANY(context_pool_bounds.country_codes)" in preview_sql
+    assert "candidate.is_duplicate = FALSE" in preview_sql
+    assert "candidate_analysis.is_relevant = TRUE" in preview_sql
+    assert "candidate.geo_country_code = context_windows.country_code" in preview_sql
+    assert "source.country_code = context_windows.country_code" in preview_sql
+    assert "source.country_code = ANY" not in preview_sql
+    assert "LIMIT 200" in preview_sql
     assert "ROW_NUMBER() OVER" in preview_sql
     assert "context_ranked AS" in preview_sql
     assert (

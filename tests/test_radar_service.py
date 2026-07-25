@@ -146,6 +146,38 @@ def test_incremental_cycle_generates_three_days_but_keeps_90_day_lookback(
     assert report.observation_count == 1
 
 
+def test_incremental_cycle_replays_persisted_actions_inside_retained_lookback(
+    monkeypatch,
+):
+    import src.radar.service as service
+
+    saved_action = make_observation(
+        country_code="ES", contour="action",
+        subject_key="economy:trade:russia", direction="increase",
+        metric="trade_change", observed_at=AS_OF - timedelta(days=30),
+        evidence_ids=("trade:ES:2025:120:100:20",),
+        value=20, authority="registry", source_count=1,
+        coverage_confidence=1.0,
+        evidence={
+            "dataset": "trade_data", "status": "verified",
+            "alignment_subject": "economy:trade:russia",
+            "alignment_direction": "warming",
+        },
+    )
+    monkeypatch.setattr(service, "build_media_observations", lambda *_: [])
+    monkeypatch.setattr(service, "build_action_observations", lambda *_: [])
+    monkeypatch.setattr(service, "_history_for_identities", lambda *_: ())
+    monkeypatch.setattr(service, "_action_history", lambda *_: (saved_action,))
+
+    report = run_radar_cycle(
+        _Session(), AS_OF, shadow=True, generation_days=3,
+    )
+
+    assert [wave.contour for wave in report.country_waves] == [Contour.ACTION]
+    assert report.country_waves[0].observations == (saved_action,)
+    assert report.inserted_observations == 0
+
+
 @pytest.mark.parametrize("generation_days", (0, 91))
 def test_incremental_generation_window_must_fit_lookback(generation_days):
     with pytest.raises(ValueError, match="generation window"):
@@ -218,7 +250,8 @@ def test_release_metrics_include_current_window_generated_day_bucket_but_not_his
 
     assert shadow.observation_count == applied.observation_count
     assert shadow.evidence_validity == applied.evidence_validity
-    assert applied.inserted_observations == applied.observation_count == 1
+    assert applied.observation_count == 1
+    assert applied.inserted_observations == 0
 
 
 def test_replay_prefers_corrected_richer_observation_without_double_count(monkeypatch):
@@ -339,6 +372,26 @@ def test_sql_persistence_uses_wave_keys_and_reports_real_count_deltas(monkeypatc
     assert report.protected_row_counts["radar_observations"] == {"before": 0, "after": 2, "delta": 2}
     assert report.protected_row_counts["articles"]["delta"] == 0
     assert any("radar_observation_history" in sql for sql, _ in session.calls)
+
+
+def test_one_day_candidate_is_reported_but_not_persisted(monkeypatch):
+    import src.radar.service as service
+
+    candidate = _media_point(
+        AS_OF - timedelta(hours=2), value=0.1, article_id=887,
+    )
+    monkeypatch.setattr(service, "build_media_observations", lambda *_: [candidate])
+    monkeypatch.setattr(service, "build_action_observations", lambda *_: [])
+    session = _RecordingSqlSession()
+
+    report = run_radar_cycle(session, AS_OF, shadow=False)
+
+    assert report.country_waves[0].state is TrendState.CANDIDATE
+    assert not any(
+        "INSERT INTO radar_observations" in sql
+        or "INSERT INTO radar_trends" in sql
+        for sql, _ in session.calls
+    )
 
 
 def test_sql_update_preserves_first_detection_timestamp():

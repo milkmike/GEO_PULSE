@@ -205,6 +205,24 @@ def test_article_duplicate_family_index_is_present_and_retry_safe():
     assert "idx.indisvalid AND idx.indisready" in migration_sql
 
 
+def test_pipeline_recovery_indexes_are_present_for_new_and_existing_installs():
+    migration_sql = migration("031_pipeline_recovery_indexes.sql")
+    init_sql = (ROOT / "data" / "init.sql").read_text()
+
+    for sql in (migration_sql, init_sql):
+        assert "CREATE EXTENSION IF NOT EXISTS pgcrypto" in sql
+        assert "idx_articles_pending_scan" in sql
+        assert "(collected_at DESC, id DESC)" in sql
+        assert "WHERE is_duplicate = FALSE" in sql
+        assert "idx_articles_geo_published_live" in sql
+        assert "(geo_country_code, published_at DESC, id DESC)" in sql
+        assert "'source_verified','publisher_verified','publisher_reassigned'" in sql
+    assert "CREATE INDEX CONCURRENTLY IF NOT EXISTS" in migration_sql
+    assert "DROP INDEX CONCURRENTLY IF EXISTS" in migration_sql
+    assert "NOT index_state.indisvalid OR NOT index_state.indisready" in migration_sql
+    assert "idx.indisvalid AND idx.indisready" in migration_sql
+
+
 def test_temperature_anomaly_storage_preserves_unbounded_v1_z_scores():
     from src.db import Temperature
     from src.engine.index import _anomaly_statistics

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Continuously prepare and index bounded story-candidate embeddings."""
+"""Continuously prepare and index bounded story-eligible embeddings."""
 
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ def run_embedding_cycle(
     prepare: Callable[..., dict[str, Any]] = prepare_jobs,
     index: Callable[..., dict[str, Any]] = index_pending,
 ) -> dict[str, object]:
-    """Prepare recent story candidates, then drain a bounded job batch."""
+    """Prepare all recent story-eligible articles, then drain a bounded batch."""
 
     for name, value in (
         ("days", days),
@@ -49,7 +49,7 @@ def run_embedding_cycle(
     prepared = prepare(
         days=days,
         limit=prepare_limit,
-        story_candidates=True,
+        story_eligible_articles=True,
     )
     indexed = index(batch_size=batch_size, limit=index_limit)
     return {"prepare": prepared, "index": indexed}
@@ -92,7 +92,7 @@ def run_loop(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Prepare and index story-candidate embeddings",
+        description="Prepare and index story-eligible article embeddings",
     )
     parser.add_argument("--loop", action="store_true")
     parser.add_argument("--interval", type=int, default=300)

@@ -19,8 +19,10 @@ import asyncio
 import logging
 import os
 import re
+import time
 import unicodedata
 from datetime import datetime, timedelta, timezone
+from urllib.parse import unquote, urlsplit
 
 from telethon import TelegramClient, events
 from telethon.tl.types import Channel, MessageMediaWebPage
@@ -49,6 +51,45 @@ MIN_POST_LENGTH = int(os.environ.get("TG_MIN_POST_LENGTH", "80"))
 COLLECT_INTERVAL = int(os.environ.get("TG_COLLECT_INTERVAL", "900"))  # 15 мин
 # Режим: "live" или "poll"
 MODE = os.environ.get("TG_MODE", "live")
+
+
+def parse_telegram_proxy(value: str | None) -> dict[str, object] | None:
+    """Convert TELEGRAM_PROXY_URL to the proxy mapping expected by Telethon."""
+    if not value or not value.strip():
+        return None
+
+    parsed = urlsplit(value.strip())
+    proxy_type = parsed.scheme.lower()
+    if proxy_type not in {"socks5", "socks4", "http"}:
+        raise ValueError("TELEGRAM_PROXY_URL must use socks5, socks4, or http")
+    if not parsed.hostname:
+        raise ValueError("TELEGRAM_PROXY_URL must include a proxy host")
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("TELEGRAM_PROXY_URL has an invalid proxy port") from exc
+    if port is None:
+        raise ValueError("TELEGRAM_PROXY_URL must include a proxy port")
+
+    proxy: dict[str, object] = {
+        "proxy_type": proxy_type,
+        "addr": parsed.hostname,
+        "port": port,
+    }
+    if parsed.username is not None:
+        proxy["username"] = unquote(parsed.username)
+    if parsed.password is not None:
+        proxy["password"] = unquote(parsed.password)
+    if proxy_type.startswith("socks"):
+        proxy["rdns"] = True
+    return proxy
+
+
+def describe_telegram_proxy(proxy: dict[str, object] | None) -> str:
+    """Return safe, credential-free proxy telemetry for collector logs."""
+    if proxy is None:
+        return "disabled"
+    return f"enabled (host={proxy['addr']}, type={proxy['proxy_type']})"
 
 # ─── Language detection ───────────────────────────────────────────
 _CYRILLIC_RE = re.compile(r"[Ѐ-ӿ]")
@@ -259,7 +300,9 @@ def enqueue_article(article_id: int, country_code: str):
 # ─── Telethon Client ─────────────────────────────────────────────
 def make_client() -> TelegramClient:
     session_file = f"{SESSION_PATH}/{TELEGRAM_SESSION}"
-    return TelegramClient(session_file, TELEGRAM_API_ID, TELEGRAM_API_HASH)
+    proxy = parse_telegram_proxy(os.environ.get("TELEGRAM_PROXY_URL"))
+    log.info("Telegram proxy: %s", describe_telegram_proxy(proxy))
+    return TelegramClient(session_file, TELEGRAM_API_ID, TELEGRAM_API_HASH, proxy=proxy)
 
 
 # ─── Collect (poll mode) ─────────────────────────────────────────
@@ -429,20 +472,86 @@ async def live_listener(client: TelegramClient):
 
 
 # ─── Main ────────────────────────────────────────────────────────
-async def main():
-    log.info("🚀 Telegram Article Collector starting...")
-    log.info(f"   Mode: {MODE}")
-    log.info(f"   Session: {SESSION_PATH}/{TELEGRAM_SESSION}")
-
-    client = make_client()
-    await client.start()
+async def _collect_once(client: TelegramClient):
     me = await client.get_me()
     log.info(f"   Logged in as: {me.first_name} (id={me.id})")
 
     if MODE == "live":
         await live_listener(client)
+        # Telethon returns from run_until_disconnected when its MTProto
+        # transport is gone. Treat that as a retryable connection loss.
+        raise ConnectionError("MTProto listener disconnected")
     else:
         await poll_loop(client)
+
+
+async def _disconnect_quietly(client) -> None:
+    try:
+        await client.disconnect()
+    except Exception:
+        # A failed connection can leave no usable transport to close.
+        pass
+
+
+async def run_with_reconnect(
+    client_factory,
+    *,
+    initial_delay: int = 5,
+    max_delay: int = 300,
+    stable_connection_seconds: int = 60,
+    sleep=asyncio.sleep,
+    monotonic=time.monotonic,
+    collect=None,
+) -> None:
+    """Run a collector session, retrying only transient MTProto failures."""
+    if (
+        initial_delay <= 0
+        or max_delay < initial_delay
+        or stable_connection_seconds <= 0
+    ):
+        raise ValueError("Reconnect delays must be positive and ordered")
+
+    delay = initial_delay
+    collector = collect or _collect_once
+    while True:
+        client = client_factory()
+        connected_at = None
+        try:
+            await client.start()
+            connected_at = monotonic()
+            await collector(client)
+            await _disconnect_quietly(client)
+            return
+        except asyncio.CancelledError:
+            await _disconnect_quietly(client)
+            raise
+        except (ConnectionError, OSError, asyncio.TimeoutError):
+            if (
+                connected_at is not None
+                and monotonic() - connected_at >= stable_connection_seconds
+            ):
+                delay = initial_delay
+            # Do not include exception text: proxy URLs and their credentials
+            # can be embedded in lower-level transport errors.
+            log.warning("MTProto connection failed; retrying in %s seconds", delay)
+            await _disconnect_quietly(client)
+            await sleep(delay)
+            delay = min(delay * 2, max_delay)
+        except Exception:
+            # Authentication and configuration failures are intentionally
+            # terminal rather than becoming a hot reconnect loop.
+            await _disconnect_quietly(client)
+            raise
+
+
+async def main():
+    if not TELEGRAM_API_ID or not TELEGRAM_API_HASH:
+        raise RuntimeError("TELEGRAM_API_ID and TELEGRAM_API_HASH are required")
+
+    log.info("🚀 Telegram Article Collector starting...")
+    log.info(f"   Mode: {MODE}")
+    log.info(f"   Session: {SESSION_PATH}/{TELEGRAM_SESSION}")
+    await run_with_reconnect(make_client)
 
 
 if __name__ == "__main__":

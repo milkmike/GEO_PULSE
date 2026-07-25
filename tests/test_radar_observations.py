@@ -9,7 +9,12 @@ import pytest
 
 from src.radar.actions import _FOSSIL, build_action_observations
 from src.radar.media import _MEDIA_ROWS, build_media_observations
-from src.radar.repository import observation_input_hash, make_observation, upsert_observations
+from src.radar.repository import (
+    make_observation,
+    observation_input_hash,
+    upsert_action_events,
+    upsert_observations,
+)
 from src.radar.types import Contour, Observation, ObservationWindow
 
 
@@ -44,6 +49,7 @@ class _Session:
         self.inserted = inserted
         self.calls = []
         self.inserted_hashes = set()
+        self.action_event_ids = {}
         self.existing_source_fingerprints = set(existing_source_fingerprints)
         self.registered_country_codes = tuple(registered_country_codes)
 
@@ -54,6 +60,12 @@ class _Session:
             return _Result(scalar_value=(params or {})["source_id"] in self.existing_source_fingerprints)
         if "radar_registered_country_codes" in sql:
             return _Result(SimpleNamespace(code=code) for code in self.registered_country_codes)
+        if "INSERT INTO action_events" in sql:
+            input_hash = (params or {})["input_hash"]
+            event_id = self.action_event_ids.setdefault(
+                input_hash, len(self.action_event_ids) + 1,
+            )
+            return _Result(scalar_value=event_id)
         if "radar_observations" in sql and "INSERT" in sql:
             input_hash = (params or {})["input_hash"]
             if input_hash in self.inserted_hashes:
@@ -372,6 +384,17 @@ def test_multiple_story_events_produce_sorted_stable_subject_observations():
     assert [point.subject_key for point in points] == ["event:alpha", "event:zeta"]
 
 
+def test_story_without_canonical_event_key_produces_no_radar_observation():
+    session = _Session(media_rows=(
+        _media_row(
+            ARTICLE_A, 10, "example.es",
+            story_event_keys=(), event_key=None,
+        ),
+    ))
+
+    assert build_media_observations(session, _window()) == []
+
+
 def test_attention_denominator_includes_verified_irrelevant_national_coverage():
     session = _Session(media_rows=(
         _media_row(ARTICLE_A, 10, "example.es"),
@@ -385,7 +408,7 @@ def test_attention_denominator_includes_verified_irrelevant_national_coverage():
     assert point.value == pytest.approx(0.5)
 
 
-def test_annual_actions_expose_period_values_and_real_refresh_time():
+def test_annual_actions_use_period_end_as_effective_time_and_keep_refresh_time():
     session = _Session(action_rows={
         "un_votes": (SimpleNamespace(
             country_code="ES", year=2025, current_value=Decimal("42.0"),
@@ -395,14 +418,56 @@ def test_annual_actions_expose_period_values_and_real_refresh_time():
 
     [point] = build_action_observations(session, _window())
 
-    assert point.observed_at == NOW
+    assert point.observed_at == datetime(2025, 12, 31, tzinfo=timezone.utc)
     assert point.evidence["period_year"] == 2025
     assert point.evidence["temporal_resolution"] == "year"
     assert point.evidence["current_value"] == 42.0
     assert point.evidence["previous_value"] == 40.0
     assert point.evidence["delta"] == 2.0
+    assert point.evidence["updated_at"] == NOW.isoformat()
     assert point.evidence["alignment_subject"] == "diplomacy:un_alignment:russia"
     assert point.evidence["alignment_direction"] == "warming"
+
+
+def test_current_year_annual_row_is_not_a_future_radar_action():
+    session = _Session(action_rows={
+        "trade_data": (SimpleNamespace(
+            country_code="ES", year=2026, current_value=Decimal("120"),
+            previous_value=Decimal("100"), value=Decimal("20"),
+            updated_at=NOW - timedelta(hours=1),
+        ),),
+    })
+
+    assert build_action_observations(session, _window()) == []
+
+
+def test_annual_row_becomes_due_on_period_end_even_without_loader_refresh():
+    row = SimpleNamespace(
+        country_code="ES", year=2026, current_value=Decimal("120"),
+        previous_value=Decimal("100"), value=Decimal("20"),
+        updated_at=NOW - timedelta(hours=1),
+    )
+    before = ObservationWindow(
+        datetime(2026, 7, 17, tzinfo=timezone.utc),
+        datetime(2026, 7, 18, tzinfo=timezone.utc),
+    )
+    after = ObservationWindow(
+        datetime(2026, 12, 30, tzinfo=timezone.utc),
+        datetime(2027, 1, 2, tzinfo=timezone.utc),
+    )
+
+    assert build_action_observations(
+        _Session(action_rows={"trade_data": (row,)}), before,
+    ) == []
+    post_session = _Session(action_rows={"trade_data": (row,)})
+    [point] = build_action_observations(post_session, after)
+
+    assert point.observed_at == datetime(2026, 12, 31, tzinfo=timezone.utc)
+    trade_sql = next(
+        sql for sql, _params in post_session.calls if "FROM trade_data" in sql
+    )
+    assert "make_date(year, 12, 31)" in trade_sql
+    assert "OR (" in trade_sql
 
 
 def test_fossil_snapshot_requires_comparable_prior_and_canonicalizes_numbers():
@@ -458,7 +523,7 @@ def test_input_hash_includes_all_evidence_roots():
     assert len({baseline.input_hash, changed_story.input_hash, changed_entity.input_hash, changed_action.input_hash}) == 4
 
 
-def test_annual_sql_selects_current_refreshes_by_real_updated_time():
+def test_annual_sql_selects_refreshes_but_uses_period_as_effective_time():
     refreshed_at = NOW - timedelta(hours=2)
     session = _AnnualWindowSession(action_rows={
         "un_votes": (
@@ -482,13 +547,13 @@ def test_annual_sql_selects_current_refreshes_by_real_updated_time():
     assert "updated_at < :window_end" in annual_sql
     assert "make_date(year, 12, 31)::timestamp AT TIME ZONE 'UTC') >=" not in annual_sql
     assert params == {"window_start": _window().start, "window_end": _window().end}
-    assert point.observed_at == refreshed_at
+    assert point.observed_at == datetime(2025, 12, 31, tzinfo=timezone.utc)
     assert point.evidence["updated_at"] == refreshed_at.isoformat()
     assert point.evidence["temporal_resolution"] == "year"
     assert point.evidence["period_year"] == 2025
 
 
-def test_annual_hash_uses_exact_persisted_observed_at():
+def test_annual_hash_is_stable_across_loader_refresh_time():
     def observation(updated_at):
         session = _Session(action_rows={
             "trade_data": (SimpleNamespace(
@@ -501,8 +566,8 @@ def test_annual_hash_uses_exact_persisted_observed_at():
     first = observation(NOW - timedelta(hours=2))
     replay = observation(NOW - timedelta(hours=1))
 
-    assert first.observed_at != replay.observed_at
-    assert first.input_hash != replay.input_hash
+    assert first.observed_at == replay.observed_at
+    assert first.input_hash == replay.input_hash
     assert first.input_hash == observation_input_hash(
         contour=first.contour,
         country_code=first.country_code,
@@ -530,7 +595,7 @@ def test_annual_source_fingerprint_suppresses_unchanged_refresh():
     assert suppressed == []
 
 
-def test_annual_corrected_value_emits_with_real_updated_time_and_new_hash():
+def test_annual_corrected_value_keeps_period_time_and_emits_new_hash():
     original = SimpleNamespace(
         country_code="ES", year=2025, current_value=Decimal("120"),
         previous_value=Decimal("100"), value=Decimal("20"), updated_at=NOW - timedelta(hours=2),
@@ -544,8 +609,40 @@ def test_annual_corrected_value_emits_with_real_updated_time_and_new_hash():
         existing_source_fingerprints=(first.evidence["source_id"],),
     ), _window())
 
-    assert point.observed_at == corrected_at
+    assert point.observed_at == datetime(2025, 12, 31, tzinfo=timezone.utc)
+    assert point.evidence["updated_at"] == corrected_at.isoformat()
     assert point.input_hash != first.input_hash
+
+
+def test_action_event_upsert_is_idempotent_and_uses_observation_identity():
+    observation = make_observation(
+        country_code="ES", contour="action",
+        subject_key="economy:trade:russia", direction="increase",
+        metric="trade_change",
+        observed_at=datetime(2025, 12, 31, tzinfo=timezone.utc),
+        evidence_ids=("trade:ES:2025:120:100:20",),
+        value=20, authority="registry",
+        evidence={
+            "dataset": "trade_data", "status": "verified",
+            "source_id": "trade:ES:2025:120:100:20",
+            "temporal_resolution": "year", "period_year": 2025,
+            "previous_value": 100.0, "current_value": 120.0, "delta": 20.0,
+        },
+    )
+    session = _Session(inserted=1)
+
+    first = upsert_action_events(session, (observation,))
+    second = upsert_action_events(session, (observation,))
+
+    assert first == {observation.input_hash: 1}
+    assert second == {observation.input_hash: 1}
+    sql, params = next(
+        (sql, params) for sql, params in session.calls
+        if "INSERT INTO action_events" in sql
+    )
+    assert "ON CONFLICT (input_hash)" in sql
+    assert params["input_hash"] == observation.input_hash
+    assert params["effective_at"] == observation.observed_at
 
 
 def test_fossil_prior_query_excludes_reported_or_non_authoritative_rows():

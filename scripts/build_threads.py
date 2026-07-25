@@ -13,7 +13,9 @@ from sqlalchemy import text
 from src.config import COUNTRY_NAMES, OPENROUTER_API_KEY, HEAVY_MODEL
 from src.db import get_session, wait_for_db
 from src.api_tracker import track_api_call, track_duration
+from src.embedding_store import EmbeddingStore
 from src.stories import build_stories as build_global_stories
+from scripts.prepare_embedding_jobs import load_story_embedding_coverage
 
 logging.basicConfig(
     level=logging.INFO,
@@ -261,9 +263,39 @@ def run_scoped_story_builder(
 
 # ── Step 1: Fetch articles ──────────────────────────────
 
+def _current_article_content_sql(alias: str) -> str:
+    return f"""CASE
+        WHEN COALESCE({alias}.summary, '') <> '' THEN
+          COALESCE({alias}.title, '') || E'\\n' || {alias}.summary
+        WHEN COALESCE({alias}.body, '') <> '' THEN
+          COALESCE({alias}.title, '') || E'\\n' || LEFT({alias}.body, 1000)
+        ELSE COALESCE({alias}.title, '') END"""
+
+
 def fetch_articles(session, days: int = 30) -> list[dict]:
     """Fetch all relevant articles with event_keys and embeddings."""
-    rows = session.execute(text("""
+    content = _current_article_content_sql("embedding_article")
+    rows = session.execute(text(f"""
+        WITH active_profile AS (
+            SELECT MIN(ep.id) AS profile_id
+            FROM embedding_profiles ep
+            WHERE ep.active = TRUE
+            HAVING COUNT(*) = 1
+               AND BOOL_AND(ep.dimensions = 1024)
+        ), active_embeddings AS (
+            SELECT DISTINCT ON (ce.object_id) ce.object_id
+            FROM content_embeddings ce
+            JOIN active_profile ap ON ap.profile_id = ce.profile_id
+            JOIN articles embedding_article
+              ON embedding_article.id::text = ce.object_id
+            WHERE ce.object_type = 'article'
+              AND ce.status = 'ready'
+              AND ce.embedding IS NOT NULL
+              AND ce.content_hash = encode(
+                digest({content}, 'sha256'), 'hex'
+              )
+            ORDER BY ce.object_id, ce.updated_at DESC, ce.id DESC
+        )
         SELECT
             an.id AS analysis_id,
             an.article_id,
@@ -271,7 +303,7 @@ def fetch_articles(session, days: int = 30) -> list[dict]:
             an.sentiment,
             an.action_level,
             an.event_type,
-            an.embedding IS NOT NULL AS has_embedding,
+            active_embeddings.object_id IS NOT NULL AS has_embedding,
             ar.title,
             ar.url,
             ar.published_at,
@@ -282,10 +314,12 @@ def fetch_articles(session, days: int = 30) -> list[dict]:
         FROM analysis an
         JOIN articles ar ON an.article_id = ar.id
         JOIN article_country_facts s ON s.article_id = ar.id
+        LEFT JOIN active_embeddings ON active_embeddings.object_id = ar.id::text
         WHERE an.is_relevant = true
+          AND ar.is_duplicate = FALSE
           AND ar.published_at > NOW() - INTERVAL :days
           AND (
-            an.embedding IS NOT NULL
+            active_embeddings.object_id IS NOT NULL
             OR (an.event_key IS NOT NULL AND LENGTH(TRIM(an.event_key)) > 5)
             OR (an.raw_response->>'event_key' IS NOT NULL
                 AND LENGTH(TRIM(an.raw_response->>'event_key')) > 5)
@@ -452,16 +486,39 @@ def cluster_pass1_embeddings(
         max_distance = 1.0 - COSINE_MAYBE_THRESHOLD
 
         try:
-            pairs = session.execute(text("""
-                SELECT a1.article_id AS id1, a2.article_id AS id2,
-                       1 - (a1.embedding <=> a2.embedding) AS similarity
-                FROM analysis a1
-                JOIN analysis a2 ON a1.article_id < a2.article_id
-                WHERE a1.article_id = ANY(:ids)
-                  AND a2.article_id = ANY(:ids)
-                  AND a1.embedding IS NOT NULL
-                  AND a2.embedding IS NOT NULL
-                  AND (a1.embedding <=> a2.embedding) < :max_dist
+            content = _current_article_content_sql("embedding_article")
+            pairs = session.execute(text(f"""
+                WITH active_profile AS (
+                    SELECT MIN(ep.id) AS profile_id
+                    FROM embedding_profiles ep
+                    WHERE ep.active = TRUE
+                    HAVING COUNT(*) = 1
+                       AND BOOL_AND(ep.dimensions = 1024)
+                ), active_embeddings AS (
+                    SELECT DISTINCT ON (ce.object_id)
+                           ce.object_id, ce.embedding
+                    FROM content_embeddings ce
+                    JOIN active_profile ap ON ap.profile_id = ce.profile_id
+                    JOIN articles embedding_article
+                      ON embedding_article.id::text = ce.object_id
+                    WHERE ce.object_type = 'article'
+                      AND ce.status = 'ready'
+                      AND ce.embedding IS NOT NULL
+                      AND ce.content_hash = encode(
+                        digest({content}, 'sha256'), 'hex'
+                      )
+                      AND ce.object_id = ANY(CAST(:ids AS text[]))
+                    ORDER BY ce.object_id, ce.updated_at DESC, ce.id DESC
+                )
+                SELECT left_embedding.object_id::integer AS id1,
+                       right_embedding.object_id::integer AS id2,
+                       1 - (left_embedding.embedding <=> right_embedding.embedding)
+                           AS similarity
+                FROM active_embeddings left_embedding
+                JOIN active_embeddings right_embedding
+                  ON left_embedding.object_id < right_embedding.object_id
+                WHERE (left_embedding.embedding <=> right_embedding.embedding)
+                          < :max_dist
             """), {"ids": article_ids, "max_dist": max_distance}).fetchall()
         except Exception as e:
             logger.warning(f"Embedding clustering failed for {cc}: {e}")
@@ -1135,14 +1192,34 @@ def link_related_threads(session):
     """Find and link related threads across countries using embeddings + trgm."""
     # Try embedding-based linking first
     try:
-        session.execute(text("""
-            WITH thread_emb AS (
-                SELECT ta.thread_id, AVG(an.embedding) AS avg_emb
+        content = _current_article_content_sql("embedding_article")
+        session.execute(text(f"""
+            WITH active_profile AS (
+                SELECT MIN(ep.id) AS profile_id
+                FROM embedding_profiles ep
+                WHERE ep.active = TRUE
+                HAVING COUNT(*) = 1
+                   AND BOOL_AND(ep.dimensions = 1024)
+            ), active_embeddings AS (
+                SELECT DISTINCT ON (ce.object_id) ce.object_id, ce.embedding
+                FROM content_embeddings ce
+                JOIN active_profile ap ON ap.profile_id = ce.profile_id
+                JOIN articles embedding_article
+                  ON embedding_article.id::text = ce.object_id
+                WHERE ce.object_type = 'article'
+                  AND ce.status = 'ready'
+                  AND ce.embedding IS NOT NULL
+                  AND ce.content_hash = encode(
+                    digest({content}, 'sha256'), 'hex'
+                  )
+                ORDER BY ce.object_id, ce.updated_at DESC, ce.id DESC
+            ), thread_emb AS (
+                SELECT ta.thread_id, AVG(embedding.embedding) AS avg_emb
                 FROM thread_articles ta
-                JOIN analysis an ON an.article_id = ta.article_id
-                WHERE an.embedding IS NOT NULL
+                JOIN active_embeddings embedding
+                  ON embedding.object_id = ta.article_id::text
                 GROUP BY ta.thread_id
-                HAVING COUNT(an.embedding) >= 1
+                HAVING COUNT(embedding.embedding) >= 1
             )
             UPDATE threads t1
             SET related_threads = (
@@ -1277,14 +1354,34 @@ def cleanup_duplicate_threads(session):
 
         # Method 2: Embedding-based (avg embedding per thread)
         try:
-            emb_dupes = session.execute(text("""
-                WITH thread_emb AS (
-                    SELECT ta.thread_id, AVG(an.embedding) AS avg_emb
+            content = _current_article_content_sql("embedding_article")
+            emb_dupes = session.execute(text(f"""
+                WITH active_profile AS (
+                    SELECT MIN(ep.id) AS profile_id
+                    FROM embedding_profiles ep
+                    WHERE ep.active = TRUE
+                    HAVING COUNT(*) = 1
+                       AND BOOL_AND(ep.dimensions = 1024)
+                ), active_embeddings AS (
+                    SELECT DISTINCT ON (ce.object_id) ce.object_id, ce.embedding
+                    FROM content_embeddings ce
+                    JOIN active_profile ap ON ap.profile_id = ce.profile_id
+                    JOIN articles embedding_article
+                      ON embedding_article.id::text = ce.object_id
+                    WHERE ce.object_type = 'article'
+                      AND ce.status = 'ready'
+                      AND ce.embedding IS NOT NULL
+                      AND ce.content_hash = encode(
+                        digest({content}, 'sha256'), 'hex'
+                      )
+                    ORDER BY ce.object_id, ce.updated_at DESC, ce.id DESC
+                ), thread_emb AS (
+                    SELECT ta.thread_id, AVG(embedding.embedding) AS avg_emb
                     FROM thread_articles ta
-                    JOIN analysis an ON an.article_id = ta.article_id
-                    WHERE an.embedding IS NOT NULL
+                    JOIN active_embeddings embedding
+                      ON embedding.object_id = ta.article_id::text
                     GROUP BY ta.thread_id
-                    HAVING COUNT(an.embedding) >= 1
+                    HAVING COUNT(embedding.embedding) >= 1
                 )
                 SELECT t1.thread_id AS keep_id, t2.thread_id AS remove_id,
                        th1.thread_key AS keep_key, th2.thread_key AS remove_key,
@@ -1576,12 +1673,23 @@ def rebuild_recent_threads_and_stories(
     run_scoped_story_builder(thread_ids, scope_start=scope_start)
 
 
+def load_cycle_embedding_coverage(days: int) -> dict[str, int]:
+    with get_session() as session:
+        profile = EmbeddingStore().active_profile(session)
+        return load_story_embedding_coverage(
+            session,
+            days=days,
+            profile_id=profile.id if profile is not None else None,
+        )
+
+
 def run_incremental_thread_story_cycle(
     *,
     thread_days: int = 3,
     story_days: int = 30,
     now: datetime | None = None,
-) -> None:
+    coverage_loader=None,
+) -> dict[str, object]:
     """Fast hourly refresh: recent threads first, wider stories second."""
 
     if thread_days < 1 or story_days < 1:
@@ -1591,14 +1699,23 @@ def run_incremental_thread_story_cycle(
         "Starting incremental thread/story cycle "
         f"(threads={thread_days}d, stories={story_days}d)"
     )
-    rebuild_recent_threads(
+    thread_ids = rebuild_recent_threads(
         days=thread_days,
         now=cycle_now,
         use_llm_dedup=False,
         use_llm_pair_judge=False,
     )
     rebuild_recent_stories(days=story_days, now=cycle_now)
-    logger.info("Incremental thread/story cycle complete")
+    coverage = (coverage_loader or load_cycle_embedding_coverage)(story_days)
+    report = {
+        "thread_ids": len(thread_ids or ()),
+        "embedding_coverage": coverage,
+    }
+    logger.info(
+        "Incremental thread/story cycle complete: %s",
+        json.dumps(report, sort_keys=True),
+    )
+    return report
 
 
 def build_threads():

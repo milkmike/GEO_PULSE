@@ -18,7 +18,7 @@ from .episodes import EpisodeInterval, episode_distance, match_episode_intervals
 from .grouping import CountryWave, MetaTrend, assign_country_waves, assign_meta_trends
 from .lifecycle import decide_state
 from .media import _publisher_family_labels, build_media_observations
-from .repository import upsert_observations
+from .repository import upsert_action_events, upsert_observations
 from .types import (
     BaselineResult,
     Contour,
@@ -132,6 +132,18 @@ JOIN active_identity identity
  AND identity.direction = observation.direction
 WHERE observation.observed_at >= :history_start
   AND observation.observed_at < :as_of
+""")
+
+_ACTION_HISTORY = text("""
+/* radar_action_observation_history */
+SELECT public_id, input_hash, country_code, contour, subject_key, direction, metric,
+       observed_at, value, publisher_family_count, source_count,
+       coverage_confidence, authority, article_id, story_id, signal_id,
+       canonical_entity_id, baseline, evidence
+FROM radar_observations
+WHERE contour = 'action'
+  AND observed_at >= :history_start
+  AND observed_at < :as_of
 """)
 
 _MEDIA_COLLECTION_HEALTH = text("""
@@ -373,6 +385,20 @@ def _history_for_identities(
         return ()
     rows = session.execute(_HISTORY_FOR_IDENTITIES, {
         **params,
+        "history_start": as_of - timedelta(days=days + 14),
+        "as_of": as_of,
+    }).fetchall()
+    return _observations_from_rows(rows)
+
+
+def _action_history(
+    session: Any, as_of: datetime, days: int,
+) -> tuple[Observation, ...]:
+    """Replay persisted structured actions throughout the retained lookback."""
+
+    if _store(session) is not None:
+        return ()
+    rows = session.execute(_ACTION_HISTORY, {
         "history_start": as_of - timedelta(days=days + 14),
         "as_of": as_of,
     }).fetchall()
@@ -997,7 +1023,8 @@ INSERT INTO radar_t0_revisions (
 
 _INSERT_OBSERVATION_EVIDENCE = text("""
 INSERT INTO radar_trend_evidence (
-  public_id, trend_id, observation_id, article_id, story_id, signal_id,
+  public_id, trend_id, observation_id, action_event_id,
+  article_id, story_id, signal_id,
   canonical_entity_id, role, contribution, evidence
 )
 SELECT COALESCE((
@@ -1007,7 +1034,13 @@ SELECT COALESCE((
            AND prior.observation_id = observation.id
          ORDER BY prior.id LIMIT 1
        ), :public_id),
-       :trend_id, observation.id, observation.article_id,
+       :trend_id, observation.id,
+       CASE WHEN observation.contour = 'action' THEN (
+         SELECT event.id FROM action_events event
+         WHERE event.input_hash = observation.input_hash
+         LIMIT 1
+       ) END,
+       observation.article_id,
        :story_id, :signal_id, observation.canonical_entity_id,
        :role, :contribution, CAST(:evidence AS jsonb)
 FROM radar_observations observation
@@ -1176,6 +1209,7 @@ def _persist_sql(
     *,
     incremental: bool = False,
 ) -> tuple[int, int | None, int]:
+    upsert_action_events(session, observations)
     inserted = upsert_observations(session, observations)
     first_id: int | None = None
     updated = 0
@@ -1799,6 +1833,51 @@ def _contour_completeness(waves: tuple[CountryWave, ...]) -> dict[str, int | flo
     }
 
 
+def _admissible_persistence(
+    generated: Iterable[Observation],
+    waves: Iterable[CountryWave],
+    metas: Iterable[MetaTrend],
+) -> tuple[tuple[Observation, ...], tuple[CountryWave, ...], tuple[MetaTrend, ...]]:
+    """Keep calculated candidates in reports without growing production state."""
+
+    persisted_waves = tuple(
+        wave for wave in waves
+        if not (
+            wave.contour is Contour.MEDIA
+            and wave.state is TrendState.CANDIDATE
+        )
+        and not wave.subject_key.startswith("story:")
+        and wave.subject_key != "media:coverage"
+    )
+    persisted_wave_ids = {id(wave) for wave in persisted_waves}
+    persisted_metas: list[MetaTrend] = []
+    for meta in metas:
+        members = tuple(
+            wave for wave in meta.waves if id(wave) in persisted_wave_ids
+        )
+        if not members:
+            continue
+        confirmed_t0s = [
+            wave.t0_auto for wave in members
+            if wave.state is TrendState.CONFIRMED and wave.t0_auto is not None
+        ]
+        persisted_metas.append(replace(
+            meta,
+            waves=members,
+            t0_auto=min(confirmed_t0s) if confirmed_t0s else None,
+        ))
+    persisted_hashes = {
+        point.input_hash
+        for wave in persisted_waves
+        for point in wave.observations
+    }
+    return (
+        tuple(point for point in generated if point.input_hash in persisted_hashes),
+        persisted_waves,
+        tuple(persisted_metas),
+    )
+
+
 def run_radar_cycle(
     session,
     as_of: datetime,
@@ -1829,8 +1908,12 @@ def run_radar_cycle(
     current_generated_hashes = frozenset(
         observation.input_hash for observation in generated
     )
+    retained_actions = _action_history(session, as_of, days) if incremental else ()
     history = (
-        _history_for_identities(session, as_of, days, generated)
+        (
+            *_history_for_identities(session, as_of, days, generated),
+            *retained_actions,
+        )
         if incremental
         else _history(session, as_of, days)
     )
@@ -1843,7 +1926,9 @@ def run_radar_cycle(
         )
     )
     previous_waves = (
-        _previous_waves_for_identities(session, as_of, generated)
+        _previous_waves_for_identities(
+            session, as_of, (*generated, *retained_actions),
+        )
         if incremental
         else _previous_waves(session, as_of)
     )
@@ -1883,14 +1968,25 @@ def run_radar_cycle(
     updated = 0
     trend_id: int | None = None
     if not shadow:
+        persisted_observations, persisted_waves, persisted_metas = (
+            _admissible_persistence(
+                generated, scored_waves, metas.meta_trends,
+            )
+        )
         if _store(session) is not None:
-            inserted, trend_id, updated = _persist_memory(session, generated, scored_waves, metas.meta_trends, as_of)
+            inserted, trend_id, updated = _persist_memory(
+                session,
+                persisted_observations,
+                persisted_waves,
+                persisted_metas,
+                as_of,
+            )
         else:
             inserted, trend_id, updated = _persist_sql(
                 session,
-                generated,
-                scored_waves,
-                metas.meta_trends,
+                list(persisted_observations),
+                persisted_waves,
+                persisted_metas,
                 as_of,
                 incremental=incremental,
             )

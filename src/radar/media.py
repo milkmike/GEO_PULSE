@@ -141,13 +141,10 @@ def _subjects(row: Any) -> tuple[str, ...]:
     events = sorted({str(value) for value in (_value(row, "story_event_keys", ()) or ()) if value})
     if events:
         return tuple(f"event:{event}" for event in events)
-    story_id = _value(row, "story_id")
-    if story_id is not None:
-        return (f"story:{int(story_id)}",)
     event_key = _value(row, "event_key")
     if event_key:
         return (f"event:{str(event_key)}",)
-    return ("media:coverage",)
+    return ()
 
 
 def _publisher_family_labels(rows: list[Any]) -> tuple[str, ...]:

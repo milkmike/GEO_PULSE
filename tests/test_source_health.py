@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from src.api.routes import world
+from src.engine import health
 from src.engine.health import source_coverage
 
 
@@ -163,3 +164,26 @@ def test_source_coverage_api_route_returns_coverage_shape(monkeypatch):
 
     assert response.status_code == 200
     assert response.json() == coverage
+
+
+def test_health_summary_uses_five_minute_cache_before_source_health_sql(monkeypatch):
+    cache = {}
+    source_health_calls = []
+    monkeypatch.setattr(health, "_cache_get", lambda key: cache.get(key))
+    monkeypatch.setattr(health, "_cache_set", lambda key, payload, ttl: cache.setdefault(key, payload))
+    monkeypatch.setattr(
+        health,
+        "source_health",
+        lambda: source_health_calls.append("source-health-sql") or [],
+    )
+    monkeypatch.setattr(
+        health,
+        "gdelt_health",
+        lambda: {"status": "OK", "last_fetch_at": None, "age_hours": 0, "countries_with_fresh_data": 1},
+    )
+
+    first = health.health_summary()
+    second = health.health_summary()
+
+    assert first == second
+    assert source_health_calls == ["source-health-sql"]

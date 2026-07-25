@@ -1116,7 +1116,10 @@ class PublisherAttributionFixtureSession:
                 for item, _, source_name, publisher_source_id
                 in self._attributed(sql, country=params["cc"])
             ])
-        if "an.embedding IS NOT NULL AS has_embedding" in sql:
+        if (
+            "an.embedding IS NOT NULL AS has_embedding" in sql
+            or "active_embeddings.object_id IS NOT NULL AS has_embedding" in sql
+        ):
             return FakeResult(rows=[
                 SimpleNamespace(
                     analysis_id=item["article_id"] + 1000,
@@ -1232,6 +1235,19 @@ def test_verified_publishers_drive_briefs_threads_and_story_candidates():
         (11, "EL PAÍS", "ES"),
         (12, "Reuters", "GB"),
     ]
+    verification_session = PublisherAttributionFixtureSession()
+    build_threads.fetch_articles(verification_session)
+    statement = verification_session.statements[-1]
+    assert "content_embeddings" in statement
+    assert "embedding_profiles" in statement
+    assert "ep.active = TRUE" in statement
+    assert "ep.dimensions = 1024" in statement
+    assert "HAVING COUNT(*) = 1" in statement
+    assert "ce.status = 'ready'" in statement
+    assert "ce.content_hash = encode" in statement
+    assert "digest(" in statement
+    assert "ar.is_duplicate = FALSE" in statement
+    assert "an.embedding IS NOT NULL" not in statement
 
     candidates = fetch_story_candidates(PublisherAttributionFixtureSession())
     assert [
@@ -1425,6 +1441,8 @@ def test_candidate_thread_and_date_scope_reaches_sql_before_mention_materializat
                 assert "ep.dimensions = 1024" in sql
                 assert "ce.status = 'ready'" in sql
                 assert "ce.object_type = 'article'" in sql
+                assert "ce.content_hash = encode" in sql
+                assert "digest(" in sql
                 assert "ANY(:semantic_article_ids)" in sql
                 assert "ANY(:semantic_thread_ids)" in sql
                 assert "HAVING COUNT(*) = 1" in sql
@@ -1713,7 +1731,11 @@ def test_story_pipeline_audit_is_read_only_and_has_stable_json_keys(monkeypatch)
                 for token in ("INSERT ", "UPDATE ", "DELETE ", "MERGE ", "CALL ")
             )
             if "audit_embedding_coverage" in sql:
-                return FakeResult(row=SimpleNamespace(embedded_articles=1))
+                return FakeResult(row=SimpleNamespace(
+                    eligible_articles=2,
+                    ready_current=1,
+                    missing_current=1,
+                ))
             if "audit_country_mismatches" in sql:
                 return FakeResult(rows=[SimpleNamespace(
                     thread_id=99,
@@ -1757,6 +1779,20 @@ def test_story_pipeline_audit_is_read_only_and_has_stable_json_keys(monkeypatch)
     }
     assert report["canonical_entity_coverage"]["articles_with_entities"] == 2
     assert report["embedding_coverage"]["articles_with_embeddings"] == 1
+    assert report["embedding_coverage"]["ready_current"] == 1
+    assert report["embedding_coverage"]["missing_current"] == 1
+    coverage_sql = next(
+        statement
+        for statement in session.statements
+        if "audit_embedding_coverage" in statement
+    )
+    assert "content_embeddings" in coverage_sql
+    assert "embedding_profiles" in coverage_sql
+    assert "ep.active = TRUE" in coverage_sql
+    assert "ep.dimensions = 1024" in coverage_sql
+    assert "HAVING COUNT(*) = 1" in coverage_sql
+    assert "ce.status = 'ready'" in coverage_sql
+    assert "an.embedding" not in coverage_sql
     assert set(report["pair_rejection_reasons"]) == {
         "pairs_total",
         "pairs_scored",

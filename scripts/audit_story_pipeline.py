@@ -94,19 +94,49 @@ def run_audit(
     articles_with_entities = sum(bool(entity_ids) for entity_ids in article_entities.values())
     candidates_with_entities = sum(bool(candidate.entities) for candidate in candidates)
 
-    embedded_articles = 0
-    if article_ids:
-        embedding_row = session.execute(text("""
-            /* audit_embedding_coverage */
-            SELECT COUNT(DISTINCT an.article_id) FILTER (
-                       WHERE an.embedding IS NOT NULL
-                   ) AS embedded_articles
-            FROM analysis an
-            WHERE an.article_id = ANY(:article_ids)
-        """), {"article_ids": article_ids}).fetchone()
-        embedded_articles = int(
-            _value(embedding_row, "embedded_articles", 0) or 0
+    embedding_row = session.execute(text("""
+        /* audit_embedding_coverage */
+        WITH active_profile AS (
+            SELECT MIN(ep.id) AS profile_id
+            FROM embedding_profiles ep
+            WHERE ep.active = TRUE
+            HAVING COUNT(*) = 1
+               AND BOOL_AND(ep.dimensions = 1024)
+        ), eligible_articles AS (
+            SELECT a.id, CASE
+                       WHEN COALESCE(a.summary, '') <> '' THEN
+                           COALESCE(a.title, '') || E'\n' || a.summary
+                       WHEN COALESCE(a.body, '') <> '' THEN
+                           COALESCE(a.title, '') || E'\n' || LEFT(a.body, 1000)
+                       ELSE COALESCE(a.title, '')
+                   END AS embedding_content
+            FROM articles a
+            JOIN analysis an ON an.article_id = a.id
+            WHERE an.is_relevant = TRUE
+              AND a.is_duplicate = FALSE
+              AND a.geo_country_code IS NOT NULL
+              AND a.published_at >= :scope_start
+        ), ready_articles AS (
+            SELECT DISTINCT ce.object_id, ce.content_hash
+            FROM content_embeddings ce
+            JOIN active_profile ap ON ap.profile_id = ce.profile_id
+            WHERE ce.object_type = 'article'
+              AND ce.status = 'ready'
+              AND ce.embedding IS NOT NULL
         )
+        SELECT COUNT(eligible.id)::integer AS eligible_articles,
+               COUNT(ready.object_id)::integer AS ready_current,
+               (COUNT(eligible.id) - COUNT(ready.object_id))::integer
+                   AS missing_current
+        FROM eligible_articles eligible
+        LEFT JOIN ready_articles ready ON ready.object_id = eligible.id::text
+          AND ready.content_hash = encode(
+              digest(eligible.embedding_content, 'sha256'), 'hex'
+          )
+    """), {"scope_start": scope_start}).fetchone()
+    eligible_articles = int(_value(embedding_row, "eligible_articles", 0) or 0)
+    ready_current = int(_value(embedding_row, "ready_current", 0) or 0)
+    missing_current = int(_value(embedding_row, "missing_current", 0) or 0)
 
     mismatch_rows = session.execute(text("""
         /* audit_country_mismatches */
@@ -197,9 +227,11 @@ def run_audit(
             ),
         },
         "embedding_coverage": {
-            "articles_total": len(article_ids),
-            "articles_with_embeddings": embedded_articles,
-            "coverage_ratio": _ratio(embedded_articles, len(article_ids)),
+            "articles_total": eligible_articles,
+            "articles_with_embeddings": ready_current,
+            "ready_current": ready_current,
+            "missing_current": missing_current,
+            "coverage_ratio": _ratio(ready_current, eligible_articles),
         },
         "pair_rejection_reasons": {
             key: int(reason_counts[key]) for key in PAIR_REASON_KEYS
