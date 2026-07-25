@@ -691,11 +691,14 @@ def test_story_eligible_loader_selects_verified_relevant_originals_and_excludes_
     assert "embedding_jobs" in session.statement
     assert "job.status IN ('pending', 'processing', 'completed')" in session.statement
     assert "job.status = 'failed'" in session.statement
-    assert session.statement.index("WHERE current_ready.content_hash IS NULL") < session.statement.index("LIMIT :limit")
+    assert session.statement.count("NOT EXISTS (") == 2
+    assert "ce.object_id = a.id::text" in session.statement
+    assert "job.object_id = a.id::text" in session.statement
+    assert session.statement.index("AND NOT EXISTS (") < session.statement.index("LIMIT :limit")
     assert "ready_content_hashes" in session.statement
     assert "ARRAY(" in session.statement
     assert "ARRAY[" not in session.statement
-    assert session.statement.index("WHERE current_ready.content_hash IS NULL") < session.statement.index("LIMIT :limit")
+    assert session.statement.count("LIMIT :limit") == 1
     assert session.params == {"days": 30, "limit": 500, "profile_id": 4}
 
 

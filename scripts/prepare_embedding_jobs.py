@@ -95,47 +95,50 @@ def load_story_eligible_articles(
                   AND a.is_duplicate = FALSE
                   AND a.geo_country_code IS NOT NULL
                   AND a.published_at >= now() - make_interval(days => :days)
-            ), current_ready AS (
-                SELECT ce.object_id, ce.content_hash
-                FROM content_embeddings ce
-                WHERE ce.profile_id = :profile_id
-                  AND ce.object_type = 'article'
-                  AND ce.status = 'ready'
-                  AND ce.embedding IS NOT NULL
-            ), current_jobs AS (
-                SELECT job.object_id, job.content_hash
-                FROM embedding_jobs job
-                WHERE job.profile_id = :profile_id
-                  AND job.object_type = 'article'
-                  AND (
-                    job.status IN ('pending', 'processing', 'completed')
-                    OR (
-                      job.status = 'failed'
-                      AND job.updated_at >= now() - INTERVAL '6 hours'
-                    )
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM content_embeddings ce
+                    WHERE ce.profile_id = :profile_id
+                      AND ce.object_type = 'article'
+                      AND ce.object_id = a.id::text
+                      AND ce.status = 'ready'
+                      AND ce.embedding IS NOT NULL
+                      AND ce.content_hash = encode(
+                          digest({content}, 'sha256'), 'hex'
+                      )
                   )
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM embedding_jobs job
+                    WHERE job.profile_id = :profile_id
+                      AND job.object_type = 'article'
+                      AND job.object_id = a.id::text
+                      AND job.content_hash = encode(
+                          digest({content}, 'sha256'), 'hex'
+                      )
+                      AND (
+                        job.status IN ('pending', 'processing', 'completed')
+                        OR (
+                          job.status = 'failed'
+                          AND job.updated_at >= now() - INTERVAL '6 hours'
+                        )
+                      )
+                  )
+                ORDER BY a.published_at DESC, a.id DESC
+                LIMIT :limit
             )
             SELECT eligible.id, eligible.title, eligible.body, eligible.summary,
                    ARRAY(
                        SELECT ready.content_hash
-                       FROM current_ready ready
-                       WHERE ready.object_id = eligible.id::text
+                       FROM content_embeddings ready
+                       WHERE ready.profile_id = :profile_id
+                         AND ready.object_type = 'article'
+                         AND ready.object_id = eligible.id::text
+                         AND ready.status = 'ready'
+                         AND ready.embedding IS NOT NULL
                    ) AS ready_content_hashes
             FROM eligible_articles eligible
-            LEFT JOIN current_ready current_ready
-              ON current_ready.object_id = eligible.id::text
-             AND current_ready.content_hash = encode(
-                 digest(eligible.embedding_content, 'sha256'), 'hex'
-             )
-            LEFT JOIN current_jobs job
-              ON job.object_id = eligible.id::text
-             AND job.content_hash = encode(
-                 digest(eligible.embedding_content, 'sha256'), 'hex'
-             )
-            WHERE current_ready.content_hash IS NULL
-              AND job.content_hash IS NULL
             ORDER BY eligible.published_at DESC, eligible.id DESC
-            LIMIT :limit
             """
         ),
         {"days": days, "limit": limit, "profile_id": profile_id},
