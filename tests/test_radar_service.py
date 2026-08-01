@@ -1267,6 +1267,14 @@ def test_incremental_meta_refresh_closes_only_stale_members_of_current_meta():
         session, (meta,), wave_ids, AS_OF, incremental=True,
     )
 
+    update_sql, update_params = next(
+        (sql, params) for sql, params in session.calls
+        if "UPDATE radar_trends trend SET" in sql
+        and params.get("id") == 77
+    )
+    assert update_params["first_observed_at"] == AS_OF
+    assert "LEAST(trend.first_observed_at, :first_observed_at)" in update_sql
+
     sql, params = next(
         (sql, params) for sql, params in session.calls
         if "UPDATE radar_trend_members" in sql

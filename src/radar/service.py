@@ -1141,6 +1141,8 @@ _UPDATE_META = text("""
 UPDATE radar_trends trend SET
   state = :state, confidence = :confidence, coverage_confidence = :coverage_confidence,
   velocity = :velocity,
+  first_observed_at = CASE WHEN :reopening THEN :first_observed_at
+                           ELSE LEAST(trend.first_observed_at, :first_observed_at) END,
   detected_at = CASE WHEN :reopening THEN :detected_at
                      ELSE COALESCE(trend.detected_at, :detected_at) END,
   confirmed_at = CASE WHEN :reopening THEN :confirmed_at
@@ -1350,6 +1352,9 @@ def _persist_meta_and_contours(
                 "id": meta_id, "state": state, "confidence": coverage,
                 "coverage_confidence": coverage,
                 "velocity": velocity,
+                "first_observed_at": min(
+                    wave.first_observed_at for wave in meta.waves
+                ),
                 "detected_at": meta_detected_at,
                 "confirmed_at": meta_confirmed_at,
                 "reopening": reopening,
