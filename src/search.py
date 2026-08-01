@@ -253,15 +253,7 @@ trigram_candidates AS (
     LIMIT :candidate_limit
 ),
 entity_candidates AS (
-    SELECT DISTINCT aem.article_id AS id, 0.0::REAL AS lexical_score,
-           'entity'::TEXT AS match_kind
-    FROM matching_entity_ids matched_entity
-    JOIN article_entity_mentions aem ON aem.entity_id = matched_entity.id
-    JOIN source_filtered_articles source_article
-      ON source_article.id = aem.article_id
-    WHERE (:country IS NOT NULL OR :tier IS NOT NULL)
-    UNION ALL
-    SELECT DISTINCT aem.article_id AS id, 0.0::REAL AS lexical_score,
+    SELECT aem.article_id AS id, 0.0::REAL AS lexical_score,
            'entity'::TEXT AS match_kind
     FROM matching_entity_ids matched_entity
     JOIN article_entity_mentions aem ON aem.entity_id = matched_entity.id
@@ -269,9 +261,7 @@ entity_candidates AS (
     JOIN matching_sources s ON s.article_id = a.id
     LEFT JOIN analysis an ON an.article_id = a.id
     CROSS JOIN snapshot snapshot_state
-    WHERE :country IS NULL
-      AND :tier IS NULL
-      AND a.is_duplicate = FALSE
+    WHERE a.is_duplicate = FALSE
       AND (
           snapshot_state.snapshot_collected_at IS NULL
           OR (COALESCE(a.collected_at, a.published_at), a.id) <=
@@ -292,6 +282,8 @@ entity_candidates AS (
       AND (:date_from IS NULL OR a.published_at >= CAST(:date_from AS DATE))
       AND (:date_to IS NULL OR a.published_at < CAST(:date_to AS DATE) + INTERVAL '1 day')
       AND (:language IS NULL OR a.language = :language)
+    ORDER BY a.published_at DESC, a.id DESC
+    LIMIT :candidate_limit
 ),
 topic_candidates AS (
     SELECT an.article_id AS id, 0.0::REAL AS lexical_score,

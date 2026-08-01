@@ -524,6 +524,18 @@ def test_exact_entity_match_skips_trigram_fallback():
     )
 
 
+def test_entity_candidates_filter_matches_before_the_global_candidate_cap():
+    entity_sql = ARTICLE_SEARCH_SQL[
+        ARTICLE_SEARCH_SQL.index("entity_candidates AS"):
+        ARTICLE_SEARCH_SQL.index("topic_candidates AS")
+    ]
+
+    assert "source_filtered_articles" not in entity_sql
+    assert "JOIN matching_sources s ON s.article_id = a.id" in entity_sql
+    assert "ORDER BY a.published_at DESC, a.id DESC" in entity_sql
+    assert "LIMIT :candidate_limit" in entity_sql
+
+
 def test_full_text_ranking_avoids_loading_stored_body_vectors():
     ranked_candidates_sql = ARTICLE_SEARCH_SQL[
         ARTICLE_SEARCH_SQL.index("full_text_candidates AS"):
