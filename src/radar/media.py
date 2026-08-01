@@ -86,8 +86,13 @@ def _alignment_subject(subject: str, rows: list[Any]) -> str:
     coverage must not corroborate a fossil-import or UN-vote action.
     """
 
-    del rows  # Reserved for future explicit, verified event metadata.
     tokens = set(re.findall(r"[a-z0-9]+", subject.casefold()))
+    for row in rows:
+        event_key = _value(row, "event_key")
+        if event_key:
+            tokens.update(re.findall(r"[a-z0-9]+", str(event_key).casefold()))
+        for event in _value(row, "story_event_keys", ()) or ():
+            tokens.update(re.findall(r"[a-z0-9]+", str(event).casefold()))
     if not tokens.intersection({"russia", "russian", "ru"}):
         return "russia:general"
     if tokens.intersection({"sanction", "sanctions", "embargo"}):
@@ -141,6 +146,13 @@ def _subjects(row: Any) -> tuple[str, ...]:
     events = sorted({str(value) for value in (_value(row, "story_event_keys", ()) or ()) if value})
     if events:
         return tuple(f"event:{event}" for event in events)
+    topics = sorted({
+        re.sub(r"[^a-z0-9_]+", "_", str(value).casefold()).strip("_")
+        for value in (_value(row, "topics", ()) or ())
+        if value
+    })
+    if topics:
+        return tuple(f"topic:{topic}" for topic in topics if topic)
     event_key = _value(row, "event_key")
     if event_key:
         return (f"event:{str(event_key)}",)

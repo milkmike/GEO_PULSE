@@ -384,6 +384,26 @@ def test_multiple_story_events_produce_sorted_stable_subject_observations():
     assert [point.subject_key for point in points] == ["event:alpha", "event:zeta"]
 
 
+def test_unclustered_event_phrasings_share_a_stable_topic_subject():
+    session = _Session(media_rows=(
+        _media_row(
+            ARTICLE_A, 10, "first.es", story_id=None,
+            story_event_keys=(), event_key="minister announces new measures",
+            topics=("sanctions",),
+        ),
+        _media_row(
+            ARTICLE_B, 11, "second.es", story_id=None,
+            story_event_keys=(), event_key="cabinet expands restrictions",
+            topics=("sanctions",),
+        ),
+    ))
+
+    [point] = build_media_observations(session, _window())
+
+    assert point.subject_key == "topic:sanctions"
+    assert point.article_ids == (ARTICLE_A, ARTICLE_B)
+
+
 def test_story_without_canonical_event_key_produces_no_radar_observation():
     session = _Session(media_rows=(
         _media_row(
