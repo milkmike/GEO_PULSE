@@ -83,6 +83,7 @@ if ! curl \
     --retry 20 \
     --retry-delay 2 \
     --retry-max-time 60 \
+    --retry-all-errors \
     --retry-connrefused \
     --connect-timeout 2 \
     --max-time 5 \

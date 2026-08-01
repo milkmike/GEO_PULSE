@@ -238,6 +238,13 @@ def test_auto_update_acquires_nonblocking_lock_before_git():
     assert script.index("flock -n 9") < script.index("git diff --quiet")
 
 
+def test_auto_update_retries_transient_health_connection_resets():
+    script = (ROOT / "deploy" / "auto-update.sh").read_text()
+
+    assert "--retry-all-errors" in script
+    assert script.index("--retry-all-errors") < script.index("$HEALTH_URL")
+
+
 def test_every_database_consumer_waits_for_successful_migration():
     compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text())
     services = compose["services"]
