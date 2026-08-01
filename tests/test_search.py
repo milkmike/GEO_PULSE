@@ -500,6 +500,9 @@ def test_full_text_search_bounds_ids_before_expensive_rank_calculation():
 
     assert "lexical_article_ids AS MATERIALIZED" in lexical_ids_sql
     assert "a.search_vector @@ sq.tsq" in lexical_ids_sql
+    assert "NOT EXISTS (SELECT 1 FROM matching_entity_ids)" in " ".join(
+        lexical_ids_sql.split()
+    )
     assert "ORDER BY" not in lexical_ids_sql
     assert "FROM lexical_article_ids lexical" in candidate_ids_sql
     assert "JOIN articles a ON a.id = lexical.id" in candidate_ids_sql
@@ -508,6 +511,17 @@ def test_full_text_search_bounds_ids_before_expensive_rank_calculation():
     assert "LIMIT :candidate_limit" in candidate_ids_sql
     assert "ts_rank_cd" not in candidate_ids_sql
     assert "FROM full_text_candidate_ids candidate" in ranked_candidates_sql
+
+
+def test_exact_entity_match_skips_trigram_fallback():
+    trigram_sql = ARTICLE_SEARCH_SQL[
+        ARTICLE_SEARCH_SQL.index("trigram_candidates AS"):
+        ARTICLE_SEARCH_SQL.index("entity_candidates AS")
+    ]
+
+    assert "NOT EXISTS (SELECT 1 FROM matching_entity_ids)" in " ".join(
+        trigram_sql.split()
+    )
 
 
 def test_full_text_ranking_avoids_loading_stored_body_vectors():
@@ -734,7 +748,7 @@ def test_search_service_uses_parameterized_hybrid_candidates_and_deterministic_r
     assert fake_session.calls[-2][0] == (
         "SET LOCAL pg_trgm.similarity_threshold = 0.1"
     )
-    assert fake_session.calls[-3][0] == "SET LOCAL statement_timeout = '2s'"
+    assert fake_session.calls[-3][0] == "SET LOCAL statement_timeout = '30s'"
     for candidate_source in (
         "entity_candidates AS",
         "topic_candidates AS",

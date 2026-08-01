@@ -159,6 +159,7 @@ lexical_article_ids AS MATERIALIZED (
     FROM articles a
     CROSS JOIN search_query sq
     WHERE :q <> ''
+      AND NOT EXISTS (SELECT 1 FROM matching_entity_ids)
       AND a.search_vector @@ sq.tsq
       AND a.is_duplicate = FALSE
 ),
@@ -216,6 +217,7 @@ trigram_candidates AS (
     LEFT JOIN analysis an ON an.article_id = a.id
     CROSS JOIN snapshot snapshot_state
     WHERE :q <> ''
+      AND NOT EXISTS (SELECT 1 FROM matching_entity_ids)
       AND NOT EXISTS (
           SELECT 1 FROM full_text_candidates OFFSET 9 LIMIT 1
       )
@@ -1226,7 +1228,7 @@ def search_articles(
     }
     try:
         with session_factory() as session:
-            session.execute(text("SET LOCAL statement_timeout = '2s'"))
+            session.execute(text("SET LOCAL statement_timeout = '30s'"))
             session.execute(text(
                 "SET LOCAL pg_trgm.similarity_threshold = 0.1"
             ))
