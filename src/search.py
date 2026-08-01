@@ -154,16 +154,22 @@ matching_entity_ids AS MATERIALIZED (
       AND ea.ambiguous = FALSE
       AND ea.normalized_alias = :q
 ),
-full_text_candidate_ids AS MATERIALIZED (
-    SELECT a.id, a.published_at
+lexical_article_ids AS MATERIALIZED (
+    SELECT a.id
     FROM articles a
-    JOIN matching_sources s ON s.article_id = a.id
-    LEFT JOIN analysis an ON an.article_id = a.id
     CROSS JOIN search_query sq
-    CROSS JOIN snapshot snapshot_state
     WHERE :q <> ''
       AND a.search_vector @@ sq.tsq
       AND a.is_duplicate = FALSE
+),
+full_text_candidate_ids AS MATERIALIZED (
+    SELECT a.id, a.published_at
+    FROM lexical_article_ids lexical
+    JOIN articles a ON a.id = lexical.id
+    JOIN matching_sources s ON s.article_id = a.id
+    LEFT JOIN analysis an ON an.article_id = a.id
+    CROSS JOIN snapshot snapshot_state
+    WHERE :q <> ''
       AND (
           snapshot_state.snapshot_collected_at IS NULL
           OR (COALESCE(a.collected_at, a.published_at), a.id) <=

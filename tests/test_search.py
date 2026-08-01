@@ -484,6 +484,10 @@ def test_search_endpoint_returns_retryable_503_on_timeout():
 
 
 def test_full_text_search_bounds_ids_before_expensive_rank_calculation():
+    lexical_ids_sql = ARTICLE_SEARCH_SQL[
+        ARTICLE_SEARCH_SQL.index("lexical_article_ids AS"):
+        ARTICLE_SEARCH_SQL.index("full_text_candidate_ids AS")
+    ]
     assert "full_text_candidate_ids AS" in ARTICLE_SEARCH_SQL
     candidate_ids_sql = ARTICLE_SEARCH_SQL[
         ARTICLE_SEARCH_SQL.index("full_text_candidate_ids AS"):
@@ -494,7 +498,12 @@ def test_full_text_search_bounds_ids_before_expensive_rank_calculation():
         ARTICLE_SEARCH_SQL.index("trigram_candidates AS")
     ]
 
-    assert "a.search_vector @@ sq.tsq" in candidate_ids_sql
+    assert "lexical_article_ids AS MATERIALIZED" in lexical_ids_sql
+    assert "a.search_vector @@ sq.tsq" in lexical_ids_sql
+    assert "ORDER BY" not in lexical_ids_sql
+    assert "FROM lexical_article_ids lexical" in candidate_ids_sql
+    assert "JOIN articles a ON a.id = lexical.id" in candidate_ids_sql
+    assert "a.search_vector @@ sq.tsq" not in candidate_ids_sql
     assert "ORDER BY a.published_at DESC, a.id DESC" in candidate_ids_sql
     assert "LIMIT :candidate_limit" in candidate_ids_sql
     assert "ts_rank_cd" not in candidate_ids_sql
