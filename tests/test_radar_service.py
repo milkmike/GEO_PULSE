@@ -178,6 +178,31 @@ def test_incremental_cycle_replays_persisted_actions_inside_retained_lookback(
     assert report.inserted_observations == 0
 
 
+def test_incremental_cycle_reuses_persisted_media_candidate_history(monkeypatch):
+    import src.radar.service as service
+
+    saved_candidate = _media_point(
+        AS_OF - timedelta(days=5), value=0.1, article_id=930,
+    )
+    current = _media_point(
+        AS_OF - timedelta(days=1), value=0.8, article_id=931,
+    )
+    monkeypatch.setattr(
+        service, "build_media_observations", lambda *_: [current],
+    )
+    monkeypatch.setattr(service, "build_action_observations", lambda *_: [])
+    monkeypatch.setattr(
+        service, "_history_for_identities", lambda *_: (saved_candidate,),
+    )
+    monkeypatch.setattr(service, "_action_history", lambda *_: ())
+
+    report = run_radar_cycle(
+        _Session(), AS_OF, shadow=True, generation_days=3,
+    )
+
+    assert report.country_waves[0].observations == (saved_candidate, current)
+
+
 @pytest.mark.parametrize("generation_days", (0, 91))
 def test_incremental_generation_window_must_fit_lookback(generation_days):
     with pytest.raises(ValueError, match="generation window"):
@@ -251,7 +276,7 @@ def test_release_metrics_include_current_window_generated_day_bucket_but_not_his
     assert shadow.observation_count == applied.observation_count
     assert shadow.evidence_validity == applied.evidence_validity
     assert applied.observation_count == 1
-    assert applied.inserted_observations == 0
+    assert applied.inserted_observations == 1
 
 
 def test_replay_prefers_corrected_richer_observation_without_double_count(monkeypatch):
@@ -374,7 +399,7 @@ def test_sql_persistence_uses_wave_keys_and_reports_real_count_deltas(monkeypatc
     assert any("radar_observation_history" in sql for sql, _ in session.calls)
 
 
-def test_one_day_candidate_is_reported_but_not_persisted(monkeypatch):
+def test_one_day_candidate_is_persisted_for_future_lifecycle_cycles(monkeypatch):
     import src.radar.service as service
 
     candidate = _media_point(
@@ -387,9 +412,12 @@ def test_one_day_candidate_is_reported_but_not_persisted(monkeypatch):
     report = run_radar_cycle(session, AS_OF, shadow=False)
 
     assert report.country_waves[0].state is TrendState.CANDIDATE
-    assert not any(
+    assert any(
         "INSERT INTO radar_observations" in sql
-        or "INSERT INTO radar_trends" in sql
+        for sql, _ in session.calls
+    )
+    assert any(
+        "INSERT INTO radar_trends" in sql
         for sql, _ in session.calls
     )
 

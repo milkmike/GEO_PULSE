@@ -1838,15 +1838,11 @@ def _admissible_persistence(
     waves: Iterable[CountryWave],
     metas: Iterable[MetaTrend],
 ) -> tuple[tuple[Observation, ...], tuple[CountryWave, ...], tuple[MetaTrend, ...]]:
-    """Keep calculated candidates in reports without growing production state."""
+    """Persist genuine waves privately while excluding synthetic subjects."""
 
     persisted_waves = tuple(
         wave for wave in waves
-        if not (
-            wave.contour is Contour.MEDIA
-            and wave.state is TrendState.CANDIDATE
-        )
-        and not wave.subject_key.startswith("story:")
+        if not wave.subject_key.startswith("story:")
         and wave.subject_key != "media:coverage"
     )
     persisted_wave_ids = {id(wave) for wave in persisted_waves}
