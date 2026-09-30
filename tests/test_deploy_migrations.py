@@ -44,6 +44,11 @@ def _fake_deploy_env(
         "#!/usr/bin/env bash\n"
         "set -eu\n"
         "printf '%s\\n' \"$*\" >> \"$DEPLOY_TEST_CALLS\"\n"
+        "if [ \"$*\" = 'compose config --services' ]; then\n"
+        "  [ \"${DEPLOY_TEST_FAIL_CONFIG:-0}\" != 1 ] || exit 44\n"
+        "  printf 'api\\nweb\\n'\n"
+        "fi\n"
+        "if [ \"$*\" = 'compose --parallel 1 build web' ] && [ \"${DEPLOY_TEST_FAIL_BUILD:-0}\" = 1 ]; then exit 43; fi\n"
         "if [ \"$*\" = 'compose run --rm migrate' ]; then\n"
         "  count=0\n"
         "  [ ! -f \"$DEPLOY_TEST_ATTEMPTS\" ] || count=\"$(cat \"$DEPLOY_TEST_ATTEMPTS\")\"\n"
@@ -138,7 +143,9 @@ def test_auto_update_retries_after_migration_failure_then_records_success(tmp_pa
     assert calls.read_text().splitlines() == [
         "compose run --rm migrate",
         "compose run --rm migrate",
-        "compose --parallel 1 build",
+        "compose config --services",
+        "compose --parallel 1 build api",
+        "compose --parallel 1 build web",
         "compose up -d",
     ]
     assert marker.read_text().strip() == "bbbbbbbb"
@@ -146,7 +153,7 @@ def test_auto_update_retries_after_migration_failure_then_records_success(tmp_pa
     third = _run_auto_update(tmp_path, env)
     assert third.returncode == 0
     assert attempts.read_text() == "2"
-    assert len(calls.read_text().splitlines()) == 4
+    assert len(calls.read_text().splitlines()) == 6
 
 
 def test_auto_update_without_marker_deploys_current_head_once(tmp_path):
@@ -159,13 +166,15 @@ def test_auto_update_without_marker_deploys_current_head_once(tmp_path):
     assert marker.read_text().strip() == "bbbbbbbb"
     assert calls.read_text().splitlines() == [
         "compose run --rm migrate",
-        "compose --parallel 1 build",
+        "compose config --services",
+        "compose --parallel 1 build api",
+        "compose --parallel 1 build web",
         "compose up -d",
     ]
 
     second = _run_auto_update(tmp_path, env)
     assert second.returncode == 0
-    assert len(calls.read_text().splitlines()) == 3
+    assert len(calls.read_text().splitlines()) == 5
 
 
 def test_auto_update_does_not_record_success_until_api_is_healthy(tmp_path):
@@ -182,7 +191,9 @@ def test_auto_update_does_not_record_success_until_api_is_healthy(tmp_path):
     assert not marker.exists()
     assert calls.read_text().splitlines() == [
         "compose run --rm migrate",
-        "compose --parallel 1 build",
+        "compose config --services",
+        "compose --parallel 1 build api",
+        "compose --parallel 1 build web",
         "compose up -d",
         "compose ps api",
         "compose logs --tail 120 api",
@@ -226,7 +237,9 @@ def test_auto_update_skips_overlapping_invocation_before_git_or_docker(tmp_path)
     assert first.returncode == 0, stderr
     assert calls.read_text().splitlines() == [
         "compose run --rm migrate",
-        "compose --parallel 1 build",
+        "compose config --services",
+        "compose --parallel 1 build api",
+        "compose --parallel 1 build web",
         "compose up -d",
     ]
 
@@ -259,3 +272,23 @@ def test_every_database_consumer_waits_for_successful_migration():
         assert services[name]["depends_on"]["migrate"] == {
             "condition": "service_completed_successfully"
         }, name
+
+
+def test_auto_update_does_not_swap_containers_when_one_service_build_fails(tmp_path):
+    env, calls, _ = _fake_deploy_env(tmp_path)
+    env['DEPLOY_TEST_FAIL_BUILD'] = '1'
+    result = _run_auto_update(tmp_path, env)
+    assert result.returncode == 43
+    assert 'compose --parallel 1 build api' in calls.read_text()
+    assert 'compose --parallel 1 build web' in calls.read_text()
+    assert 'compose up -d' not in calls.read_text()
+    assert not (tmp_path / '.deploy-state' / 'last-successful-commit').exists()
+
+
+def test_auto_update_stops_when_service_inventory_fails(tmp_path):
+    env, calls, _ = _fake_deploy_env(tmp_path)
+    env['DEPLOY_TEST_FAIL_CONFIG'] = '1'
+    result = _run_auto_update(tmp_path, env)
+    assert result.returncode == 44
+    assert 'compose up -d' not in calls.read_text()
+    assert not (tmp_path / '.deploy-state' / 'last-successful-commit').exists()
