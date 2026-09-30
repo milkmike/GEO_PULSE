@@ -840,6 +840,7 @@ export interface RadarMethodology {
 export interface AgendaArticle {
   id: number;
   title: string;
+  title_ru?: string | null;
   url: string | null;
   source_name: string;
   country_code: string;
@@ -853,6 +854,7 @@ export interface AgendaArticle {
 export interface AgendaItem {
   id: number;
   title: string;
+  title_ru?: string | null;
   article_count: number;
   source_count: number;
   countries: string[];

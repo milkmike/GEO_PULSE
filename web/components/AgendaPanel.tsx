@@ -34,6 +34,33 @@ function countryName(code: string): string {
   catch { return code; }
 }
 
+function SourceTitle({ title, titleRu, href, heading = false }: {
+  title: string;
+  titleRu?: string | null;
+  href?: string | null;
+  heading?: boolean;
+}) {
+  const [showOriginal, setShowOriginal] = useState(false);
+  const titleId = useId();
+  const translation = typeof titleRu === "string" ? titleRu.trim() : "";
+  const hasTranslation = Boolean(translation && translation !== title.trim());
+  const isTranslation = hasTranslation && !showOriginal;
+  const displayedTitle = isTranslation ? translation : title;
+  return <>
+    {heading ? (
+      <h3 id={titleId} lang={isTranslation ? "ru" : undefined} className="mt-3 break-words text-lg font-medium leading-7">{displayedTitle}</h3>
+    ) : href ? (
+      <a id={titleId} lang={isTranslation ? "ru" : undefined} href={href} target="_blank" rel="noopener noreferrer" className="break-words text-sm leading-6 text-fg underline decoration-line underline-offset-4 hover:text-accent focus-visible:outline-2 focus-visible:outline-accent">{displayedTitle}</a>
+    ) : <p id={titleId} lang={isTranslation ? "ru" : undefined} className="break-words text-sm leading-6 text-fg">{displayedTitle}</p>}
+    {hasTranslation && <div className="mt-1 flex flex-wrap items-center gap-x-3 text-xs text-dim">
+      <span>{isTranslation ? "Машинный перевод" : "Оригинал источника"}</span>
+      <button type="button" aria-controls={titleId} onClick={() => setShowOriginal((current) => !current)} className="min-h-11 text-accent underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-accent">
+        {showOriginal ? "Показать перевод" : "Показать оригинал"}
+      </button>
+    </div>}
+  </>;
+}
+
 function Evidence({ article }: { article: AgendaArticle }) {
   const url = safeHttpUrl(article.url);
   const published = article.date_warning ? null : formatDate(article.published_at);
@@ -44,11 +71,13 @@ function Evidence({ article }: { article: AgendaArticle }) {
         <span className="rounded border border-line px-2 py-1 text-fg">{RELATIONS[article.relation] ?? "Связь не указана"}</span>
         <span>{article.source_name} · {countryName(article.country_code)}</span>
       </div>
-      {url ? (
-        <a href={url} target="_blank" rel="noopener noreferrer" className="break-words text-sm leading-6 text-fg underline decoration-line underline-offset-4 hover:text-accent focus-visible:outline-2 focus-visible:outline-accent">
-          {article.title}
-        </a>
-      ) : <p className="break-words text-sm leading-6 text-fg">{article.title}</p>}
+      <SourceTitle title={article.title} titleRu={article.title_ru} href={url} />
+      {url && <a
+        href={`https://translate.google.com/translate?sl=auto&tl=ru&u=${encodeURIComponent(url)}`}
+        target="_blank" rel="noopener noreferrer"
+        title="Открыть русский перевод в Google Переводчике"
+        className="mt-1 inline-flex min-h-11 items-center text-xs text-accent underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-accent"
+      >Перевести публикацию</a>}
       <p className="mt-2 text-xs leading-5 text-dim">
         {date ? `${published ? "Опубликовано" : "Собрано"}: ${date} МСК` : "Дата не указана"}
         {article.date_warning && " · дата публикации требует проверки"}
@@ -71,7 +100,7 @@ export function AgendaCard({ item }: { item: AgendaItem }) {
         <span className="uppercase tracking-[0.08em]">Заголовок источника</span>
         {verified && <span title={item.model ?? undefined} className="rounded border border-line px-2 py-1">Связи проверены Jev</span>}
       </div>
-      <h3 className="mt-3 break-words text-lg font-medium leading-7">{item.title}</h3>
+      <SourceTitle title={item.title} titleRu={item.title_ru} heading />
       <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-dim">
         <span>Публикаций: {item.article_count}</span><span>Источников: {item.source_count}</span>
         <span>Последняя публикация собрана: {formatDate(item.last_seen) ?? "дата не указана"}{formatDate(item.last_seen) && " МСК"}</span>

@@ -15,6 +15,7 @@ from src import agenda_store as store, agenda_budget as budget
 from src.agenda_discovery import (MODEL, MAX_REQUEST_BYTES, candidate_group_page,
     prepare_pair_payload, parse_pair_response, pair_cache_key, accepted_decision)
 from src.api_tracker import track_api_call
+from src.agenda_translation import run_translation_cycle
 from src.db import get_session
 from src.jev import _request
 
@@ -136,6 +137,11 @@ def run_cycle(*,budget_usd=Decimal('0'),campaign=CAMPAIGN,max_calls=20):
             position=page['group_cursors'][group_index]
             stats['discovery_cursor']=position['cursor'] if pending and not stop else position['next_cursor']
             break
+    try:
+        stats['translation']=run_translation_cycle(budget_usd=budget_usd,campaign=campaign)
+    except Exception:
+        # Presentation failures never discard successfully discovered agendas.
+        stats['translation']={'status':'error'}
     stats['remaining_budget_usd']=budget.get_budget(campaign)
     store.record_run(status,stats)
     return {**stats,'status':status}

@@ -37,6 +37,7 @@ def harness(monkeypatch):
     monkeypatch.setattr(worker,'candidate_group_page',page)
     monkeypatch.setattr(worker.store,'get_cached_decisions',lambda keys:{})
     monkeypatch.setattr(worker,'check_tariff',Mock())
+    monkeypatch.setattr(worker,'run_translation_cycle',Mock(return_value={'status':'ok','calls':0,'translated':0}))
     reserve=Mock(return_value='reservation')
     monkeypatch.setattr(worker.budget,'reserve_request',reserve)
     settled=Mock()
@@ -138,3 +139,16 @@ def test_endpoint_tariff_rejects_wrong_model_missing_or_expensive_provider(monke
     monkeypatch.setattr(worker.httpx,'get',Mock(return_value=reply))
     monkeypatch.setenv('OPENROUTER_API_KEY','test-key')
     with pytest.raises(ValueError):worker.check_tariff()
+
+
+def test_translation_runs_after_discovery_and_failure_keeps_jev_result(monkeypatch,harness):
+    worker,articles,page,reserve,settled,saved,attached=harness
+    monkeypatch.setattr(worker,'_request',lambda payload,*args:response(payload))
+    def translate(**kwargs):
+        attached.assert_called_once()
+        assert kwargs=={'budget_usd':Decimal('3'),'campaign':worker.CAMPAIGN}
+        raise ValueError('bad translation response')
+    monkeypatch.setattr(worker,'run_translation_cycle',translate,raising=False)
+    result=worker.run_cycle(budget_usd=Decimal('3'))
+    assert result['status']=='ok' and result['accepted']==1
+    assert result['translation']['status']=='error'

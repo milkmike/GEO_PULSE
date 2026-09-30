@@ -33,6 +33,7 @@ def store(monkeypatch):
         (4,1,'Duplicate','Copy',NULL,NULL,NULL,now(),now(),true);
         ''')
         conn.exec_driver_sql(Path('scripts/migrations/034_news_agendas.sql').read_text())
+        conn.exec_driver_sql(Path('scripts/migrations/036_article_title_translations.sql').read_text())
     factory = sessionmaker(bind=local)
     @contextmanager
     def session():
@@ -256,3 +257,76 @@ def test_large_raw_window_reads_bounded_batches_without_replacing_excluded_ids(s
     assert {r['id'] for r in rows}==set(range(7,2011,2))
     assert len(batches)==3
     assert [identity for batch in batches for identity in batch]==list(range(2010,5,-1))
+
+
+def test_translation_cache_projects_same_representative_and_invalidates_changed_title(store):
+    rows={r['id']:r for r in store.load_articles()}
+    store.attach_decisions(rows[1],[decision()],rows)
+    store.save_title_translations([{'article_id':2,'source_title':rows[2]['title'],
+                                    'title_ru':'Рейс Flydubai сел в Табуке'}], 'test-model')
+    item=store.list_agendas()['items'][0]
+    assert item['title']==rows[2]['title']
+    assert item['title_ru']=='Рейс Flydubai сел в Табуке'
+    assert item['articles'][0]['id']==2
+    assert item['articles'][0]['title_ru']==item['title_ru']
+    assert [a['id'] for a in store.load_translation_candidates()]==[1]
+    with store.get_session() as session:
+        session.execute(text("UPDATE articles SET title='Corrected Flydubai flight report' WHERE id=2"))
+    # A stale response cannot overwrite the cache after a source correction.
+    store.save_title_translations([{'article_id':2,'source_title':rows[2]['title'],
+                                    'title_ru':'Устаревший перевод'}], 'test-model')
+    rows={r['id']:r for r in store.load_articles()}
+    store.attach_decisions(rows[1],[decision()],rows)
+    item=store.list_agendas()['items'][0]
+    assert item['title']=='Corrected Flydubai flight report' and item['title_ru'] is None
+    assert [a['id'] for a in store.load_translation_candidates()]==[2,1]
+
+
+def test_translation_candidates_only_current_memberships_and_cards_first(store):
+    rows={r['id']:r for r in store.load_articles()}
+    store.attach_decisions(rows[1],[decision()],rows)
+    assert [a['id'] for a in store.load_translation_candidates()]==[2,1]
+    with store.get_session() as session:
+        session.execute(text("UPDATE articles SET collected_at=now()-interval '73 hours' WHERE id IN(1,2)"))
+    rows={r['id']:r for r in store.load_articles(hours=168)}
+    store.attach_decisions(rows[1],[decision()],rows)
+    assert store.load_translation_candidates()==[]
+
+
+def test_old_translation_cannot_overwrite_concurrent_corrected_title_cache(store,monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+    import time
+    rows={r['id']:r for r in store.load_articles()}
+    stale={'article_id':2,'source_title':rows[2]['title'],'title_ru':'Старый перевод'}
+    store.save_title_translations([stale],'test-model')
+    original=store.get_session
+    started=Event()
+    pids=[]
+    @contextmanager
+    def observed_session():
+        with original() as session:
+            pids.append(session.execute(text('SELECT pg_backend_pid()')).scalar())
+            started.set()
+            yield session
+    with original() as writer:
+        writer.execute(text("UPDATE articles SET title='Corrected headline' WHERE id=2"))
+        writer.execute(text("UPDATE article_title_translations SET source_title='Corrected headline',title_ru='Исправленный перевод' WHERE article_id=2"))
+        monkeypatch.setattr(store,'get_session',observed_session)
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future=pool.submit(store.save_title_translations,[stale],'test-model')
+            try:
+                assert started.wait(2)
+                deadline=time.monotonic()+3
+                blocked=False
+                while time.monotonic()<deadline:
+                    blocked=writer.execute(text('SELECT cardinality(pg_blocking_pids(:pid))>0'),{'pid':pids[0]}).scalar()
+                    if blocked:break
+                    time.sleep(.01)
+                assert blocked, 'stale saver did not reach the contested row'
+            finally:
+                writer.commit()
+            future.result(timeout=3)
+    with original() as reader:
+        cached=reader.execute(text('SELECT source_title,title_ru FROM article_title_translations WHERE article_id=2')).one()
+    assert tuple(cached)==('Corrected headline','Исправленный перевод')
