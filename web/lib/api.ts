@@ -1,5 +1,5 @@
 import type {
-  AgreementGroup, ArticleSearchRequest, ArticleSearchResponse, Brief, CountrySummary,
+  AgendasRequest, AgendasResponse, AgreementGroup, ArticleSearchRequest, ArticleSearchResponse, Brief, CountrySummary,
   Dossier, EntityStat, EntitySuggestionsResponse, FxSeries, Headline, Health, MapEntry,
   IndexExplanation, IndexExplanationRequest, Meta, Signal, SignalDetail, SourceHealthRow,
   SourceRow, StoriesListResponse, StoriesRequest, StoryDetailResponse, TemperatureMethodology,
@@ -87,6 +87,11 @@ function radarParams(request: RadarFilters, cursor?: string | null): URLSearchPa
 }
 
 export const api = {
+  agendas: (request: AgendasRequest = {}, signal?: AbortSignal) => {
+    const params = new URLSearchParams({ limit: String(request.limit ?? 20) });
+    if (request.q?.trim()) params.set("q", request.q.trim());
+    return get<AgendasResponse>(`/api/v2/agendas?${params.toString()}`, signal);
+  },
   radar: (request: RadarFilters = {}, cursor?: string | null, signal?: AbortSignal) =>
     get<RadarTrendPage>(`/api/v2/radar?${radarParams(request, cursor).toString()}`, signal),
   countryRadar: (code: string, request: Omit<RadarFilters, "country"> = {}, cursor?: string | null, signal?: AbortSignal) =>

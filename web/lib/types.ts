@@ -827,3 +827,50 @@ export interface RadarMethodology {
   evidence_roles: string[];
   limitations: string[];
 }
+
+
+export interface AgendaArticle {
+  id: number;
+  title: string;
+  url: string | null;
+  source_name: string;
+  country_code: string;
+  published_at: string | null;
+  collected_at: string | null;
+  date_warning?: boolean;
+  relation: "seed" | "same_event" | "development";
+  confidence: number | null;
+}
+
+export interface AgendaItem {
+  id: number;
+  title: string;
+  article_count: number;
+  source_count: number;
+  countries: string[];
+  first_seen: string | null;
+  last_seen: string | null;
+  updated_at: string | null;
+  same_event_count: number;
+  development_count: number;
+  model: string | null;
+  articles: AgendaArticle[];
+}
+
+export interface AgendaCoverage {
+  last_run_at: string | null;
+  status: "never_run" | "ok" | "budget_exhausted" | "error" | "disabled" | "running";
+  articles_scanned: number;
+  candidate_groups: number;
+  decisions: number;
+  accepted: number;
+  remaining_budget_usd: number | null;
+}
+
+export interface AgendasRequest { limit?: number; q?: string; }
+
+export interface AgendasResponse {
+  items: AgendaItem[];
+  coverage: AgendaCoverage;
+  has_more: boolean;
+}
