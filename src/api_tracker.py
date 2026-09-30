@@ -30,6 +30,8 @@ logger = logging.getLogger(__name__)
 COST_TABLE = {
     # service -> model -> (input_per_1M, output_per_1M) in USD
     "openrouter": {
+        # Fallback estimate; provider-reported usage.cost takes precedence.
+        "openai/text-embedding-3-small": (0.02, 0.0),
         "anthropic/claude-sonnet-4": (3.0, 15.0),
         "anthropic/claude-3.5-sonnet": (3.0, 15.0),
         # Cheap heavy/structured models (HEAVY_MODEL) — see src/config.py
