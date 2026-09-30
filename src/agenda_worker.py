@@ -16,6 +16,7 @@ from src.agenda_discovery import (MODEL, MAX_REQUEST_BYTES, candidate_group_page
     prepare_pair_payload, parse_pair_response, pair_cache_key, accepted_decision)
 from src.api_tracker import track_api_call
 from src.agenda_translation import run_translation_cycle
+from src.decision_extraction import run_decision_cycle
 from src.db import get_session
 from src.jev import _request
 
@@ -61,6 +62,31 @@ def run_cycle(*,budget_usd=Decimal('0'),campaign=CAMPAIGN,max_calls=20):
     if not os.environ.get('OPENROUTER_API_KEY'):
         store.record_run('error',{**stats,'error':'missing_key'})
         return {**stats,'status':'error'}
+    try:
+        stats=_run_discovery(budget_usd=budget_usd,campaign=campaign,max_calls=max_calls)
+        status=stats.pop('status')
+    except Exception as exc:
+        # Discovery infrastructure can fail independently of analyst extraction.
+        status='error'
+        stats['error']=type(exc).__name__
+        logger.error('Agenda discovery failed: %s',type(exc).__name__)
+    try:
+        stats['translation']=run_translation_cycle(budget_usd=budget_usd,campaign=campaign)
+    except Exception:
+        # Presentation failures never discard successfully discovered agendas.
+        stats['translation']={'status':'error'}
+    try:
+        stats['decision_extraction']=run_decision_cycle(budget_usd=budget_usd,campaign=campaign)
+    except Exception:
+        # An incomplete analyst annotation cannot invalidate discovery or titles.
+        stats['decision_extraction']={'status':'error'}
+    stats['remaining_budget_usd']=budget.get_budget(campaign)
+    store.record_run(status,stats)
+    return {**stats,'status':status}
+
+
+def _run_discovery(*,budget_usd,campaign,max_calls):
+    stats={'articles_scanned':0,'candidate_groups':0,'decisions':0,'accepted':0,'calls':0}
     articles=store.load_articles()
     existing=store.load_groups()
     by_id={a['id']:a for a in articles}
@@ -137,13 +163,6 @@ def run_cycle(*,budget_usd=Decimal('0'),campaign=CAMPAIGN,max_calls=20):
             position=page['group_cursors'][group_index]
             stats['discovery_cursor']=position['cursor'] if pending and not stop else position['next_cursor']
             break
-    try:
-        stats['translation']=run_translation_cycle(budget_usd=budget_usd,campaign=campaign)
-    except Exception:
-        # Presentation failures never discard successfully discovered agendas.
-        stats['translation']={'status':'error'}
-    stats['remaining_budget_usd']=budget.get_budget(campaign)
-    store.record_run(status,stats)
     return {**stats,'status':status}
 
 

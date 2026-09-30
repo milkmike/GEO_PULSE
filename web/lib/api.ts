@@ -7,6 +7,7 @@ import type {
   RadarCoverage, RadarEvidencePage, RadarFilters, RadarMethodology, RadarTimeline,
   RadarTrend, RadarTrendPage,
 } from "./types";
+import type { DecisionWorkspaceResponse } from "./decisionTypes";
 
 /** API base: build-time env wins; otherwise same host on :8100 (compose default). */
 export function apiBase(): string {
@@ -87,6 +88,12 @@ function radarParams(request: RadarFilters, cursor?: string | null): URLSearchPa
 }
 
 export const api = {
+  decisionWorkspace: (country?: string | null, signal?: AbortSignal) => {
+    const params = new URLSearchParams();
+    if (country) params.set("country", country.trim().toUpperCase());
+    const query = params.toString();
+    return get<DecisionWorkspaceResponse>(`/api/v2/decision-workspace${query ? `?${query}` : ""}`, signal);
+  },
   agendas: (request: AgendasRequest = {}, signal?: AbortSignal) => {
     const params = new URLSearchParams({ limit: String(request.limit ?? 20) });
     if (request.q?.trim()) params.set("q", request.q.trim());

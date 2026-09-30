@@ -17,6 +17,7 @@ const apiMocks = vi.hoisted(() => ({
 
 vi.mock("@/lib/api", () => ({ api: apiMocks }));
 vi.mock("@/components/SiteHeader", () => ({ default: () => <nav>header</nav> }));
+vi.mock("@/components/DecisionWorkspace", () => ({ default: () => null }));
 vi.mock("@/components/SortableGrid", () => ({
   default: ({ items }: { items: { id: string; node: ReactNode }[] }) => (
     <>{items.map((item) => <div key={item.id}>{item.node}</div>)}</>
