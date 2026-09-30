@@ -210,7 +210,7 @@ def generate_embedding(text: str) -> Optional[list[float]]:
                 service=svc, endpoint="/v1/embeddings", model=model,
                 script="embeddings.py",
                 tokens_in=usage.get("prompt_tokens", usage.get("total_tokens", 0)),
-                tokens_out=0, status="ok", duration_ms=timer.ms,
+                tokens_out=0, cost=usage.get("cost"), status="ok", duration_ms=timer.ms,
             )
 
             return embedding
@@ -304,7 +304,7 @@ def generate_embeddings_batch(texts: list[str]) -> list[Optional[list[float]]]:
                     service=svc, endpoint="/v1/embeddings", model=model,
                     script="embeddings.py",
                     tokens_in=usage.get("prompt_tokens", usage.get("total_tokens", 0)),
-                    tokens_out=0, status="ok", duration_ms=timer.ms,
+                    tokens_out=0, cost=usage.get("cost"), status="ok", duration_ms=timer.ms,
                 )
 
                 logger.info(f"  Batch {chunk_start//chunk_size + 1}: {len(data['data'])} embeddings")

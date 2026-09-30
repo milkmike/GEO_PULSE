@@ -40,10 +40,16 @@ OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.1")
 RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 _openrouter_blocked_until = 0.0
 AUTH_COOLDOWN_SECONDS = 300
+EMPTY_RESPONSE_COOLDOWN_SECONDS = 7200
+_empty_response_blocked_until: dict[tuple[str, str], float] = {}
 
 
 class LLMError(Exception):
     """All providers in the chain failed."""
+
+
+class EmptyResponseError(LLMError):
+    """A completed, potentially billed request returned no usable text."""
 
 
 def _cache_get(key: str) -> str | None:
@@ -78,8 +84,11 @@ def _call_openrouter(model: str, prompt: str, max_tokens: int,
     }
     if temperature is not None:
         body["temperature"] = temperature
-    if script == "analyze.py" and model in {"deepseek/deepseek-v4-flash", "qwen/qwen3.6-flash"}:
-        # Short structured extraction must leave its token budget for JSON.
+    if script in {"analyze.py", "briefs.py"} and model in {
+        "deepseek/deepseek-v4-flash", "qwen/qwen3.6-flash", "qwen/qwen3.7-plus",
+    }:
+        # These models support disabling reasoning. Reserve the output budget
+        # for the requested JSON/brief, not hidden reasoning tokens.
         body["reasoning"] = {"enabled": False}
 
     with track_duration() as timer:
@@ -87,16 +96,28 @@ def _call_openrouter(model: str, prompt: str, max_tokens: int,
         resp.raise_for_status()
 
     data = resp.json()
-    usage = data.get("usage", {})
+    usage = data.get("usage") or {}
+    choices = data.get("choices") or []
+    choice = choices[0] if choices and isinstance(choices[0], dict) else {}
+    message = choice.get("message") or {}
+    content = message.get("content") if isinstance(message, dict) else None
+    text = content.strip() if isinstance(content, str) else ""
+    error = None
+    if not text:
+        details = usage.get("completion_tokens_details") or {}
+        error = (f"empty_content finish_reason={choice.get('finish_reason')} "
+                 f"reasoning_tokens={details.get('reasoning_tokens', 'unknown')}")
     track_api_call(
         service="openrouter", endpoint="/chat/completions",
         model=model, script=script,
         tokens_in=usage.get("prompt_tokens", 0),
         tokens_out=usage.get("completion_tokens", 0),
         cost=usage.get("cost"),
-        status="ok", duration_ms=timer.ms,
+        status="ok" if text else "error", error=error, duration_ms=timer.ms,
     )
-    return data["choices"][0]["message"]["content"].strip()
+    if not text:
+        raise EmptyResponseError(error)
+    return text
 
 
 def _call_ollama(prompt: str, max_tokens: int, temperature: float | None,
@@ -149,12 +170,25 @@ def chat(prompt: str, max_tokens: int = 300, temperature: float | None = None,
         raise LLMError("OpenRouter authentication/billing cooldown; retry later")
 
     if OPENROUTER_API_KEY:
-        for model in chain:
+        for model in dict.fromkeys(chain):
+            cooldown_key = (script, model)
+            if time.monotonic() < _empty_response_blocked_until.get(cooldown_key, 0):
+                errors.append(f"{model}: empty-response cooldown")
+                continue
             try:
                 text = _call_openrouter(model, prompt, max_tokens, temperature, script)
                 if cache_key:
                     _cache_set(cache_key, json.dumps({"text": text, "model": model}), cache_ttl)
                 return text, model
+            except EmptyResponseError as e:
+                # Usage was already recorded with the provider's actual cost.
+                # Skip this model for subsequent scopes in the same worker.
+                _empty_response_blocked_until[cooldown_key] = (
+                    time.monotonic() + EMPTY_RESPONSE_COOLDOWN_SECONDS
+                )
+                errors.append(f"{model}: {e}")
+                logger.warning("LLM %s returned no text; cooling down and trying next model: %s", model, e)
+                continue
             except httpx.HTTPStatusError as e:
                 status = e.response.status_code
                 track_api_call(service="openrouter", endpoint="/chat/completions",
