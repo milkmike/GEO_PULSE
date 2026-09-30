@@ -46,7 +46,16 @@ def load_job_content(session: Any, job: EmbeddingJob) -> str | None:
     """Load the current deterministic text representation for a claimed job."""
     if job.object_type == "article":
         raw = session.execute(
-            text("SELECT title, body, summary FROM articles WHERE id = :id"),
+            text("""
+                SELECT a.title, a.body, a.summary FROM articles a
+                WHERE a.id = :id
+                  AND NOT EXISTS (
+                    SELECT 1 FROM analysis an
+                    WHERE an.article_id = a.id
+                      AND an.model_used = 'keyword_filter'
+                      AND an.sentiment IS NULL
+                  )
+            """),
             {"id": int(job.object_id)},
         ).fetchone()
         if raw is None:
