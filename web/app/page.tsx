@@ -12,13 +12,13 @@ import EarlyWarningPanel from "@/components/EarlyWarningPanel";
 import SignalFeed from "@/components/SignalFeed";
 import SiteHeader from "@/components/SiteHeader";
 import SortableGrid, { type SortableItem } from "@/components/SortableGrid";
-import StoriesPanel from "@/components/StoriesPanel";
+import AgendaHighlights from "@/components/AgendaHighlights";
 import { useFeatureFlags } from "@/components/FeatureFlagsProvider";
 import WorldMap from "@/components/WorldMap";
 import { api } from "@/lib/api";
 import { HOME_TIPS } from "@/lib/explain";
 import { fmtDate } from "@/lib/format";
-import type { Brief, CountrySummary, Headline, Meta, Signal, StoryListItem, TopicBriefResponse } from "@/lib/types";
+import type { Brief, CountrySummary, Headline, Meta, Signal, TopicBriefResponse } from "@/lib/types";
 
 // Default order of the home dashboard cards; visitors can drag to reorder
 // (persisted per browser in localStorage under "home-panel-order").
@@ -37,9 +37,6 @@ export default function HomePage() {
   const [topicBrief, setTopicBrief] = useState<TopicBriefResponse | null>(null);
   const [topicBriefLoading, setTopicBriefLoading] = useState(false);
   const [topicBriefError, setTopicBriefError] = useState(false);
-  const [stories, setStories] = useState<StoryListItem[]>([]);
-  const [storiesState, setStoriesState] = useState<"loading" | "ready" | "error">("loading");
-  const [storiesReload, setStoriesReload] = useState(0);
 
   useEffect(() => {
     const load = () => {
@@ -53,16 +50,6 @@ export default function HomePage() {
     return () => clearInterval(t);
   }, []);
 
-  useEffect(() => {
-    if (!storiesNavigation) return;
-    setStoriesState("loading");
-    api.stories({ limit: 6 })
-      .then((payload) => {
-        setStories(payload.stories.slice(0, 6));
-        setStoriesState("ready");
-      })
-      .catch(() => setStoriesState("error"));
-  }, [storiesNavigation, storiesReload]);
 
   useEffect(() => {
     const loadHeadlines = () => {
@@ -164,11 +151,7 @@ export default function HomePage() {
     {
       id: "stories", cellClassName: "col-span-12 lg:col-span-8",
       node: storiesNavigation ? (
-        <StoriesPanel
-          stories={stories}
-          state={storiesState}
-          onRetry={() => setStoriesReload((value) => value + 1)}
-        />
+        <AgendaHighlights />
       ) : null,
     },
     {
