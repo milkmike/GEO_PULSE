@@ -226,3 +226,33 @@ def test_concurrent_groups_cannot_share_an_article(store):
 
 def test_recent_id_bound_is_applied_before_eligibility(store):
     assert {a['id'] for a in store.load_articles(limit=2)}=={3}
+
+
+def test_large_raw_window_reads_bounded_batches_without_replacing_excluded_ids(store, monkeypatch):
+    # A monolithic excerpt query (or widening the window to replace quarantined
+    # rows) defeats the bounded-work guarantee that protects production reads.
+    with store.get_session() as session:
+        session.execute(text("""INSERT INTO articles
+          (id,source_id,title,body,published_at,collected_at,is_duplicate,geo_status)
+          SELECT n,1,'Report number '||n,'Evidence',now(),now(),false,
+                 CASE WHEN n%2=0 THEN 'unverified' ELSE 'source_verified' END
+          FROM generate_series(5,2010) n"""))
+    original=store.get_session
+    batches=[]
+    @contextmanager
+    def observed_session():
+        with original() as session:
+            class Reader:
+                def execute(self, statement, params=None):
+                    params=params or {}
+                    if store.ARTICLE_FIELDS in str(statement):
+                        ids=params.get('ids')
+                        assert ids and len(ids)<=1000, 'excerpt reads must have a bounded ID batch'
+                        batches.append(list(ids))
+                    return session.execute(statement,params)
+            yield Reader()
+    monkeypatch.setattr(store,'get_session',observed_session)
+    rows=store.load_articles(limit=2005)
+    assert {r['id'] for r in rows}==set(range(7,2011,2))
+    assert len(batches)==3
+    assert [identity for batch in batches for identity in batch]==list(range(2010,5,-1))
