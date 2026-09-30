@@ -138,7 +138,7 @@ def test_auto_update_retries_after_migration_failure_then_records_success(tmp_pa
     assert calls.read_text().splitlines() == [
         "compose run --rm migrate",
         "compose run --rm migrate",
-        "compose build",
+        "compose --parallel 1 build",
         "compose up -d",
     ]
     assert marker.read_text().strip() == "bbbbbbbb"
@@ -159,7 +159,7 @@ def test_auto_update_without_marker_deploys_current_head_once(tmp_path):
     assert marker.read_text().strip() == "bbbbbbbb"
     assert calls.read_text().splitlines() == [
         "compose run --rm migrate",
-        "compose build",
+        "compose --parallel 1 build",
         "compose up -d",
     ]
 
@@ -182,7 +182,7 @@ def test_auto_update_does_not_record_success_until_api_is_healthy(tmp_path):
     assert not marker.exists()
     assert calls.read_text().splitlines() == [
         "compose run --rm migrate",
-        "compose build",
+        "compose --parallel 1 build",
         "compose up -d",
         "compose ps api",
         "compose logs --tail 120 api",
@@ -226,7 +226,7 @@ def test_auto_update_skips_overlapping_invocation_before_git_or_docker(tmp_path)
     assert first.returncode == 0, stderr
     assert calls.read_text().splitlines() == [
         "compose run --rm migrate",
-        "compose build",
+        "compose --parallel 1 build",
         "compose up -d",
     ]
 
