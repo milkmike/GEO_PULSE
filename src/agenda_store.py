@@ -64,16 +64,31 @@ def load_articles(hours=72, limit=30000):
         raise ValueError('Invalid agenda collection bounds')
     with get_session() as session:
         session.execute(text("SET LOCAL statement_timeout='15s'"))
-        rows = session.execute(text(f"""
-         WITH recent AS MATERIALIZED (SELECT id FROM articles ORDER BY id DESC LIMIT :limit)
-         SELECT {ARTICLE_FIELDS} FROM recent
-         JOIN articles ar ON ar.id=recent.id {PUBLISHER_JOINS}
-         WHERE {ELIGIBILITY}
-           AND ar.collected_at >= now()-make_interval(hours=>:hours)
-           AND ar.collected_at <= now()
-         ORDER BY ar.collected_at DESC,ar.id DESC
-        """), {'limit':limit,'hours':hours}).mappings().all()
-    return [_article(row) for row in rows]
+        # Freeze the admission window once. Quarantined/old/duplicate IDs are
+        # excluded below, never replaced by progressively older archive rows.
+        ids = session.execute(text(
+            'SELECT id FROM articles ORDER BY id DESC LIMIT :limit'
+        ), {'limit':limit}).scalars().all()
+        rows=[]
+        for offset in range(0,len(ids),1000):
+            # The materialization fence makes the primary-key batch precede the
+            # date predicate, whose cardinality is underestimated in production.
+            # Only bounded excerpts are materialized, not complete article bodies.
+            rows.extend(session.execute(text(f"""
+             WITH batch AS MATERIALIZED (
+               SELECT id,source_id,publisher_source_id,geo_status,is_duplicate,
+                      title,published_at,collected_at,resolved_url,url,
+                      LEFT(COALESCE(NULLIF(summary,''),body,''),1200) AS summary,
+                      NULL::text AS body
+               FROM articles WHERE id=ANY(:ids)
+             )
+             SELECT {ARTICLE_FIELDS} FROM batch ar {PUBLISHER_JOINS}
+             WHERE {ELIGIBILITY}
+               AND ar.collected_at >= now()-make_interval(hours=>:hours)
+               AND ar.collected_at <= now()
+            """), {'ids':ids[offset:offset+1000],'hours':hours}).mappings().all())
+    return [_article(row) for row in sorted(rows,key=lambda row:(row['collected_at'],row['id']),reverse=True)]
+
 
 
 def load_groups(hours=72):
