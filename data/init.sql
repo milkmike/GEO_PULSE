@@ -1158,3 +1158,67 @@ CREATE TABLE IF NOT EXISTS notification_events (
 );
 CREATE INDEX IF NOT EXISTS idx_notification_events_trend_time
   ON notification_events(trend_id, created_at DESC, id DESC);
+-- Persistent, fail-closed reservations for the explicitly authorized Jev campaign.
+CREATE TABLE IF NOT EXISTS agenda_budget (
+    campaign TEXT PRIMARY KEY,
+    limit_usd NUMERIC NOT NULL CHECK (limit_usd > 0 AND limit_usd <= 3),
+    charged_usd NUMERIC NOT NULL DEFAULT 0 CHECK (charged_usd >= 0),
+    halted BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS agenda_budget_calls (
+    id UUID PRIMARY KEY,
+    campaign TEXT NOT NULL REFERENCES agenda_budget(campaign) ON DELETE RESTRICT,
+    payload_hash CHAR(64) NOT NULL,
+    pair_keys JSONB NOT NULL DEFAULT '[]'::jsonb CHECK (jsonb_typeof(pair_keys)='array'),
+    status VARCHAR(40) NOT NULL DEFAULT 'reserved',
+    charged_usd NUMERIC NOT NULL DEFAULT 0.10 CHECK (charged_usd >= 0),
+    actual_cost_usd NUMERIC CHECK (actual_cost_usd >= 0),
+    cost_invalid BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    finished_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_agenda_budget_calls_campaign
+    ON agenda_budget_calls(campaign, created_at);
+
+ALTER TABLE agenda_budget_calls
+    ADD COLUMN IF NOT EXISTS pair_keys JSONB NOT NULL DEFAULT '[]'::jsonb
+    CHECK (jsonb_typeof(pair_keys)='array');
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agenda_budget_calls_payload
+    ON agenda_budget_calls(campaign,payload_hash);
+CREATE INDEX IF NOT EXISTS idx_agenda_budget_calls_pairs
+    ON agenda_budget_calls USING GIN (pair_keys);
+-- Article-first news agendas. Separate from RRI relevance and confirmed risks.
+CREATE TABLE IF NOT EXISTS news_agendas (
+ id BIGSERIAL PRIMARY KEY,
+ anchor_article_id INTEGER NOT NULL UNIQUE REFERENCES articles(id) ON DELETE CASCADE,
+ model TEXT NOT NULL,
+ created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+ updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS news_agenda_articles (
+ article_id INTEGER PRIMARY KEY REFERENCES articles(id) ON DELETE CASCADE,
+ agenda_id BIGINT NOT NULL REFERENCES news_agendas(id) ON DELETE CASCADE,
+ relation TEXT NOT NULL CHECK (relation IN ('seed','same_event','development')),
+ confidence DOUBLE PRECISION CHECK (confidence BETWEEN 0 AND 1),
+ probabilities JSONB NOT NULL DEFAULT '{}',
+ content_hash TEXT NOT NULL,
+ anchor_hash TEXT NOT NULL,
+ created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS news_agenda_articles_group_idx ON news_agenda_articles(agenda_id);
+CREATE TABLE IF NOT EXISTS news_agenda_decisions (
+ cache_key TEXT PRIMARY KEY,
+ anchor_id INTEGER NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+ article_id INTEGER NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+ decision JSONB NOT NULL,
+ created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS news_agenda_runs (
+ id BIGSERIAL PRIMARY KEY,
+ status TEXT NOT NULL,
+ stats JSONB NOT NULL,
+ created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);

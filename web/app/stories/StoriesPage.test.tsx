@@ -11,6 +11,7 @@ const navigation = vi.hoisted(() => ({
 
 const apiMocks = vi.hoisted(() => ({
   stories: vi.fn(),
+  agendas: vi.fn(),
   entitySuggestions: vi.fn(),
   meta: vi.fn(),
 }));
@@ -84,6 +85,11 @@ beforeEach(() => {
   navigation.params = "";
   navigation.push.mockReset();
   navigation.replace.mockReset();
+  apiMocks.agendas.mockReset().mockResolvedValue({
+    items: [], has_more: false,
+    coverage: { status: "never_run", last_run_at: null, articles_scanned: 0,
+      candidate_groups: 0, decisions: 0, accepted: 0, remaining_budget_usd: null },
+  });
   apiMocks.stories.mockReset().mockResolvedValue(response());
   apiMocks.entitySuggestions.mockReset().mockResolvedValue({ items: [] });
   apiMocks.meta.mockReset().mockResolvedValue({
@@ -136,6 +142,7 @@ describe("StoriesPage durable filters", () => {
         expect.any(AbortSignal),
       ),
     );
+    expect(apiMocks.agendas).toHaveBeenCalledWith({ limit: 20 }, expect.any(AbortSignal));
     expect(
       await screen.findByRole("link", {
         name: "Испания и Россия: портовые переговоры",
@@ -224,7 +231,7 @@ describe("StoriesPage durable filters", () => {
     await user.click(screen.getByRole("button", { name: /следующую страницу/i }));
     await screen.findByRole("link", { name: "Второй сюжет" });
 
-    const headings = screen.getAllByRole("heading", { level: 2 });
+    const headings = screen.getAllByRole("heading", { level: 2, name: /сюжет$/i });
     expect(headings.map((heading) => heading.textContent)).toEqual([
       "Первый сюжет",
       "Второй сюжет",
