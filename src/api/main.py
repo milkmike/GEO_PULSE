@@ -159,6 +159,8 @@ def get_visits(days: int = Query(30, ge=1, le=365)):
 
 # Register routes
 app.include_router(sources_router)
+from src.api.routes.agendas import router as agendas_router
+app.include_router(agendas_router)
 app.include_router(stories_router)
 app.include_router(threads_router)
 app.include_router(vox_router)

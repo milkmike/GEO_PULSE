@@ -149,7 +149,7 @@ export default function AgendaPanel() {
         <div className="mt-5 border-l-2 border-ru-blue/70 pl-3 text-xs leading-5 text-dim">
           <p role="status">{RUN_STATUS[coverage.status]}</p>
           {lastRun && <p>Последний проход: {lastRun} МСК</p>}
-          <p>Просмотрено публикаций: {coverage.articles_scanned} · Групп-кандидатов: {coverage.candidate_groups} · Проверено связей: {coverage.decisions} · Принято: {coverage.accepted}</p>
+          <p>Просмотрено публикаций: {coverage.articles_scanned} · Групп-кандидатов: {coverage.candidate_groups} · Проверено связей: {coverage.decisions} · Одобрено Jev: {coverage.accepted}</p>
           <p>Страны обозначают местонахождение издателей.</p>
         </div>
       )}
