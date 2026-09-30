@@ -57,9 +57,9 @@ def test_prompt_covers_public_stance_truncation_and_attribution_in_each_claim():
         excerpt="The Republic of Serbia will maintain its principled stance against imposing restrictive measures on the Russian Federation, the Students in Blockade m")
     prompt = extraction.prepare_prompt(source)
     assert source["title"] + "\n" + source["excerpt"] in prompt
-    for phrase in ("public position about Russia", "even if no action", "name or unambiguously identify THAT country",
-                   "never finish an incomplete clause", "EACH position_ru and change_ru", "actual quoted/speaking person",
-                   "explicitly name which Russian citizens or organization is affected"):
+    for phrase in ("Публичная позиция по санкциям", "даже без изменения правил", "именно эту страну",
+                   "Не дописывай оборванные фразы", "В КАЖДОМ position_ru и change_ru", "конкретный названный автор",
+                   "назови затронутую сторону"):
         assert phrase in prompt
     assert len(prompt.encode()) <= 32000
 
@@ -209,3 +209,62 @@ def test_source_snapshot_is_invalidated_and_rechecked_before_save(monkeypatch):
         with engine.begin() as conn:
             conn.execute(text(f"DROP SCHEMA {schema} CASCADE"))
         engine.dispose()
+
+@pytest.mark.parametrize('verdict', ['accept', 'reject', 'error'])
+def test_positive_extraction_is_reviewed_before_any_save(monkeypatch, verdict):
+    calls = []
+    monkeypatch.setenv('OPENROUTER_API_KEY', 'test-key')
+    monkeypatch.setattr(extraction, 'load_candidates', lambda article_ids=None: ([article()], {'RS'}))
+    monkeypatch.setattr(extraction.budget, 'get_attempted_pair_keys', lambda campaign: set())
+    monkeypatch.setattr(extraction.budget, 'get_budget', lambda campaign: 2.0)
+    monkeypatch.setattr(extraction.budget, 'reserve_request', lambda *a, **k: 'generated')
+    monkeypatch.setattr(extraction.budget, 'finish_request', lambda *a: calls.append('settled'))
+    monkeypatch.setattr(extraction, 'track_api_call', lambda **k: None)
+    class FakeChat:
+        def __init__(self, *a, **k): self.requests = []
+        def chat(self, *a, **k):
+            self.requests.append({'finish_reason':'stop', 'usage':{'cost':.001}})
+            return json.dumps(annotation()), extraction.MODEL
+    monkeypatch.setattr(extraction, 'BudgetedChat', FakeChat)
+    reviewed = annotation(positions=[])
+    def review(source, value, **kwargs):
+        assert calls == ['settled']
+        assert kwargs == {'campaign':'existing', 'budget_usd':Decimal('3')}
+        calls.append('review')
+        if verdict == 'error': raise RuntimeError('unavailable')
+        return reviewed if verdict == 'accept' else None
+    monkeypatch.setattr(extraction, 'verify_annotation', review)
+    def save(source, value):
+        assert value == reviewed
+        calls.append('save')
+        return True
+    monkeypatch.setattr(extraction, 'save_if_current', save)
+    result = extraction.run_decision_cycle(budget_usd=Decimal('3'), campaign='existing', max_calls=1)
+    assert result['saved'] == (1 if verdict == 'accept' else 0)
+    assert calls == ['settled','review'] + (['save'] if verdict == 'accept' else [])
+
+
+def test_single_json_fence_and_exact_original_actor_are_normalized_without_guessing():
+    source = article(excerpt='The ministry said Russian citizens may enter Serbia. Students in Blockade said it.')
+    value = annotation(positions=[dict(actor='Students in Blockade',actor_type='ngo',position_ru='Высказалось о въезде',evidence_quote='Students in Blockade said it.')])
+    parsed = extraction.parse_annotation('```json\n'+json.dumps(value)+'\n```', source, {'RS'})
+    assert parsed['positions'][0]['actor'] == 'Участник: Students in Blockade'
+    value['positions'][0]['actor'] = 'Unmentioned author'
+    with pytest.raises(ValueError):
+        extraction.parse_annotation(json.dumps(value), source, {'RS'})
+    with pytest.raises(ValueError):
+        extraction.parse_annotation('Here is my answer:\n```json\n'+json.dumps(annotation())+'\n```', source, {'RS'})
+
+
+def test_country_citation_uses_existing_source_line_without_inventing_country_relation():
+    source=article()
+    value=annotation(countries=[dict(code='RS',evidence_quote='Russian citizens')])
+    result=extraction.parse_annotation(json.dumps(value),source,{'RS'})
+    assert 'Serbia' in result['countries'][0]['evidence_quote']
+    assert result['countries'][0]['evidence_quote'] in source['title']+'\n'+source['excerpt']
+
+
+def test_only_reviewed_annotation_may_drop_optional_generated_text():
+    value=annotation(summary_ru='',russia_explanation_ru='')
+    with pytest.raises(ValueError): extraction.validate_annotation(value,article(),{'RS'})
+    assert extraction.validate_annotation(value,article(),{'RS'},reviewed=True)==value

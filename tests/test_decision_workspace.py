@@ -62,6 +62,39 @@ def test_country_involvement_is_annotation_not_publisher_geography():
     assert result["topics"][0]["evidence"][0]["article_id"] == 1
 
 
+def test_reviewed_headline_survives_dropped_optional_prose_without_fallback():
+    row = article()
+    row["annotation"]["summary_ru"] = ""
+    row["annotation"]["russia_explanation_ru"] = ""
+    result = project_decision_workspace(
+        country={"code": "RS", "name": "Сербия", "region": "europe"},
+        countries=[], rows=[row], now=NOW, attention=[], coverage={}, truncated=False,
+    )
+    evidence = result["brief"]["day"][0]
+    assert evidence["title_ru"] == "Сербия изменила правила въезда"
+    assert evidence["russia_evidence_quote"] == "Russians"
+    assert evidence["country_evidence_quote"] == "Serbia"
+    assert evidence["summary_ru"] == ""
+    assert evidence["russia_explanation_ru"] == ""
+
+
+@pytest.mark.parametrize("field,value", [
+    ("summary_ru", None),
+    ("summary_ru", "a" * 1001),
+    ("summary_ru", "<script>unsafe</script>"),
+    ("russia_explanation_ru", ["wrong type"]),
+    ("russia_explanation_ru", "https://example.com"),
+])
+def test_optional_prose_still_rejects_invalid_or_unsafe_values(field, value):
+    row = article()
+    row["annotation"][field] = value
+    result = project_decision_workspace(
+        country={"code": "RS", "name": "Сербия", "region": "europe"},
+        countries=[], rows=[row], now=NOW, attention=[], coverage={}, truncated=False,
+    )
+    assert result["brief"]["day"] == []
+
+
 @pytest.mark.parametrize("overrides", [
     {"source_title": "old title"},
     {"excerpt": "changed body"},

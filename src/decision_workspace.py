@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import re
 from typing import Any, Mapping
 
 from sqlalchemy import text
@@ -16,7 +17,7 @@ MAX_DETAIL = 1000
 # Keep this read-only contract independent of the background HTTP client.
 # The PostgreSQL regression test checks parity with decision_extraction.
 CURRENT_ANNOTATION_MODEL = "deepseek/deepseek-v4-flash"
-CURRENT_ANNOTATION_VERSION = "decision-annotation-v2"
+CURRENT_ANNOTATION_VERSION = "decision-annotation-v3-reviewed"
 _KINDS = {
     "decision": ("Решения", "Каков статус решения и кого оно затрагивает?"),
     "conflict": ("Разногласия", "Какие утверждения сторон требуют проверки?"),
@@ -45,6 +46,16 @@ def _iso(value: datetime | None) -> str | None:
 
 def _valid_text(value: Any, *, max_length: int = 1000) -> bool:
     return isinstance(value, str) and bool(value.strip()) and len(value) <= max_length
+
+
+def _valid_optional_prose(value: Any) -> bool:
+    if not isinstance(value, str) or len(value) > 1000:
+        return False
+    if value == "":
+        return True
+    return (_valid_text(value) and value == value.strip()
+            and not re.search(r"[<>`]|https?://|www\.|javascript:", value, re.I)
+            and not any(ord(char) < 32 or ord(char) == 127 for char in value))
 
 
 def _quote(value: Any, source: str) -> bool:
@@ -77,8 +88,9 @@ def _evidence(row: Any, country_code: str, now: datetime) -> tuple[dict[str, Any
                      and _quote(c.get("evidence_quote"), source)]
     if not country_items:
         return None
-    if not all(_valid_text(annotation.get(key), max_length=1000)
-               for key in ("headline_ru", "summary_ru", "russia_explanation_ru")):
+    if (not _valid_text(annotation.get("headline_ru"))
+            or not all(_valid_optional_prose(annotation.get(key))
+                       for key in ("summary_ru", "russia_explanation_ru"))):
         return None
     kind = annotation.get("kind")
     if not isinstance(kind, str) or kind not in _KINDS:
