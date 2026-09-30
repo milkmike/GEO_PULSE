@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DecisionEvidence, DecisionWorkspaceResponse } from "@/lib/decisionTypes";
 import DecisionWorkspace from "./DecisionWorkspace";
 
@@ -41,6 +41,7 @@ beforeEach(() => {
   mocks.decisionWorkspace.mockReset();
   mocks.decisionWorkspace.mockResolvedValue(response());
 });
+afterEach(() => vi.useRealTimers());
 
 describe("DecisionWorkspace", () => {
   it("renders all six analyst sections with source dates, uncertainty and citation", async () => {
@@ -57,6 +58,14 @@ describe("DecisionWorkspace", () => {
     expect(within(citation!).getByText(/Опубликовано:/)).toHaveTextContent("собрано:");
     expect(within(citation!).getByRole("link", { name: /Открыть публикацию/ })).toHaveAttribute("href", "https://example.org/article");
     expect(window.location.search).toBe("?country=RS");
+  });
+
+  it("selects and requests the country from a lowercase URL code", async () => {
+    window.history.replaceState(null, "", "/?country=rs");
+    render(<DecisionWorkspace />);
+    expect(await screen.findByText("Сербия ↔ Россия")).toBeVisible();
+    expect(screen.getByRole("combobox", { name: "Выбранная страна" })).toHaveValue("RS");
+    expect(mocks.decisionWorkspace).toHaveBeenCalledWith("RS", expect.any(AbortSignal));
   });
 
   it("keeps the country in the URL and ignores an older response after switching", async () => {
@@ -101,5 +110,33 @@ describe("DecisionWorkspace", () => {
     expect(screen.getByText(/Выборка ограничена/)).toBeVisible();
     expect(screen.queryByRole("link", { name: /Открыть публикацию/ })).not.toBeInTheDocument();
     expect(screen.getByText("Ссылка на оригинал недоступна.")).toBeInTheDocument();
+  });
+
+  it("refreshes the currently selected country manually", async () => {
+    const newer = response();
+    newer.as_of = "2026-09-30T11:00:00Z";
+    mocks.decisionWorkspace.mockResolvedValueOnce(response()).mockResolvedValueOnce(newer);
+    render(<DecisionWorkspace />);
+    await screen.findByText("Сербия ↔ Россия");
+    fireEvent.click(screen.getByRole("button", { name: "Обновить срез" }));
+    expect(await screen.findByText(/срез .*11:00 UTC/)).toBeVisible();
+    expect(mocks.decisionWorkspace).toHaveBeenNthCalledWith(2, "RS", expect.any(AbortSignal));
+  });
+
+  it("checks every two minutes and keeps the old snapshot visible if refresh fails", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    let rejectRefresh!: (error: Error) => void;
+    mocks.decisionWorkspace.mockResolvedValueOnce(response()).mockReturnValueOnce(new Promise((_, reject) => { rejectRefresh = reject; }));
+    render(<DecisionWorkspace />);
+    await screen.findByText("Сербия ↔ Россия");
+    await act(async () => { await vi.advanceTimersByTimeAsync(120_000); });
+    expect(mocks.decisionWorkspace).toHaveBeenCalledTimes(2);
+    expect(mocks.decisionWorkspace).toHaveBeenNthCalledWith(2, "RS", expect.any(AbortSignal));
+    expect(screen.getByText("Сербия ↔ Россия")).toBeVisible();
+    expect(screen.getByRole("status")).toHaveTextContent("Обновляем срез");
+    expect(screen.getByRole("button", { name: "Обновить срез" })).toBeDisabled();
+    await act(async () => rejectRefresh(new Error("offline")));
+    expect(screen.getByRole("alert")).toHaveTextContent("Показаны данные от");
+    expect(screen.getByText("Сербия ↔ Россия")).toBeVisible();
   });
 });

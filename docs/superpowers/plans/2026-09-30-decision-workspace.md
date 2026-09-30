@@ -23,7 +23,7 @@
 - [x] Extraction worker: own src/decision_extraction.py, tests/test_decision_extraction.py, scripts/migrations/037_article_decision_annotations.sql, matching data/init.sql DDL. Write validation/reservation/cache invalidation regressions before implementation; run relevant Python tests. Expose run_decision_cycle(budget_usd,campaign,max_calls=4). No migration/deploy/model execution by agent.
 - [x] API: own src/decision_workspace.py, src/api/routes/decision_workspace.py, tests/test_decision_workspace.py. Implement exact contract in spec; tests use fixed now, invalid/stale/old/future evidence and publisher-vs-participant countries. Add real PG contract check. No main.py changes; root registers router.
 - [x] UI: own web/components/DecisionWorkspace.tsx, its tests, web/lib/decisionTypes.ts, web/lib/api.ts, web/app/page.tsx. Native country selector and URL persistence, compact 6-widget hierarchy, exact backend fields, citation expansion, explicit unsupported claims and coverage caveats. Add to home before SortableGrid. Test request race, retry, empty, unsupported URLs, rendered language and selection.
-- [ ] Root integration: register route in main.py; invoke independent extractor in existing agenda worker; test isolation/failure behavior; whole-branch review; focused and full tests, build; production schema/API/UI verification after CI and deployment; bounded real extraction and original-quote checks.
+- [x] Root integration: register route in main.py; invoke independent extractor in existing agenda worker; test isolation/failure behavior; whole-branch review; focused and full tests, build; production schema/API/UI verification after CI and deployment; bounded real extraction and original-quote checks.
 
 ## Execution ledger
 - Base remote and prod both 5bbe2e2 verified. Main local contains unrelated ahead commits; isolated existing worktree reused on feat/decision-workspace.
@@ -35,3 +35,9 @@
 - Review finding fixed: local publisher coverage uses indexed geography independently of article-involvement aggregation.
 
 - Production read-only latency gate: broad extraction query exceeded15s; changed to indexed per-publisher-country pending ID batches (40/country), cache exclusion before bound. Probe234.234ms for3329 IDs; local RS coverage130.542ms. Root bootstrap selectors retain Russian publisher eligibility; extracted directions still exclude RU. Final affected PG/HTTP/worker suite44passed.
+
+- PR31 merged and deployed at587956e. Six-widget API measured195ms forRS and78ms forZA with saved annotations; desktop/mobile browser country switching and citations verified. First4 bounded real extractions saved for$0.001268188 from existing campaign.
+- Live source review found v1 omitted sanctions positions, used English actors and completed truncated clauses. Follow-up v2 strengthens explicit public-position relevance, Russian named actors, individual-claim uncertainty, affected Russian parties and country quote grounding; namespace also included in reservation hash.
+- Added manual snapshot refresh and120s polling with retained evidence and honest failed-refresh state. Follow-up local verification:27 extraction/worker tests,191 frontend tests, TypeScript and Next production build passed.
+
+- Final cross-review: API now requires current model/version for every annotation projection and coverage count; non-PG parity regression prevents extraction/API contract drift. Lowercase country URLs normalize correctly. All 46 affected API/extraction/worker tests passed on isolated PostgreSQL schemas; 7 workspace UI tests and TypeScript passed after the final URL correction.

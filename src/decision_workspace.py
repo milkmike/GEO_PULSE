@@ -13,6 +13,10 @@ from src.db import get_session
 
 
 MAX_DETAIL = 1000
+# Keep this read-only contract independent of the background HTTP client.
+# The PostgreSQL regression test checks parity with decision_extraction.
+CURRENT_ANNOTATION_MODEL = "deepseek/deepseek-v4-flash"
+CURRENT_ANNOTATION_VERSION = "decision-annotation-v2"
 _KINDS = {
     "decision": ("Решения", "Каков статус решения и кого оно затрагивает?"),
     "conflict": ("Разногласия", "Какие утверждения сторон требуют проверки?"),
@@ -166,7 +170,8 @@ def project_decision_workspace(*, country: dict, countries: list[dict], rows: li
 
 
 _VALID_ANNOTATION = """
-  ada.source_title = ar.title
+  ada.model = :annotation_model AND ada.version = :annotation_version
+  AND ada.source_title = ar.title
   AND ada.source_excerpt = LEFT(COALESCE(NULLIF(ar.body,''),ar.summary,''),4000)
 """
 _RUSSIA_QUOTE = """
@@ -223,7 +228,9 @@ def load_decision_workspace(country_code: str | None = None, *, now: datetime | 
             GROUP BY involved.item->>'code'
             HAVING COUNT(DISTINCT ar.id) FILTER (WHERE ar.published_at >= :day_start) > 0
             ORDER BY count_24h DESC, count_7d DESC, latest_at DESC
-        """), {"day_start": now-timedelta(hours=24), "week_start": now-timedelta(days=7), "as_of": now}).mappings().all()
+        """), {"day_start": now-timedelta(hours=24), "week_start": now-timedelta(days=7),
+                "as_of": now, "annotation_model": CURRENT_ANNOTATION_MODEL,
+                "annotation_version": CURRENT_ANNOTATION_VERSION}).mappings().all()
         attention = [
             {"code": r["code"], "name": next(c["name"] for c in countries if c["code"] == r["code"]),
              "count_24h": int(r["count_24h"]), "count_7d": int(r["count_7d"]),
@@ -236,7 +243,9 @@ def load_decision_workspace(country_code: str | None = None, *, now: datetime | 
         if selected not in valid_codes:
             raise ValueError("Unknown country code")
         country = next(c for c in countries if c["code"] == selected)
-        params = {"country": selected, "week_start": now-timedelta(days=7), "as_of": now}
+        params = {"country": selected, "week_start": now-timedelta(days=7), "as_of": now,
+                  "annotation_model": CURRENT_ANNOTATION_MODEL,
+                  "annotation_version": CURRENT_ANNOTATION_VERSION}
         detail_rows = session.execute(text(f"""
             SELECT ar.id AS article_id, ar.title,
                    LEFT(COALESCE(NULLIF(ar.body,''),ar.summary,''),4000) AS body_excerpt,

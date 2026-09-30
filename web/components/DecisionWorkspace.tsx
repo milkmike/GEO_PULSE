@@ -6,7 +6,7 @@ import { ArrowUpRight, LoaderCircle } from "lucide-react";
 import { api } from "@/lib/api";
 import type { DecisionEvidence, DecisionWorkspaceResponse } from "@/lib/decisionTypes";
 
-type LoadState = "loading" | "ready" | "error";
+type LoadState = "loading" | "ready" | "refreshing" | "refreshError" | "error";
 
 function dateTime(value: string | null): string {
   if (!value) return "нет данных";
@@ -87,7 +87,10 @@ export default function DecisionWorkspace() {
   const [windowSize, setWindowSize] = useState<"day" | "week">("day");
 
   useEffect(() => {
-    const readCountry = () => setSelectedCountry(new URLSearchParams(window.location.search).get("country"));
+    const readCountry = () => {
+      const country = new URLSearchParams(window.location.search).get("country")?.trim().toUpperCase();
+      setSelectedCountry(country || null);
+    };
     readCountry();
     setInitialized(true);
     window.addEventListener("popstate", readCountry);
@@ -97,11 +100,13 @@ export default function DecisionWorkspace() {
   useEffect(() => {
     if (!initialized) return;
     const controller = new AbortController();
-    setState("loading");
-    api.decisionWorkspace(selectedCountry, controller.signal).then((result) => {
+    const requestCountry = selectedCountry ?? payload?.country.code ?? null;
+    const hasMatchingPayload = Boolean(payload && (!requestCountry || payload.country.code === requestCountry.toUpperCase()));
+    setState(hasMatchingPayload ? "refreshing" : "loading");
+    api.decisionWorkspace(requestCountry, controller.signal).then((result) => {
       if (controller.signal.aborted) return;
-      if (selectedCountry && result.country.code !== selectedCountry.toUpperCase()) {
-        setState("error");
+      if (requestCountry && result.country.code !== requestCountry.toUpperCase()) {
+        setState(hasMatchingPayload ? "refreshError" : "error");
         return;
       }
       setPayload(result);
@@ -112,10 +117,17 @@ export default function DecisionWorkspace() {
         window.history.replaceState(window.history.state, "", url);
       }
     }).catch(() => {
-      if (!controller.signal.aborted) setState("error");
+      if (!controller.signal.aborted) setState(hasMatchingPayload ? "refreshError" : "error");
     });
     return () => controller.abort();
+    // The current payload is intentionally read only when a country/reload request starts.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialized, selectedCountry, reload]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setReload((value) => value + 1), 120_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   function selectCountry(code: string) {
     if (!code || code === (selectedCountry ?? payload?.country.code)) return;
@@ -128,7 +140,8 @@ export default function DecisionWorkspace() {
 
   const currentCountry = selectedCountry ?? payload?.country.code ?? "";
   const countryOptions = payload?.countries ?? [];
-  const content = state === "ready" && (!selectedCountry || payload?.country.code === selectedCountry.toUpperCase()) ? payload : null;
+  const content = state !== "loading" && state !== "error"
+    && (!selectedCountry || payload?.country.code === selectedCountry.toUpperCase()) ? payload : null;
   const brief = content?.brief[windowSize] ?? [];
   const coverage = content?.coverage;
 
@@ -140,7 +153,13 @@ export default function DecisionWorkspace() {
           <h2 id={titleId} className="display mt-1 text-[28px] leading-tight sm:text-[34px]">Россия и мир: что изменилось</h2>
           <p className="mt-2 max-w-3xl text-xs leading-5 text-dim">Сообщения подключённых СМИ, отобранные машинным анализом. Цитаты позволяют проверить основание; сообщение не означает подтверждённый факт или действующую норму.</p>
         </div>
-        {content && <p className="tnum text-[11px] text-dim">срез {dateTime(content.as_of)}</p>}
+        {content && <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+          <p className="tnum text-[11px] text-dim">срез {dateTime(content.as_of)}</p>
+          <button type="button" disabled={state === "refreshing"} onClick={() => setReload((value) => value + 1)}
+            className="min-h-11 text-xs text-accent underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-wait disabled:opacity-60 sm:min-h-0">
+            Обновить срез
+          </button>
+        </div>}
       </header>
 
       <div className="grid gap-3 lg:grid-cols-[minmax(230px,280px)_minmax(0,1fr)]">
@@ -173,9 +192,11 @@ export default function DecisionWorkspace() {
           )}
         </aside>
 
-        <div className="min-w-0" aria-busy={state === "loading"}>
+        <div className="min-w-0" aria-busy={state === "loading" || state === "refreshing"}>
           {state === "loading" && <div role="status" className="card flex min-h-48 items-center gap-3 px-5 text-sm text-dim"><LoaderCircle aria-hidden="true" size={17} className="animate-spin motion-reduce:animate-none" />Собираем срез по стране…</div>}
           {state === "error" && <div role="alert" className="card border-ru-red/50 p-5"><p className="text-sm text-fg">Не удалось загрузить аналитический срез.</p><button type="button" onClick={() => setReload((value) => value + 1)} className="mt-3 min-h-11 text-sm text-accent underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">Повторить загрузку</button></div>}
+          {state === "refreshing" && <p role="status" className="mb-3 flex items-center gap-2 border-l-2 border-ru-blue/70 pl-3 text-xs text-dim"><LoaderCircle aria-hidden="true" size={13} className="animate-spin motion-reduce:animate-none" />Обновляем срез…</p>}
+          {state === "refreshError" && content && <p role="alert" className="mb-3 border-l-2 border-ru-red/70 pl-3 text-xs leading-5 text-dim">Не удалось обновить срез. Показаны данные от {dateTime(content.as_of)}. Используйте «Обновить срез», чтобы повторить.</p>}
           {content && <>
             <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2 border-b border-line pb-3">
               <div><p className="section-num text-[10px]">ВЫБРАННАЯ СТРАНА</p><h3 className="display text-[27px] leading-tight">{content.country.name} ↔ Россия</h3></div>
