@@ -54,6 +54,33 @@ def test_placeholder_excluded_without_rejecting_legacy_or_repaired_rows(story_se
     assert {r['article_id'] for r in threads} == expected
 
 
+def test_queued_placeholder_never_reaches_paid_embedding_provider(story_session):
+    from contextlib import nullcontext
+
+    from scripts.index_embeddings import index_pending, load_job_content
+    from src.embedding_store import EmbeddingJob, EmbeddingProfile, content_hash
+    from tests.test_embedding_store import DocumentOnlyProvider, IndexStore
+
+    profile = EmbeddingProfile('test', 'test', 'test', 2, 'text-matching', '1', True, 4)
+    content = 'Trade agreement\nA specific trade agreement'
+    jobs = [EmbeddingJob(id=i, profile_id=4, object_type='article', object_id=str(i),
+                         content_hash=content_hash(content), attempts=1)
+            for i in range(7001, 7005)]
+    store = IndexStore(profile, jobs)
+    provider = DocumentOnlyProvider(profile)
+    result = index_pending(
+        store=store, session_factory=lambda: nullcontext(story_session),
+        provider_factory=lambda _: provider,
+    )
+    assert result == {'processed': 4, 'indexed': 3, 'failed': 1}
+    assert provider.documents == [[content, content, content]]
+    assert [job.object_id for job, _, retry in store.failures if not retry] == ['7001']
+
+    # Recovery restores eligibility without changing the article's content/hash.
+    story_session.execute(text("UPDATE analysis SET sentiment=1 WHERE article_id=7001"))
+    assert load_job_content(story_session, jobs[0]) == content
+
+
 def test_additive_refresh_count_matches_all_saved_memberships(story_session, monkeypatch):
     monkeypatch.setattr(build_threads, 'calculate_importance_v2', lambda _: {
         'importance': 5, 'velocity': 0, 'sentiment_shift': 0})
