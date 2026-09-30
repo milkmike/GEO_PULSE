@@ -46,6 +46,8 @@ def test_queue_failure_is_not_counted_as_success(monkeypatch):
     "Russland greift Kyjiw an", "روسيا توقع اتفاقية جديدة", "俄罗斯与阿塞拜疆签署协议",
     "Rusia firma un acuerdo", "La Russie signe un accord", "Rusya yeni anlaşma imzaladı",
     "Rússia assina acordo", "ロシアが協定に署名", "러시아 정상 회담", "Росія підписала угоду",
+    "Rossiya bilan muzokaralar boshlandi",
+    "Atacuri aeriene ruseşti la Kiev", "Atacuri aeriene rusești la Kiev",
 ])
 def test_multilingual_russia_is_not_dropped(title):
     assert is_relevant(title)

@@ -6,7 +6,7 @@ RUSSIA_KEYWORDS = re.compile(
     r"Росси|Росі|Путин|Москв|Кремл|"
     r"\b(?:ОДКБ|ЕАЭС|ШОС|СНГ|CSTO|EAEU|SCO|CIS)\b|"
     r"\b(?:Russia\w*|Russland\w*|russisch\w*|Rusia\w*|"
-    r"Russie|russe\w*|Rússia|Rusya|Rusiya|Rosja|Rosji|Rosją|Rosję|"
+    r"Russie|russe\w*|rusesc\w*|ruse[șş]t\w*|rusă|Rússia|Rusya|Rusiya|Rossiy\w*|Rosja|Rosji|Rosją|Rosję|"
     r"rosyj\w*|Rusko|Ruska|Venäjä\w*|Ryssland\w*|Putin\w*|Poutine|Kremlin)\b|"
     r"روسيا|روسیه|الروسي|بوتين|"
     r"俄罗斯|俄羅斯|普京|ロシア|プーチン|러시아|푸틴|रूस|"
