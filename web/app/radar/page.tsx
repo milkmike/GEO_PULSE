@@ -3,17 +3,64 @@
 import { Suspense, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { CircleAlert, LoaderCircle, Radar } from "lucide-react";
+import Link from "next/link";
 import SiteHeader from "@/components/SiteHeader";
 import TrendCard from "@/components/TrendCard";
 import { useFeatureFlags } from "@/components/FeatureFlagsProvider";
 import { api } from "@/lib/api";
-import type { RadarContour, RadarFilters, RadarTrend, RadarTrendState } from "@/lib/types";
+import type { RadarCoverage, RadarContour, RadarFilters, RadarTrend, RadarTrendState } from "@/lib/types";
 
 const STATES: Array<["" | RadarTrendState, string]> = [["", "активные состояния"], ["confirmed", "подтверждён"], ["emerging", "зарождается"], ["cooling", "затухает"], ["resolved", "завершён"]];
 const CONTOURS: Array<["" | RadarContour, string]> = [["", "оба контура"], ["media", "медиаконтур"], ["action", "контур действий"]];
 const FILTER_IDS = ["radar-state", "radar-contour", "radar-country"];
 
 function isAbort(reason: unknown) { return reason instanceof DOMException && reason.name === "AbortError"; }
+
+function observationDate(value: string | null): string | null {
+  if (!value || Number.isNaN(new Date(value).getTime())) return null;
+  return new Intl.DateTimeFormat("ru-RU", {
+    day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "UTC",
+  }).format(new Date(value));
+}
+
+function ObservationStatus() {
+  const [coverage, setCoverage] = useState<RadarCoverage | null>(null);
+  const [state, setState] = useState<"loading" | "ready" | "error">("loading");
+  const [reload, setReload] = useState(0);
+  useEffect(() => {
+    const controller = new AbortController();
+    setState("loading");
+    api.radarCoverage(controller.signal).then((payload) => {
+      if (!controller.signal.aborted) { setCoverage(payload); setState("ready"); }
+    }).catch(() => { if (!controller.signal.aborted) setState("error"); });
+    return () => controller.abort();
+  }, [reload]);
+  const summary = coverage?.observation_summary;
+  const latest = observationDate(summary?.latest_observation_at ?? null);
+  const updated = observationDate(coverage?.updated_at ?? null);
+  const stale = summary && (!latest || Date.now() - new Date(summary.latest_observation_at!).getTime() > 72 * 3600000);
+  return (
+    <section aria-label="Наблюдения радара" className="mt-5 border-l-2 border-ru-blue/70 py-1 pl-4 text-sm leading-6 text-dim">
+      <h2 className="text-sm font-medium text-fg">Наблюдения радара</h2>
+      <p className="mt-1 text-xs">Медиаконтур · все страны · сохранённые наблюдения за 30 календарных дней UTC</p>
+      {state === "loading" && <p role="status" className="mt-2">Загружаем сводку наблюдений…</p>}
+      {state === "error" && <div role="alert" className="mt-2"><p>Не удалось загрузить сводку наблюдений.</p><button type="button" onClick={() => setReload((value) => value + 1)} className="min-h-11 text-accent underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-accent">Повторить загрузку сводки</button></div>}
+      {state === "ready" && <>
+        {summary ? <>
+          <div className="mt-2 flex flex-wrap gap-x-6 gap-y-1">
+            <p>Наблюдений за 72 часа: <span className="tnum text-fg">{summary.recent_observation_count}</span></p>
+            <p>Стран за 72 часа: <span className="tnum text-fg">{summary.recent_country_count}</span></p>
+            <p>Дней с наблюдениями: <span className="tnum text-fg">{summary.days_with_observations_30d} из 30</span></p>
+          </div>
+          <p className="mt-2 text-xs">Последние наблюдения: {latest ? `${latest} UTC` : "за 30 дней не найдены"}</p>
+          {stale && <p className="mt-2 text-fg">Нет свежих наблюдений за последние 72 часа.</p>}
+          {summary.days_with_observations_30d < 14 && <p className="mt-2">Истории наблюдений пока недостаточно для устойчивой оценки изменений.</p>}
+        </> : <p className="mt-2">Сводка наблюдений пока недоступна.</p>}
+        {updated && <p className="mt-1 text-xs">Обновление сохранённых трендов: {updated} UTC · по сохранённым трендам</p>}
+      </>}
+    </section>
+  );
+}
 
 function RadarPageContent() {
   const { earlyWarningRadar } = useFeatureFlags();
@@ -113,6 +160,8 @@ function RadarPageContent() {
       <SiteHeader active="/radar" />
       <header className="reveal reveal-1 border-b border-line pb-7 pt-10"><p className="section-num">EARLY WARNING / 01</p><h1 className="display mt-2 text-[40px] leading-none sm:text-[58px]">Радар перемен</h1><p className="mt-5 max-w-3xl text-[15px] leading-7 text-dim">Подтверждённые межстрановые волны и ранние признаки ускорения. Медиа и действия показаны раздельно; пробелы покрытия не скрываются.</p></header>
 
+      <ObservationStatus />
+
       <section aria-label="Фильтры радара" className="my-5 grid gap-2 border-y border-line py-3 sm:grid-cols-[1fr_1fr_1fr_auto]">
         <label className="text-[10px] uppercase tracking-wide text-dim">Состояние<select id="radar-state" value={filters.state ?? ""} onKeyDown={(event) => moveFilterFocus(event, 0)} onChange={(event) => updateFilter("state", event.target.value)} className="mt-1 min-h-11 w-full rounded-md border border-line bg-panel px-3 text-sm text-fg focus-visible:outline-2 focus-visible:outline-accent">{STATES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
         <label className="text-[10px] uppercase tracking-wide text-dim">Контур<select id="radar-contour" value={filters.contour ?? ""} onKeyDown={(event) => moveFilterFocus(event, 1)} onChange={(event) => updateFilter("contour", event.target.value)} className="mt-1 min-h-11 w-full rounded-md border border-line bg-panel px-3 text-sm text-fg focus-visible:outline-2 focus-visible:outline-accent">{CONTOURS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
@@ -123,8 +172,9 @@ function RadarPageContent() {
       {state === "loading" && <p role="status" className="flex items-center justify-center gap-2 py-16 text-sm text-dim"><LoaderCircle size={18} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />сверяем сохранённые тренды…</p>}
       {state === "error" && <div role="alert" className="border-y border-ru-red/40 py-12 text-center"><CircleAlert size={20} className="mx-auto mb-3 text-ru-red" aria-hidden="true" /><p className="text-sm text-dim">Не удалось загрузить радар.</p><button type="button" onClick={() => setReload((value) => value + 1)} className="mt-3 min-h-11 text-accent underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">повторить</button></div>}
       {state === "ready" && items.length === 0 && <div className="border-y border-line py-14 text-center">
-        <h2 className="display text-2xl text-fg">Сейчас нет трендов, прошедших проверку</h2>
-        <p className="mx-auto mt-3 max-w-2xl text-sm leading-6 text-dim">Радар покажет изменение, когда оно появится минимум в двух странах, получит измеримое ускорение и проверяемые материалы. Статические годовые показатели сюда не попадают.</p>
+        <h2 className="display text-2xl text-fg">Нет подтверждённых изменений по выбранным фильтрам</h2>
+        <p className="mx-auto mt-3 max-w-2xl text-sm leading-6 text-dim">Радар покажет изменение, когда оно появится минимум в двух странах, получит измеримое ускорение и проверяемые материалы. Отсутствие подтверждённых изменений не означает отсутствия событий.</p>
+        <div className="mt-4 flex flex-wrap justify-center gap-x-6 gap-y-2 text-sm"><Link href="/search" className="min-h-11 content-center text-accent underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-accent">Свежие публикации</Link><Link href="/stories" className="min-h-11 content-center text-accent underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-accent">Новостные повестки</Link></div>
       </div>}
       {state === "ready" && items.length > 0 && <section aria-label="Тренды радара" className="divide-y divide-line border-y border-line">{items.map((trend) => <TrendCard key={trend.public_id} trend={trend} />)}</section>}
       {state === "ready" && loadMoreError && <div role="alert" className="mt-4 border-l-2 border-ru-red px-4 py-2 text-xs text-dim">Следующую страницу трендов загрузить не удалось. <button type="button" onClick={loadMore} className="ml-1 min-h-11 text-accent underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent sm:min-h-0">повторить</button></div>}

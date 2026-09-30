@@ -30,7 +30,7 @@ _STATES = frozenset({"candidate", "emerging", "confirmed", "cooling", "resolved"
 _PUBLIC_FILTER_STATES = frozenset({"emerging", "confirmed", "cooling", "resolved"})
 _CONTOURS = frozenset({"media", "action"})
 _STATE_RANK = {"confirmed": 0, "emerging": 1, "cooling": 2, "candidate": 3, "resolved": 4, "rejected": 5}
-RADAR_METHODOLOGY_UPDATED_AT = datetime(2026, 7, 18, tzinfo=timezone.utc)
+RADAR_METHODOLOGY_UPDATED_AT = datetime(2026, 9, 30, tzinfo=timezone.utc)
 _BIGINT_MAX = 2**63 - 1
 _INTEGER_MAX = 2**31 - 1
 _PUBLIC_EVIDENCE_PREDICATE = (
@@ -709,8 +709,25 @@ class SqlRadarReadService:
                 FROM radar_trends WHERE scope = 'country'
                 ORDER BY country_code, updated_at DESC, id DESC
             """)).fetchall()
+            observation_rows = session.execute(text("""
+                SELECT MAX(observed_at) AS latest_observation_at,
+                       COUNT(*) FILTER (WHERE observed_at >= now() - interval '72 hours') AS recent_observation_count,
+                       COUNT(DISTINCT country_code) FILTER (WHERE observed_at >= now() - interval '72 hours') AS recent_country_count,
+                       COUNT(DISTINCT (observed_at AT TIME ZONE 'UTC')::date) AS days_with_observations_30d
+                FROM radar_observations
+                WHERE contour = 'media'
+                  AND observed_at >= ((date_trunc('day', now() AT TIME ZONE 'UTC') - interval '29 days') AT TIME ZONE 'UTC')
+                  AND observed_at <= now()
+            """)).fetchall()
+        observation = observation_rows[0] if observation_rows else {}
+        summary = {
+            "latest_observation_at": _value(observation, "latest_observation_at"),
+            **{field: int(_value(observation, field, 0) or 0) for field in (
+                "recent_observation_count", "recent_country_count", "days_with_observations_30d"
+            )},
+        }
         updated = max((_value(row, "updated_at") for row in rows if _value(row, "updated_at") is not None), default=None)
-        return {"updated_at": updated, "countries": rows}
+        return {"updated_at": updated, "countries": rows, "observation_summary": summary}
 
 
 def get_radar_service() -> RadarReadService:
@@ -797,7 +814,16 @@ def get_radar_coverage(service: RadarReadService = Depends(get_radar_service)):
     for item in payload.get("countries", []):
         confidence = _number(_value(item, "coverage_confidence")) or 0.0
         countries.append({"country_code": _value(item, "country_code"), "coverage_confidence": confidence, "state": "critical" if confidence <= 0.5 else "degraded" if confidence < 0.75 else "healthy", "blind_spots": sanitize_persisted_json(_json_object(_value(item, "blind_spots"), []))})
-    return {"updated_at": _as_iso(payload.get("updated_at")), "coverage_source": "temporary trend-derived proxy; not collection-health snapshots", "countries": countries}
+    result = {"updated_at": _as_iso(payload.get("updated_at")), "coverage_source": "temporary trend-derived proxy; not collection-health snapshots", "countries": countries}
+    if isinstance(payload.get("observation_summary"), dict):
+        summary = payload["observation_summary"]
+        result["observation_summary"] = {
+            "latest_observation_at": _as_iso(summary.get("latest_observation_at")),
+            **{field: int(summary.get(field) or 0) for field in (
+                "recent_observation_count", "recent_country_count", "days_with_observations_30d"
+            )},
+        }
+    return result
 
 
 def radar_methodology_payload() -> dict[str, Any]:
@@ -812,7 +838,7 @@ def radar_methodology_payload() -> dict[str, Any]:
         "coverage_hard_gate": "coverage_confidence <= 0.5 suppresses confirmation while retaining the candidate",
         "action_independence": "analysis.action_level is media classification and never independently confirms action evidence",
         "evidence_roles": ["trigger", "support", "context", "contradiction"],
-        "limitations": ["Radar reads only persisted observations and trends.", "Coverage is a temporary trend-derived proxy, not collection-health snapshots.", "Insufficient action evidence remains explicitly insufficient.", "Critical collection gaps can suppress confirmation."],
+        "limitations": ["Radar reads only persisted observations and trends.", "Media silence requires at least 90% classified eligible daily articles and healthy publisher breadth; missing processing is not a zero.", "Media days before the first known topic observation remain unknown.", "Acceleration requires seven known recent days and at least seven known earlier days; gaps suppress the estimate.", "Coverage is a temporary trend-derived proxy, not collection-health snapshots.", "Insufficient action evidence remains explicitly insufficient.", "Critical collection gaps can suppress confirmation."],
     }
 
 

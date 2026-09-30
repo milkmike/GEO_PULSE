@@ -735,6 +735,9 @@ CREATE INDEX IF NOT EXISTS idx_radar_observations_country_time
   ON radar_observations(country_code, observed_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_radar_observations_subject_time
   ON radar_observations(subject_key, observed_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_radar_observations_media_time
+  ON radar_observations(observed_at DESC) INCLUDE (country_code)
+  WHERE contour = 'media';
 
 CREATE TABLE IF NOT EXISTS action_events (
   id BIGSERIAL PRIMARY KEY,

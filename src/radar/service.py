@@ -148,22 +148,44 @@ WHERE contour = 'action'
 
 _MEDIA_COLLECTION_HEALTH = text("""
 /* radar_media_collection_health */
-SELECT article.id AS article_id,
-       fact.country_code,
-       (date_trunc('day', article.published_at AT TIME ZONE 'UTC')
-         AT TIME ZONE 'UTC') AS healthy_day,
-       publisher.id AS publisher_id,
+WITH eligible_articles AS MATERIALIZED (
+  SELECT article.id AS article_id, fact.country_code,
+         (date_trunc('day', article.published_at AT TIME ZONE 'UTC')
+           AT TIME ZONE 'UTC') AS healthy_day,
+         fact.id AS publisher_id
+  FROM articles article
+  JOIN article_country_facts fact ON fact.article_id = article.id
+  WHERE article.is_duplicate = FALSE
+    AND article.is_backfill = FALSE
+    AND article.collected_at <= article.published_at + INTERVAL '24 hours'
+    AND article.collected_at < :collection_cutoff
+    AND article.published_at >= :window_start
+    AND article.published_at < :window_end
+), processed_days AS MATERIALIZED (
+  SELECT eligible.country_code, eligible.healthy_day
+  FROM eligible_articles eligible
+  LEFT JOIN analysis ON analysis.article_id = eligible.article_id
+  GROUP BY eligible.country_code, eligible.healthy_day
+  -- Operational completeness, not model accuracy: at least 90% must have a
+  -- usable classification available before the common historical replay cutoff.
+  HAVING COUNT(*) FILTER (
+    WHERE analysis.analyzed_at < :collection_cutoff
+      AND (analysis.is_relevant IS FALSE
+        OR (analysis.is_relevant IS TRUE
+          AND (NULLIF(BTRIM(analysis.event_key), '') IS NOT NULL
+            OR EXISTS (SELECT 1 FROM unnest(analysis.topics) AS topic(value)
+                       WHERE NULLIF(BTRIM(topic.value), '') IS NOT NULL))))
+  ) * 10 >= COUNT(*) * 9
+), daily_publishers AS MATERIALIZED (
+  SELECT DISTINCT eligible.country_code, eligible.healthy_day, eligible.publisher_id
+  FROM eligible_articles eligible
+  JOIN processed_days processed USING (country_code, healthy_day)
+)
+SELECT daily.country_code, daily.healthy_day, daily.publisher_id,
        publisher.url AS publisher_url,
        publisher.config AS publisher_config
-FROM articles article
-JOIN article_country_facts fact ON fact.article_id = article.id
-JOIN sources publisher ON publisher.id = fact.id
-WHERE article.is_duplicate = FALSE
-  AND article.is_backfill = FALSE
-  AND article.collected_at <= article.published_at + INTERVAL '24 hours'
-  AND article.collected_at < :window_end
-  AND article.published_at >= :window_start
-  AND article.published_at < :window_end
+FROM daily_publishers daily
+JOIN sources publisher ON publisher.id = daily.publisher_id
 """)
 
 _PROTECTED_COUNTS = text("""
@@ -412,17 +434,31 @@ def _media_collection_health(
 
     A non-empty day is not automatically healthy: it must retain at least 75%
     of the country's first-60-day upper-quartile source and publisher-family
-    breadth.  This deliberately freezes lifecycle cooling when collection is
-    partial.  Fetch status is not used because only the latest status is stored
-    today and applying it retrospectively would leak future state into replay.
+    breadth. The day must also have usable analysis for at least 90% of its
+    eligible articles before the replay cutoff. This operational completeness
+    bound is not model accuracy: collector or analysis outages cannot establish
+    quiet topic days. Fetch status is not used because only its latest state is
+    stored; applying that retrospectively would leak future state into replay.
     """
 
     if _store(session) is not None:
         return {}
-    rows = session.execute(_MEDIA_COLLECTION_HEALTH, {
-        "window_start": window.start,
-        "window_end": window.end,
-    }).fetchall()
+    rows: list[Any] = []
+    batch_start = window.start
+    while batch_start < window.end:
+        # UTC day boundaries keep each processing denominator in one query.
+        # Ninety days need at most 13 queries, each covering at most seven days.
+        batch_end = min(
+            _utc(batch_start).replace(hour=0, minute=0, second=0, microsecond=0)
+            + timedelta(days=7),
+            window.end,
+        )
+        rows.extend(session.execute(_MEDIA_COLLECTION_HEALTH, {
+            "window_start": batch_start,
+            "window_end": batch_end,
+            "collection_cutoff": window.end,
+        }).fetchall())
+        batch_start = batch_end
     grouped: dict[tuple[str, int], list[Any]] = defaultdict(list)
     for row in rows:
         country = str(_row_value(row, "country_code", "")).upper()
@@ -618,12 +654,25 @@ def _daily_points_for_wave(
         if index is not None:
             grouped[index].append(observation)
 
+    # Collection breadth cannot prove a topic was previously absent. Keep
+    # pre-wave media buckets unknown until there is actual observation history.
+    # An older retained first_observed_at still permits zeros across this window.
+    first_media_bucket = None
+    if wave.contour is Contour.MEDIA:
+        first_known = min((
+            _utc(wave.first_observed_at),
+            *(_utc(point.observed_at) for point in wave.observations),
+        ))
+        first_media_bucket = (first_known - window_start) // timedelta(days=1)
+
     active_indices = sorted(grouped)
     points: list[DailyPoint] = []
     for index in sorted(healthy_buckets | set(grouped)):
         members = grouped.get(index, ())
         at = window_start + timedelta(days=index)
         if not members:
+            if first_media_bucket is not None and index < first_media_bucket:
+                continue
             points.append(DailyPoint(
                 at=at,
                 volume=0.0,
@@ -808,6 +857,13 @@ def _historical_timeline(wave: CountryWave, as_of: datetime) -> tuple[datetime |
 
 
 def _baseline_velocity(baseline: BaselineResult) -> float:
+    recent_points = baseline.dense_points[-baseline.acceleration_days:]
+    prior_points = baseline.dense_points[:-baseline.acceleration_days]
+    # Unknown days cannot establish either acceleration or a quiet decline.
+    if any(point is None for point in recent_points) or sum(
+        point is not None for point in prior_points
+    ) < 7:
+        return 0.0
     deltas = []
     for recent, historical in (
         (baseline.acceleration_volume, baseline.baseline_volume),
@@ -1942,8 +1998,9 @@ def run_radar_cycle(
     )
     cycle_waves = (*assignments.waves, *unmatched_previous)
     healthy_buckets = _healthy_collection_buckets(observations, as_of)
-    health_window = generation_window if incremental else window
-    for country, buckets in _media_collection_health(session, health_window).items():
+    # Health needs the first 60 buckets as a reference, even when only the
+    # latest observations are regenerated. Missing health is not healthy silence.
+    for country, buckets in _media_collection_health(session, window).items():
         healthy_buckets.setdefault((country, Contour.MEDIA), set()).update(buckets)
     scored_waves = tuple(
         _analyze_wave(

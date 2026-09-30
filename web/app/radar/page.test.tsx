@@ -14,7 +14,7 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(navigation.query),
 }));
 
-const apiMocks = vi.hoisted(() => ({ radar: vi.fn() }));
+const apiMocks = vi.hoisted(() => ({ radar: vi.fn(), radarCoverage: vi.fn() }));
 vi.mock("@/lib/api", () => ({ api: apiMocks }));
 vi.mock("@/components/SiteHeader", () => ({ default: () => <nav>header</nav> }));
 
@@ -62,7 +62,58 @@ describe("Radar list page", () => {
   beforeEach(() => {
     navigation.query = "";
     navigation.replace.mockReset();
+    apiMocks.radarCoverage.mockReset().mockResolvedValue({ updated_at: null, countries: [], coverage_source: "trend-derived" });
     apiMocks.radar.mockReset().mockResolvedValue({ items: [baseTrend], limit: 25, next_cursor: null });
+  });
+
+  it("shows observation readiness independently of an empty filtered result", async () => {
+    apiMocks.radar.mockResolvedValue({ items: [], limit: 25, next_cursor: null });
+    apiMocks.radarCoverage.mockResolvedValue({ updated_at: "2026-08-20T10:00:00Z", countries: [], coverage_source: "trend-derived",
+      observation_summary: { latest_observation_at: new Date().toISOString(), recent_observation_count: 82, recent_country_count: 11, days_with_observations_30d: 2 } });
+    renderPage();
+    const status = await screen.findByRole("region", { name: "Наблюдения радара" });
+    await waitFor(() => expect(status).toHaveTextContent("Наблюдений за 72 часа: 82"));
+    expect(status).toHaveTextContent("Стран за 72 часа: 11");
+    expect(status).toHaveTextContent("Дней с наблюдениями: 2 из 30");
+    expect(status).toHaveTextContent("Истории наблюдений пока недостаточно для устойчивой оценки изменений");
+    expect(status).toHaveTextContent("Обновление сохранённых трендов");
+    expect(status).toHaveTextContent("Последние наблюдения");
+    expect(status).not.toHaveTextContent("Нет свежих наблюдений");
+    expect(await screen.findByRole("heading", { name: /нет подтверждённых изменений/i })).toBeVisible();
+    expect(screen.getByRole("link", { name: "Свежие публикации" })).toHaveAttribute("href", "/search");
+    expect(screen.getByRole("link", { name: "Новостные повестки" })).toHaveAttribute("href", "/stories");
+  });
+
+  it("flags stale observations even when a trend calculation is recent", async () => {
+    apiMocks.radarCoverage.mockResolvedValue({ updated_at: new Date().toISOString(), countries: [], coverage_source: "trend-derived",
+      observation_summary: { latest_observation_at: new Date(Date.now() - 96 * 3600000).toISOString(), recent_observation_count: 0, recent_country_count: 0, days_with_observations_30d: 18 } });
+    renderPage();
+    expect(await screen.findByText(/Нет свежих наблюдений/)).toBeVisible();
+    expect(screen.queryByText(/Истории наблюдений пока недостаточно/)).not.toBeInTheDocument();
+    expect(await screen.findByText(baseTrend.thesis)).toBeVisible();
+  });
+
+  it("retries coverage alone while retaining the trend list and aborts on unmount", async () => {
+    apiMocks.radarCoverage.mockRejectedValueOnce(new Error("coverage unavailable"));
+    const user = userEvent.setup();
+    const { unmount } = renderPage();
+    expect(await screen.findByText(baseTrend.thesis)).toBeVisible();
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Не удалось загрузить сводку наблюдений");
+    apiMocks.radarCoverage.mockReturnValueOnce(new Promise(() => {}));
+    await user.click(within(alert).getByRole("button", { name: /повторить/i }));
+    expect(screen.getByText(baseTrend.thesis)).toBeVisible();
+    expect(apiMocks.radar).toHaveBeenCalledOnce();
+    const signal = apiMocks.radarCoverage.mock.calls[1][0] as AbortSignal;
+    unmount();
+    expect(signal.aborted).toBe(true);
+  });
+
+  it("does not turn missing summary data into zero observations", async () => {
+    renderPage();
+    expect(await screen.findByText("Сводка наблюдений пока недоступна.")).toBeVisible();
+    expect(screen.queryByText(/Наблюдений за 72 часа: 0/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Нет свежих наблюдений/)).not.toBeInTheDocument();
   });
 
   it("does not expose internal candidate or rejected states as public filters", async () => {
@@ -78,6 +129,7 @@ describe("Radar list page", () => {
     renderPage({ ...enabled, earlyWarningRadar: false });
     expect(screen.getByText(/раздел раннего предупреждения отключён/i)).toBeVisible();
     expect(apiMocks.radar).not.toHaveBeenCalled();
+    expect(apiMocks.radarCoverage).not.toHaveBeenCalled();
   });
 
   it("loads URL-backed filters and aborts its request on replacement", async () => {
@@ -148,7 +200,7 @@ describe("Radar list page", () => {
     apiMocks.radar.mockResolvedValueOnce({ items: [], limit: 25, next_cursor: null });
     const user = userEvent.setup();
     const { unmount } = renderPage();
-    expect(await screen.findByText(/сейчас нет трендов, прошедших проверку/i)).toBeVisible();
+    expect(await screen.findByText(/нет подтверждённых изменений по выбранным фильтрам/i)).toBeVisible();
     expect(screen.getByText(/минимум в двух странах/i)).toBeVisible();
     await user.selectOptions(screen.getByLabelText(/состояние/i), "confirmed");
     expect(navigation.replace).toHaveBeenCalledWith("/radar?state=confirmed");

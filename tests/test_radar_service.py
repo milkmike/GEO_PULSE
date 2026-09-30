@@ -846,10 +846,10 @@ def test_independent_media_health_uses_verified_non_duplicate_country_articles()
     assert "is_duplicate = FALSE" in session.sql
     assert "is_backfill = FALSE" in session.sql
     assert "collected_at <= article.published_at + INTERVAL '24 hours'" in session.sql
-    assert "article.collected_at < :window_end" in session.sql
+    assert "article.collected_at < :collection_cutoff" in session.sql
     assert "AT TIME ZONE 'UTC'" in session.sql
-    assert "analysis" not in session.sql
-    assert "is_relevant" not in session.sql
+    assert "analysis" in session.sql
+    assert "is_relevant" in session.sql
 
 
 @pytest.mark.parametrize(
@@ -1750,3 +1750,349 @@ def test_contour_matching_uses_wave_key_for_stable_equal_gap_ties():
     pairs = match_contour_episodes([(1, media)], [(2, earlier), (3, later)])
 
     assert [(media_id, action_id) for media_id, _, action_id, _ in pairs] == [(1, 3)]
+
+
+def test_incremental_health_keeps_historical_zeros_and_full_cycle_velocity(monkeypatch):
+    """An existing wave keeps its actual history when only new days regenerate."""
+    import src.radar.service as service
+
+    start = AS_OF - timedelta(days=90)
+    articles = [
+        _media_point(start + timedelta(days=day), value=0.8, article_id=day + 1)
+        for day in (0, 14, 28, 42, 56, 70, 84, 87, 88, 89)
+    ]
+    generated_windows = []
+    health_windows = []
+
+    def media(_session, window):
+        generated_windows.append(window)
+        return [point for point in articles if window.start <= point.observed_at < window.end]
+
+    class HealthSession(_RecordingSqlSession):
+        def execute(self, statement, params=None):
+            if 'radar_observation_history' in str(statement):
+                return _Result(rows=[point for point in articles
+                    if params['history_start'] <= point.observed_at < AS_OF-timedelta(days=3)])
+            if 'radar_media_collection_health' not in str(statement):
+                return super().execute(statement, params)
+            health_windows.append((params['window_start'], params['window_end'], params['collection_cutoff']))
+            return _Result(rows=[
+                {
+                    'country_code': 'ES', 'healthy_day': start + timedelta(days=day),
+                    'publisher_id': publisher,
+                    'publisher_url': f'https://publisher-{publisher}.example/rss',
+                    'publisher_config': {},
+                }
+                for day in range(90) if day != 80
+                for publisher in (1, 2)
+                if params['window_start'] <= start + timedelta(days=day) < params['window_end']
+            ])
+
+    monkeypatch.setattr(service, 'build_media_observations', media)
+    monkeypatch.setattr(service, 'build_action_observations', lambda *_: [])
+    full = service.run_radar_cycle(HealthSession(), AS_OF, shadow=True)
+    incremental = service.run_radar_cycle(HealthSession(), AS_OF, shadow=True, generation_days=3)
+    [complete_wave] = full.country_waves
+    [incremental_wave] = incremental.country_waves
+
+    assert generated_windows[1].start == AS_OF - timedelta(days=3)
+    expected_batches = [(start+timedelta(days=offset),
+                         min(start+timedelta(days=offset+7), AS_OF), AS_OF)
+                        for offset in range(0, 90, 7)]
+    assert health_windows == expected_batches * 2
+    assert incremental_wave.observations == complete_wave.observations
+    assert incremental_wave.first_observed_at == start
+    assert incremental_wave.baseline.dense_points[0] is not None
+    assert incremental_wave.baseline.dense_points[0].volume == 1
+    assert incremental_wave.baseline.dense_points[1].volume == 0
+    assert incremental_wave.baseline.dense_points[80] is None
+    assert incremental_wave.baseline.valid_days == complete_wave.baseline.valid_days == 89
+    assert incremental_wave.baseline.missing_days == complete_wave.baseline.missing_days == 1
+    assert incremental_wave.baseline.baseline_volume == pytest.approx(10 / 89)
+    assert incremental_wave.baseline.acceleration_volume == pytest.approx(4 / 7)
+    assert incremental_wave.velocity == pytest.approx(0.9 * (4 / 7 - 10 / 89))
+    assert incremental_wave.baseline == complete_wave.baseline
+    assert incremental_wave.velocity == complete_wave.velocity
+
+
+@pytest.fixture
+def media_health_database():
+    import os
+    from sqlalchemy import create_engine, text
+
+    url = os.getenv('GEO_PULSE_TEST_DATABASE_URL')
+    if not url:
+        pytest.skip('GEO_PULSE_TEST_DATABASE_URL required for PostgreSQL health query test')
+    engine = create_engine(url)
+    try:
+        with engine.connect() as connection:
+            connection.execute(text("SET LOCAL TIME ZONE 'Pacific/Honolulu'"))
+            connection.execute(text("""
+                CREATE TEMP TABLE sources (
+                    id INTEGER PRIMARY KEY, country_code TEXT, url TEXT, config JSONB
+                );
+                CREATE TEMP TABLE articles (
+                    id INTEGER PRIMARY KEY, source_id INTEGER, publisher_source_id INTEGER,
+                    geo_status TEXT DEFAULT 'source_verified',
+                    published_at TIMESTAMPTZ, collected_at TIMESTAMPTZ,
+                    is_duplicate BOOLEAN DEFAULT FALSE, is_backfill BOOLEAN DEFAULT FALSE
+                );
+                CREATE TEMP TABLE analysis (
+                    article_id INTEGER PRIMARY KEY, is_relevant BOOLEAN,
+                    event_key TEXT, topics TEXT[], analyzed_at TIMESTAMPTZ
+                );
+                CREATE TEMP VIEW article_country_facts AS
+                SELECT article.id AS article_id, publisher.id, publisher.country_code
+                FROM articles article
+                JOIN sources discovery ON discovery.id=article.source_id
+                JOIN sources publisher ON publisher.id=CASE
+                    WHEN COALESCE(discovery.config->>'feed_mode','publisher')='publisher_discovery'
+                    THEN article.publisher_source_id
+                    ELSE COALESCE(article.publisher_source_id,article.source_id) END
+                WHERE article.geo_status IN ('source_verified','publisher_verified','publisher_reassigned')
+                  AND (COALESCE(discovery.config->>'feed_mode','publisher')<>'publisher_discovery'
+                       OR article.publisher_source_id IS NOT NULL);
+                INSERT INTO sources VALUES
+                    (1,'ES','https://diario.example/rss','{}'),
+                    (2,'ES','https://radio.example/rss','{}'),
+                    (9,'ZZ','https://discovery.example/rss','{"feed_mode":"publisher_discovery"}');
+            """))
+            yield connection
+    finally:
+        engine.dispose()
+
+
+def test_media_health_sql_deduplicates_publisher_days_and_preserves_filters(media_health_database):
+    from sqlalchemy import text
+    import src.radar.service as service
+
+    connection = media_health_database
+    start = AS_OF - timedelta(days=90)
+    rows = []
+    for day in (0, 89):
+        for publisher in (1, 2):
+            for hour in (0, 12, 23):
+                at = start + timedelta(days=day, hours=hour)
+                rows.append(dict(id=len(rows)+1, source_id=publisher,
+                    publisher_source_id=None, geo_status='source_verified',
+                    published_at=at, collected_at=at, is_duplicate=False, is_backfill=False))
+    valid_discovery = dict(rows[0], id=100, source_id=9, publisher_source_id=1,
+                           geo_status='publisher_verified')
+    rows.append(valid_discovery)
+    for offset, change in enumerate((
+        {'is_duplicate': True}, {'is_backfill': True},
+        {'collected_at': start + timedelta(days=13, hours=1)},
+        {'geo_status': 'unverified'}, {'source_id': 9},
+        {'published_at': start-timedelta(seconds=1)},
+        {'published_at': AS_OF},
+        {'published_at': AS_OF-timedelta(hours=12), 'collected_at': AS_OF},
+    ), start=10):
+        at = start + timedelta(days=offset)
+        rows.append(dict(rows[0], id=100+offset, published_at=at,
+                         collected_at=at) | change)
+    connection.execute(text('''
+        INSERT INTO articles(id,source_id,publisher_source_id,geo_status,published_at,
+                             collected_at,is_duplicate,is_backfill)
+        VALUES(:id,:source_id,:publisher_source_id,:geo_status,:published_at,
+               :collected_at,:is_duplicate,:is_backfill)
+    '''), rows)
+    connection.execute(text('INSERT INTO analysis(article_id,is_relevant,analyzed_at) SELECT id,false,:at FROM articles'), {'at': AS_OF-timedelta(seconds=1)})
+    params = {'window_start': start, 'window_end': AS_OF, 'collection_cutoff': AS_OF}
+    result = connection.execute(service._MEDIA_COLLECTION_HEALTH, params).mappings().all()
+    assert len(result) == 4
+    assert {(row['country_code'], row['healthy_day'].astimezone(timezone.utc), row['publisher_id'])
+            for row in result} == {('ES', start+timedelta(days=day), publisher)
+                                  for day in (0, 89) for publisher in (1, 2)}
+    assert {row['publisher_url'] for row in result} == {
+        'https://diario.example/rss', 'https://radio.example/rss'}
+    assert service._media_collection_health(connection, ObservationWindow(start, AS_OF)) == {'ES': {0, 89}}
+    # An article can be timely yet collected after its publication batch.
+    # The historical replay cutoff must remain AS_OF for every batch.
+    connection.execute(text("""
+        INSERT INTO articles(id,source_id,published_at,collected_at)
+        VALUES(200,1,:published,:collected),(201,2,:published,:collected)
+    """), {'published': start+timedelta(days=6, hours=23),
+             'collected': start+timedelta(days=7, hours=1)})
+    connection.execute(text('INSERT INTO analysis(article_id,is_relevant,analyzed_at) SELECT id,false,:at FROM articles WHERE id IN (200,201)'), {'at': AS_OF-timedelta(seconds=1)})
+    first_week = connection.execute(service._MEDIA_COLLECTION_HEALTH,
+        params | {'window_end': start+timedelta(days=7)}).mappings().all()
+    assert len(first_week) == 4
+    assert {row['healthy_day'].astimezone(timezone.utc) for row in first_week} == {
+        start, start+timedelta(days=6)}
+    assert service._media_collection_health(connection, ObservationWindow(start, AS_OF)) == {'ES': {0, 6, 89}}
+
+
+@pytest.mark.parametrize(('prior_days', 'recent_values', 'expected'), [
+    (7, (None, None, None, None, None, 0, 0), 0),
+    (7, (0, 0, 0, 0, 0, 0, 0), -1),
+    (6, (0, 0, 0, 0, 0, 0, 0), 0),
+    (7, (8, 8, 8, 8, 8, 8, 8), 1 / 3),
+], ids=['incomplete-recent-history', 'known-decline', 'insufficient-prior-history', 'known-growth'])
+def test_velocity_requires_complete_recent_week_and_seven_known_prior_days(
+    prior_days, recent_values, expected,
+):
+    from src.radar.baseline import calculate_baseline
+    from src.radar.service import _baseline_velocity
+    from src.radar.types import DailyPoint
+
+    # Older positive evidence and recent quiet days must not hide an outage.
+    points = [DailyPoint(AS_OF-timedelta(days=40+day), volume=4)
+              for day in range(prior_days)]
+    points.extend(DailyPoint(AS_OF-timedelta(days=7-day), volume=value)
+                  for day, value in enumerate(recent_values) if value is not None)
+    baseline = calculate_baseline(points, AS_OF, coverage=1)
+
+    assert _baseline_velocity(baseline) == pytest.approx(expected)
+
+
+def test_new_media_wave_has_no_invented_zeros_or_acceleration_before_first_observation():
+    import src.radar.service as service
+
+    points = tuple(_media_point(AS_OF-timedelta(days=day), value=0.8, article_id=day)
+                   for day in (3, 2, 1))
+    wave = CountryWave('ES', Contour.MEDIA, 'event:energy', 'negative', points,
+                       points[0].observed_at, None, state=TrendState.CANDIDATE)
+    analyzed = service._analyze_wave(wave, AS_OF, set(range(90)))
+
+    assert analyzed.baseline.dense_points[:87] == (None,) * 87
+    assert analyzed.baseline.valid_days == 3
+    assert analyzed.baseline.missing_days == 87
+    assert analyzed.baseline.baseline_volume == analyzed.baseline.acceleration_volume == 1
+    assert analyzed.velocity == 0
+
+
+def test_media_wave_started_before_retained_window_keeps_healthy_quiet_days():
+    import src.radar.service as service
+
+    point = _media_point(AS_OF-timedelta(days=1))
+    wave = CountryWave('ES', Contour.MEDIA, 'event:energy', 'negative', (point,),
+                       AS_OF-timedelta(days=100), None)
+    points = service._daily_points_for_wave(wave, AS_OF, set(range(90)))
+
+    assert len(points) == 90
+    assert points[0].at == AS_OF-timedelta(days=90)
+    assert points[0].volume == 0
+    assert points[-1].volume == 1
+
+
+def test_media_cold_start_guard_does_not_change_action_zero_filling():
+    import src.radar.service as service
+
+    point = make_observation(country_code='ES', contour='action',
+        subject_key='economy:trade:russia', direction='increase', metric='trade_change',
+        observed_at=AS_OF-timedelta(days=1), evidence_ids=('trade:1',),
+        value=20, authority='registry', source_count=1, coverage_confidence=1)
+    wave = CountryWave('ES', Contour.ACTION, point.subject_key, point.direction,
+                       (point,), point.observed_at, None)
+    points = service._daily_points_for_wave(wave, AS_OF, set(range(90)))
+
+    assert len(points) == 90
+    assert points[0].volume == 0
+    assert points[-1].volume == 20
+
+
+def test_media_health_batches_dates_but_combines_all_reference_breadth():
+    import src.radar.service as service
+
+    start = AS_OF-timedelta(days=90)
+    calls = []
+
+    class HealthSession:
+        def execute(self, statement, params):
+            calls.append(dict(params))
+            assert params['window_end']-params['window_start'] <= timedelta(days=7)
+            assert params['collection_cutoff'] == AS_OF
+            return _Result(rows=[{
+                'country_code': 'ES', 'healthy_day': start+timedelta(days=day),
+                'publisher_id': publisher, 'publisher_config': {},
+                'publisher_url': f'https://publisher-{publisher}.example/rss',
+            } for day, count in ((0, 2), (8, 2), (56, 4), (57, 4), (58, 4), (89, 3))
+              for publisher in range(1, count+1)
+              if params['window_start'] <= start+timedelta(days=day) < params['window_end']])
+
+    health = service._media_collection_health(HealthSession(), ObservationWindow(start, AS_OF))
+
+    assert health == {'ES': {56, 57, 58, 89}}
+    assert len(calls) == 13
+    assert calls[0]['window_start'] == start
+    assert calls[-1]['window_end'] == AS_OF
+    assert all(previous['window_end'] == following['window_start']
+               for previous, following in zip(calls, calls[1:]))
+
+
+@pytest.mark.parametrize('processing,healthy', [
+    ('missing', False), ('late', False), ('placeholder', False),
+    ('relevant_without_topic', False), ('irrelevant', True),
+    ('relevant_event', True), ('relevant_topic', True),
+    ('89_percent', False), ('90_percent', True),
+])
+def test_media_health_requires_completed_analysis_before_replay_cutoff(media_health_database, processing, healthy):
+    from sqlalchemy import text
+    import src.radar.service as service
+
+    connection = media_health_database
+    start = AS_OF-timedelta(days=90)
+    articles = [{'id': i+1, 'source_id': 1+i%2,
+                 'at': start if i < 4 else AS_OF-timedelta(days=1)} for i in range(104)]
+    connection.execute(text("""
+        INSERT INTO articles(id,source_id,published_at,collected_at)
+        VALUES(:id,:source_id,:at,:at)
+    """), articles)
+    analyses = []
+    for row in articles:
+        historic = row['id'] <= 4
+        if not historic and processing == 'missing':
+            continue
+        is_relevant, event_key, topics = False, None, []
+        analyzed_at = AS_OF-timedelta(seconds=1)
+        if not historic:
+            if processing == 'late':
+                analyzed_at = AS_OF
+            elif processing == 'placeholder':
+                is_relevant = None
+            elif processing == 'relevant_without_topic':
+                is_relevant, event_key, topics = True, ' ', ['', ' ', None]
+            elif processing == 'relevant_event':
+                is_relevant, event_key = True, 'energy:imports'
+            elif processing == 'relevant_topic':
+                is_relevant, topics = True, ['energy']
+            elif processing in ('89_percent', '90_percent'):
+                completed = 89 if processing == '89_percent' else 90
+                if row['id']-4 > completed:
+                    is_relevant = None
+                elif row['id'] % 2:
+                    is_relevant, topics = True, ['energy']
+        analyses.append({'id': row['id'], 'relevant': is_relevant, 'event': event_key,
+                         'topics': topics, 'at': analyzed_at})
+    connection.execute(text("""
+        INSERT INTO analysis(article_id,is_relevant,event_key,topics,analyzed_at)
+        VALUES(:id,:relevant,:event,:topics,:at)
+    """), analyses)
+
+    health = service._media_collection_health(connection, ObservationWindow(start, AS_OF))
+
+    assert health == {'ES': {0, 89} if healthy else {0}}
+
+
+def test_media_health_batches_never_split_a_utc_day_processing_denominator():
+    import src.radar.service as service
+
+    as_of = AS_OF+timedelta(hours=12, minutes=30)
+    start = as_of-timedelta(days=90)
+    calls = []
+
+    class EmptySession:
+        def execute(self, statement, params):
+            calls.append(dict(params))
+            return _Result()
+
+    assert service._media_collection_health(EmptySession(), ObservationWindow(start, as_of)) == {}
+    assert len(calls) == 13
+    assert calls[0]['window_start'] == start
+    assert calls[-1]['window_end'] == as_of
+    assert all(call['window_end']-call['window_start'] <= timedelta(days=7) for call in calls)
+    assert all(call['collection_cutoff'] == as_of for call in calls)
+    assert all(call['window_end'].timetz() == datetime.min.time().replace(tzinfo=timezone.utc)
+               for call in calls[:-1])
+    assert all(previous['window_end'] == following['window_start']
+               for previous, following in zip(calls, calls[1:]))

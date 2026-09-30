@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+import os
 from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
+from sqlalchemy import create_engine, text
 
 from src.radar.actions import _FOSSIL, build_action_observations
 from src.radar.media import _MEDIA_ROWS, build_media_observations
@@ -20,6 +22,130 @@ from src.radar.types import Contour, Observation, ObservationWindow
 
 NOW = datetime(2026, 7, 18, 12, 0, tzinfo=timezone.utc)
 ARTICLE_A, ARTICLE_B, ARTICLE_C = 101, 102, 103
+
+
+@pytest.fixture
+def media_database():
+    url = os.getenv("GEO_PULSE_TEST_DATABASE_URL")
+    if not url:
+        pytest.skip("GEO_PULSE_TEST_DATABASE_URL required for PostgreSQL media query test")
+    engine = create_engine(url)
+    with engine.connect() as connection:
+        transaction = connection.begin()
+        connection.exec_driver_sql("""
+            CREATE TEMP TABLE sources(id integer primary key, name text, country_code text,
+              url text, config jsonb DEFAULT '{}');
+            CREATE TEMP TABLE articles(id integer primary key, source_id integer,
+              publisher_source_id integer, geo_status text DEFAULT 'source_verified',
+              published_at timestamptz, collected_at timestamptz, is_duplicate bool DEFAULT false);
+            CREATE TEMP TABLE analysis(article_id integer primary key, event_key text,
+              sentiment numeric, is_relevant bool, topics text[], analyzed_at timestamptz);
+            CREATE TEMP TABLE story_articles(article_id integer, story_id bigint);
+            CREATE TEMP TABLE story_events(story_id bigint, event_key text);
+            CREATE TEMP TABLE story_entities(story_id bigint, entity_id uuid);
+            CREATE TEMP TABLE signal_evidence(id bigint primary key, signal_id integer,
+              article_ids integer[], story_ids bigint[]);
+            CREATE INDEX ON signal_evidence USING gin(article_ids);
+            CREATE INDEX ON signal_evidence USING gin(story_ids);
+            CREATE TEMP VIEW article_country_facts AS
+              SELECT article.id AS article_id, publisher.* FROM articles article
+              JOIN sources discovery ON discovery.id = article.source_id
+              JOIN sources publisher ON publisher.id = CASE
+                WHEN COALESCE(discovery.config->>'feed_mode', 'publisher') = 'publisher_discovery'
+                  THEN article.publisher_source_id
+                ELSE COALESCE(article.publisher_source_id, article.source_id) END
+              WHERE article.geo_status IN ('source_verified','publisher_verified','publisher_reassigned')
+                AND (COALESCE(discovery.config->>'feed_mode','publisher') <> 'publisher_discovery'
+                  OR article.publisher_source_id IS NOT NULL);
+            INSERT INTO sources VALUES
+              (1,'ES publisher','ES','https://es.example','{}'),
+              (2,'FR publisher','FR','https://fr.example','{}'),
+              (3,'Discovery','US','https://discovery.example','{"feed_mode":"publisher_discovery"}');
+            INSERT INTO story_articles VALUES (1,77),(1,88);
+            INSERT INTO story_events VALUES (77,'event-a'),(77,'event-a'),(88,'event-b');
+            INSERT INTO story_entities VALUES (77,'00000000-0000-0000-0000-000000000001');
+            INSERT INTO signal_evidence VALUES
+              (900,10,ARRAY[1,1],ARRAY[77]),(901,20,ARRAY[2],ARRAY[88]),
+              (902,30,ARRAY[1],ARRAY[]::bigint[]);
+            INSERT INTO signal_evidence
+              SELECT 1000+n,1000+n,ARRAY[10000+n],ARRAY[20000+n]::bigint[]
+              FROM generate_series(1,500) n;
+        """)
+        connection.execute(text("""
+            INSERT INTO articles(id,source_id,published_at,collected_at)
+              SELECT n,1,:at,:at FROM generate_series(1,110) n WHERE n <> 9 AND n <> 110
+        """), {"at": NOW - timedelta(hours=2)})
+        connection.exec_driver_sql("""
+            UPDATE articles SET is_duplicate=true WHERE id=3;
+            UPDATE articles SET published_at=published_at-INTERVAL '10 days' WHERE id=4;
+            UPDATE articles SET collected_at=collected_at+INTERVAL '10 days' WHERE id=5;
+            UPDATE articles SET source_id=3 WHERE id IN (6,8);
+            UPDATE articles SET geo_status='unverified' WHERE id=7;
+            UPDATE articles SET publisher_source_id=2 WHERE id=8;
+            INSERT INTO analysis SELECT id,'fallback',-0.5,true,ARRAY['politics'],collected_at FROM articles;
+            ANALYZE signal_evidence;
+            ANALYZE articles;
+        """)
+        try:
+            yield connection
+        finally:
+            transaction.rollback()
+    engine.dispose()
+
+
+def test_media_query_preserves_all_memberships_and_evidence(media_database):
+    rows = media_database.execute(_MEDIA_ROWS, {
+        "window_start": _window().start, "window_end": NOW,
+    }).mappings().all()
+    assert len(rows) == 104
+    assert {row["article_id"] for row in rows} == {1, 2, 8, *range(10, 110)}
+    memberships = {(row["article_id"], row["story_id"]): row for row in rows}
+    assert set(memberships[1, 77]["signal_ids"]) == {10, 30}
+    assert set(memberships[1, 88]["signal_ids"]) == {10, 20, 30}
+    assert memberships[1, 77]["story_event_keys"] == ["event-a"]
+    assert memberships[1, 88]["story_event_keys"] == ["event-b"]
+    assert memberships[1, 77]["entity_ids"] == [UUID("00000000-0000-0000-0000-000000000001")]
+    assert memberships[2, None]["signal_ids"] == [20]
+    assert memberships[2, None]["entity_ids"] == []
+    assert memberships[10, None]["signal_ids"] == []
+    assert memberships[8, None]["country_code"] == "FR"
+    assert memberships[8, None]["publisher_id"] == 2
+
+
+def test_media_signal_lookup_does_not_rescan_evidence_per_article(media_database):
+    plan = media_database.execute(text("EXPLAIN (ANALYZE, FORMAT JSON) " + str(_MEDIA_ROWS)), {
+        "window_start": _window().start, "window_end": NOW,
+    }).scalar_one()[0]["Plan"]
+
+    def nodes(node):
+        yield node
+        for child in node.get("Plans", ()):
+            yield from nodes(child)
+
+    scans = [node for node in nodes(plan) if node.get("Relation Name") == "signal_evidence"]
+    assert scans
+    assert all(node["Actual Loops"] <= 1 for node in scans), scans
+
+
+@pytest.mark.parametrize("analysis_delay", (timedelta(0), timedelta(hours=1)))
+def test_late_analysis_is_excluded_but_article_remains_in_national_denominator(
+    media_database, analysis_delay,
+):
+    media_database.exec_driver_sql("""
+        DELETE FROM articles WHERE id NOT IN (2,10);
+        UPDATE analysis SET topics=ARRAY['timely_topic'] WHERE article_id=10;
+        UPDATE analysis SET topics=ARRAY['late_topic'] WHERE article_id=2;
+    """)
+    media_database.execute(text("UPDATE analysis SET analyzed_at=:late WHERE article_id=2"),
+                           {"late": NOW + analysis_delay})
+
+    observations = build_media_observations(media_database, _window())
+
+    assert {point.subject_key for point in observations} == {"topic:timely_topic"}
+    [point] = observations
+    assert point.article_ids == (10,)
+    assert point.value == pytest.approx(0.5)
+    assert point.baseline["national_indexed_article_count"] == 2
 
 
 def _window() -> ObservationWindow:
