@@ -1,5 +1,6 @@
 from contextlib import contextmanager
 from types import SimpleNamespace
+from datetime import datetime, timezone
 
 import httpx
 import pytest
@@ -7,6 +8,27 @@ import pytest
 from scripts import analyze, build_threads, collect
 from src.pipeline.filter import is_relevant
 from tests.test_collect import _article, _database, _seed
+
+
+@pytest.mark.parametrize("suffix", [" [emb:123]", " [text:0123456789abcdef0123]"])
+def test_thread_internal_identity_is_not_public_copy(monkeypatch, suffix):
+    saved = []
+
+    class Session:
+        def execute(self, statement, params):
+            saved.append(params)
+            return SimpleNamespace(fetchone=lambda: None)
+
+    monkeypatch.setattr(build_threads, "calculate_importance_v2", lambda _: {
+        "importance": 4, "velocity": 0, "sentiment_shift": 0,
+    })
+    articles = [dict(article_id=i, sentiment=1, action_level=2,
+                     published_at=datetime.now(timezone.utc)) for i in (1, 2)]
+    key = "specific trade agreement" + suffix
+    build_threads.upsert_thread(Session(), "BY", key, articles, ["specific trade agreement"],
+                                generate_narrative=False)
+    assert saved[0]["thread_key"] == key
+    assert saved[0]["title"] == "specific trade agreement"
 
 
 @pytest.mark.parametrize("result", [None, RuntimeError("provider unavailable")])
@@ -121,6 +143,25 @@ def test_disconnected_embedding_groups_with_identical_keys_survive():
     assert sorted(a["article_id"] for group in result.values() for a in group) == [3, 9]
     assert result == reverse
     assert len({key.split(":", 1)[1][:200] for key in result}) == 2
+
+
+def test_connected_article_with_higher_action_does_not_rename_thread():
+    class Session:
+        def execute(self, statement, params):
+            ids = params["ids"]
+            return SimpleNamespace(fetchall=lambda: [
+                SimpleNamespace(id1=ids[0], id2=i, similarity=.95) for i in ids[1:]
+            ])
+
+    rows = [{"article_id": i, "country_code": "BY", "has_embedding": True,
+             "event_key": label, "title": label, "action_level": action}
+            for i, label, action in [(3, "trade agreement signed", 2),
+                                      (9, "trade agreement signed", 2),
+                                      (12, "major new agreement", 5)]]
+    before = build_threads.cluster_pass1_embeddings(Session(), rows[:2], use_llm_pair_judge=False)
+    after = build_threads.cluster_pass1_embeddings(Session(), rows, use_llm_pair_judge=False)
+    assert list(before) == list(after)
+    assert len(next(iter(after.values()))) == 3
 
 
 def test_auth_failure_cools_down_without_repeated_paid_requests(monkeypatch):

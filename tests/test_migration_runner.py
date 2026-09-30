@@ -51,13 +51,13 @@ def test_failed_migration_stops_chain_and_is_not_recorded(tmp_path):
         line for line in calls.splitlines()
         if "-f " + str(migrations / "001_ok.sql") in line
     )
-    assert "-1" in first_apply
+    assert "-1" in first_apply.split()
     assert "INSERT INTO public.schema_migrations(filename) VALUES ('001_ok.sql')" in first_apply
     failed_apply = next(
         line for line in calls.splitlines()
         if "-f " + str(migrations / "002_fail.sql") in line
     )
-    assert "-1" in failed_apply
+    assert "-1" in failed_apply.split()
     assert "INSERT INTO public.schema_migrations(filename) VALUES ('002_fail.sql')" in failed_apply
 
 
@@ -96,6 +96,6 @@ def test_concurrent_index_migration_keeps_required_autocommit_mode(tmp_path):
         line for line in calls
         if "INSERT INTO public.schema_migrations" in line
     )
-    assert "-1" not in apply_call
+    assert "-1" not in apply_call.split()
     assert "INSERT INTO public.schema_migrations" not in apply_call
     assert "-c" in marker_call

@@ -1153,6 +1153,8 @@ def test_scoped_thread_upsert_skips_llm_narrative(monkeypatch):
                 return FakeResult(row=(42,))
             if "INSERT INTO thread_articles" in sql:
                 return FakeResult()
+            if "UPDATE threads SET article_count" in sql:
+                return FakeResult()
             raise AssertionError(sql)
 
     articles = [

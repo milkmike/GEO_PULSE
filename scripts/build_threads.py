@@ -276,7 +276,7 @@ def _current_article_content_sql(alias: str) -> str:
 
 def fetch_articles(session, days: int = 30) -> list[dict]:
     """Fetch all relevant articles with event_keys and embeddings."""
-    content = _current_article_content_sql("embedding_article")
+    content = _current_article_content_sql("ar")
     rows = session.execute(text(f"""
         WITH active_profile AS (
             SELECT MIN(ep.id) AS profile_id
@@ -284,19 +284,6 @@ def fetch_articles(session, days: int = 30) -> list[dict]:
             WHERE ep.active = TRUE
             HAVING COUNT(*) = 1
                AND BOOL_AND(ep.dimensions = 1024)
-        ), active_embeddings AS (
-            SELECT DISTINCT ON (ce.object_id) ce.object_id
-            FROM content_embeddings ce
-            JOIN active_profile ap ON ap.profile_id = ce.profile_id
-            JOIN articles embedding_article
-              ON embedding_article.id = ce.object_id::integer
-            WHERE ce.object_type = 'article'
-              AND ce.status = 'ready'
-              AND ce.embedding IS NOT NULL
-              AND ce.content_hash = encode(
-                digest({content}, 'sha256'), 'hex'
-              )
-            ORDER BY ce.object_id, ce.updated_at DESC, ce.id DESC
         )
         SELECT
             an.id AS analysis_id,
@@ -317,8 +304,19 @@ def fetch_articles(session, days: int = 30) -> list[dict]:
         FROM analysis an
         JOIN articles ar ON an.article_id = ar.id
         JOIN article_country_facts s ON s.article_id = ar.id
-        LEFT JOIN active_embeddings ON active_embeddings.object_id = ar.id::text
+        LEFT JOIN LATERAL (
+            SELECT ce.object_id
+            FROM content_embeddings ce
+            JOIN active_profile ap ON ap.profile_id = ce.profile_id
+            WHERE ce.object_type = 'article'
+              AND ce.object_id = ar.id::text
+              AND ce.status = 'ready'
+              AND ce.embedding IS NOT NULL
+              AND ce.content_hash = encode(digest({content}, 'sha256'), 'hex')
+            LIMIT 1
+        ) active_embeddings ON TRUE
         WHERE an.is_relevant = true
+          AND NOT (COALESCE(an.model_used, '') = 'keyword_filter' AND an.sentiment IS NULL)
           AND ar.is_duplicate = FALSE
           AND ar.published_at > NOW() - INTERVAL :days
           AND (
@@ -574,14 +572,11 @@ def cluster_pass1_embeddings(
         # Create cluster IDs using the best event_key or title
         for group_articles in sorted(groups.values(), key=lambda group: min(a["article_id"] for a in group)):
             group_articles = sorted(group_articles, key=lambda a: a["article_id"])
-            # Pick best key for cluster naming
-            keys_with_articles = [(a["event_key"], a) for a in group_articles if a["event_key"] != "(no key)"]
-            if keys_with_articles:
-                # Use key from article with highest action_level
-                best_key = max(keys_with_articles, key=lambda x: x[1].get("action_level", 1))[0]
-            else:
-                # No event_key — use truncated title
-                best_key = group_articles[0]["title"][:80].lower()
+            # New, higher-impact coverage must not rename the same component.
+            anchor = group_articles[0]
+            best_key = anchor["event_key"]
+            if best_key == "(no key)":
+                best_key = anchor["title"][:80].lower()
 
             # Always identify the component, including the first one. Otherwise
             # a later rolling window could reuse another component's bare key.
@@ -1086,11 +1081,12 @@ def upsert_thread(
 
     # Generate narrative for important threads
     summary_json = None
-    title = canonical_key[:200]
+    display_key = _re.sub(r" \[(?:emb:\d+|text:[0-9a-f]{20})\]$", "", canonical_key)
+    title = display_key[:200]
     narrative = None
 
     if generate_narrative and metrics["importance"] >= NARRATIVE_MIN_IMPORTANCE:
-        structured = generate_structured_narrative(cc, canonical_key, articles, metrics)
+        structured = generate_structured_narrative(cc, display_key, articles, metrics)
         if structured:
             summary_json = structured
             title = structured.get("title", title)[:500]
@@ -1112,7 +1108,7 @@ def upsert_thread(
                     str(article.get("title") or ""),
                 ),
             )
-        title = best.get("title", canonical_key)[:500]
+        title = (best.get("title") or display_key)[:500]
 
     if preserve_existing_copy:
         copy_updates = """
@@ -1199,6 +1195,13 @@ def upsert_thread(
             INSERT INTO thread_articles (thread_id, article_id)
             VALUES (:tid, :aid) ON CONFLICT DO NOTHING
         """), {"tid": thread_id, "aid": aid})
+
+    if not replace_memberships:
+        session.execute(text("""
+            UPDATE threads SET article_count = (
+                SELECT COUNT(*) FROM thread_articles WHERE thread_id = :tid
+            ) WHERE id = :tid
+        """), {"tid": thread_id})
 
     return thread_id
 
