@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import json
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from sqlalchemy import text
 
 from src.db import get_session
@@ -213,19 +213,55 @@ def list_agendas(limit=20, q=''):
         items=[]
         for group in groups[:limit]:
             evidence=session.execute(text(f'''WITH valid AS ({VALID_MEMBERS})
-             SELECT * FROM valid WHERE agenda_id=:id ORDER BY collected_at DESC,id DESC LIMIT 50'''),
+             SELECT valid.*,translation.title_ru FROM valid
+             LEFT JOIN article_title_translations translation ON translation.article_id=valid.id
+               AND translation.source_title=valid.title
+             WHERE agenda_id=:id ORDER BY collected_at DESC,id DESC LIMIT 50'''),
              {'id':group['agenda_id']}).mappings().all()
             if len(evidence)<2:
                 continue
             articles=[]
             for row in evidence:
                 item=_article(row)
-                articles.append({key:item[key] for key in ('id','title','source_name','country_code','published_at','collected_at','relation','confidence','date_warning')} | {'url':safe_public_url(item['url'])})
-            representative=next((a for a in articles if any('а'<=c.lower()<='я' for c in a['title'])),articles[0])
-            items.append(dict(group) | {'id':group['agenda_id'],'title':representative['title'],'articles':articles})
+                articles.append({key:item[key] for key in ('id','title','title_ru','source_name','country_code','published_at','collected_at','relation','confidence','date_warning')} | {'url':safe_public_url(item['url'])})
+            representative=articles[0]
+            items.append(dict(group) | {'id':group['agenda_id'],'title':representative['title'],'title_ru':representative['title_ru'],'articles':articles})
         run=session.execute(text('SELECT status,stats,created_at FROM news_agenda_runs ORDER BY id DESC LIMIT 1')).mappings().first()
     coverage={'last_run_at':None,'status':'never_run','articles_scanned':0,'candidate_groups':0,'decisions':0,'accepted':0,'remaining_budget_usd':None}
     if run:
         coverage.update({k:run['stats'][k] for k in coverage if k in run['stats']})
         coverage.update(status=run['status'],last_run_at=run['created_at'])
     return {'items':items,'coverage':coverage,'has_more':len(groups)>limit}
+
+
+def load_translation_candidates(limit=400):
+    """Current visible representatives first, then evidence; cache hits stay local."""
+    if type(limit) is not int or not 1 <= limit <= 400:
+        raise ValueError('Invalid translation candidate bound')
+    items = list_agendas(limit=50)['items']
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=72)
+    ordered = [item['articles'][0] for item in items]
+    ordered.extend(article for item in items for article in item['articles'][1:])
+    candidates = {}
+    for article in ordered:
+        if (article['collected_at'] >= cutoff and article['collected_at'] <= datetime.now(timezone.utc)
+                and not article.get('title_ru')):
+            candidates.setdefault(article['id'], {'id': article['id'], 'title': article['title']})
+    return list(candidates.values())[:limit]
+
+
+def save_title_translations(translations, model):
+    """A response for an old source headline cannot replace a current translation."""
+    with get_session() as session:
+        # Serialize source corrections and competing cache saves; the following
+        # statement rechecks source titles after any concurrent writer commits.
+        session.execute(text('SELECT id FROM articles WHERE id=ANY(:ids) ORDER BY id FOR UPDATE'),
+                        {'ids':sorted({item['article_id'] for item in translations})}).all()
+        for item in translations:
+            session.execute(text("""INSERT INTO article_title_translations
+              (article_id,source_title,title_ru,model)
+              SELECT id,title,:title_ru,:model FROM articles
+              WHERE id=:article_id AND title=:source_title
+              ON CONFLICT(article_id) DO UPDATE SET source_title=EXCLUDED.source_title,
+                title_ru=EXCLUDED.title_ru,model=EXCLUDED.model,translated_at=now()
+            """), {**item, 'model':model})

@@ -110,3 +110,95 @@ describe("AgendaPanel", () => {
     await waitFor(() => expect(screen.queryByText("Открыт новый авиарейс")).not.toBeInTheDocument());
   });
 });
+
+describe("Agenda titles in Russian", () => {
+  it("defaults to cached Russian titles and lets the reader switch back without another request", async () => {
+    const translated = payload();
+    translated.items[0].title = "A new flight route opens";
+    translated.items[0].title_ru = "Открывается новый авиамаршрут";
+    mocks.agendas.mockResolvedValue(translated);
+    const user = userEvent.setup();
+    render(<AgendaPanel />);
+    expect(await screen.findByRole("heading", { name: "Открывается новый авиамаршрут" })).toBeVisible();
+    expect(screen.getByText("Машинный перевод")).toBeVisible();
+    expect(screen.getByText("Связи проверены Jev")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Показать оригинал" }));
+    expect(screen.getByRole("heading", { name: "A new flight route opens" })).toBeVisible();
+    expect(screen.queryByText("Машинный перевод")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Показать перевод" }));
+    expect(screen.getByRole("heading", { name: "Открывается новый авиамаршрут" })).toBeVisible();
+    expect(mocks.agendas).toHaveBeenCalledOnce();
+  });
+
+  it("toggles each evidence title independently and keeps its original source destination", async () => {
+    const translated = payload();
+    translated.items[0].articles[0].title = "Source report";
+    translated.items[0].articles[0].title_ru = "Исходное сообщение";
+    translated.items[0].articles[1].title = "Another report";
+    translated.items[0].articles[1].title_ru = "Другое сообщение";
+    mocks.agendas.mockResolvedValue(translated);
+    const user = userEvent.setup();
+    render(<AgendaPanel />);
+    await user.click(await screen.findByRole("button", { name: "Показать публикации" }));
+    const first = screen.getByRole("link", { name: "Исходное сообщение" });
+    expect(first).toHaveAttribute("href", "https://example.com/a");
+    const evidence = first.closest("li")!;
+    await user.click(within(evidence).getByRole("button", { name: "Показать оригинал" }));
+    expect(within(evidence).getByRole("link", { name: "Source report" })).toHaveAttribute("href", "https://example.com/a");
+    expect(within(evidence).queryByText("Машинный перевод")).not.toBeInTheDocument();
+    expect(screen.getByText("Другое сообщение")).toBeVisible();
+    expect(screen.getAllByText("Машинный перевод")).toHaveLength(1);
+  });
+
+  it.each([undefined, null, "", "  ", "Открыт новый авиарейс"])("preserves the source title without a distinct cached translation (%s)", async (title_ru) => {
+    const untranslated = payload();
+    untranslated.items[0].title_ru = title_ru;
+    mocks.agendas.mockResolvedValue(untranslated);
+    render(<AgendaPanel />);
+    expect(await screen.findByRole("heading", { name: "Открыт новый авиарейс" })).toBeVisible();
+    expect(screen.getByText("Заголовок источника")).toBeVisible();
+    expect(screen.queryByText("Машинный перевод")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Показать оригинал|Показать перевод/ })).not.toBeInTheDocument();
+  });
+
+  it("renders translated and original markup as plain source text", async () => {
+    const translated = payload();
+    translated.items[0].title = '<script>alert("source")</script>';
+    translated.items[0].title_ru = '<img src=x onerror="alert(1)">';
+    mocks.agendas.mockResolvedValue(translated);
+    const user = userEvent.setup();
+    const { container } = render(<AgendaPanel />);
+    expect(await screen.findByRole("heading", { name: translated.items[0].title_ru })).toBeVisible();
+    expect(container.querySelector("img")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Показать оригинал" }));
+    expect(screen.getByRole("heading", { name: translated.items[0].title })).toBeVisible();
+    expect(container.querySelector("script")).toBeNull();
+  });
+
+  it.each(["https://example.com/news?x=1&tl=en#part", "http://example.com/story"])("offers opt-in page translation with an encoded safe source URL: %s", async (url) => {
+    const articles = payload();
+    articles.items[0].articles[0].url = url;
+    mocks.agendas.mockResolvedValue(articles);
+    const user = userEvent.setup();
+    render(<AgendaPanel />);
+    await user.click(await screen.findByRole("button", { name: "Показать публикации" }));
+    const translate = screen.getByRole("link", { name: "Перевести публикацию" });
+    expect(translate).toHaveAttribute("href", `https://translate.google.com/translate?sl=auto&tl=ru&u=${encodeURIComponent(url)}`);
+    expect(translate).toHaveAttribute("target", "_blank");
+    expect(translate).toHaveAttribute("title", "Открыть русский перевод в Google Переводчике");
+    expect(translate).toHaveAttribute("rel", "noopener noreferrer");
+    expect(screen.getByRole("link", { name: "Первое сообщение" })).toHaveAttribute("href", url);
+    expect(mocks.agendas).toHaveBeenCalledOnce();
+  });
+
+  it.each(["javascript:alert(1)", "data:text/html,test", "ftp://example.com/story", "https://user:secret@example.com/story", "https://example.com/%0Ahidden"])("never sends an unsafe source URL to the external translation service: %s", async (url) => {
+    const articles = payload();
+    articles.items[0].articles[0].url = url;
+    mocks.agendas.mockResolvedValue(articles);
+    const user = userEvent.setup();
+    render(<AgendaPanel />);
+    await user.click(await screen.findByRole("button", { name: "Показать публикации" }));
+    expect(screen.getByText("Первое сообщение")).toBeVisible();
+    expect(screen.queryByRole("link", { name: "Перевести публикацию" })).not.toBeInTheDocument();
+  });
+});
