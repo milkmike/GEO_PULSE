@@ -112,3 +112,29 @@ def test_cached_success_attaches_without_new_charge(monkeypatch,harness):
     assert result['accepted']==1 and result['calls']==0
     attached.assert_called_once()
     reserve.assert_not_called()
+
+
+def test_tariff_reads_jev_provider_endpoints_not_chat_catalog(monkeypatch):
+    from src import agenda_worker as worker
+    reply=Mock()
+    reply.json.return_value={'data':{'id':'typesafe/jev-1.13','endpoints':[
+        {'provider_name':'TypeSafe','pricing':{'prompt':'0.000000042','completion':'0','discount':0}}]}}
+    get=Mock(return_value=reply)
+    monkeypatch.setattr(worker.httpx,'get',get)
+    monkeypatch.setenv('OPENROUTER_API_KEY','test-key')
+    worker.check_tariff()
+    assert get.call_args.args[0]=='https://openrouter.ai/api/v1/models/typesafe/jev-1.13/endpoints'
+    assert get.call_args.kwargs['headers']=={'Authorization':'Bearer test-key'}
+
+
+@pytest.mark.parametrize('data',[
+    {'id':'typesafe/jev-latest','endpoints':[{'pricing':{'prompt':'0','completion':'0'}}]},
+    {'id':'typesafe/jev-1.13','endpoints':[]},
+    {'id':'typesafe/jev-1.13','endpoints':[{'pricing':{'prompt':'.000000042','completion':'0'}},{'pricing':{'prompt':'1','completion':'0'}}]},
+])
+def test_endpoint_tariff_rejects_wrong_model_missing_or_expensive_provider(monkeypatch,data):
+    from src import agenda_worker as worker
+    reply=Mock();reply.json.return_value={'data':data}
+    monkeypatch.setattr(worker.httpx,'get',Mock(return_value=reply))
+    monkeypatch.setenv('OPENROUTER_API_KEY','test-key')
+    with pytest.raises(ValueError):worker.check_tariff()
