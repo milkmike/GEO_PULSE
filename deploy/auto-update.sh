@@ -73,7 +73,13 @@ docker compose run --rm migrate >>"$LOG" 2>&1
 # Build first at low CPU/IO priority so a heavy image build (Next.js!) cannot
 # starve the running containers (the box OOM-froze once, 2026-06-12), then
 # swap containers — compose only recreates changed services.
-nice -n 19 ionice -c3 docker compose --parallel 1 build >>"$LOG" 2>&1
+# Compose v5 delegates to Bake, which can ignore --parallel across targets.
+# Submit one service per invocation so only one target can build at a time.
+BUILD_SERVICES="$(docker compose config --services)"
+while IFS= read -r service; do
+    [ -n "$service" ] || continue
+    nice -n 19 ionice -c3 docker compose --parallel 1 build "$service" >>"$LOG" 2>&1
+done <<< "$BUILD_SERVICES"
 docker compose up -d >>"$LOG" 2>&1
 
 # Compose can return success while a newly created API has not actually
