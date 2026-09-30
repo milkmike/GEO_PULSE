@@ -774,7 +774,7 @@ def test_postgres_relation_filters_match_direct_and_active_member_evidence(monke
                    ('00000000-0000-0000-0000-' || lpad(id::text, 12, '0'))::uuid,
                    CASE WHEN id < 100 THEN 'meta' ELSE 'country' END,
                    CASE WHEN id < 100 THEN NULL ELSE 'media' END,
-                   CASE WHEN id < 100 THEN NULL ELSE 'ES' END,
+                   CASE WHEN id < 100 THEN NULL WHEN id < 200 THEN 'ES' ELSE 'KZ' END,
                    'subject:' || id, 'Trend ' || id, 'negative', 'confirmed',
                    0.9, 0.9, (200 - id)::numeric,
                    '2026-07-18T10:00:00Z'::timestamptz,
@@ -783,12 +783,17 @@ def test_postgres_relation_filters_match_direct_and_active_member_evidence(monke
                    '2026-07-18T10:00:00Z'::timestamptz,
                    '2026-07-18T10:00:00Z'::timestamptz,
                    '2026-07-18T12:00:00Z'::timestamptz
-            FROM unnest(ARRAY[1,2,3,4,5,6,7,8,101,102,103,104,105,106,107,108]) id;
+            FROM unnest(ARRAY[1,2,3,4,5,6,7,8,101,102,103,104,105,106,107,108,
+                              201,202,203,204,205,206,207,208]) id;
 
             INSERT INTO radar_trend_members(meta_trend_id, country_trend_id, left_at)
             VALUES (1,101,NULL), (2,102,NULL), (2,102,NULL), (3,103,NULL), (4,104,NULL),
                    (5,105,NULL), (6,106,NULL),
-                   (7,107,'2026-07-18T11:00:00Z'), (8,108,NULL);
+                   (7,107,'2026-07-18T11:00:00Z'), (8,108,NULL),
+                   -- Public meta trends require two distinct active countries.
+                   -- The second wave has no evidence and cannot satisfy a relation filter.
+                   (1,201,NULL), (2,202,NULL), (3,203,NULL), (4,204,NULL),
+                   (5,205,NULL), (6,206,NULL), (7,207,NULL), (8,208,NULL);
 
             INSERT INTO radar_observations(id, evidence, article_id)
             VALUES (201, '{}', NULL), (202, '{}', NULL);

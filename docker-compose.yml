@@ -146,6 +146,8 @@ services:
       OPENROUTER_EMBEDDING_DIMENSIONS: ${OPENROUTER_EMBEDDING_DIMENSIONS:-1536}
       HTTPS_PROXY: ${HTTPS_PROXY:-}
       HEAVY_MODEL: ${HEAVY_MODEL:-qwen/qwen3.6-flash}
+      JEV_STORY_MODE: ${JEV_STORY_MODE:-off}
+      JEV_STORY_TIMEOUT_SECONDS: ${JEV_STORY_TIMEOUT_SECONDS:-2}
     depends_on:
       db:
         condition: service_healthy

@@ -1,5 +1,6 @@
 """Narrative Threads v2 — LLM-powered dedup, structured narratives, smart scoring."""
 import argparse
+import hashlib
 import json
 import logging
 import math
@@ -14,6 +15,7 @@ from src.config import COUNTRY_NAMES, OPENROUTER_API_KEY, HEAVY_MODEL
 from src.db import get_session, wait_for_db
 from src.api_tracker import track_api_call, track_duration
 from src.embedding_store import EmbeddingStore
+from src.jev import review_story_pairs
 from src.stories import build_stories as build_global_stories
 from scripts.prepare_embedding_jobs import load_story_embedding_coverage
 
@@ -274,7 +276,7 @@ def _current_article_content_sql(alias: str) -> str:
 
 def fetch_articles(session, days: int = 30) -> list[dict]:
     """Fetch all relevant articles with event_keys and embeddings."""
-    content = _current_article_content_sql("embedding_article")
+    content = _current_article_content_sql("ar")
     rows = session.execute(text(f"""
         WITH active_profile AS (
             SELECT MIN(ep.id) AS profile_id
@@ -282,19 +284,6 @@ def fetch_articles(session, days: int = 30) -> list[dict]:
             WHERE ep.active = TRUE
             HAVING COUNT(*) = 1
                AND BOOL_AND(ep.dimensions = 1024)
-        ), active_embeddings AS (
-            SELECT DISTINCT ON (ce.object_id) ce.object_id
-            FROM content_embeddings ce
-            JOIN active_profile ap ON ap.profile_id = ce.profile_id
-            JOIN articles embedding_article
-              ON embedding_article.id = ce.object_id::integer
-            WHERE ce.object_type = 'article'
-              AND ce.status = 'ready'
-              AND ce.embedding IS NOT NULL
-              AND ce.content_hash = encode(
-                digest({content}, 'sha256'), 'hex'
-              )
-            ORDER BY ce.object_id, ce.updated_at DESC, ce.id DESC
         )
         SELECT
             an.id AS analysis_id,
@@ -305,6 +294,7 @@ def fetch_articles(session, days: int = 30) -> list[dict]:
             an.event_type,
             active_embeddings.object_id IS NOT NULL AS has_embedding,
             ar.title,
+            LEFT(COALESCE(NULLIF(ar.summary, ''), ar.body, ''), 1200) AS excerpt,
             ar.url,
             ar.published_at,
             s.id AS publisher_source_id,
@@ -314,8 +304,19 @@ def fetch_articles(session, days: int = 30) -> list[dict]:
         FROM analysis an
         JOIN articles ar ON an.article_id = ar.id
         JOIN article_country_facts s ON s.article_id = ar.id
-        LEFT JOIN active_embeddings ON active_embeddings.object_id = ar.id::text
+        LEFT JOIN LATERAL (
+            SELECT ce.object_id
+            FROM content_embeddings ce
+            JOIN active_profile ap ON ap.profile_id = ce.profile_id
+            WHERE ce.object_type = 'article'
+              AND ce.object_id = ar.id::text
+              AND ce.status = 'ready'
+              AND ce.embedding IS NOT NULL
+              AND ce.content_hash = encode(digest({content}, 'sha256'), 'hex')
+            LIMIT 1
+        ) active_embeddings ON TRUE
         WHERE an.is_relevant = true
+          AND NOT (COALESCE(an.model_used, '') = 'keyword_filter' AND an.sentiment IS NULL)
           AND ar.is_duplicate = FALSE
           AND ar.published_at > NOW() - INTERVAL :days
           AND (
@@ -342,6 +343,7 @@ def fetch_articles(session, days: int = 30) -> list[dict]:
             "action_level": r.action_level or 1,
             "event_type": r.event_type,
             "title": r.title,
+            "excerpt": getattr(r, "excerpt", "") or "",
             "url": r.url,
             "published_at": r.published_at,
             "publisher_source_id": r.publisher_source_id,
@@ -450,6 +452,14 @@ def premerge_special_cases(cc_clusters: list[tuple[str, list[dict]]]) -> tuple[l
 
 
 # ── Step 2: Clustering ──────────────────────────────────
+
+def _text_cluster_id(cc: str, key: str) -> str:
+    # Preserve existing short text keys. Reserve component suffixes and avoid
+    # collisions when long labels are persisted in a 200-character column.
+    if len(key) > 200 or " [emb:" in key or " [text:" in key:
+        suffix = f" [text:{hashlib.sha256(key.encode()).hexdigest()[:20]}]"
+        key = key[:200 - len(suffix)] + suffix
+    return f"{cc}:{key}"
 
 def cluster_pass1_embeddings(
     session,
@@ -560,17 +570,19 @@ def cluster_pass1_embeddings(
             groups[root].append(a)
 
         # Create cluster IDs using the best event_key or title
-        for root_id, group_articles in groups.items():
-            # Pick best key for cluster naming
-            keys_with_articles = [(a["event_key"], a) for a in group_articles if a["event_key"] != "(no key)"]
-            if keys_with_articles:
-                # Use key from article with highest action_level
-                best_key = max(keys_with_articles, key=lambda x: x[1].get("action_level", 1))[0]
-            else:
-                # No event_key — use truncated title
-                best_key = group_articles[0]["title"][:80].lower()
+        for group_articles in sorted(groups.values(), key=lambda group: min(a["article_id"] for a in group)):
+            group_articles = sorted(group_articles, key=lambda a: a["article_id"])
+            # New, higher-impact coverage must not rename the same component.
+            anchor = group_articles[0]
+            best_key = anchor["event_key"]
+            if best_key == "(no key)":
+                best_key = anchor["title"][:80].lower()
 
-            cluster_id = f"{cc}:{best_key}"
+            # Always identify the component, including the first one. Otherwise
+            # a later rolling window could reuse another component's bare key.
+            # Losing the anchor may split a thread, but cannot take its identity.
+            suffix = f" [emb:{group_articles[0]['article_id']}]"
+            cluster_id = f"{cc}:{best_key[:200 - len(suffix)]}{suffix}"
             clusters[cluster_id] = group_articles
 
         # Handle articles without embeddings via trgm
@@ -685,7 +697,7 @@ def _cluster_trgm_country(session, cc: str, articles: list[dict]) -> dict[str, l
 
     clusters = {}
     for canonical, keys in groups.items():
-        cluster_id = f"{cc}:{canonical}"
+        cluster_id = _text_cluster_id(cc, canonical)
         cluster_articles = [a for a in articles if a["event_key"] in set(keys)]
         if cluster_articles:
             clusters[cluster_id] = cluster_articles
@@ -770,7 +782,7 @@ def cluster_pass1_trgm(session, articles: list[dict]) -> dict[str, list[dict]]:
             groups[find(k)].append(k)
 
         for canonical, keys in groups.items():
-            cluster_id = f"{cc}:{canonical}"
+            cluster_id = _text_cluster_id(cc, canonical)
             cluster_articles = [a for a in cc_articles if a["event_key"] in set(keys)]
             if cluster_articles:
                 clusters[cluster_id] = cluster_articles
@@ -1069,11 +1081,12 @@ def upsert_thread(
 
     # Generate narrative for important threads
     summary_json = None
-    title = canonical_key[:200]
+    display_key = _re.sub(r" \[(?:emb:\d+|text:[0-9a-f]{20})\]$", "", canonical_key)
+    title = display_key[:200]
     narrative = None
 
     if generate_narrative and metrics["importance"] >= NARRATIVE_MIN_IMPORTANCE:
-        structured = generate_structured_narrative(cc, canonical_key, articles, metrics)
+        structured = generate_structured_narrative(cc, display_key, articles, metrics)
         if structured:
             summary_json = structured
             title = structured.get("title", title)[:500]
@@ -1095,7 +1108,7 @@ def upsert_thread(
                     str(article.get("title") or ""),
                 ),
             )
-        title = best.get("title", canonical_key)[:500]
+        title = (best.get("title") or display_key)[:500]
 
     if preserve_existing_copy:
         copy_updates = """
@@ -1182,6 +1195,13 @@ def upsert_thread(
             INSERT INTO thread_articles (thread_id, article_id)
             VALUES (:tid, :aid) ON CONFLICT DO NOTHING
         """), {"tid": thread_id, "aid": aid})
+
+    if not replace_memberships:
+        session.execute(text("""
+            UPDATE threads SET article_count = (
+                SELECT COUNT(*) FROM thread_articles WHERE thread_id = :tid
+            ) WHERE id = :tid
+        """), {"tid": thread_id})
 
     return thread_id
 
@@ -1654,6 +1674,9 @@ def rebuild_recent_threads(
             if thread_id is not None:
                 thread_ids.add(thread_id)
 
+    # Shadow decisions never affect memberships. Release the DB transaction
+    # before the optional, deadline-bounded network call.
+    review_story_pairs(articles, clusters)
     return thread_ids
 
 

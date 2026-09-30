@@ -42,6 +42,8 @@ def analyze_sentiment(
     body: str,
     source_name: str,
     country_code: str,
+    *,
+    chat_fn=None,
 ) -> dict | None:
     """Analyze sentiment of an article through the LLM provider chain.
 
@@ -61,7 +63,7 @@ def analyze_sentiment(
     )
 
     try:
-        text, model_used = chat(prompt, max_tokens=350, script="analyze.py")
+        text, model_used = (chat_fn or chat)(prompt, max_tokens=350, script="analyze.py")
     except LLMError as e:
         logger.warning(f"LLM chain unavailable: {e}")
         return None

@@ -38,6 +38,8 @@ OLLAMA_URL = os.environ.get("OLLAMA_URL", "").rstrip("/")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.1")
 
 RETRYABLE_STATUS = {429, 500, 502, 503, 504}
+_openrouter_blocked_until = 0.0
+AUTH_COOLDOWN_SECONDS = 300
 
 
 class LLMError(Exception):
@@ -76,6 +78,9 @@ def _call_openrouter(model: str, prompt: str, max_tokens: int,
     }
     if temperature is not None:
         body["temperature"] = temperature
+    if script == "analyze.py" and model in {"deepseek/deepseek-v4-flash", "qwen/qwen3.6-flash"}:
+        # Short structured extraction must leave its token budget for JSON.
+        body["reasoning"] = {"enabled": False}
 
     with track_duration() as timer:
         resp = httpx.post(OPENROUTER_URL, headers=headers, json=body, timeout=90.0)
@@ -88,6 +93,7 @@ def _call_openrouter(model: str, prompt: str, max_tokens: int,
         model=model, script=script,
         tokens_in=usage.get("prompt_tokens", 0),
         tokens_out=usage.get("completion_tokens", 0),
+        cost=usage.get("cost"),
         status="ok", duration_ms=timer.ms,
     )
     return data["choices"][0]["message"]["content"].strip()
@@ -126,6 +132,7 @@ def chat(prompt: str, max_tokens: int = 300, temperature: float | None = None,
     use a stronger model than the high-volume analyzer). Returns
     (text, model_used). Raises LLMError when every tier fails.
     """
+    global _openrouter_blocked_until
     chain = models or LLM_MODELS
     cache_key = None
     if cache_ttl > 0:
@@ -137,6 +144,9 @@ def chat(prompt: str, max_tokens: int = 300, temperature: float | None = None,
             return obj["text"], obj["model"] + " (cached)"
 
     errors = []
+
+    if OPENROUTER_API_KEY and time.monotonic() < _openrouter_blocked_until:
+        raise LLMError("OpenRouter authentication/billing cooldown; retry later")
 
     if OPENROUTER_API_KEY:
         for model in chain:
@@ -151,6 +161,8 @@ def chat(prompt: str, max_tokens: int = 300, temperature: float | None = None,
                                model=model, script=script, status="error",
                                error=f"HTTP {status}")
                 errors.append(f"{model}: HTTP {status}")
+                if status in {401, 402}:
+                    _openrouter_blocked_until = time.monotonic() + AUTH_COOLDOWN_SECONDS
                 if status in RETRYABLE_STATUS:
                     logger.warning(f"LLM {model} returned {status}, trying next in chain")
                     time.sleep(1.0)

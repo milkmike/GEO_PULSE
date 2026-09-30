@@ -1246,8 +1246,8 @@ def test_verified_publishers_drive_briefs_threads_and_story_candidates():
     assert "ce.status = 'ready'" in statement
     assert "ce.content_hash = encode" in statement
     assert "digest(" in statement
-    assert "embedding_article.id = ce.object_id::integer" in statement
-    assert "embedding_article.id::text = ce.object_id" not in statement
+    assert "LEFT JOIN LATERAL" in statement
+    assert "ce.object_id = ar.id::text" in statement
     assert "ar.is_duplicate = FALSE" in statement
     assert "an.embedding IS NOT NULL" not in statement
 

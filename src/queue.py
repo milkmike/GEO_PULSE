@@ -16,7 +16,12 @@ _pool = None
 def get_redis():
     global _pool
     if _pool is None:
-        _pool = redis.ConnectionPool.from_url(REDIS_URL)
+        # redis-py 8 defaults socket_timeout to 5s, exactly our BRPOP wait.
+        # Give the empty reply time to arrive instead of reporting an outage
+        # and preventing the analyzer's bounded DB fallback from running.
+        _pool = redis.ConnectionPool.from_url(
+            REDIS_URL, socket_timeout=10, socket_connect_timeout=5,
+        )
     return redis.Redis(connection_pool=_pool)
 
 

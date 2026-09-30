@@ -46,6 +46,7 @@ def load_eligible_articles(
             FROM articles a
             JOIN analysis an ON an.article_id = a.id
             WHERE an.is_relevant = TRUE
+                  AND NOT (COALESCE(an.model_used, '') = 'keyword_filter' AND an.sentiment IS NULL)
               AND a.is_duplicate = FALSE
               AND a.published_at >= now() - make_interval(days => :days)
             ORDER BY a.published_at DESC, a.id DESC
@@ -92,6 +93,7 @@ def load_story_eligible_articles(
                 FROM articles a
                 JOIN analysis an ON an.article_id = a.id
                 WHERE an.is_relevant = TRUE
+                  AND NOT (COALESCE(an.model_used, '') = 'keyword_filter' AND an.sentiment IS NULL)
                   AND a.is_duplicate = FALSE
                   AND a.geo_country_code IS NOT NULL
                   AND a.published_at >= now() - make_interval(days => :days)
@@ -162,6 +164,7 @@ def load_story_embedding_coverage(
                 FROM articles a
                 JOIN analysis an ON an.article_id = a.id
                 WHERE an.is_relevant = TRUE
+                  AND NOT (COALESCE(an.model_used, '') = 'keyword_filter' AND an.sentiment IS NULL)
                   AND a.is_duplicate = FALSE
                   AND a.geo_country_code IS NOT NULL
                   AND a.published_at >= now() - make_interval(days => :days)

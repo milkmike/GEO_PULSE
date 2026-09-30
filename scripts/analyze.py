@@ -62,7 +62,7 @@ def _save_analysis(session, result: dict) -> Analysis:
     return analysis
 
 
-def _analyze_one(row) -> dict | None:
+def _analyze_one(row, *, sentiment_fn=None) -> dict | None:
     """Analyze a single article. Returns dict to save or None."""
     title = row.title or ""
     body = row.body or ""
@@ -80,7 +80,7 @@ def _analyze_one(row) -> dict | None:
     # Step 2: LLM sentiment analysis
     if OPENROUTER_API_KEY:
         try:
-            result = analyze_sentiment(
+            result = (sentiment_fn or analyze_sentiment)(
                 title=title,
                 body=body,
                 source_name=row.source_name,
@@ -122,14 +122,9 @@ def _analyze_one(row) -> dict | None:
         except Exception as e:
             logger.error(f"  LLM analysis failed for article {row.id}: {e}")
 
-    # Fallback
-    return {
-        "article_id": row.id,
-        "is_relevant": True,
-        "relevance_score": 0.8,
-        "model_used": "keyword_filter",
-        "prompt_version": "v1.1",
-    }
+    # Provider failure is not a completed analysis. Keep the article eligible
+    # for the bounded database retry path instead of saving a placeholder.
+    return None
 
 
 def _analyze_article_by_id(article_id: int) -> bool:
@@ -175,7 +170,8 @@ def process_from_queue() -> str:
 
     article_id = job["article_id"]
     try:
-        _analyze_article_by_id(article_id)
+        if not _analyze_article_by_id(article_id):
+            raise RuntimeError("Analysis incomplete; article remains eligible for retry")
         # Update stats
         try:
             r = get_redis()

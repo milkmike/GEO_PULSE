@@ -176,6 +176,11 @@ CREATE TABLE IF NOT EXISTS threads (
     avg_sentiment DECIMAL(4,2),
     max_action_level INTEGER DEFAULT 1,
     importance_score DECIMAL(5,2) DEFAULT 0,
+    summary_json JSONB,
+    velocity DOUBLE PRECISION DEFAULT 0,
+    sentiment_shift DOUBLE PRECISION DEFAULT 0,
+    related_threads INTEGER[],
+    merged_keys TEXT[],
     generated_at TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE(country_code, thread_key)
 );
