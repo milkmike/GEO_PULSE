@@ -25,7 +25,7 @@ TOPIC_WEIGHT = 0.15
 FRESHNESS_WEIGHT = 0.10
 TRUST_WEIGHT = 0.10
 STORY_WEIGHT = 0.05
-SEARCH_RANKING_VERSION = "v1"
+SEARCH_RANKING_VERSION = "v2-query-integrity"
 POSTGRES_INTEGER_MAX = 2_147_483_647
 
 _STRUCTURED_FILTERS = {
@@ -37,7 +37,7 @@ _STRUCTURED_FILTERS = {
     "tier",
     "language",
 }
-_NON_WORD_RE = re.compile(r"[^\w]+", re.UNICODE)
+_NON_WORD_RE = re.compile(r'[^\w"\s-]+', re.UNICODE)
 
 
 class _CursorRequestMismatch(ValueError):
@@ -49,7 +49,10 @@ WITH search_query AS (
     SELECT CASE
         WHEN :q <> '' THEN websearch_to_tsquery('simple', :q)
         ELSE NULL
-    END AS tsq
+    END AS tsq,
+    (POSITION('"' IN :q) = 0
+     AND :q !~ '(^|[[:space:]])-'
+     AND :q !~* '(^|[[:space:]])or([[:space:]]|$)') AS allow_expansion
 ),
 latest_article AS (
     SELECT COALESCE(a.collected_at, a.published_at) AS collected_at, a.id
@@ -87,11 +90,21 @@ publisher_article_candidates AS MATERIALIZED (
         JOIN article_country_facts canonical_source
           ON canonical_source.article_id = candidate.id
          AND canonical_source.id = publisher_filter.id
+        LEFT JOIN analysis candidate_analysis ON candidate_analysis.article_id = candidate.id
         WHERE (
             candidate.source_id = publisher_filter.id
             OR candidate.publisher_source_id = publisher_filter.id
         )
           AND candidate.is_duplicate = FALSE
+          AND (:topic IS NULL OR candidate_analysis.topics @> ARRAY[CAST(:topic AS TEXT)])
+          AND (:entity_id IS NULL OR EXISTS (
+              SELECT 1 FROM article_entity_mentions candidate_mention
+              WHERE candidate_mention.article_id = candidate.id
+                AND candidate_mention.entity_id = CAST(:entity_id AS UUID)
+          ))
+          AND (:date_from IS NULL OR candidate.published_at >= CAST(:date_from AS DATE))
+          AND (:date_to IS NULL OR candidate.published_at < CAST(:date_to AS DATE) + INTERVAL '1 day')
+          AND (:language IS NULL OR candidate.language = :language)
           AND (
               snapshot_state.snapshot_collected_at IS NULL
               OR (COALESCE(candidate.collected_at, candidate.published_at),
@@ -147,10 +160,12 @@ matching_entity_ids AS MATERIALIZED (
     JOIN canonical_entities ce
       ON ce.kind = kinds.kind AND ce.normalized_name = :q
     WHERE :q <> ''
+      AND (SELECT allow_expansion FROM search_query)
     UNION
     SELECT ea.entity_id
     FROM entity_aliases ea
     WHERE :q <> ''
+      AND (SELECT allow_expansion FROM search_query)
       AND ea.ambiguous = FALSE
       AND ea.normalized_alias = :q
 ),
@@ -159,7 +174,6 @@ lexical_article_ids AS MATERIALIZED (
     FROM articles a
     CROSS JOIN search_query sq
     WHERE :q <> ''
-      AND NOT EXISTS (SELECT 1 FROM matching_entity_ids)
       AND a.search_vector @@ sq.tsq
       AND a.is_duplicate = FALSE
 ),
@@ -216,7 +230,9 @@ trigram_candidates AS (
     JOIN article_country_facts s ON s.article_id = a.id
     LEFT JOIN analysis an ON an.article_id = a.id
     CROSS JOIN snapshot snapshot_state
+    CROSS JOIN search_query sq
     WHERE :q <> ''
+      AND sq.allow_expansion
       AND NOT EXISTS (SELECT 1 FROM matching_entity_ids)
       AND NOT EXISTS (
           SELECT 1 FROM full_text_candidates OFFSET 9 LIMIT 1
@@ -288,21 +304,12 @@ entity_candidates AS (
 topic_candidates AS (
     SELECT an.article_id AS id, 0.0::REAL AS lexical_score,
            'topic'::TEXT AS match_kind
-    FROM source_filtered_articles source_article
-    JOIN analysis an ON an.article_id = source_article.id
-    WHERE (:country IS NOT NULL OR :tier IS NOT NULL)
-      AND :q <> ''
-      AND an.topics @> ARRAY[CAST(:q AS TEXT)]
-    UNION ALL
-    SELECT an.article_id AS id, 0.0::REAL AS lexical_score,
-           'topic'::TEXT AS match_kind
     FROM analysis an
     JOIN articles a ON a.id = an.article_id
     JOIN article_country_facts s ON s.article_id = a.id
     CROSS JOIN snapshot snapshot_state
-    WHERE :country IS NULL
-      AND :tier IS NULL
-      AND :q <> ''
+    WHERE :q <> ''
+      AND (SELECT allow_expansion FROM search_query)
       AND an.topics @> ARRAY[CAST(:q AS TEXT)]
       AND a.is_duplicate = FALSE
       AND (
@@ -333,6 +340,7 @@ matching_story_ids AS MATERIALIZED (
     FROM stories st
     CROSS JOIN search_query sq
     WHERE :q <> ''
+      AND sq.allow_expansion
       AND to_tsvector(
           'simple', COALESCE(st.title_ru, '') || ' ' ||
                     COALESCE(st.summary, '')
@@ -343,21 +351,11 @@ story_candidates AS (
            'story'::TEXT AS match_kind
     FROM matching_story_ids matched_story
     JOIN story_articles sa_match ON sa_match.story_id = matched_story.id
-    JOIN source_filtered_articles source_article
-      ON source_article.id = sa_match.article_id
-    WHERE (:country IS NOT NULL OR :tier IS NOT NULL)
-    UNION ALL
-    SELECT DISTINCT sa_match.article_id AS id, 0.0::REAL AS lexical_score,
-           'story'::TEXT AS match_kind
-    FROM matching_story_ids matched_story
-    JOIN story_articles sa_match ON sa_match.story_id = matched_story.id
     JOIN articles a ON a.id = sa_match.article_id
     JOIN article_country_facts s ON s.article_id = a.id
     LEFT JOIN analysis an ON an.article_id = a.id
     CROSS JOIN snapshot snapshot_state
-    WHERE :country IS NULL
-      AND :tier IS NULL
-      AND a.is_duplicate = FALSE
+    WHERE a.is_duplicate = FALSE
       AND (
           snapshot_state.snapshot_collected_at IS NULL
           OR (COALESCE(a.collected_at, a.published_at), a.id) <=
@@ -656,6 +654,15 @@ limited_candidates AS (
     LIMIT :candidate_limit
 )
 SELECT a.id, a.title, a.summary,
+       ((SELECT COUNT(*) FROM full_text_candidate_ids) >= :candidate_limit
+        OR (SELECT COUNT(*) FROM trigram_candidates) >= :candidate_limit
+        OR (SELECT COUNT(*) FROM entity_candidates) >= :candidate_limit
+        OR (SELECT COUNT(*) FROM structured_language_candidates) >= :candidate_limit
+        OR (SELECT COUNT(*) FROM limited_candidates) >= :candidate_limit
+        OR (:q = '' AND EXISTS (
+            SELECT 1 FROM publisher_article_candidates
+            GROUP BY publisher_id HAVING COUNT(*) >= :candidate_limit
+        ))) AS candidate_limit_reached,
        COALESCE(NULLIF(a.resolved_url, ''), a.url) AS url,
        a.published_at, a.language,
        s.name AS source_name, s.country_code, s.tier,
@@ -680,7 +687,12 @@ SELECT a.id, a.title, a.summary,
        END AS lexical_field,
        CASE
            WHEN candidates.match_kind = 'full_text' THEN ts_headline(
-               'simple', COALESCE(a.title, a.summary, a.body, ''), sq.tsq,
+               'simple', CASE
+                   WHEN to_tsvector('simple', COALESCE(a.title, '')) @@ sq.tsq THEN a.title
+                   WHEN to_tsvector('simple', COALESCE(a.summary, '')) @@ sq.tsq THEN a.summary
+                   WHEN to_tsvector('simple', COALESCE(a.body, '')) @@ sq.tsq THEN a.body
+                   ELSE CONCAT_WS(' ', a.title, a.summary, a.body)
+               END, sq.tsq,
                'StartSel=«, StopSel=», MaxWords=35, MinWords=12'
            )
            WHEN candidates.match_kind = 'trigram' THEN a.title
@@ -777,7 +789,7 @@ class SearchScore:
 
 
 def normalize_query(value: str) -> str:
-    """Normalize multilingual search text without language-specific stemming."""
+    """Normalize text while retaining PostgreSQL web-search phrase/NOT/OR syntax."""
 
     normalized = unicodedata.normalize("NFKC", value or "").casefold()
     normalized = normalized.replace("ё", "е")
@@ -1295,5 +1307,8 @@ def search_articles(
     return {
         "items": [item for item, _ in page_rows],
         "candidate_count": len(rows),
+        "candidate_limit_reached": any(
+            bool(_row_value(row, "candidate_limit_reached", False)) for row in rows
+        ),
         "next_cursor": next_cursor,
     }

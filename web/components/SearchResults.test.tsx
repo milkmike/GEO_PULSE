@@ -75,7 +75,8 @@ describe("SearchResults", () => {
 
     await user.click(screen.getByRole("button", { name: /почему найдено/i }));
     expect(screen.getByText(result.why_included)).toBeVisible();
-    expect(screen.getByText(/достоверность 91%/i)).toBeVisible();
+    expect(screen.getByText(/уверенность совпадения 91%/i)).toBeVisible();
+    expect(screen.queryByText(/достоверность/i)).not.toBeInTheDocument();
   });
 
   it("links story matches only when stories navigation is enabled", () => {

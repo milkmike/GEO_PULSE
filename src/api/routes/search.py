@@ -131,5 +131,6 @@ def search_articles_endpoint(
         "semantic_search": "unavailable",
         "items": items,
         "candidate_count": int(page.get("candidate_count", len(items))),
+        "candidate_limit_reached": bool(page.get("candidate_limit_reached", False)),
         "next_cursor": _serialize_cursor(page.get("next_cursor")),
     }

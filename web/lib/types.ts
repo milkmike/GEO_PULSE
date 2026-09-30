@@ -319,6 +319,7 @@ export interface ArticleSearchResponse {
   semantic_search: "unavailable" | string;
   items: SearchArticle[];
   candidate_count: number;
+  candidate_limit_reached?: boolean;
   next_cursor: string | null;
 }
 

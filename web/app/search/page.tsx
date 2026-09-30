@@ -95,6 +95,7 @@ function SearchPageContent() {
   const [activeSuggestion, setActiveSuggestion] = useState(-1);
   const [items, setItems] = useState<SearchArticle[]>([]);
   const [candidateCount, setCandidateCount] = useState(0);
+  const [candidateLimitReached, setCandidateLimitReached] = useState(false);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -186,6 +187,7 @@ function SearchPageContent() {
     if (!shouldSearch) {
       setItems([]);
       setCandidateCount(0);
+      setCandidateLimitReached(false);
       setNextCursor(null);
       setLoading(false);
       setError(null);
@@ -196,12 +198,14 @@ function SearchPageContent() {
     setError(null);
     setItems([]);
     setCandidateCount(0);
+    setCandidateLimitReached(false);
     setNextCursor(null);
     api.searchArticles(currentRequest, null, controller.signal)
       .then((response) => {
         if (controller.signal.aborted || activeParamsKeyRef.current !== paramsKey) return;
         setItems(response.items);
         setCandidateCount(response.candidate_count);
+        setCandidateLimitReached(Boolean(response.candidate_limit_reached));
         setNextCursor(response.next_cursor);
       })
       .catch((reason: unknown) => {
@@ -298,6 +302,7 @@ function SearchPageContent() {
         ];
       });
       setCandidateCount(response.candidate_count);
+      setCandidateLimitReached(Boolean(response.candidate_limit_reached));
       setNextCursor(response.next_cursor);
     } catch (reason: unknown) {
       if (controller.signal.aborted || activeParamsKeyRef.current !== requestKey) return;
@@ -367,6 +372,11 @@ function SearchPageContent() {
         </div>
 
         <div className="mt-6 border-t border-line pt-5">
+          <p className="mb-4 text-[12px] leading-5 text-dim">
+            Кавычки ищут точную фразу: «&quot;Северный поток&quot;». Минус исключает слово:
+            «санкции -спорт». OR ищет любой вариант: «Газпром OR Gazprom».
+            Страна относится к источнику публикации.
+          </p>
           <p className="card-title mb-3 flex items-center gap-2">
             <SlidersHorizontal aria-hidden="true" size={12} /> точная линза
           </p>
@@ -610,9 +620,15 @@ function SearchPageContent() {
             <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
               <p className="card-title">найденные материалы</p>
               <p className="tnum text-[10px] uppercase tracking-[0.08em] text-dim">
-                показано {items.length} · кандидатов {candidateCount}
+                показано {items.length} · в выборке {candidateCount}
               </p>
             </div>
+            {candidateLimitReached && (
+              <p role="status" className="mb-4 border-l-2 border-cooling pl-3 text-[12px] leading-5 text-dim">
+                Выборка ограничена: часть совпадений может не войти в результаты.
+                Сузьте период или добавьте фильтры, чтобы проверить материалы за нужный срез.
+              </p>
+            )}
             <SearchResults items={items} />
             {nextCursor && (
               <div className="border-b border-line py-7 text-center">
