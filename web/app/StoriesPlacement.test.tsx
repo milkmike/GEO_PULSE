@@ -23,6 +23,9 @@ const apiMocks = vi.hoisted(() => ({
 
 vi.mock("@/lib/api", () => ({ api: apiMocks, apiBase: () => "http://api.test" }));
 vi.mock("@/components/SiteHeader", () => ({ default: () => <nav>header</nav> }));
+vi.mock("@/components/DecisionWorkspace", () => ({
+  default: () => <section aria-label="Аналитическое рабочее место">Рабочее место</section>,
+}));
 vi.mock("@/components/SortableGrid", () => ({
   default: ({ items }: { items: { id: string; node: ReactNode }[] }) => <>{items.map((item) => <div key={item.id}>{item.node}</div>)}</>,
 }));
@@ -116,6 +119,8 @@ describe("story placements", () => {
       </FeatureFlagsProvider>,
     );
     expect(await screen.findByText("Свежая повестка")).toBeVisible();
+    expect(screen.getByRole("region", { name: "Аналитическое рабочее место" })
+      .compareDocumentPosition(screen.getByText("Свежая повестка")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.queryByRole("link", { name: "Сюжет 15" })).not.toBeInTheDocument();
     expect(apiMocks.stories).not.toHaveBeenCalled();
     expect(apiMocks.agendas).toHaveBeenCalledWith({ limit: 6 }, expect.any(AbortSignal));

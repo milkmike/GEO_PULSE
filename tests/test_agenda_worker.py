@@ -38,6 +38,7 @@ def harness(monkeypatch):
     monkeypatch.setattr(worker.store,'get_cached_decisions',lambda keys:{})
     monkeypatch.setattr(worker,'check_tariff',Mock())
     monkeypatch.setattr(worker,'run_translation_cycle',Mock(return_value={'status':'ok','calls':0,'translated':0}))
+    monkeypatch.setattr(worker,'run_decision_cycle',Mock(return_value={'status':'ok','calls':0,'annotated':0}),raising=False)
     reserve=Mock(return_value='reservation')
     monkeypatch.setattr(worker.budget,'reserve_request',reserve)
     settled=Mock()
@@ -152,3 +153,35 @@ def test_translation_runs_after_discovery_and_failure_keeps_jev_result(monkeypat
     result=worker.run_cycle(budget_usd=Decimal('3'))
     assert result['status']=='ok' and result['accepted']==1
     assert result['translation']['status']=='error'
+
+
+def test_decision_extraction_runs_with_same_budget_after_translation(monkeypatch,harness):
+    worker,articles,page,reserve,settled,saved,attached=harness
+    monkeypatch.setattr(worker,'_request',lambda payload,*args:response(payload))
+    def extract(**kwargs):
+        attached.assert_called_once()
+        worker.run_translation_cycle.assert_called_once()
+        assert kwargs=={'budget_usd':Decimal('3'),'campaign':worker.CAMPAIGN}
+        return {'status':'ok','calls':1,'annotated':1}
+    monkeypatch.setattr(worker,'run_decision_cycle',extract)
+    result=worker.run_cycle(budget_usd=Decimal('3'))
+    assert result['decision_extraction']=={'status':'ok','calls':1,'annotated':1}
+
+
+def test_decision_extraction_failure_preserves_discovery_and_translation(monkeypatch,harness):
+    worker,articles,page,reserve,settled,saved,attached=harness
+    monkeypatch.setattr(worker,'_request',lambda payload,*args:response(payload))
+    monkeypatch.setattr(worker,'run_decision_cycle',Mock(side_effect=ValueError('invalid evidence')))
+    result=worker.run_cycle(budget_usd=Decimal('3'))
+    assert result['status']=='ok' and result['accepted']==1
+    assert result['translation']['status']=='ok'
+    assert result['decision_extraction']=={'status':'error'}
+
+
+def test_jev_tariff_outage_does_not_block_independent_decision_extraction(monkeypatch,harness):
+    worker,*_=harness
+    monkeypatch.setattr(worker,'check_tariff',Mock(side_effect=ValueError('catalog unavailable')))
+    result=worker.run_cycle(budget_usd=Decimal('3'))
+    assert result['status']=='error'
+    worker.run_decision_cycle.assert_called_once_with(budget_usd=Decimal('3'),campaign=worker.CAMPAIGN)
+    assert result['decision_extraction']['status']=='ok'

@@ -13,6 +13,7 @@ import SignalFeed from "@/components/SignalFeed";
 import SiteHeader from "@/components/SiteHeader";
 import SortableGrid, { type SortableItem } from "@/components/SortableGrid";
 import AgendaHighlights from "@/components/AgendaHighlights";
+import DecisionWorkspace from "@/components/DecisionWorkspace";
 import { useFeatureFlags } from "@/components/FeatureFlagsProvider";
 import WorldMap from "@/components/WorldMap";
 import { api } from "@/lib/api";
@@ -257,6 +258,8 @@ export default function HomePage() {
           </span>
         }
       />
+
+      <DecisionWorkspace />
 
       {meta && (
         <Filters
