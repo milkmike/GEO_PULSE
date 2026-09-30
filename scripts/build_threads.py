@@ -1,5 +1,6 @@
 """Narrative Threads v2 — LLM-powered dedup, structured narratives, smart scoring."""
 import argparse
+import hashlib
 import json
 import logging
 import math
@@ -14,6 +15,7 @@ from src.config import COUNTRY_NAMES, OPENROUTER_API_KEY, HEAVY_MODEL
 from src.db import get_session, wait_for_db
 from src.api_tracker import track_api_call, track_duration
 from src.embedding_store import EmbeddingStore
+from src.jev import review_story_pairs
 from src.stories import build_stories as build_global_stories
 from scripts.prepare_embedding_jobs import load_story_embedding_coverage
 
@@ -305,6 +307,7 @@ def fetch_articles(session, days: int = 30) -> list[dict]:
             an.event_type,
             active_embeddings.object_id IS NOT NULL AS has_embedding,
             ar.title,
+            LEFT(COALESCE(NULLIF(ar.summary, ''), ar.body, ''), 1200) AS excerpt,
             ar.url,
             ar.published_at,
             s.id AS publisher_source_id,
@@ -342,6 +345,7 @@ def fetch_articles(session, days: int = 30) -> list[dict]:
             "action_level": r.action_level or 1,
             "event_type": r.event_type,
             "title": r.title,
+            "excerpt": getattr(r, "excerpt", "") or "",
             "url": r.url,
             "published_at": r.published_at,
             "publisher_source_id": r.publisher_source_id,
@@ -450,6 +454,14 @@ def premerge_special_cases(cc_clusters: list[tuple[str, list[dict]]]) -> tuple[l
 
 
 # ── Step 2: Clustering ──────────────────────────────────
+
+def _text_cluster_id(cc: str, key: str) -> str:
+    # Preserve existing short text keys. Reserve component suffixes and avoid
+    # collisions when long labels are persisted in a 200-character column.
+    if len(key) > 200 or " [emb:" in key or " [text:" in key:
+        suffix = f" [text:{hashlib.sha256(key.encode()).hexdigest()[:20]}]"
+        key = key[:200 - len(suffix)] + suffix
+    return f"{cc}:{key}"
 
 def cluster_pass1_embeddings(
     session,
@@ -560,7 +572,8 @@ def cluster_pass1_embeddings(
             groups[root].append(a)
 
         # Create cluster IDs using the best event_key or title
-        for root_id, group_articles in groups.items():
+        for group_articles in sorted(groups.values(), key=lambda group: min(a["article_id"] for a in group)):
+            group_articles = sorted(group_articles, key=lambda a: a["article_id"])
             # Pick best key for cluster naming
             keys_with_articles = [(a["event_key"], a) for a in group_articles if a["event_key"] != "(no key)"]
             if keys_with_articles:
@@ -570,7 +583,11 @@ def cluster_pass1_embeddings(
                 # No event_key — use truncated title
                 best_key = group_articles[0]["title"][:80].lower()
 
-            cluster_id = f"{cc}:{best_key}"
+            # Always identify the component, including the first one. Otherwise
+            # a later rolling window could reuse another component's bare key.
+            # Losing the anchor may split a thread, but cannot take its identity.
+            suffix = f" [emb:{group_articles[0]['article_id']}]"
+            cluster_id = f"{cc}:{best_key[:200 - len(suffix)]}{suffix}"
             clusters[cluster_id] = group_articles
 
         # Handle articles without embeddings via trgm
@@ -685,7 +702,7 @@ def _cluster_trgm_country(session, cc: str, articles: list[dict]) -> dict[str, l
 
     clusters = {}
     for canonical, keys in groups.items():
-        cluster_id = f"{cc}:{canonical}"
+        cluster_id = _text_cluster_id(cc, canonical)
         cluster_articles = [a for a in articles if a["event_key"] in set(keys)]
         if cluster_articles:
             clusters[cluster_id] = cluster_articles
@@ -770,7 +787,7 @@ def cluster_pass1_trgm(session, articles: list[dict]) -> dict[str, list[dict]]:
             groups[find(k)].append(k)
 
         for canonical, keys in groups.items():
-            cluster_id = f"{cc}:{canonical}"
+            cluster_id = _text_cluster_id(cc, canonical)
             cluster_articles = [a for a in cc_articles if a["event_key"] in set(keys)]
             if cluster_articles:
                 clusters[cluster_id] = cluster_articles
@@ -1654,6 +1671,9 @@ def rebuild_recent_threads(
             if thread_id is not None:
                 thread_ids.add(thread_id)
 
+    # Shadow decisions never affect memberships. Release the DB transaction
+    # before the optional, deadline-bounded network call.
+    review_story_pairs(articles, clusters)
     return thread_ids
 
 

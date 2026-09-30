@@ -491,6 +491,6 @@ def test_collect_all_selects_source_config():
         collect._update_collector_stats = original_stats
 
     assert statements == [
-        "SELECT id, name, url, country_code, source_type, weight, config "
-        "FROM sources WHERE active = true"
+        "SELECT id, name, url, country_code, source_type, weight, config, language "
+        "FROM sources WHERE active = true AND source_type IN ('rss', 'web')"
     ]
