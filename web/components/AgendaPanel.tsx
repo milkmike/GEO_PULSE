@@ -60,7 +60,7 @@ function Evidence({ article }: { article: AgendaArticle }) {
   );
 }
 
-function AgendaCard({ item }: { item: AgendaItem }) {
+export function AgendaCard({ item }: { item: AgendaItem }) {
   const [expanded, setExpanded] = useState(false);
   const evidenceId = useId();
   const verified = /^typesafe\/jev(?:-|$)/i.test(item.model ?? "")
@@ -74,7 +74,7 @@ function AgendaCard({ item }: { item: AgendaItem }) {
       <h3 className="mt-3 break-words text-lg font-medium leading-7">{item.title}</h3>
       <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-dim">
         <span>Публикаций: {item.article_count}</span><span>Источников: {item.source_count}</span>
-        <span>Обновлено: {formatDate(item.updated_at) ?? "дата не указана"}{formatDate(item.updated_at) && " МСК"}</span>
+        <span>Последняя публикация собрана: {formatDate(item.last_seen) ?? "дата не указана"}{formatDate(item.last_seen) && " МСК"}</span>
       </div>
       <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-dim">
         <span>Страны издателей:</span>

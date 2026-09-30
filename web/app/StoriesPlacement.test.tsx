@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Dossier, StoryListItem } from "@/lib/types";
+import type { AgendaItem, Dossier, StoryListItem } from "@/lib/types";
 import HomePage from "./page";
 import CountryPage from "./country/[code]/page";
 import { FeatureFlagsProvider } from "@/components/FeatureFlagsProvider";
@@ -15,7 +15,7 @@ vi.mock("next/navigation", () => ({
 
 const apiMocks = vi.hoisted(() => ({
   countries: vi.fn(), signals: vi.fn(), worldBrief: vi.fn(), meta: vi.fn(),
-  worldHeadlines: vi.fn(), topicCountries: vi.fn(), topicBrief: vi.fn(), stories: vi.fn(),
+  worldHeadlines: vi.fn(), topicCountries: vi.fn(), topicBrief: vi.fn(), stories: vi.fn(), agendas: vi.fn(),
   dossier: vi.fn(), topics: vi.fn(), headlines: vi.fn(), entities: vi.fn(), fx: vi.fn(),
   countryBrief: vi.fn(), unVotes: vi.fn(), trade: vi.fn(), agreements: vi.fn(),
   countryStories: vi.fn(), generateCountryBrief: vi.fn(),
@@ -81,6 +81,7 @@ function deferred<T>() {
 describe("story placements", () => {
   beforeEach(() => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date("2026-09-30T12:00:00Z"));
     Object.values(apiMocks).forEach((mock) => mock.mockReset());
     apiMocks.countries.mockResolvedValue({ countries: [], total: 0 });
     apiMocks.signals.mockResolvedValue({ signals: [] });
@@ -100,18 +101,24 @@ describe("story placements", () => {
 
   afterEach(() => vi.useRealTimers());
 
-  it("shows exactly six latest stories on the home dashboard", async () => {
-    apiMocks.stories.mockResolvedValue({ stories: Array.from({ length: 8 }, (_, index) => story(index + 1)), next_cursor: null });
+  it("shows recent collected agendas instead of all-time legacy stories on home", async () => {
+    const agenda: AgendaItem = {
+      id: 1, title: "Свежая повестка", article_count: 2, source_count: 2,
+      countries: ["ES", "RU"], first_seen: "2026-09-30T09:00:00Z",
+      last_seen: "2026-09-30T11:00:00Z", updated_at: "2026-09-30T11:30:00Z",
+      same_event_count: 1, development_count: 0, model: "typesafe/jev-1.13", articles: [],
+    };
+    apiMocks.agendas.mockResolvedValue({ items: [agenda], coverage: { status: "ok", last_run_at: null }, has_more: false });
+    apiMocks.stories.mockResolvedValue({ stories: [story(15)], next_cursor: null });
     render(
       <FeatureFlagsProvider flags={{ searchNavigation: false, storiesNavigation: true, investigation: false, signalDetail: false, earlyWarningRadar: false }}>
         <HomePage />
       </FeatureFlagsProvider>,
     );
-
-    expect(await screen.findByRole("region", { name: /главные межстрановые сюжеты/i })).toBeVisible();
-    expect(screen.getByRole("link", { name: "Сюжет 6" })).toHaveAttribute("href", "/stories/6");
-    expect(screen.queryByRole("link", { name: "Сюжет 7" })).not.toBeInTheDocument();
-    expect(apiMocks.stories).toHaveBeenCalledWith({ limit: 6 });
+    expect(await screen.findByText("Свежая повестка")).toBeVisible();
+    expect(screen.queryByRole("link", { name: "Сюжет 15" })).not.toBeInTheDocument();
+    expect(apiMocks.stories).not.toHaveBeenCalled();
+    expect(apiMocks.agendas).toHaveBeenCalledWith({ limit: 6 }, expect.any(AbortSignal));
   });
 
   it("does not query or expose story panels while the server snapshot is off", async () => {
@@ -123,7 +130,8 @@ describe("story placements", () => {
 
     await waitFor(() => expect(apiMocks.countries).toHaveBeenCalled());
     expect(apiMocks.stories).not.toHaveBeenCalled();
-    expect(screen.queryByRole("region", { name: /главные межстрановые сюжеты/i })).not.toBeInTheDocument();
+    expect(apiMocks.agendas).not.toHaveBeenCalled();
+    expect(screen.queryByRole("region", { name: /свежие новостные повестки/i })).not.toBeInTheDocument();
   });
 
   it("keeps an explicit story panel on a country page even when it is empty", async () => {
