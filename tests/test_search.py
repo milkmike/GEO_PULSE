@@ -483,6 +483,18 @@ def test_search_endpoint_returns_retryable_503_on_timeout():
     assert response.json()["detail"] == "article search timed out; retry the request"
 
 
+def test_search_endpoint_exposes_candidate_saturation():
+    def bounded_service(query):
+        return {"items": [], "candidate_count": 500, "candidate_limit_reached": True}
+
+    app.dependency_overrides[get_search_service] = lambda: bounded_service
+    try:
+        response = TestClient(app).get("/api/v2/search/articles", params={"q": "санкции"})
+    finally:
+        app.dependency_overrides.pop(get_search_service, None)
+    assert response.json()["candidate_limit_reached"] is True
+
+
 def test_full_text_search_bounds_ids_before_expensive_rank_calculation():
     lexical_ids_sql = ARTICLE_SEARCH_SQL[
         ARTICLE_SEARCH_SQL.index("lexical_article_ids AS"):
@@ -500,9 +512,6 @@ def test_full_text_search_bounds_ids_before_expensive_rank_calculation():
 
     assert "lexical_article_ids AS MATERIALIZED" in lexical_ids_sql
     assert "a.search_vector @@ sq.tsq" in lexical_ids_sql
-    assert "NOT EXISTS (SELECT 1 FROM matching_entity_ids)" in " ".join(
-        lexical_ids_sql.split()
-    )
     assert "ORDER BY" not in lexical_ids_sql
     assert "FROM lexical_article_ids lexical" in candidate_ids_sql
     assert "JOIN articles a ON a.id = lexical.id" in candidate_ids_sql
@@ -562,7 +571,7 @@ def test_search_sql_uses_verified_publishers_and_resolved_article_urls():
     assert "COALESCE(NULLIF(a.resolved_url, ''), a.url) AS url" in compact_sql
 
 
-def test_country_candidates_keep_per_publisher_cap_before_structured_filters():
+def test_country_candidates_bound_filtered_rows_per_publisher():
     publisher_candidates_sql = ARTICLE_SEARCH_SQL[
         ARTICLE_SEARCH_SQL.index("publisher_article_candidates AS"):
         ARTICLE_SEARCH_SQL.index("matching_sources AS")

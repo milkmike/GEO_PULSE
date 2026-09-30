@@ -170,7 +170,7 @@ function ResultCard({
           >
             <p>{item.why_included}</p>
             <p className="tnum mt-1 text-[10px] uppercase tracking-[0.08em] text-dim">
-              Релевантность {Math.round(item.relevance_score * 100)}% · достоверность{" "}
+              Релевантность {Math.round(item.relevance_score * 100)}% · уверенность совпадения{" "}
               {Math.round(item.confidence * 100)}%
             </p>
           </div>

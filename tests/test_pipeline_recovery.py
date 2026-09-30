@@ -80,6 +80,20 @@ def test_short_acronyms_do_not_match_inside_words(title):
     assert not is_relevant(title)
 
 
+@pytest.mark.parametrize("title", [
+    "Gazprom signs gas deal", "Rosatom builds nuclear plant", "Rosneft earnings",
+    "Lukoil signs a contract", "Russian Railways opens route", "Санкционные ограничения",
+    "Переговоры о санкциях", "Rosatom's new project",
+])
+def test_company_aliases_and_sanctions_forms_reach_analysis(title):
+    assert is_relevant(title)
+
+
+@pytest.mark.parametrize("title", ["NotRosatomCompany launches", "Gazprometer device", "Migrant birds arrive"])
+def test_company_aliases_do_not_admit_unrelated_substrings(title):
+    assert not is_relevant(title)
+
+
 @pytest.mark.parametrize(("title", "declared", "expected"), [
     ("Über neue Gespräche in Berlin", "de", "de"),
     ("Über neue Gespräche in Berlin", "ru", "und"),

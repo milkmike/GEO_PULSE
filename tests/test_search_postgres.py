@@ -459,9 +459,8 @@ def test_actual_search_plans_use_selective_indexes_and_bounded_candidates():
             node for node in _walk_plan(structured_entity_country_root["Plan"])
             if node.get("Actual Loops", 0) > 0
         ]
-        # The newest canonical EL PAÍS row is inside the per-publisher cap but
-        # has no entity mention; structured filters run after that cap.
-        assert len(structured_entity_rows) == 499
+        # The unrelated newest row must not consume a filtered candidate slot.
+        assert len(structured_entity_rows) == 500
         assert not any(
             node.get("Node Type") in {"Aggregate", "Sort", "Unique"}
             and node.get("Actual Rows", 0) > 500

@@ -110,6 +110,18 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+it("warns that saturated candidates are not the whole archive", async () => {
+  navigation.params = "q=санкции&range=all";
+  apiMocks.searchArticles.mockResolvedValue({
+    ...response([article(1, "Санкции")]),
+    candidate_count: 500,
+    candidate_limit_reached: true,
+  });
+  render(<SearchPage />);
+  expect(await screen.findByText(/выборка ограничена/i)).toBeVisible();
+  expect(screen.getByText(/сузьте период или добавьте фильтры/i)).toBeVisible();
+});
+
 describe("SearchPage URL and request lifecycle", () => {
   it("canonicalizes the default 90-day range into the URL before searching", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
