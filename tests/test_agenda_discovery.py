@@ -195,3 +195,66 @@ def test_duplicate_or_self_candidates_are_not_sent_twice():
     payload, pairs = prepare_pair_payload(a, [a, b, b])
     assert list(pairs) == ['pair_1_2']
     assert set(payload['state']['articles']) == {'1', '2'}
+
+
+def test_cached_rejected_pairs_cannot_fill_the_first_group_forever():
+    from src.agenda_discovery import candidate_group_page
+
+    rows = [article(4, 'Orchid laboratory chemical explosion'), article(3, 'Orchid laboratory chemical explosion'),
+            article(2, 'Meridian ferry rescue operation'), article(1, 'Meridian ferry rescue operation')]
+    first = candidate_group_page(rows, max_groups=1)
+    assert first['groups'][0]['anchor']['id'] == 4
+    known = {pair_cache_key(rows[0], rows[1]), pair_cache_key(rows[1], rows[0])}
+    second = candidate_group_page(rows, max_groups=1, known_pair_keys=known)
+    assert second['groups'][0]['anchor']['id'] == 2
+    assert [r['id'] for r in second['groups'][0]['candidates']] == [1]
+
+
+def test_continuation_advances_through_empty_anchors_and_reaches_older_events():
+    from src.agenda_discovery import candidate_group_page
+
+    rows = [article(5, 'Alpha'), article(4, 'Bravo'), article(3, 'Delta'),
+            article(2, 'Meridian ferry rescue operation'), article(1, 'Meridian ferry rescue operation')]
+    first = candidate_group_page(rows, scan_limit=2)
+    assert first == {'groups': [], 'group_cursors': [], 'next_cursor': 2, 'anchors_scanned': 2, 'has_more': True}
+    second = candidate_group_page(rows, cursor=first['next_cursor'], scan_limit=2)
+    assert second['groups'][0]['anchor']['id'] == 2
+    assert second['group_cursors'] == [{'cursor': 3, 'next_cursor': 4}]
+    assert second['anchors_scanned'] == 2
+    last = candidate_group_page(rows, cursor=second['next_cursor'], scan_limit=2)
+    assert last['has_more'] is False and last['next_cursor'] == 0
+
+
+def test_call_cap_can_resume_same_anchor_without_repeating_cached_questions():
+    from src.agenda_discovery import candidate_group_page
+
+    rows = [article(i, 'Orchid laboratory chemical explosion') for i in range(1, 6)]
+    first = candidate_group_page(rows, max_groups=1)
+    group = first['groups'][0]
+    known = {pair_cache_key(group['anchor'], group['candidates'][0])}
+    resumed = candidate_group_page(rows, max_groups=1, cursor=first['group_cursors'][0]['cursor'], known_pair_keys=known)
+    assert resumed['groups'][0]['anchor']['id'] == group['anchor']['id']
+    assert group['candidates'][0]['id'] not in [a['id'] for a in resumed['groups'][0]['candidates']]
+    assert len(resumed['groups'][0]['candidates']) == 3
+
+
+def test_older_cohort_is_retrievable_beyond_popular_token_posting_window():
+    from src.agenda_discovery import candidate_group_page
+
+    rows = [article(i, 'Orchid laboratory chemical explosion') for i in range(1, 401)]
+    page = candidate_group_page(rows, cursor=200, max_groups=1, max_members=4)
+    group = page['groups'][0]
+    assert group['anchor']['id'] == 200
+    assert any(a['id'] < 200 for a in group['candidates'])
+    assert all(abs(a['id'] - 200) <= 64 for a in group['candidates'])
+
+
+def test_existing_rejected_candidates_remain_available_for_a_new_anchor():
+    from src.agenda_discovery import candidate_group_page
+
+    old = article(100, 'Orchid laboratory chemical explosion')
+    a, b = article(2, 'Orchid laboratory chemical explosion followup'), article(1, 'Orchid laboratory chemical explosion followup')
+    known = {pair_cache_key(old, a), pair_cache_key(old, b)}
+    page = candidate_group_page([a, b], [{'id': 40, 'anchor': old, 'articles': [old]}], known_pair_keys=known)
+    assert page['groups'][0]['existing_id'] is None
+    assert page['groups'][0]['anchor']['id'] == 2

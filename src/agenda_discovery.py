@@ -10,7 +10,8 @@ import json
 import math
 import re
 import unicodedata
-from collections import Counter, defaultdict, deque
+from bisect import bisect_left
+from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
 
@@ -20,7 +21,8 @@ MAX_ARTICLES = 30_000
 MAX_PAIRS = 8
 MAX_REQUEST_BYTES = 24_000
 MAX_TIME_GAP_SECONDS = 72 * 3600
-# Each lookup examines at most 12 * 128 postings and scores at most 128 rows.
+# Each feature contributes at most 128 nearby postings; 12 features vote and
+# at most 128 rows are scored for each anchor.
 MAX_POSTINGS = 128
 MAX_FEATURES = 96
 MAX_LOOKUP_FEATURES = 12
@@ -138,75 +140,111 @@ def _similarity(left, right):
     return 0.0
 
 
-def candidate_groups(articles, existing_groups=(), max_groups=30, max_members=20):
-    """Return bounded stable-anchor proposals, never lexical memberships.
+def candidate_groups(articles, existing_groups=(), max_groups=30, max_members=20, *, known_pair_keys=(), cursor=0):
+    """Compatibility list interface; use candidate_group_page for continuation."""
+    return candidate_group_page(articles, existing_groups, max_groups, max_members,
+                                known_pair_keys=known_pair_keys, cursor=cursor,
+                                scan_limit=MAX_ARTICLES + 300)['groups']
 
-    Caller supplies verified publisher attribution and a recent article window.
-    Existing members are unavailable to new groups. Proposed candidates are
-    reserved within this pass to avoid repeated paid comparisons; a rejected
-    proposal can be reconsidered in a later pass. Recall is intentionally bounded.
+
+def candidate_group_page(articles, existing_groups=(), max_groups=30, max_members=20, *,
+                         known_pair_keys=(), cursor=0, scan_limit=512):
+    """Return a resumable page of stable-anchor suspects, never memberships.
+
+    Cached decisions are excluded before candidate reservation. The cursor counts
+    examined anchors, including empty/rejected anchors, in a deterministic order:
+    existing agendas first, then new articles newest first. Persist next_cursor
+    for the next cycle; zero and has_more=False mean the pass is exhausted.
+    group_cursors aligns with groups: resume its cursor if work stopped inside a
+    group, or its next_cursor if that group completed. Known hashes avoid paying
+    for completed pairs after resumption. Cursor offsets describe this snapshot;
+    a changed input window can shift offsets, so completed passes restart at zero.
+
+    Full postings contain at most MAX_ARTICLES * MAX_FEATURES entries. Retrieval
+    reads only small windows near each anchor and scores at most MAX_SCORED rows.
+    Thus continuation can inspect older cohorts despite popular shared features.
     """
     max_groups = min(max(int(max_groups), 0), 30)
     max_members = min(max(int(max_members), 0), 20)
-    if not max_groups or not max_members:
-        return []
-    # Input may be unsorted; select deterministically before bounded retrieval.
+    scan_limit = min(max(int(scan_limit), 1), MAX_ARTICLES + 300)
+    known = set(known_pair_keys)
     valid = sorted((a for a in articles if _valid_article(a)),
                    key=lambda a: (_effective_time(a), a['id']), reverse=True)[:MAX_ARTICLES]
     rows = {}
     for article in valid:
         rows.setdefault(article['id'], article)
     existing = sorted((g for g in existing_groups if isinstance(g, dict) and _valid_article(g.get('anchor'))),
-                      key=lambda g: g['id'])[:300]
+                      key=lambda g: (-_effective_time(g['anchor']).timestamp(), g['id']))[:300]
     members = {a['id'] for g in existing for a in g.get('articles', ()) if isinstance(a, dict) and isinstance(a.get('id'), int)}
     members.update(g['anchor']['id'] for g in existing)
+    anchors = [(g['anchor'], g['id']) for g in existing]
+    anchors.extend((a, None) for a in rows.values() if a['id'] not in members)
+    offset = max(int(cursor), 0)
+    if offset >= len(anchors):
+        offset = 0
+    page = {'groups': [], 'group_cursors': [], 'next_cursor': offset,
+            'anchors_scanned': 0, 'has_more': bool(anchors)}
+    if not max_groups or not max_members or not anchors:
+        return page
+    identities = list(rows)
+    positions = {identity: index for index, identity in enumerate(identities)}
+    times = [-_effective_time(rows[identity]).timestamp() for identity in identities]
     token_sets = {identity: _tokens(a) for identity, a in rows.items()}
     features = {identity: _features(tokens) for identity, tokens in token_sets.items()}
-    postings = defaultdict(lambda: deque(maxlen=MAX_POSTINGS))
-    counts = Counter()
-    for identity in reversed(rows):
-        if identity in members:
-            continue
-        for feature in features[identity]:
-            postings[feature].append(identity)
-            counts[feature] += 1
+    postings = defaultdict(list)
+    for index, identity in enumerate(identities):
+        if identity not in members:
+            for feature in features[identity]:
+                postings[feature].append(index)
     proposed = set(members)
-    result = []
 
     def candidates(anchor):
         tokens = token_sets.get(anchor['id'], _tokens(anchor))
         fs = features.get(anchor['id'], _features(tokens))
-        rare = sorted((f for f in fs if any(i != anchor['id'] and i not in proposed for i in postings[f])),
-                      key=lambda f: (counts[f], f))[:MAX_LOOKUP_FEATURES]
-        votes = Counter(identity for f in rare for identity in postings[f] if identity not in proposed and identity != anchor['id'])
+        anchor_position = positions.get(anchor['id'])
+        if anchor_position is None:
+            anchor_position = bisect_left(times, -_effective_time(anchor).timestamp())
+        windows = {}
+        for feature in fs:
+            entries = postings.get(feature, ())
+            if not entries:
+                continue
+            middle = bisect_left(entries, anchor_position)
+            start = max(0, min(middle - MAX_POSTINGS // 2, len(entries) - MAX_POSTINGS))
+            window = entries[start:start + MAX_POSTINGS]
+            if any(identities[i] != anchor['id'] and identities[i] not in proposed for i in window):
+                windows[feature] = window
+        rare = sorted(windows, key=lambda f: (len(postings[f]), f))[:MAX_LOOKUP_FEATURES]
+        votes = Counter(i for f in rare for i in windows[f]
+                        if identities[i] not in proposed and identities[i] != anchor['id'])
         scored = []
-        for identity, _ in sorted(votes.items(), key=lambda item: (-item[1], -item[0]))[:MAX_SCORED]:
-            candidate = rows[identity]
+        for index, _ in sorted(votes.items(), key=lambda item: (-item[1], abs(item[0] - anchor_position), item[0]))[:MAX_SCORED]:
+            candidate = rows[identities[index]]
             if abs((_effective_time(anchor) - _effective_time(candidate)).total_seconds()) > MAX_TIME_GAP_SECONDS:
                 continue
-            score = _similarity(tokens, token_sets[identity])
-            if score:
-                scored.append((score, candidate))
-        return [a for _, a in sorted(scored, key=lambda item: (-item[0], -item[1]['id']))[:max_members]]
+            score = _similarity(tokens, token_sets[candidate['id']])
+            if score and (not known or pair_cache_key(anchor, candidate) not in known):
+                scored.append((score, abs(index - anchor_position), candidate))
+        return [a for _, _, a in sorted(scored, key=lambda item: (-item[0], item[1], -item[2]['id']))[:max_members]]
 
-    for group in existing:
-        found = candidates(group['anchor'])
-        if found:
-            result.append({'anchor': group['anchor'], 'candidates': found, 'existing_id': group['id']})
-            proposed.update(a['id'] for a in found)
-        if len(result) >= max_groups:
-            return result
-    for identity, anchor in rows.items():
-        if identity in proposed:
+    while offset < len(anchors) and page['anchors_scanned'] < scan_limit:
+        anchor, existing_id = anchors[offset]
+        current = offset
+        offset += 1
+        page['anchors_scanned'] += 1
+        if existing_id is None and anchor['id'] in proposed:
             continue
         found = candidates(anchor)
         if found:
-            result.append({'anchor': anchor, 'candidates': found, 'existing_id': None})
-            proposed.add(identity)
+            page['groups'].append({'anchor': anchor, 'candidates': found, 'existing_id': existing_id})
+            page['group_cursors'].append({'cursor': current, 'next_cursor': offset if offset < len(anchors) else 0})
+            proposed.add(anchor['id'])
             proposed.update(a['id'] for a in found)
-        if len(result) >= max_groups:
+        if len(page['groups']) >= max_groups:
             break
-    return result
+    page['has_more'] = offset < len(anchors)
+    page['next_cursor'] = offset if page['has_more'] else 0
+    return page
 
 
 def prepare_pair_payload(anchor, candidates):
