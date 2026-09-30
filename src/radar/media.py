@@ -16,29 +16,81 @@ from .repository import make_observation
 from .types import Contour, Observation, ObservationWindow
 
 
+# Materialize the date window before enrichment, and resolve signal arrays once
+# for that window. A correlated ANY(... ) OR ANY(...) used to scan the whole
+# signal_evidence table for every article/story membership.
 _MEDIA_ROWS = text("""
-    SELECT a.id AS article_id, a.published_at, a.is_duplicate,
-           source.country_code, source.id AS publisher_id,
-           source.name AS publisher_name, source.url AS publisher_url,
-           publisher.config AS publisher_config,
-           story_link.story_id, analysis.event_key, analysis.sentiment,
-           analysis.is_relevant, COALESCE(analysis.topics, ARRAY[]::text[]) AS topics,
-           ARRAY(SELECT DISTINCT event.event_key FROM story_events event
-                 WHERE event.story_id = story_link.story_id) AS story_event_keys,
-           ARRAY(SELECT DISTINCT entity.entity_id FROM story_entities entity
-                 WHERE entity.story_id = story_link.story_id) AS entity_ids,
-           ARRAY(SELECT DISTINCT evidence.signal_id FROM signal_evidence evidence
-                 WHERE a.id = ANY(evidence.article_ids)
-                    OR story_link.story_id = ANY(evidence.story_ids)) AS signal_ids
-    FROM articles a
-    JOIN article_country_facts source ON source.article_id = a.id
-    JOIN sources publisher ON publisher.id = source.id
-    LEFT JOIN analysis ON analysis.article_id = a.id
-    LEFT JOIN story_articles story_link ON story_link.article_id = a.id
-    WHERE a.is_duplicate = FALSE
-      AND a.published_at >= :window_start
-      AND a.published_at < :window_end
-      AND a.collected_at < :window_end
+    WITH window_articles AS MATERIALIZED (
+      SELECT a.id, a.published_at, a.is_duplicate, a.source_id,
+             a.publisher_source_id, a.geo_status
+      FROM articles a
+      WHERE a.is_duplicate = FALSE
+        AND a.published_at >= :window_start
+        AND a.published_at < :window_end
+        AND a.collected_at < :window_end
+    ), media_rows AS MATERIALIZED (
+      SELECT a.id AS article_id, a.published_at, a.is_duplicate,
+             publisher.country_code, publisher.id AS publisher_id,
+             publisher.name AS publisher_name, publisher.url AS publisher_url,
+             publisher.config AS publisher_config,
+             story_link.story_id, analysis.event_key, analysis.sentiment,
+             analysis.is_relevant, COALESCE(analysis.topics, ARRAY[]::text[]) AS topics
+      FROM window_articles a
+      JOIN sources discovery ON discovery.id = a.source_id
+      JOIN sources publisher ON publisher.id = CASE
+        WHEN COALESCE(discovery.config->>'feed_mode', 'publisher') = 'publisher_discovery'
+          THEN a.publisher_source_id
+        ELSE COALESCE(a.publisher_source_id, a.source_id) END
+      LEFT JOIN analysis ON analysis.article_id = a.id
+        AND analysis.analyzed_at < :window_end
+      LEFT JOIN story_articles story_link ON story_link.article_id = a.id
+      WHERE a.geo_status IN ('source_verified', 'publisher_verified', 'publisher_reassigned')
+        AND (COALESCE(discovery.config->>'feed_mode', 'publisher') <> 'publisher_discovery'
+          OR a.publisher_source_id IS NOT NULL)
+    ), selected_articles AS MATERIALIZED (
+      SELECT DISTINCT article_id FROM media_rows
+    ), selected_stories AS MATERIALIZED (
+      SELECT DISTINCT story_id FROM media_rows WHERE story_id IS NOT NULL
+    ), events AS MATERIALIZED (
+      SELECT event.story_id, array_agg(DISTINCT event.event_key ORDER BY event.event_key) AS keys
+      FROM story_events event
+      JOIN selected_stories selected USING (story_id)
+      GROUP BY event.story_id
+    ), entities AS MATERIALIZED (
+      SELECT entity.story_id, array_agg(DISTINCT entity.entity_id ORDER BY entity.entity_id) AS ids
+      FROM story_entities entity
+      JOIN selected_stories selected USING (story_id)
+      GROUP BY entity.story_id
+    ), selected_evidence AS MATERIALIZED (
+      SELECT evidence.signal_id, evidence.article_ids, evidence.story_ids
+      FROM signal_evidence evidence
+      WHERE evidence.article_ids && ARRAY(SELECT article_id FROM selected_articles)
+         OR evidence.story_ids && ARRAY(SELECT story_id FROM selected_stories)
+    ), article_signals AS MATERIALIZED (
+      SELECT link.article_id, array_agg(DISTINCT evidence.signal_id) AS ids
+      FROM selected_evidence evidence
+      CROSS JOIN LATERAL unnest(evidence.article_ids) AS link(article_id)
+      JOIN selected_articles selected USING (article_id)
+      GROUP BY link.article_id
+    ), story_signals AS MATERIALIZED (
+      SELECT link.story_id, array_agg(DISTINCT evidence.signal_id) AS ids
+      FROM selected_evidence evidence
+      CROSS JOIN LATERAL unnest(evidence.story_ids) AS link(story_id)
+      JOIN selected_stories selected USING (story_id)
+      GROUP BY link.story_id
+    )
+    SELECT media.*,
+           COALESCE(events.keys, ARRAY[]::text[]) AS story_event_keys,
+           COALESCE(entities.ids, ARRAY[]::uuid[]) AS entity_ids,
+           ARRAY(SELECT DISTINCT signal_id
+                 FROM unnest(COALESCE(article_signals.ids, ARRAY[]::integer[])
+                          || COALESCE(story_signals.ids, ARRAY[]::integer[])) AS signal_id
+                 ORDER BY signal_id) AS signal_ids
+    FROM media_rows media
+    LEFT JOIN events USING (story_id)
+    LEFT JOIN entities USING (story_id)
+    LEFT JOIN article_signals USING (article_id)
+    LEFT JOIN story_signals USING (story_id)
 """)
 
 

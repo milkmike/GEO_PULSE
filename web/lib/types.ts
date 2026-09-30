@@ -804,7 +804,15 @@ export interface RadarEvidencePage {
   next_cursor: string | null;
 }
 
+export interface RadarObservationSummary {
+  latest_observation_at: string | null;
+  recent_observation_count: number;
+  recent_country_count: number;
+  days_with_observations_30d: number;
+}
+
 export interface RadarCoverage {
+  observation_summary?: RadarObservationSummary;
   updated_at: string | null;
   coverage_source: string;
   countries: Array<{

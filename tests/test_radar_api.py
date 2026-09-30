@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import inspect
 from uuid import UUID
 
@@ -462,6 +462,8 @@ def test_sql_radar_read_session_rolls_back_and_closes_without_commit(monkeypatch
     assert radar_routes.SqlRadarReadService().coverage() == {
         "updated_at": None,
         "countries": [],
+        "observation_summary": {"latest_observation_at": None, "recent_observation_count": 0,
+                                "recent_country_count": 0, "days_with_observations_30d": 0},
     }
     assert session.rollback_calls == 1
     assert session.close_calls == 1
@@ -945,6 +947,56 @@ def test_postgres_relation_filters_match_direct_and_active_member_evidence(monke
             "/api/v2/radar/trends/00000000-0000-0000-0000-000000000006/evidence",
             params={"cursor": evidence_cursor},
         ).status_code == 422
+    finally:
+        connection.close()
+        engine.dispose()
+
+
+@pytest.mark.skipif(not POSTGRES_URL, reason="GEO_PULSE_TEST_DATABASE_URL is not configured")
+def test_postgres_coverage_aggregates_observed_media_history_in_utc(monkeypatch):
+    engine = create_engine(POSTGRES_URL)
+    connection = engine.connect()
+    try:
+        connection.execute(text("""
+            CREATE TEMP TABLE radar_trends (id BIGINT, country_code TEXT, scope TEXT,
+                coverage_confidence NUMERIC, updated_at TIMESTAMPTZ);
+            CREATE TEMP TABLE radar_observations (country_code TEXT, contour TEXT,
+                observed_at TIMESTAMPTZ, created_at TIMESTAMPTZ DEFAULT now());
+            INSERT INTO radar_trends VALUES(1,'ES','country',.8,now());
+            INSERT INTO radar_observations(country_code,contour,observed_at) VALUES
+                ('ES','media',now()-interval '1 hour'),
+                ('FR','media',now()-interval '2 hours'),
+                ('ES','media',now()-interval '2 hours'),
+                ('JP','action',now()-interval '30 minutes'),
+                ('US','media',now()+interval '1 hour'),
+                ('DE','media',(date_trunc('day',now() AT TIME ZONE 'UTC')-interval '10 days'+interval '30 minutes') AT TIME ZONE 'UTC'),
+                ('DE','media',(date_trunc('day',now() AT TIME ZONE 'UTC')-interval '10 days'+interval '23 hours 30 minutes') AT TIME ZONE 'UTC'),
+                ('GB','media',(date_trunc('day',now() AT TIME ZONE 'UTC')-interval '29 days') AT TIME ZONE 'UTC'),
+                ('PL','media',(date_trunc('day',now() AT TIME ZONE 'UTC')-interval '30 days') AT TIME ZONE 'UTC'),
+                ('IT','media',now()-interval '40 days');
+        """))
+        connection.commit()
+        connection.execute(text("SET TIME ZONE 'Pacific/Kiritimati'"))
+        connection.commit()
+        now = connection.execute(text('SELECT now()')).scalar_one()
+        recent_dates = {(now - timedelta(hours=h)).astimezone(timezone.utc).date() for h in (1, 2)}
+        connection.commit()
+        monkeypatch.setattr(radar_routes, 'SessionLocal', sessionmaker(bind=connection))
+        client = TestClient(FastAPI())
+        client.app.include_router(radar_routes.router)
+        response = client.get('/api/v2/radar/coverage')
+        assert response.status_code == 200
+        summary = response.json()['observation_summary']
+        assert summary['recent_observation_count'] == 3
+        assert summary['recent_country_count'] == 2
+        assert summary['days_with_observations_30d'] == len(recent_dates) + 2
+        assert datetime.fromisoformat(summary['latest_observation_at']) < now
+        assert (now - datetime.fromisoformat(summary['latest_observation_at'])).total_seconds() == pytest.approx(3600, abs=10)
+        connection.execute(text('DELETE FROM radar_observations'))
+        connection.commit()
+        summary = client.get('/api/v2/radar/coverage').json()['observation_summary']
+        assert summary == {'latest_observation_at': None, 'recent_observation_count': 0,
+                           'recent_country_count': 0, 'days_with_observations_30d': 0}
     finally:
         connection.close()
         engine.dispose()
