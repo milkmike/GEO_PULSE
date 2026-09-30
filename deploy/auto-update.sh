@@ -73,8 +73,8 @@ docker compose run --rm migrate >>"$LOG" 2>&1
 # Build first at low CPU/IO priority so a heavy image build (Next.js!) cannot
 # starve the running containers (the box OOM-froze once, 2026-06-12), then
 # swap containers — compose only recreates changed services.
-nice -n 19 ionice -c3 docker compose build >/dev/null 2>&1
-docker compose up -d >/dev/null 2>&1
+nice -n 19 ionice -c3 docker compose --parallel 1 build >>"$LOG" 2>&1
+docker compose up -d >>"$LOG" 2>&1
 
 # Compose can return success while a newly created API has not actually
 # reached the running/listening state. Never advance the durable marker until
