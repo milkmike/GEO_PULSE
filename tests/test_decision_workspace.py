@@ -12,6 +12,14 @@ from src.decision_workspace import project_decision_workspace, load_decision_wor
 NOW = datetime(2026, 9, 30, 12, tzinfo=timezone.utc)
 
 
+def test_api_annotation_contract_tracks_extractor_version_without_postgres():
+    import src.decision_workspace as workspace
+    from src.decision_extraction import MODEL, VERSION
+
+    assert workspace.CURRENT_ANNOTATION_MODEL == MODEL
+    assert workspace.CURRENT_ANNOTATION_VERSION == VERSION
+
+
 def article(*, article_id=1, publisher_country="US", age_hours=2, collected_hours=1,
             title="Serbia changed entry rules for Russians", url="https://example.com/a",
             source_title=None, source_excerpt="Serbia changed entry rules for Russians today.",
@@ -113,6 +121,7 @@ def test_postgres_projection_counts_country_involvement_without_publisher_confus
     from sqlalchemy import create_engine, text
     from sqlalchemy.orm import sessionmaker
     import src.decision_workspace as module
+    from src.decision_extraction import MODEL, VERSION
 
     engine = create_engine(os.environ["GEO_PULSE_TEST_DATABASE_URL"])
     schema = "decision_test_" + uuid4().hex[:12]
@@ -133,7 +142,8 @@ def test_postgres_projection_counts_country_involvement_without_publisher_confus
         """))
         connection.execute(text("""
             CREATE TABLE article_decision_annotations (article_id bigint, source_title text,
-              source_excerpt text, annotation jsonb, analyzed_at timestamptz)
+              source_excerpt text, annotation jsonb, model text, version text,
+              analyzed_at timestamptz)
         """))
         connection.execute(text("""
             CREATE VIEW article_country_facts AS SELECT a.id AS article_id, s.name,
@@ -156,11 +166,12 @@ def test_postgres_projection_counts_country_involvement_without_publisher_confus
                      "published": record["published_at"], "collected": record["collected_at"],
                      "url": record["url"]})
             connection.execute(text("""
-                INSERT INTO article_decision_annotations VALUES
-                    (:id,:title,:excerpt,CAST(:annotation AS jsonb),:analyzed)
+                    INSERT INTO article_decision_annotations VALUES
+                        (:id,:title,:excerpt,CAST(:annotation AS jsonb),:model,:version,:analyzed)
             """), {"id": ident, "title": record["source_title"],
                      "excerpt": record["source_excerpt"],
                      "annotation": json.dumps(record["annotation"]),
+                     "model": MODEL, "version": VERSION,
                      "analyzed": record["analyzed_at"]})
         connection.execute(text("""
             INSERT INTO articles VALUES
@@ -173,6 +184,28 @@ def test_postgres_projection_counts_country_involvement_without_publisher_confus
               (8,2,'Unverified local','Local body',NULL,:published,:collected,
                 'https://local.rs/8',NULL,false,'RS','unverified')
         """), {"published": NOW-timedelta(hours=2), "collected": NOW-timedelta(hours=1)})
+        for ident, version, model, source_id, geo in (
+            (7, "decision-annotation-v1", MODEL, 2, "RS"),
+            (9, "decision-annotation-v1", MODEL, 1, "US"),
+            (10, VERSION, "other/model", 1, "US"),
+        ):
+            record = article(article_id=ident)
+            if ident != 7:
+                connection.execute(text("""
+                    INSERT INTO articles VALUES (:id,:source_id,:title,:body,NULL,:published,:collected,
+                        :url,NULL,false,:geo,'source_verified')
+                """), {"id": ident, "source_id": source_id, "title": record["title"],
+                         "body": record["source_excerpt"], "published": record["published_at"],
+                         "collected": record["collected_at"], "url": record["url"], "geo": geo})
+            else:
+                record["title"] = "Verified local"
+                record["source_excerpt"] = "Local body"
+            connection.execute(text("""
+                INSERT INTO article_decision_annotations VALUES
+                    (:id,:title,:excerpt,CAST(:annotation AS jsonb),:model,:version,:analyzed)
+            """), {"id": ident, "title": record["title"], "excerpt": record["source_excerpt"],
+                     "annotation": json.dumps(record["annotation"]), "model": model,
+                     "version": version, "analyzed": record["analyzed_at"]})
 
     Session = sessionmaker(bind=engine)
 
@@ -189,6 +222,7 @@ def test_postgres_projection_counts_country_involvement_without_publisher_confus
         assert result["attention"][0]["count_24h"] == 1
         assert "Сербия изменила правила въезда" in result["attention"][0]["reason"]
         assert result["coverage"]["collected_from_country_7d"] == 1
+        assert result["coverage"]["reviewed_from_country_7d"] == 0
         assert result["coverage"]["relevant_to_country_7d"] == 1
         assert result["coverage"]["publisher_families"] == 1
         assert result["coverage"]["local_publisher_families"] == 1

@@ -3,6 +3,8 @@ from decimal import Decimal
 from contextlib import contextmanager
 from pathlib import Path
 import os
+import hashlib
+import json
 from uuid import uuid4
 
 import pytest
@@ -41,6 +43,25 @@ def test_strict_shape_abstention_and_unsafe_generated_text():
         extraction.validate_annotation(annotation(headline_ru="https://example.com"), article(), {"RS"})
     empty = annotation(relevant=False, headline_ru="", summary_ru="", russia_explanation_ru="", russia_evidence_quote="", countries=[], positions=[], changes=[])
     assert extraction.validate_annotation(empty, article(), {"RS"}) == empty
+    with pytest.raises(ValueError, match="missing Russian text"):
+        extraction.validate_annotation(annotation(positions=[dict(
+            actor="Students in Blockade", actor_type="ngo",
+            position_ru="Выступили против санкций", evidence_quote="The ministry said")]), article(), {"RS"})
+    wrapped = annotation(positions=[dict(actor="Движение Students in Blockade", actor_type="ngo",
+        position_ru="Выступило против санкций", evidence_quote="The ministry said")])
+    assert extraction.validate_annotation(wrapped, article(), {"RS"}) == wrapped
+
+
+def test_prompt_covers_public_stance_truncation_and_attribution_in_each_claim():
+    source = article(title="Student List declares stance on sanctions against Russia",
+        excerpt="The Republic of Serbia will maintain its principled stance against imposing restrictive measures on the Russian Federation, the Students in Blockade m")
+    prompt = extraction.prepare_prompt(source)
+    assert source["title"] + "\n" + source["excerpt"] in prompt
+    for phrase in ("public position about Russia", "even if no action", "name or unambiguously identify THAT country",
+                   "never finish an incomplete clause", "EACH position_ru and change_ru", "actual quoted/speaking person",
+                   "explicitly name which Russian citizens or organization is affected"):
+        assert phrase in prompt
+    assert len(prompt.encode()) <= 32000
 
 
 @pytest.mark.parametrize("bad", [
@@ -84,6 +105,9 @@ def test_reservation_precedes_http_and_invalid_response_is_not_saved(monkeypatch
     monkeypatch.setattr(extraction.budget, "get_budget", lambda campaign: 2.0)
     def reserve(*args, **kwargs):
         calls.append("reserve")
+        expected = hashlib.sha256(json.dumps([extraction.VERSION, extraction.MODEL,
+            extraction.prepare_prompt(article())], ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
+        assert args[2] == expected
         return "reserved-id"
     monkeypatch.setattr(extraction.budget, "reserve_request", reserve)
     monkeypatch.setattr(extraction.budget, "finish_request", lambda ident, cost, status: calls.append(("finish", ident, cost, status)))
