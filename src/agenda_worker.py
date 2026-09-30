@@ -33,9 +33,21 @@ def validate_tariff(data):
 
 
 def check_tariff():
-    response=httpx.get('https://openrouter.ai/api/v1/models',timeout=10)
+    # Decisions models are absent from the chat model list. Query the official
+    # per-model provider catalog and require every eligible provider to fit.
+    response=httpx.get(f'https://openrouter.ai/api/v1/models/{MODEL}/endpoints',
+                      headers={'Authorization':'Bearer '+os.environ['OPENROUTER_API_KEY']},timeout=10)
     response.raise_for_status()
-    validate_tariff(response.json())
+    data=response.json().get('data')
+    if not isinstance(data,dict) or data.get('id')!=MODEL:
+        raise ValueError('Unexpected Jev provider catalog')
+    endpoints=data.get('endpoints')
+    if not isinstance(endpoints,list) or not endpoints:
+        raise ValueError('Jev has no available provider')
+    for endpoint in endpoints:
+        if not isinstance(endpoint,dict):
+            raise ValueError('Invalid Jev provider metadata')
+        validate_tariff({'data':[{'id':MODEL,'pricing':endpoint.get('pricing',{})}]})
 
 
 def run_cycle(*,budget_usd=Decimal('0'),campaign=CAMPAIGN,max_calls=20):
