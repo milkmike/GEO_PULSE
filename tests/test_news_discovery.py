@@ -15,7 +15,7 @@ def row(**changes):
                 published_at=NOW-timedelta(hours=2), collected_at=NOW-timedelta(hours=1),
                 publisher_name="Example", publisher_country_code="US",
                 url="https://example.com/news", classification=dict(
-                    countries=["RS"], russia_relation="uncertain", topic="sanctions",
+                    countries=["RS"], country_primary="RS", russia_relation="uncertain", topic="sanctions",
                     event_type="proposal", actor_type="government", uncertain=True)) | changes
 
 
@@ -90,3 +90,29 @@ def test_russian_original_needs_no_paid_translation(language, title, expected):
     assert result["title_ru"] == expected
     assert result["title_original"] == title
     assert result["status"] == "needs_review"
+
+
+@pytest.mark.parametrize("primary", ["unknown", "none", None])
+def test_secondary_country_never_replaces_unresolved_primary(primary):
+    from src.news_discovery import project_leads
+    item = row()
+    item["classification"].update(country_primary=primary, country_secondary="US", countries=["US"])
+    assert project_leads([item], country="US", now=NOW)["week"] == []
+    global_items = project_leads([item], country=None, now=NOW)["week"]
+    assert global_items[0]["countries"] == []
+
+
+def test_resolved_bilateral_countries_are_preserved():
+    from src.news_discovery import project_leads
+    item = row()
+    item["classification"].update(country_primary="RS", country_secondary="US", countries=["RS", "US"])
+    assert project_leads([item], country="US", now=NOW)["day"][0]["countries"] == ["RS", "US"]
+
+
+@pytest.mark.parametrize("primary", ["RS", "unknown"])
+def test_malformed_country_array_never_becomes_a_country_or_global_lead(primary):
+    from src.news_discovery import project_leads
+    item = row()
+    item["classification"].update(country_primary=primary, countries=["RS", 42])
+    for country in ("RS", None):
+        assert project_leads([item], country=country, now=NOW)["week"] == []

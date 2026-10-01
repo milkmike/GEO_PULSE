@@ -215,6 +215,10 @@ export default function DecisionWorkspace({ renderMap, mapControls, activeMapFil
   const leads = content?.discovery?.[windowSize];
   const unassignedLeads = content?.discovery?.[windowSize === "day" ? "unassigned_day" : "unassigned_week"]?.filter((lead) => lead.countries.length === 0) ?? [];
   const coverage = content?.coverage;
+  const hasCountryMaterial = Boolean(content && (
+    (leads?.length ?? 0) > 0 || brief.length > 0 || content.positions.length > 0
+    || content.changes.length > 0 || content.topics.length > 0
+  ));
 
   return (
     <section aria-labelledby={titleId} className="reveal reveal-1 mt-5 pb-10">
@@ -290,12 +294,13 @@ export default function DecisionWorkspace({ renderMap, mapControls, activeMapFil
             </div>
             <div className="grid gap-x-8 gap-y-8 lg:grid-cols-[minmax(0,1fr)_300px]">
             <div className="min-w-0 space-y-8">
-            <section className="min-w-0 border-t-2 border-cooling/70 pt-4" aria-labelledby={`${titleId}-discovery`}>
+            {leads === undefined && <p className="border-t border-line pt-4 text-sm leading-6 text-dim">Не удалось загрузить сообщения по стране.</p>}
+            {leads !== undefined && !hasCountryMaterial && <p className="border-t border-line pt-4 text-sm leading-6 text-dim">По выбранной стране за этот период материалов пока нет. Отсутствие сообщений не означает отсутствия событий.</p>}
+            {leads && leads.length > 0 && <section className="min-w-0 border-t-2 border-cooling/70 pt-4" aria-labelledby={`${titleId}-discovery`}>
               <div id={`${titleId}-discovery`}><Heading title="Возможные повестки" description="Предварительный отбор: сообщения ещё не подтверждены." /></div>
-              {leads === undefined ? <Empty>Не удалось загрузить сообщения по стране.</Empty>
-                : leads.length === 0 ? <Empty>В доступной выборке за этот период сообщений по стране пока нет.</Empty>
-                  : <LeadList key={`${currentCountry}-${windowSize}`} leads={leads} />}
-              {unassignedLeads.length > 0 && <details className="mt-4 border-t border-line pt-4" aria-labelledby={`${titleId}-unassigned`}>
+              <LeadList key={`${currentCountry}-${windowSize}`} leads={leads} />
+            </section>}
+            {unassignedLeads.length > 0 && <details className="min-w-0 border-t border-line pt-4" aria-labelledby={`${titleId}-unassigned`}>
                 <summary id={`${titleId}-unassigned`} className="display cursor-pointer text-lg leading-tight focus-visible:outline-2 focus-visible:outline-accent">Другие международные сообщения <span className="tnum text-xs text-dim">({unassignedLeads.length})</span></summary>
                 <p className="mt-1 text-xs leading-5 text-dim">Страна события пока не определена. Сообщения ещё не подтверждены.</p>
                 <LeadList key={`global-${currentCountry}-${windowSize}`} leads={unassignedLeads.slice(0, 4)} />
@@ -304,29 +309,28 @@ export default function DecisionWorkspace({ renderMap, mapControls, activeMapFil
                   <LeadList key={`more-${currentCountry}-${windowSize}`} leads={unassignedLeads.slice(4)} />
                 </details>}
               </details>}
-            </section>
-              <section className="min-w-0 border-t border-line pt-4" aria-labelledby={`${titleId}-brief`}>
+              {brief.length > 0 && <section className="min-w-0 border-t border-line pt-4" aria-labelledby={`${titleId}-brief`}>
                 <div id={`${titleId}-brief`}><Heading title="Страна за 60 секунд" /></div>
-                {brief.length === 0 ? <Empty>Сводка за этот период пока не сформирована.</Empty> : <div className="mt-2 grid gap-x-6 lg:grid-cols-2">{brief.map((item) => <EvidenceRow key={item.article_id} item={item} />)}</div>}
-              </section>
+                <div className="mt-2 grid gap-x-6 lg:grid-cols-2">{brief.map((item) => <EvidenceRow key={item.article_id} item={item} />)}</div>
+              </section>}
 
-              <details className="min-w-0 border-t border-line py-4" aria-labelledby={`${titleId}-positions`}>
+              {content.positions.length > 0 && <details className="min-w-0 border-t border-line py-4" aria-labelledby={`${titleId}-positions`}>
                 <summary id={`${titleId}-positions`} className="cursor-pointer text-sm font-medium text-ru-white focus-visible:outline-2 focus-visible:outline-accent">Кто какую позицию занимает <span className="tnum text-dim">({content.positions.length})</span></summary>
                 <p className="mt-2 text-xs text-dim">Только прямо названные заявления и действия в публикации.</p>
-                {content.positions.length === 0 ? <Empty>В доступных материалах пока нет заявлений с указанным автором.</Empty> : <div className="divide-y divide-line">{content.positions.map((item) => <article key={item.id} className="py-3"><p className="text-xs font-semibold text-ru-white">{item.actor}</p><p className="mt-1 text-sm leading-5">{item.position_ru}</p><p className="mt-1 text-[11px] text-dim">По сообщению: {item.evidence.publisher_name} · {dateTime(item.evidence.published_at)}</p><SourceEvidence evidence={item.evidence} quote={item.evidence_quote} /></article>)}</div>}
-              </details>
+                <div className="divide-y divide-line">{content.positions.map((item) => <article key={item.id} className="py-3"><p className="text-xs font-semibold text-ru-white">{item.actor}</p><p className="mt-1 text-sm leading-5">{item.position_ru}</p><p className="mt-1 text-[11px] text-dim">По сообщению: {item.evidence.publisher_name} · {dateTime(item.evidence.published_at)}</p><SourceEvidence evidence={item.evidence} quote={item.evidence_quote} /></article>)}</div>
+              </details>}
 
-              <details className="min-w-0 border-t border-line py-4" aria-labelledby={`${titleId}-changes`}>
+              {content.changes.length > 0 && <details className="min-w-0 border-t border-line py-4" aria-labelledby={`${titleId}-changes`}>
                 <summary id={`${titleId}-changes`} className="cursor-pointer text-sm font-medium text-ru-white focus-visible:outline-2 focus-visible:outline-accent">Что меняется для российских граждан и организаций <span className="tnum text-dim">({content.changes.length})</span></summary>
                 <p className="mt-2 text-xs text-dim">Предложения, решения и вступившие в силу меры различаются по тексту источника.</p>
-                {content.changes.length === 0 ? <Empty>В доступных материалах пока нет конкретных изменений для граждан или организаций РФ.</Empty> : <div className="divide-y divide-line">{content.changes.map((item) => <article key={item.id} className="py-3"><p className="text-sm leading-5 text-fg">{item.change_ru}</p><p className="mt-1 text-[11px] text-dim">По сообщению: {item.evidence.publisher_name} · {dateTime(item.evidence.published_at)}</p><SourceEvidence evidence={item.evidence} quote={item.evidence_quote} /></article>)}</div>}
-              </details>
+                <div className="divide-y divide-line">{content.changes.map((item) => <article key={item.id} className="py-3"><p className="text-sm leading-5 text-fg">{item.change_ru}</p><p className="mt-1 text-[11px] text-dim">По сообщению: {item.evidence.publisher_name} · {dateTime(item.evidence.published_at)}</p><SourceEvidence evidence={item.evidence} quote={item.evidence_quote} /></article>)}</div>
+              </details>}
 
-              <details className="min-w-0 border-t border-line py-4" aria-labelledby={`${titleId}-topics`}>
+              {content.topics.length > 0 && <details className="min-w-0 border-t border-line py-4" aria-labelledby={`${titleId}-topics`}>
                 <summary id={`${titleId}-topics`} className="cursor-pointer text-sm font-medium text-ru-white focus-visible:outline-2 focus-visible:outline-accent">Темы для разговора <span className="tnum text-dim">({content.topics.length})</span></summary>
                 <p className="mt-2 text-xs text-dim">Вопросы для проверки, без предположения о согласии сторон.</p>
-                {content.topics.length === 0 ? <Empty>По обработанным публикациям пока нет тем с проверяемым основанием.</Empty> : <div className="divide-y divide-line">{content.topics.map((item) => <article key={item.id} className="py-3"><h4 className="text-sm font-medium text-ru-white">{item.title}</h4><p className="mt-1 text-xs leading-5">{item.question}</p>{item.evidence.map((evidence) => <SourceEvidence key={evidence.article_id} evidence={evidence} />)}</article>)}</div>}
-              </details>
+                <div className="divide-y divide-line">{content.topics.map((item) => <article key={item.id} className="py-3"><h4 className="text-sm font-medium text-ru-white">{item.title}</h4><p className="mt-1 text-xs leading-5">{item.question}</p>{item.evidence.map((evidence) => <SourceEvidence key={evidence.article_id} evidence={evidence} />)}</article>)}</div>
+              </details>}
             </div>
 
               <aside className="min-w-0 border-t border-line pt-4 lg:border-l lg:border-t-0 lg:pl-6 lg:pt-0" aria-labelledby={`${titleId}-coverage`}>

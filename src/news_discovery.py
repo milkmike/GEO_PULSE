@@ -1,7 +1,8 @@
 """Read-only, explicitly unreviewed news leads for the decision workspace.
 
 No model clients are imported here. Country involvement comes from the cached
-classification, while local collection/processing counters use publisher origin.
+classification only when its primary country is resolved. Local collection and
+processing counters use publisher origin.
 """
 from datetime import datetime, timedelta
 import re
@@ -20,6 +21,21 @@ EVENTS = {"statement", "proposal", "decision", "incident", "analysis", "other"}
 ACTORS = {"government", "business", "media", "ngo", "other"}
 RELATIONS = {"direct", "indirect", "uncertain"}
 MAX_LEADS = 24
+
+
+def resolved_primary(primary, countries) -> bool:
+    """A secondary mention cannot establish scope when the main country is unclear."""
+    return (isinstance(primary, str) and re.fullmatch(r"[A-Z]{2}", primary) is not None
+            and primary != "RU" and primary in countries)
+
+
+# Apply before LIMIT and aggregation, including old cached classifications.
+SCOPED_COUNTRIES = """(CASE WHEN
+    nt.classification->>'country_primary' ~ '^[A-Z]{2}$'
+    AND nt.classification->>'country_primary' <> 'RU'
+    AND jsonb_typeof(nt.classification->'countries')='array'
+    AND (nt.classification->'countries') ? (nt.classification->>'country_primary')
+    THEN nt.classification->'countries' ELSE '[]'::jsonb END)"""
 
 
 def processing_status(collected: int, classified: int, remaining: float | None) -> str:
@@ -44,8 +60,11 @@ def project_leads(rows, *, country: str | None, now: datetime) -> dict:
         if not isinstance(tags, dict):
             continue
         countries = tags.get("countries")
-        if (not isinstance(countries, list) or not all(isinstance(c, str) for c in countries)
-                or (country not in countries if country else bool(countries))
+        if not isinstance(countries, list) or not all(isinstance(c, str) for c in countries):
+            continue
+        if not resolved_primary(tags.get("country_primary"), countries):
+            countries = []
+        if ((country not in countries if country else bool(countries))
                 or tags.get("russia_relation") not in RELATIONS
                 or tags.get("topic") not in TOPICS or tags.get("event_type") not in EVENTS
                 or tags.get("actor_type") not in ACTORS):
@@ -84,6 +103,10 @@ RECENT = """
 LEAD = """
  nt.classification->>'russia_relation' IN ('direct','indirect','uncertain')
  AND jsonb_typeof(nt.classification->'countries')='array'
+ AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(CASE
+     WHEN jsonb_typeof(nt.classification->'countries')='array'
+     THEN nt.classification->'countries' ELSE '[]'::jsonb END) AS country_value
+     WHERE jsonb_typeof(country_value)<>'string')
 """
 
 
@@ -107,12 +130,12 @@ def load_discovery(session, *, country: str, now: datetime, countries: list[dict
         LEFT JOIN article_title_translations tr ON tr.article_id=ar.id AND tr.source_title=ar.title
         WHERE {CURRENT} AND {RECENT} AND {LEAD}
     """
-    rows = session.execute(text(projection_sql + """
-        AND nt.classification->'countries' ? :country
+    rows = session.execute(text(projection_sql + f"""
+        AND {SCOPED_COUNTRIES} ? :country
         ORDER BY ar.published_at DESC,ar.id DESC LIMIT 24
     """), params).mappings().all()
-    unassigned_rows = session.execute(text(projection_sql + """
-        AND nt.classification->'countries'='[]'::jsonb
+    unassigned_rows = session.execute(text(projection_sql + f"""
+        AND {SCOPED_COUNTRIES}='[]'::jsonb
         ORDER BY ar.published_at DESC,ar.id DESC LIMIT 8
     """), params).mappings().all()
     local = session.execute(text(f"""
@@ -126,7 +149,7 @@ def load_discovery(session, *, country: str, now: datetime, countries: list[dict
         SELECT COUNT(*) FROM article_news_triage nt JOIN articles ar ON ar.id=nt.article_id
         JOIN article_country_facts src ON src.article_id=ar.id
         WHERE {CURRENT} AND {RECENT} AND {LEAD}
-          AND nt.classification->'countries' ? :country
+          AND {SCOPED_COUNTRIES} ? :country
     """), params).scalar_one()
     attention_rows = session.execute(text(f"""
         SELECT involved.code,COUNT(DISTINCT ar.id) AS count_7d,
@@ -135,9 +158,7 @@ def load_discovery(session, *, country: str, now: datetime, countries: list[dict
           (ARRAY_AGG(nt.classification->>'topic' ORDER BY ar.published_at DESC,ar.id DESC))[1] AS topic
         FROM article_news_triage nt JOIN articles ar ON ar.id=nt.article_id
         JOIN article_country_facts src ON src.article_id=ar.id
-        CROSS JOIN LATERAL jsonb_array_elements_text(CASE
-          WHEN jsonb_typeof(nt.classification->'countries')='array'
-          THEN nt.classification->'countries' ELSE '[]'::jsonb END) AS involved(code)
+        CROSS JOIN LATERAL jsonb_array_elements_text({SCOPED_COUNTRIES}) AS involved(code)
         WHERE {CURRENT} AND {RECENT} AND {LEAD}
         GROUP BY involved.code
         HAVING COUNT(DISTINCT ar.id) FILTER (WHERE ar.published_at>=:day_start)>0

@@ -62,6 +62,9 @@ afterEach(() => vi.useRealTimers());
 
 describe("DecisionWorkspace", () => {
   it("puts the map first and retains source dates, uncertainty and detail sections", async () => {
+    const value = response();
+    value.discovery = { day: [lead], week: [] };
+    mocks.decisionWorkspace.mockResolvedValue(value);
     render(<DecisionWorkspace />);
     expect(await screen.findByText("Сербия ↔ Россия")).toBeVisible();
     expect(screen.getByRole("region", { name: "Карта отношений России и мира" })).toBeVisible();
@@ -135,7 +138,7 @@ describe("DecisionWorkspace", () => {
     expect(mocks.decisionWorkspace).toHaveBeenCalledTimes(2);
   });
 
-  it("does not create a link for unsafe evidence URLs and explains empty evidence", async () => {
+  it("hides empty sections and does not create a link for unsafe evidence URLs", async () => {
     const value = response();
     value.brief = { day: [], week: [] };
     value.positions = [];
@@ -145,10 +148,12 @@ describe("DecisionWorkspace", () => {
     mocks.decisionWorkspace.mockResolvedValue(value);
     render(<DecisionWorkspace />);
     expect(await screen.findByText("Сербия ↔ Россия")).toBeVisible();
-    expect(screen.getByText("Сводка за этот период пока не сформирована.")).toBeVisible();
-    fireEvent.click(screen.getByText(/Кто какую позицию занимает/));
+    expect(screen.queryByText("Страна за 60 секунд")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Кто какую позицию занимает/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Что меняется для российских граждан/)).not.toBeInTheDocument();
+    expect(screen.queryByText("Возможные повестки")).not.toBeInTheDocument();
     fireEvent.click(screen.getByText(/Темы для разговора/));
-    expect(screen.getByText("В доступных материалах пока нет заявлений с указанным автором.")).toBeVisible();
+    expect(screen.queryByText(/По выбранной стране за этот период материалов пока нет/)).not.toBeInTheDocument();
     expect(screen.getByText(/Выборка ограничена/)).toBeVisible();
     expect(screen.queryByRole("link", { name: /Открыть публикацию/ })).not.toBeInTheDocument();
     expect(screen.getByText("Ссылка на оригинал недоступна.")).toBeInTheDocument();
@@ -212,7 +217,7 @@ describe("DecisionWorkspace", () => {
     expect(screen.getByText("Публикаций собрано").nextElementSibling).toHaveTextContent("12");
     expect(screen.getByText("Групп местных издателей").nextElementSibling).toHaveTextContent("1");
     fireEvent.change(screen.getByRole("combobox", { name: "Период материалов" }), { target: { value: "week" } });
-    expect(within(discovery).queryByText("Переговоры Сербии и России")).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: /Возможные повестки/ })).not.toBeInTheDocument();
   });
 
   it("shows pending and unavailable discovery honestly and never links unsafe lead URLs", async () => {
@@ -229,7 +234,7 @@ describe("DecisionWorkspace", () => {
     expect(within(discovery).queryByRole("link", { name: "Читать источник" })).not.toBeInTheDocument();
     expect(within(discovery).queryByText("Перевод готовится")).not.toBeInTheDocument();
     fireEvent.change(screen.getByRole("combobox", { name: "Период материалов" }), { target: { value: "week" } });
-    expect(within(discovery).getByText(/сообщений по стране пока нет/)).toBeVisible();
+    expect(screen.queryByRole("region", { name: /Возможные повестки/ })).not.toBeInTheDocument();
   });
 
   it("does not show a previous country's leads while the next country loads", async () => {
@@ -282,9 +287,9 @@ describe("DecisionWorkspace", () => {
     };
     mocks.decisionWorkspace.mockResolvedValue(value);
     render(<DecisionWorkspace />);
-    const discovery = await screen.findByRole("region", { name: /Возможные повестки/ });
-    expect(within(discovery).getByText(/сообщений по стране пока нет/)).toBeVisible();
-    const general = within(discovery).getByRole("group", { name: /Другие международные сообщения/ });
+    await screen.findByText("Сербия ↔ Россия");
+    expect(screen.queryByRole("region", { name: /Возможные повестки/ })).not.toBeInTheDocument();
+    const general = screen.getByRole("group", { name: /Другие международные сообщения/ });
     expect(within(general).getByText("НАТО обсуждает отношения с Россией")).not.toBeVisible();
     fireEvent.click(within(general).getByText(/Другие международные сообщения/));
     expect(within(general).getByText(/Страна события пока не определена/)).toBeVisible();
@@ -296,6 +301,42 @@ describe("DecisionWorkspace", () => {
     fireEvent.change(screen.getByRole("combobox", { name: "Период материалов" }), { target: { value: "week" } });
     expect(within(general).getByText("Недельный общий материал")).toBeVisible();
     expect(within(general).queryByText("НАТО обсуждает отношения с Россией")).not.toBeInTheDocument();
+  });
+
+  it("shows one country empty message while retaining coverage warnings and a separate global stream", async () => {
+    const value = response();
+    value.brief = { day: [], week: [] };
+    value.positions = [];
+    value.changes = [];
+    value.topics = [];
+    value.discovery = { day: [], week: [], unassigned_day: [{ ...lead, countries: [], title_ru: "Общий материал" }] };
+    value.coverage.triage_status = "budget_exhausted";
+    value.coverage.truncated = true;
+    mocks.decisionWorkspace.mockResolvedValue(value);
+    render(<DecisionWorkspace />);
+    expect(await screen.findByText("Сербия ↔ Россия")).toBeVisible();
+    expect(screen.getAllByText(/По выбранной стране за этот период материалов пока нет/)).toHaveLength(1);
+    for (const heading of ["Возможные повестки", "Страна за 60 секунд", "Кто какую позицию занимает", "Что меняется для российских граждан и организаций", "Темы для разговора"]) {
+      expect(screen.queryByText(new RegExp(heading))).not.toBeInTheDocument();
+    }
+    expect(screen.getByText("Обработка приостановлена: достигнут лимит.")).toBeVisible();
+    expect(screen.getByText(/Выборка ограничена/)).toBeVisible();
+    const general = screen.getByRole("group", { name: /Другие международные сообщения/ });
+    expect(within(general).getByText("Общий материал")).not.toBeVisible();
+    fireEvent.click(within(general).getByText(/Другие международные сообщения/));
+    expect(within(general).getByText("Общий материал")).toBeVisible();
+  });
+
+  it("reports unavailable discovery separately from empty country materials", async () => {
+    const value = response();
+    value.discovery = undefined;
+    mocks.decisionWorkspace.mockResolvedValue(value);
+    render(<DecisionWorkspace />);
+    expect(await screen.findByText("Сербия ↔ Россия")).toBeVisible();
+    expect(screen.getByText("Не удалось загрузить сообщения по стране.")).toBeVisible();
+    expect(screen.getByText("Страна за 60 секунд")).toBeVisible();
+    expect(screen.queryByText(/По выбранной стране за этот период материалов пока нет/)).not.toBeInTheDocument();
+    expect(screen.queryByText("Возможные повестки")).not.toBeInTheDocument();
   });
 
   it("collapses untranslated leads again after changing country", async () => {

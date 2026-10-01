@@ -276,7 +276,7 @@ def test_postgres_projection_counts_country_involvement_without_publisher_confus
             connection.execute(text("UPDATE articles SET language='ru', title='Российские граждане обсуждают правила' WHERE id=7"))
             connection.execute(text("""INSERT INTO article_news_triage
                 SELECT id,title,LEFT(body,2000),
-                '{"countries":["RS"],"russia_relation":"uncertain","topic":"sanctions",
+                '{"countries":["RS"],"country_primary":"RS","russia_relation":"uncertain","topic":"sanctions",
                   "event_type":"proposal","actor_type":"government","uncertain": true}'::jsonb,
                 'typesafe/jev-1.13','news-triage-v2',:as_of
                 FROM articles WHERE id IN (1,2,3,4,7,8)"""), {"as_of": NOW})
@@ -292,6 +292,37 @@ def test_postgres_projection_counts_country_involvement_without_publisher_confus
         # Discovery does not become a reviewed claim or alter confirmed counts.
         assert refreshed["brief"] == result["brief"]
         assert refreshed["changes"] == result["changes"]
+        # Historical cache: an uncertain primary must not promote a secondary
+        # mention into country leads, attention or coverage counts.
+        with engine.begin() as connection:
+            connection.execute(text(f'SET LOCAL search_path TO "{schema}"'))
+            connection.execute(text("""UPDATE article_news_triage SET classification =
+                classification || '{"country_primary":"unknown","country_secondary":"RS"}'::jsonb
+                WHERE article_id=7"""))
+        scoped = load_decision_workspace("RS", now=NOW)
+        assert {a["article_id"] for a in scoped["discovery"]["day"]} == {1}
+        assert scoped["coverage"]["discovered_to_country_7d"] == 1
+        assert next(a for a in scoped["discovery"]["unassigned_day"] if a["article_id"] == 7)["countries"] == []
+        from src.news_discovery import load_discovery
+        with session() as db:
+            discovery_only = load_discovery(db, country="RS", now=NOW,
+                countries=[{"code":"RS","name":"Сербия"}], collected=1)
+        assert discovery_only["attention"][0]["count_24h"] == 1
+        with engine.begin() as connection:
+            connection.execute(text(f'SET LOCAL search_path TO "{schema}"'))
+            connection.execute(text("""UPDATE article_news_triage SET classification =
+                classification || '{"country_primary":"RS","countries":["RS",42]}'::jsonb
+                WHERE article_id=7"""))
+        with session() as db:
+            malformed = load_discovery(db, country="RS", now=NOW,
+                countries=[{"code":"RS","name":"Сербия"}], collected=1)
+        assert malformed["attention"][0]["count_24h"] == 1
+        assert malformed["coverage"]["discovered_to_country_7d"] == 1
+        assert all(a["article_id"] != 7 for a in malformed["discovery"]["unassigned_day"])
+
+        # Classified local publications remain classified even if geography is uncertain.
+        assert scoped["coverage"]["classified_from_country_7d"] == 1
+
     finally:
         with engine.begin() as connection:
             connection.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))
