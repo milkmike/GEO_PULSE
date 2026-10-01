@@ -21,9 +21,8 @@ import { HOME_TIPS } from "@/lib/explain";
 import { fmtDate } from "@/lib/format";
 import type { Brief, CountrySummary, Headline, Meta, Signal, TopicBriefResponse } from "@/lib/types";
 
-// Default order of the home dashboard cards; visitors can drag to reorder
-// (persisted per browser in localStorage under "home-panel-order").
-const HOME_ORDER = ["map", "ranking", "early-warning", "stories", "headlines", "signals", "brief", "radar"];
+// Secondary data panels can still be reordered; the map and country brief stay fixed.
+const HOME_ORDER = ["early-warning", "stories", "headlines", "signals", "brief", "radar"];
 
 export default function HomePage() {
   const { storiesNavigation, signalDetail, earlyWarningRadar } = useFeatureFlags();
@@ -121,30 +120,8 @@ export default function HomePage() {
 
   const updatedAt = countries[0]?.updated_at;
 
-  // Reorderable home dashboard. Sizes live on each cell (col-span) so dragging
-  // preserves widths and the map stays large.
+  // Secondary data views remain available below the map and country detail.
   const homePanels: SortableItem[] = [
-    {
-      id: "map", cellClassName: "col-span-12 lg:col-span-8", tip: HOME_TIPS.map,
-      node: (
-        <section className="card min-h-[420px] lg:h-[58vh]">
-          <WorldMap entries={mapEntries} />
-        </section>
-      ),
-    },
-    {
-      id: "ranking", cellClassName: "col-span-12 lg:col-span-4", tip: HOME_TIPS.ranking,
-      node: (
-        <section className="card flex max-h-[58vh] min-h-[320px] flex-col">
-          <div className="card-title px-4 pb-1 pt-3">
-            {filters.topic && meta
-              ? `Линза: ${meta.topics[filters.topic]}`
-              : "Страны по индексу отношений"}
-          </div>
-          <CountryRanking countries={filtered} topicCounts={topicCounts ?? undefined} />
-        </section>
-      ),
-    },
     {
       id: "early-warning", cellClassName: "col-span-12 lg:col-span-8",
       node: earlyWarningRadar ? <EarlyWarningPanel limit={3} /> : null,
@@ -259,20 +236,29 @@ export default function HomePage() {
         }
       />
 
-      <DecisionWorkspace />
+      <DecisionWorkspace
+        renderMap={({ selectedCountry, onSelectCountry }) => {
+          const selected = countries.find((country) => country.code === selectedCountry);
+          const entries = selected && !mapEntries.some((entry) => entry.code === selectedCountry)
+            ? [...mapEntries, { iso3: selected.iso3, code: selected.code, name: selected.name, score: selected.score, level: selected.level, delta_24h: selected.delta_24h }]
+            : mapEntries;
+          return <WorldMap entries={entries} selectedCountry={selectedCountry} onSelectCountry={onSelectCountry} />;
+        }}
+        mapControls={meta && <Filters regions={meta.regions} topics={meta.topics} value={filters} onChange={setFilters} />}
+        activeMapFilters={Number(Boolean(filters.region)) + Number(Boolean(filters.level)) + Number(Boolean(filters.topic))}
+      />
 
-      {meta && (
-        <Filters
-          regions={meta.regions}
-          topics={meta.topics}
-          value={filters}
-          onChange={setFilters}
-        />
-      )}
+      <details className="border-t border-line py-5">
+        <summary className="display cursor-pointer text-xl focus-visible:outline-2 focus-visible:outline-accent">Страны по индексу отношений</summary>
+        <div className="card mt-4 max-h-[520px] overflow-y-auto"><CountryRanking countries={filtered} topicCounts={topicCounts ?? undefined} /></div>
+      </details>
 
-      <div className="reveal reveal-2 mt-3 grid grid-cols-12 gap-3">
-        <SortableGrid storageKey="home-panel-order" defaultOrder={HOME_ORDER} items={homePanels} />
-      </div>
+      <details className="border-t border-line py-5">
+        <summary className="display cursor-pointer text-xl focus-visible:outline-2 focus-visible:outline-accent">Другие данные и ленты</summary>
+        <div className="reveal reveal-2 mt-4 grid grid-cols-12 gap-3">
+          <SortableGrid storageKey="home-panel-order" defaultOrder={HOME_ORDER} items={homePanels} />
+        </div>
+      </details>
     </main>
   );
 }

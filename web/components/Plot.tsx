@@ -6,6 +6,7 @@ type PlotlyModule = {
   react: (el: HTMLElement, data: unknown[], layout: Record<string, unknown>,
           config?: Record<string, unknown>) => Promise<unknown>;
   purge: (el: HTMLElement) => void;
+  Plots: { resize: (el: HTMLElement) => Promise<unknown> };
 };
 
 let plotlyPromise: Promise<PlotlyModule> | null = null;
@@ -40,6 +41,7 @@ export default function Plot({ data, layout, config, className, onClick }: PlotP
 
   useEffect(() => {
     let cancelled = false;
+    let observer: ResizeObserver | undefined;
     const el = ref.current;
     if (!el) return;
 
@@ -50,7 +52,18 @@ export default function Plot({ data, layout, config, className, onClick }: PlotP
         responsive: true,
         ...config,
       }).then(() => {
-        if (cancelled || !ref.current || !onClick) return;
+        if (cancelled || !ref.current) return;
+        // Disclosure panels and map controls can resize a chart without a
+        // window resize, which Plotly's responsive flag alone does not detect.
+        if (typeof ResizeObserver !== "undefined") {
+          observer = new ResizeObserver((entries) => {
+            if (!cancelled && entries.some(({ contentRect }) => contentRect.width > 0 && contentRect.height > 0)) {
+              void Plotly.Plots.resize(el).catch(() => {});
+            }
+          });
+          observer.observe(el);
+        }
+        if (!onClick) return;
         const node = ref.current as HTMLElement & {
           on?: (ev: string, cb: (e: { points?: PlotClickPoint[] }) => void) => void;
           removeAllListeners?: (ev: string) => void;
@@ -64,6 +77,7 @@ export default function Plot({ data, layout, config, className, onClick }: PlotP
 
     return () => {
       cancelled = true;
+      observer?.disconnect();
     };
   }, [data, layout, config, onClick]);
 

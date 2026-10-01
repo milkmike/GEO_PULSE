@@ -94,12 +94,19 @@ function planStrike(now: number): Missile[] {
   });
 }
 
-export default function WorldMap({ entries }: { entries: MapEntry[] }) {
+interface WorldMapProps {
+  entries: MapEntry[];
+  selectedCountry?: string | null;
+  onSelectCountry?: (code: string) => void;
+}
+
+export default function WorldMap({ entries, selectedCountry, onSelectCountry }: WorldMapProps) {
   const router = useRouter();
   const [missiles, setMissiles] = useState<Missile[] | null>(null);
   const [finale, setFinale] = useState(false);
   const [tick, setTick] = useState(0);
   const rafRef = useRef<number>(0);
+  const selectedEntry = entries.find((entry) => entry.code === selectedCountry);
 
   const byIso3 = useMemo(
     () => Object.fromEntries(entries.map((e) => [e.iso3, e])),
@@ -163,6 +170,16 @@ export default function WorldMap({ entries }: { entries: MapEntry[] }) {
         },
       },
     ];
+
+    const selected = entries.find((entry) => entry.code === selectedCountry);
+    if (selected) {
+      base.push({
+        type: "choropleth", locations: [selected.iso3], z: [selected.score],
+        zmin: -100, zmax: 100, colorscale: SCORE_COLORSCALE, showscale: false,
+        marker: { line: { color: "#f0eee8", width: 2 } },
+        text: [`${selected.name} · выбрана`], hovertemplate: "%{text}<extra></extra>",
+      });
+    }
 
     if (!missiles) return base;
 
@@ -232,14 +249,16 @@ export default function WorldMap({ entries }: { entries: MapEntry[] }) {
     );
     return base;
     // eslint-disable-next-line react-hooks/exhaustive-deps -- tick drives reanimation frames
-  }, [entries, missiles, tick]);
+  }, [entries, selectedCountry, missiles, tick]);
 
   const handleClick = useCallback(
     (p: { location?: string }) => {
       const e = p.location ? byIso3[p.location] : undefined;
-      if (e) router.push(`/country/${e.code}`);
+      if (!e) return;
+      if (onSelectCountry) onSelectCountry(e.code);
+      else router.push(`/country/${e.code}`);
     },
-    [byIso3, router],
+    [byIso3, router, onSelectCountry],
   );
 
   return (
@@ -247,9 +266,13 @@ export default function WorldMap({ entries }: { entries: MapEntry[] }) {
       <Plot
         data={data}
         layout={GEO_LAYOUT as unknown as Record<string, unknown>}
-        className="min-h-[340px] h-full w-full"
+        className="min-h-[240px] h-full w-full sm:min-h-[340px]"
         onClick={handleClick}
       />
+      {onSelectCountry && selectedEntry && <a
+        href="#country-overview"
+        className="absolute left-3 top-3 z-10 inline-flex min-h-9 items-center rounded border border-line bg-panel/95 px-3 text-xs text-ru-white hover:border-accent focus-visible:outline-2 focus-visible:outline-accent"
+      >{selectedEntry.name} <span className="ml-2 text-accent">к разбору ↓</span></a>}
       <button
         onClick={launch}
         title="не нажимать"
