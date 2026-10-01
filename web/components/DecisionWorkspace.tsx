@@ -4,7 +4,7 @@ import { useEffect, useId, useState } from "react";
 import Link from "next/link";
 import { ArrowUpRight, LoaderCircle } from "lucide-react";
 import { api } from "@/lib/api";
-import type { DecisionEvidence, DecisionWorkspaceResponse } from "@/lib/decisionTypes";
+import type { DecisionEvidence, DecisionWorkspaceResponse, NewsLead } from "@/lib/decisionTypes";
 
 type LoadState = "loading" | "ready" | "refreshing" | "refreshError" | "error";
 
@@ -67,6 +67,56 @@ function EvidenceRow({ item }: { item: DecisionEvidence }) {
       <SourceEvidence evidence={item} />
     </article>
   );
+}
+
+const topicLabels: Record<string, string> = {
+  sanctions: "Санкции", travel: "Поездки", business: "Бизнес",
+  education: "Образование", culture: "Культура", security: "Безопасность",
+  diplomacy: "Дипломатия", other: "Другие темы",
+};
+
+const eventLabels: Record<string, string> = {
+  statement: "заявление", proposal: "предложение", decision: "решение",
+  incident: "происшествие", analysis: "анализ", other: "другое сообщение",
+};
+
+const relationLabels: Record<NewsLead["russia_relation"], string> = {
+  direct: "прямая", indirect: "косвенная", uncertain: "требует уточнения",
+};
+
+function leadHeading(lead: NewsLead): string {
+  const title = lead.title_ru?.trim();
+  if (title) return title;
+  const topic = topicLabels[lead.topic.toLowerCase()] ?? "Международная повестка";
+  const event = eventLabels[lead.event_type.toLowerCase()];
+  return event ? `${topic}: ${event}` : topic;
+}
+
+function LeadRow({ lead }: { lead: NewsLead }) {
+  const href = safeSourceUrl(lead.url);
+  const hasTranslation = Boolean(lead.title_ru?.trim());
+  return <article className="border-t border-line py-3 first:border-t-0">
+    <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-1">
+      <h4 className="min-w-0 break-words text-sm font-medium leading-5 text-ru-white">{leadHeading(lead)}</h4>
+      <span className="shrink-0 rounded border border-cooling/40 px-2 py-0.5 text-[10px] text-cooling">Требует проверки</span>
+    </div>
+    {!hasTranslation && <p className="mt-1 text-[11px] text-dim">Перевод готовится</p>}
+    <div className="mt-2 flex flex-wrap gap-1.5 text-[11px] text-dim" aria-label="Машинная разметка публикации">
+      <span className="rounded border border-line px-1.5 py-0.5">Тема: {topicLabels[lead.topic.toLowerCase()] ?? "не определена"}</span>
+      <span className="rounded border border-line px-1.5 py-0.5">Тип: {eventLabels[lead.event_type.toLowerCase()] ?? "не определён"}</span>
+    </div>
+    <p className="mt-1 text-[11px] text-dim">Связь с Россией: {relationLabels[lead.russia_relation]}</p>
+    <p className="mt-1 text-[11px] text-dim">{lead.publisher_name} · опубликовано {dateTime(lead.published_at)}</p>
+    <details className="mt-2 text-xs">
+      <summary className="w-fit cursor-pointer rounded-sm py-1 text-accent underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">Оригинал и источник</summary>
+      <div className="mt-2 min-w-0 space-y-2 break-words border-l-2 border-cooling/60 pl-3 leading-5 text-dim">
+        <p className="text-fg">{lead.title_original}</p>
+        <p>{lead.publisher_name}{lead.publisher_country_code ? ` · издатель: ${lead.publisher_country_code}` : ""}</p>
+        <p>Опубликовано: {dateTime(lead.published_at)} · собрано: {dateTime(lead.collected_at)}</p>
+        {href ? <a className="inline-flex min-h-11 items-center gap-1 text-accent underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent sm:min-h-0" href={href} target="_blank" rel="noopener noreferrer">Открыть публикацию <ArrowUpRight aria-hidden="true" size={13} /></a> : <p>Ссылка на оригинал недоступна.</p>}
+      </div>
+    </details>
+  </article>;
 }
 
 function Heading({ number, title, description }: { number: string; title: string; description?: string }) {
@@ -143,6 +193,8 @@ export default function DecisionWorkspace() {
   const content = state !== "loading" && state !== "error"
     && (!selectedCountry || payload?.country.code === selectedCountry.toUpperCase()) ? payload : null;
   const brief = content?.brief[windowSize] ?? [];
+  const leads = content?.discovery?.[windowSize];
+  const unassignedLeads = content?.discovery?.[windowSize === "day" ? "unassigned_day" : "unassigned_week"]?.filter((lead) => lead.countries.length === 0) ?? [];
   const coverage = content?.coverage;
 
   return (
@@ -166,7 +218,7 @@ export default function DecisionWorkspace() {
         <aside className="card h-fit overflow-hidden p-4" aria-labelledby={`${titleId}-attention`}>
           <p className="section-num text-[10px]">01 / ПРИОРИТЕТЫ</p>
           <h3 id={`${titleId}-attention`} className="display mt-1 text-xl leading-tight">Где требуется внимание сегодня</h3>
-          <p className="mt-2 text-xs leading-5 text-dim">Страны с новыми публикациями, где модель выделила связь с Россией; число сообщений не определяет важность.</p>
+          <p className="mt-2 text-xs leading-5 text-dim">Страны с новыми сообщениями о возможной связи с Россией. Часть сообщений требует проверки; число публикаций не определяет важность.</p>
           <label htmlFor={`${titleId}-country`} className="mt-4 block text-[10px] uppercase tracking-wide text-dim">Выбранная страна</label>
           <select
             id={`${titleId}-country`}
@@ -184,7 +236,7 @@ export default function DecisionWorkspace() {
               {content.attention.map((item) => (
                 <button key={item.code} type="button" onClick={() => selectCountry(item.code)} aria-current={currentCountry === item.code ? "true" : undefined}
                   className={`flex min-h-11 w-full items-start justify-between gap-3 px-2 py-2.5 text-left focus-visible:outline-2 focus-visible:outline-inset focus-visible:outline-accent ${currentCountry === item.code ? "bg-panel2 text-ru-white" : "text-fg hover:bg-panel2/60"}`}>
-                  <span className="min-w-0"><span className="block text-sm font-medium">{item.name}</span><span className="mt-0.5 block text-[11px] leading-4 text-dim">{item.reason}</span></span>
+                  <span className="min-w-0"><span className="block text-sm font-medium">{item.name}</span><span className="mt-0.5 block text-[11px] leading-4 text-dim">{item.reason}</span>{item.status === "needs_review" && <span className="mt-1 inline-block rounded border border-cooling/40 px-1.5 py-0.5 text-[10px] text-cooling">Требует проверки</span>}</span>
                   <span className="tnum shrink-0 text-right text-xs"><strong className="text-ru-white">{item.count_24h}</strong><span className="block text-[10px] text-dim">24 ч · {item.count_7d} / 7 д</span></span>
                 </button>
               ))}
@@ -202,10 +254,26 @@ export default function DecisionWorkspace() {
               <div><p className="section-num text-[10px]">ВЫБРАННАЯ СТРАНА</p><h3 className="display text-[27px] leading-tight">{content.country.name} ↔ Россия</h3></div>
               <Link href={`/country/${encodeURIComponent(content.country.code)}`} className="min-h-11 content-center text-xs text-accent underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent sm:min-h-0">Полное досье страны →</Link>
             </div>
+            <section className="card mb-3 min-w-0 border-l-2 border-cooling/70 p-4" aria-labelledby={`${titleId}-discovery`}>
+              <div id={`${titleId}-discovery`}><Heading number={`КАНДИДАТЫ / ${windowSize === "day" ? "24 ЧАСА" : "7 СУТОК"}`} title="Возможные повестки" description="Первичная разметка публикаций. Связь с Россией и значение события ещё требуют проверки по источнику." /></div>
+              <h4 className="mt-4 text-xs font-semibold text-ru-white">По выбранной стране: {content.country.name}</h4>
+              {leads === undefined ? <Empty>Первичная разметка пока недоступна. Отсутствие списка не означает отсутствия событий.</Empty>
+                : leads.length === 0 ? <Empty>По выбранной стране за этот период кандидаты пока не найдены среди размеченных публикаций. Это не означает отсутствия событий.</Empty>
+                  : <div className="mt-2 grid gap-x-6 lg:grid-cols-2">{leads.map((lead) => <LeadRow key={lead.article_id} lead={lead} />)}</div>}
+              {unassignedLeads.length > 0 && <section className="mt-4 border-t border-line pt-4" aria-labelledby={`${titleId}-unassigned`}>
+                <h4 id={`${titleId}-unassigned`} className="display text-lg leading-tight">Международные темы без привязки к стране</h4>
+                <p className="mt-1 text-xs leading-5 text-dim">Общий поток, не только выбранная страна. У этих публикаций страна не определена; проверка источника ещё нужна.</p>
+                <div className="mt-2 grid gap-x-6 lg:grid-cols-2">{unassignedLeads.slice(0, 4).map((lead) => <LeadRow key={lead.article_id} lead={lead} />)}</div>
+                {unassignedLeads.length > 4 && <details className="mt-2 border-t border-line pt-2 text-xs">
+                  <summary className="w-fit cursor-pointer rounded-sm py-1 text-accent underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">Показать ещё {unassignedLeads.length - 4}</summary>
+                  <div className="mt-2 grid gap-x-6 lg:grid-cols-2">{unassignedLeads.slice(4).map((lead) => <LeadRow key={lead.article_id} lead={lead} />)}</div>
+                </details>}
+              </section>}
+            </section>
             <div className="grid gap-3 md:grid-cols-2">
               <section className="card p-4 md:col-span-2" aria-labelledby={`${titleId}-brief`}>
                 <div className="flex flex-wrap items-start justify-between gap-3"><div id={`${titleId}-brief`}><Heading number="02 / СВОДКА" title="Страна за 60 секунд" description="Короткие сообщения с проверяемыми цитатами из исходных публикаций." /></div>
-                  <label className="text-[10px] uppercase tracking-wide text-dim">Период<select aria-label="Период сводки" value={windowSize} onChange={(event) => setWindowSize(event.target.value as "day" | "week")} className="mt-1 min-h-11 rounded-md border border-line bg-panel2 px-3 text-sm text-fg focus-visible:outline-2 focus-visible:outline-accent"><option value="day">24 часа</option><option value="week">7 суток</option></select></label>
+                  <label className="text-[10px] uppercase tracking-wide text-dim">Период<select aria-label="Период материалов" value={windowSize} onChange={(event) => setWindowSize(event.target.value as "day" | "week")} className="mt-1 min-h-11 rounded-md border border-line bg-panel2 px-3 text-sm text-fg focus-visible:outline-2 focus-visible:outline-accent"><option value="day">24 часа</option><option value="week">7 суток</option></select></label>
                 </div>
                 {brief.length === 0 ? <Empty>За выбранный период среди обработанных источников нет публикаций, где модель выделила явную связь со страной и Россией.</Empty> : <div className="mt-2 grid gap-x-6 lg:grid-cols-2">{brief.map((item) => <EvidenceRow key={item.article_id} item={item} />)}</div>}
               </section>
@@ -228,9 +296,12 @@ export default function DecisionWorkspace() {
               <section className="card min-w-0 p-4" aria-labelledby={`${titleId}-coverage`}>
                 <div id={`${titleId}-coverage`}><Heading number="06 / ПОКРЫТИЕ" title="Насколько полна картина" description="Только подключённые источники и обработанная часть корпуса." /></div>
                 {coverage && <>
-                  <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3 text-xs"><div><dt className="text-dim">Публикаций местных СМИ за 7 суток</dt><dd className="tnum mt-1 text-lg text-ru-white">{coverage.collected_from_country_7d}</dd></div><div><dt className="text-dim">Из них разобрано моделью</dt><dd className="tnum mt-1 text-lg text-ru-white">{coverage.reviewed_from_country_7d}</dd></div><div><dt className="text-dim">Модель выделила связь со страной и РФ</dt><dd className="tnum mt-1 text-lg text-ru-white">{coverage.relevant_to_country_7d}</dd></div><div><dt className="text-dim">Семейств издателей в выборке</dt><dd className="tnum mt-1 text-lg text-ru-white">{coverage.publisher_families}</dd></div></dl>
+                  <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3 text-xs"><div><dt className="text-dim">Собрано у местных издателей</dt><dd className="tnum mt-1 text-lg text-ru-white">{coverage.collected_from_country_7d}</dd></div>{coverage.classified_from_country_7d !== undefined && <div><dt className="text-dim">Размечено</dt><dd className="tnum mt-1 text-lg text-ru-white">{coverage.classified_from_country_7d}</dd></div>}{coverage.pending_from_country_7d !== undefined && <div><dt className="text-dim">Ожидает разметки</dt><dd className="tnum mt-1 text-lg text-ru-white">{coverage.pending_from_country_7d}</dd></div>}<div><dt className="text-dim">Подробно проверено моделью</dt><dd className="tnum mt-1 text-lg text-ru-white">{coverage.reviewed_from_country_7d}</dd></div><div><dt className="text-dim">Выделена связь со страной и РФ</dt><dd className="tnum mt-1 text-lg text-ru-white">{coverage.relevant_to_country_7d}</dd></div><div><dt className="text-dim">Семейств издателей в выборке</dt><dd className="tnum mt-1 text-lg text-ru-white">{coverage.publisher_families}</dd></div></dl>
+                  {coverage.discovered_to_country_7d !== undefined && <p className="mt-3 border-t border-line pt-3 text-xs leading-5 text-dim">Кандидаты о стране из всех источников: <strong className="tnum text-ru-white">{coverage.discovered_to_country_7d}</strong>. Это другой круг публикаций; число не входит в долю местных издателей.</p>}
+                  {coverage.triage_status && <p className="mt-3 text-xs leading-5 text-dim">Разметка: {{ not_started: "ещё не началась", partial: "выполнена частично", up_to_date: "обработаны поступившие публикации", budget_exhausted: "остановлена из-за лимита обработки" }[coverage.triage_status]}. Последняя разметка: {dateTime(coverage.last_classified_at ?? null)}.</p>}
                   <p className="mt-3 text-xs leading-5 text-dim">Местных семейств издателей в выборке: {coverage.local_publisher_families}. Последний сбор: {dateTime(coverage.last_collected_at)}. Последний анализ: {dateTime(coverage.last_analyzed_at)}.</p>
                   <p className="mt-2 border-l-2 border-ru-blue/70 pl-3 text-xs leading-5 text-dim">Независимость подтверждений не оценивалась. Перепечатки могут повторять одно сообщение.</p>
+                  <p className="mt-2 text-xs leading-5 text-dim">Отсутствие материалов в сводке или кандидатах не означает отсутствия событий: источники и обработка охватывают лишь часть публикаций.</p>
                   {coverage.truncated && <p role="status" className="mt-2 text-xs leading-5 text-cooling">Выборка ограничена: показана только часть подходящих публикаций.</p>}
                   {coverage.limitations.length > 0 && <ul className="mt-2 list-disc space-y-1 pl-4 text-xs leading-5 text-dim">{coverage.limitations.map((item, index) => <li key={`${index}-${item}`}>{item}</li>)}</ul>}
                 </>}

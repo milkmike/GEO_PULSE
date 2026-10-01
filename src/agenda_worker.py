@@ -17,6 +17,7 @@ from src.agenda_discovery import (MODEL, MAX_REQUEST_BYTES, candidate_group_page
 from src.api_tracker import track_api_call
 from src.agenda_translation import run_translation_cycle
 from src.decision_extraction import run_decision_cycle
+from src.news_triage import run_triage_cycle
 from src.db import get_session
 from src.jev import _request
 
@@ -63,6 +64,11 @@ def run_cycle(*,budget_usd=Decimal('0'),campaign=CAMPAIGN,max_calls=20):
         store.record_run('error',{**stats,'error':'missing_key'})
         return {**stats,'status':'error'}
     try:
+        triage_result=run_triage_cycle(budget_usd=budget_usd,campaign=campaign)
+    except Exception:
+        # Screening failure must not erase existing agenda or analyst output.
+        triage_result={'status':'error'}
+    try:
         stats=_run_discovery(budget_usd=budget_usd,campaign=campaign,max_calls=max_calls)
         status=stats.pop('status')
     except Exception as exc:
@@ -80,6 +86,7 @@ def run_cycle(*,budget_usd=Decimal('0'),campaign=CAMPAIGN,max_calls=20):
     except Exception:
         # An incomplete analyst annotation cannot invalidate discovery or titles.
         stats['decision_extraction']={'status':'error'}
+    stats['triage']=triage_result
     stats['remaining_budget_usd']=budget.get_budget(campaign)
     store.record_run(status,stats)
     return {**stats,'status':status}
@@ -119,7 +126,8 @@ def _run_discovery(*,budget_usd,campaign,max_calls):
                 check_tariff()
                 tariff_checked=True
             request_id=budget.reserve_request(campaign,budget_usd,hashlib.sha256(encoded).hexdigest(),
-                                              pair_keys=[p['cache_key'] for p in pairs.values()])
+                                              pair_keys=[p['cache_key'] for p in pairs.values()],
+                                              reservation_usd=Decimal('.01'))
             if request_id is None:
                 status='budget_exhausted'
                 stop=True
@@ -135,11 +143,16 @@ def _run_discovery(*,budget_usd,campaign,max_calls):
                     raise ValueError('Provider did not return a decision')
                 data=response['data']
                 usage=data.get('usage') or {}
+                if not isinstance(usage,dict):
+                    usage={}
+                    raise ValueError('Invalid provider usage')
                 cost=usage.get('cost')
                 fresh,cost=parse_pair_response(data,pairs)
+                if cost is not None and cost> .01:
+                    raise ValueError('Pair decision cost exceeds reservation')
                 store.save_decisions(fresh)
                 decisions.extend(fresh)
-            except (ValueError,TypeError,KeyError,subprocess.SubprocessError,OSError):
+            except (ValueError,TypeError,KeyError,AttributeError,subprocess.SubprocessError,OSError):
                 if outcome=='ok':
                     outcome='invalid_response'
                 status='error'
@@ -148,7 +161,7 @@ def _run_discovery(*,budget_usd,campaign,max_calls):
                 budget.finish_request(request_id,cost,outcome)
                 track_api_call(service='openrouter',endpoint='/alpha/decisions',model=MODEL,
                     script='build_agendas.py',tokens_in=usage.get('prompt_tokens',usage.get('input_tokens',0)),
-                    cost=cost if isinstance(cost,(int,float)) and not isinstance(cost,bool) and 0<=cost<=.1 else None,
+                    cost=cost if isinstance(cost,(int,float)) and not isinstance(cost,bool) and 0<=cost<=.01 else None,
                     status='ok' if outcome=='ok' else 'error',error=None if outcome=='ok' else outcome)
             if stop:
                 break

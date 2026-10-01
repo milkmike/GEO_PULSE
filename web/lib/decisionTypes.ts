@@ -20,6 +20,23 @@ export interface DecisionEvidence {
   kind: string;
 }
 
+export interface NewsLead {
+  article_id: number;
+  title_ru: string | null;
+  title_original: string;
+  url: string | null;
+  publisher_name: string;
+  publisher_country_code: string | null;
+  published_at: string;
+  collected_at: string;
+  topic: string;
+  event_type: string;
+  actor_type: string;
+  russia_relation: "direct" | "indirect" | "uncertain";
+  status: "needs_review";
+  countries: string[];
+}
+
 export interface DecisionWorkspaceResponse {
   as_of: string;
   country: DecisionCountry;
@@ -30,9 +47,16 @@ export interface DecisionWorkspaceResponse {
     count_24h: number;
     count_7d: number;
     reason: string;
+    status?: "needs_review";
     latest_at: string;
   }>;
   brief: { day: DecisionEvidence[]; week: DecisionEvidence[] };
+  discovery?: {
+    day: NewsLead[];
+    week: NewsLead[];
+    unassigned_day?: NewsLead[];
+    unassigned_week?: NewsLead[];
+  };
   positions: Array<{
     id: string;
     actor: string;
@@ -57,6 +81,11 @@ export interface DecisionWorkspaceResponse {
   coverage: {
     collected_from_country_7d: number;
     reviewed_from_country_7d: number;
+    classified_from_country_7d?: number;
+    pending_from_country_7d?: number;
+    discovered_to_country_7d?: number;
+    last_classified_at?: string | null;
+    triage_status?: "not_started" | "partial" | "up_to_date" | "budget_exhausted";
     relevant_to_country_7d: number;
     publisher_families: number;
     local_publisher_families: number;

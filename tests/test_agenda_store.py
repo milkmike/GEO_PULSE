@@ -34,6 +34,7 @@ def store(monkeypatch):
         ''')
         conn.exec_driver_sql(Path('scripts/migrations/034_news_agendas.sql').read_text())
         conn.exec_driver_sql(Path('scripts/migrations/036_article_title_translations.sql').read_text())
+        conn.exec_driver_sql(Path('scripts/migrations/038_article_news_triage.sql').read_text())
     factory = sessionmaker(bind=local)
     @contextmanager
     def session():
@@ -280,6 +281,20 @@ def test_translation_cache_projects_same_representative_and_invalidates_changed_
     item=store.list_agendas()['items'][0]
     assert item['title']=='Corrected Flydubai flight report' and item['title_ru'] is None
     assert [a['id'] for a in store.load_translation_candidates()]==[2,1]
+
+
+def test_triage_leads_are_translated_without_waiting_for_agenda_group(store):
+    with store.get_session() as session:
+        session.execute(text("""INSERT INTO article_news_triage
+            (article_id,source_title,source_excerpt,classification,model,version)
+            SELECT id,title,LEFT(body,2000),
+              '{"countries":["RS"],"russia_relation":"uncertain"}'::jsonb,
+              'typesafe/jev-1.13','news-triage-v2' FROM articles WHERE id=2"""))
+    assert store.list_agendas()['items'] == []
+    assert store.load_translation_candidates() == [{'id':2,'title':'Flydubai flight lands in Tabuk'}]
+    with store.get_session() as session:
+        session.execute(text("UPDATE article_news_triage SET source_excerpt='stale' WHERE article_id=2"))
+    assert store.load_translation_candidates() == []
 
 
 def test_translation_candidates_only_current_memberships_and_cards_first(store):
