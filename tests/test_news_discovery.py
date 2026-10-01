@@ -75,3 +75,18 @@ def test_nato_russia_lead_stays_in_explicit_global_bucket_without_inventing_memb
     global_leads = project_leads([item], country=None, now=NOW)
     assert global_leads["day"][0]["countries"] == []
     assert global_leads["day"][0]["status"] == "needs_review"
+
+
+@pytest.mark.parametrize("language,title,expected", [
+    ("ru", "Российские граждане обсуждают новые правила", "Российские граждане обсуждают новые правила"),
+    ("sr", "Србија и Русија разговарају", None),
+    (None, "Србија и Русија разговарају", None),
+    ("en", "Russia and Serbia discuss new rules", None),
+])
+def test_russian_original_needs_no_paid_translation(language, title, expected):
+    from src.news_discovery import project_leads
+    item = row(language=language, title=title, source_title=title, title_ru=None)
+    result = project_leads([item], country="RS", now=NOW)["day"][0]
+    assert result["title_ru"] == expected
+    assert result["title_original"] == title
+    assert result["status"] == "needs_review"

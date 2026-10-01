@@ -65,17 +65,21 @@ describe("DecisionWorkspace", () => {
     render(<DecisionWorkspace />);
     expect(await screen.findByText("Сербия ↔ Россия")).toBeVisible();
     expect(screen.getByRole("region", { name: "Карта отношений России и мира" })).toBeVisible();
-    for (const heading of ["Где требуется внимание", "Страна за 60 секунд", "Насколько полна картина"]) {
+    for (const heading of ["Где требуется внимание", "Страна за 60 секунд", "Покрытие"]) {
       expect(screen.getByText(heading)).toBeVisible();
     }
     for (const heading of ["Кто какую позицию занимает", "Что меняется для российских граждан и организаций", "Темы для разговора"]) {
       expect(screen.getByText(new RegExp(heading))).toBeVisible();
     }
-    expect(screen.getByText(/Связь с Россией и значение события ещё требуют проверки/)).toBeVisible();
-    expect(screen.getByText(/Независимость подтверждений не оценивалась/)).toBeVisible();
-    expect(screen.getByText(/Охвачены не все издатели/)).toBeVisible();
+    expect(screen.getByText("Предварительный отбор: сообщения ещё не подтверждены.")).toBeVisible();
+    const coverageDetails = screen.getByText("Подробнее о покрытии").closest("details");
+    expect(coverageDetails).not.toHaveAttribute("open");
+    fireEvent.click(within(coverageDetails!).getByText("Подробнее о покрытии"));
+    expect(within(coverageDetails!).getByText(/Независимость подтверждений не оценивалась/)).toBeVisible();
+    expect(within(coverageDetails!).getByText(/Охвачены не все издатели/)).toBeVisible();
     const citation = screen.getAllByText("Цитата и источник")[0].closest("details");
     expect(citation).not.toBeNull();
+    fireEvent.click(within(citation!).getByText("Цитата и источник"));
     expect(within(citation!).getByText(/Опубликовано:/)).toHaveTextContent("собрано:");
     expect(within(citation!).getByRole("link", { name: /Открыть публикацию/ })).toHaveAttribute("href", "https://example.org/article");
     expect(window.location.search).toBe("?country=RS");
@@ -141,10 +145,10 @@ describe("DecisionWorkspace", () => {
     mocks.decisionWorkspace.mockResolvedValue(value);
     render(<DecisionWorkspace />);
     expect(await screen.findByText("Сербия ↔ Россия")).toBeVisible();
-    expect(screen.getByText(/За выбранный период среди обработанных источников нет публикаций/)).toBeVisible();
+    expect(screen.getByText("Сводка за этот период пока не сформирована.")).toBeVisible();
     fireEvent.click(screen.getByText(/Кто какую позицию занимает/));
     fireEvent.click(screen.getByText(/Темы для разговора/));
-    expect(screen.getByText(/Модель не выделила явно атрибутированных позиций/)).toBeVisible();
+    expect(screen.getByText("В доступных материалах пока нет заявлений с указанным автором.")).toBeVisible();
     expect(screen.getByText(/Выборка ограничена/)).toBeVisible();
     expect(screen.queryByRole("link", { name: /Открыть публикацию/ })).not.toBeInTheDocument();
     expect(screen.getByText("Ссылка на оригинал недоступна.")).toBeInTheDocument();
@@ -178,9 +182,9 @@ describe("DecisionWorkspace", () => {
     expect(screen.getByText("Сербия ↔ Россия")).toBeVisible();
   });
 
-  it("keeps possible leads separate from checked conclusions and follows the selected period", async () => {
+  it("keeps translated headlines readable and moves machine labels into details", async () => {
     const value = response();
-    value.discovery = { day: [lead], week: [{ ...lead, article_id: 78, title_ru: "Переговоры Сербии и России" }] };
+    value.discovery = { day: [{ ...lead, title_ru: "Переговоры Сербии и России" }], week: [] };
     value.coverage.classified_from_country_7d = 8;
     value.coverage.pending_from_country_7d = 4;
     value.coverage.discovered_to_country_7d = 15;
@@ -189,20 +193,26 @@ describe("DecisionWorkspace", () => {
     mocks.decisionWorkspace.mockResolvedValue(value);
     render(<DecisionWorkspace />);
     const discovery = await screen.findByRole("region", { name: /Возможные повестки/ });
-    expect(within(discovery).getByText("Дипломатия: анализ")).toBeVisible();
-    expect(within(discovery).getByText("Тема: Дипломатия")).toBeVisible();
-    expect(within(discovery).getByText("Тип: анализ")).toBeVisible();
-    expect(within(discovery).getByText("Связь с Россией: требует уточнения")).toBeVisible();
-    expect(within(discovery).getByText("Перевод готовится")).toBeVisible();
-    expect(within(discovery).getByText("Требует проверки")).toBeVisible();
-    expect(within(discovery).getByText("Србија и Русија разговарају").closest("details")).not.toHaveAttribute("open");
-    expect(within(discovery).getByRole("link", { name: /Открыть публикацию/ })).toHaveAttribute("href", "https://example.rs/news");
-    expect(within(screen.getByRole("region", { name: /Страна за 60 секунд/ })).queryByText("Дипломатия: анализ")).not.toBeInTheDocument();
-    expect(screen.getByText("Ожидает разметки").nextElementSibling).toHaveTextContent("4");
-    expect(screen.getByText(/Кандидаты о стране из всех источников/)).toHaveTextContent("15");
-    fireEvent.change(screen.getByRole("combobox", { name: "Период материалов" }), { target: { value: "week" } });
     expect(within(discovery).getByText("Переговоры Сербии и России")).toBeVisible();
+    expect(within(discovery).getByText("Предварительный отбор: сообщения ещё не подтверждены.")).toBeVisible();
+    expect(within(discovery).queryByText("Требует проверки")).not.toBeInTheDocument();
     expect(within(discovery).queryByText("Перевод готовится")).not.toBeInTheDocument();
+    expect(within(discovery).queryByText("Дипломатия: анализ")).not.toBeInTheDocument();
+    expect(within(discovery).getByRole("link", { name: "Читать источник" })).toHaveAttribute("href", "https://example.rs/news");
+    expect(within(discovery).getByText(/Dnevnik · 30 сент/)).toBeVisible();
+    const details = within(discovery).getByText("Подробнее").closest("details");
+    expect(details).not.toHaveAttribute("open");
+    expect(within(details!).getByText("Тема: Дипломатия")).not.toBeVisible();
+    fireEvent.click(within(details!).getByText("Подробнее"));
+    expect(within(details!).getByText("Тема: Дипломатия")).toBeVisible();
+    expect(within(details!).getByText("Тип: анализ")).toBeVisible();
+    expect(within(details!).getByText("Связь с Россией: требует уточнения")).toBeVisible();
+    expect(within(details!).getByText("Србија и Русија разговарају")).toBeVisible();
+    expect(screen.getByText("Подробнее о покрытии").closest("details")).not.toHaveAttribute("open");
+    expect(screen.getByText("Публикаций собрано").nextElementSibling).toHaveTextContent("12");
+    expect(screen.getByText("Групп местных издателей").nextElementSibling).toHaveTextContent("1");
+    fireEvent.change(screen.getByRole("combobox", { name: "Период материалов" }), { target: { value: "week" } });
+    expect(within(discovery).queryByText("Переговоры Сербии и России")).not.toBeInTheDocument();
   });
 
   it("shows pending and unavailable discovery honestly and never links unsafe lead URLs", async () => {
@@ -212,12 +222,14 @@ describe("DecisionWorkspace", () => {
     mocks.decisionWorkspace.mockResolvedValue(value);
     render(<DecisionWorkspace />);
     const discovery = await screen.findByRole("region", { name: /Возможные повестки/ });
-    fireEvent.click(within(discovery).getByText("Оригинал и источник"));
+    fireEvent.click(within(discovery).getByText(/Без перевода · 1/));
+    expect(within(discovery).getByText("Србија и Русија разговарају")).toBeVisible();
+    fireEvent.click(within(discovery).getByText("Подробнее"));
     expect(within(discovery).getByText("Ссылка на оригинал недоступна.")).toBeVisible();
-    expect(within(discovery).queryByRole("link", { name: /Открыть публикацию/ })).not.toBeInTheDocument();
-    expect(screen.getAllByText("Требует проверки")).toHaveLength(2);
+    expect(within(discovery).queryByRole("link", { name: "Читать источник" })).not.toBeInTheDocument();
+    expect(within(discovery).queryByText("Перевод готовится")).not.toBeInTheDocument();
     fireEvent.change(screen.getByRole("combobox", { name: "Период материалов" }), { target: { value: "week" } });
-    expect(within(discovery).getByText(/не означает отсутствия событий/)).toBeVisible();
+    expect(within(discovery).getByText(/сообщений по стране пока нет/)).toBeVisible();
   });
 
   it("does not show a previous country's leads while the next country loads", async () => {
@@ -226,12 +238,12 @@ describe("DecisionWorkspace", () => {
     mocks.decisionWorkspace.mockImplementation((country: string | null) => country === "AE"
       ? new Promise<DecisionWorkspaceResponse>(() => {}) : Promise.resolve(serbia));
     render(<DecisionWorkspace />);
-    expect(await screen.findByText("Дипломатия: анализ")).toBeVisible();
+    expect(await screen.findByText(/Без перевода · 1/)).toBeVisible();
     fireEvent.change(screen.getByRole("combobox", { name: "Выбранная страна" }), { target: { value: "AE" } });
-    expect(screen.queryByText("Дипломатия: анализ")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Без перевода · 1/)).not.toBeInTheDocument();
   });
 
-  it("labels each backend topic, event, and relation even for translated titles", async () => {
+  it("preserves topic, event, and relation labels for translated titles inside details", async () => {
     const value = response();
     const topics = ["sanctions", "travel", "business", "education", "culture", "security", "diplomacy", "other"];
     const events = ["statement", "proposal", "decision", "incident", "analysis", "other"];
@@ -243,6 +255,12 @@ describe("DecisionWorkspace", () => {
     mocks.decisionWorkspace.mockResolvedValue(value);
     render(<DecisionWorkspace />);
     const discovery = await screen.findByRole("region", { name: /Возможные повестки/ });
+    expect(within(discovery).getByText("Перевод 0")).toBeVisible();
+    expect(within(discovery).getByText("Предварительный отбор: сообщения ещё не подтверждены.")).toBeVisible();
+    expect(within(discovery).queryByText("Требует проверки")).not.toBeInTheDocument();
+    const detailSummaries = within(discovery).getAllByText("Подробнее");
+    expect(detailSummaries).toHaveLength(topics.length);
+    for (const summary of detailSummaries) fireEvent.click(summary);
     for (const topic of ["Санкции", "Поездки", "Бизнес", "Образование", "Культура", "Безопасность", "Дипломатия", "Другие темы"]) {
       expect(within(discovery).getByText(`Тема: ${topic}`)).toBeVisible();
     }
@@ -265,19 +283,48 @@ describe("DecisionWorkspace", () => {
     mocks.decisionWorkspace.mockResolvedValue(value);
     render(<DecisionWorkspace />);
     const discovery = await screen.findByRole("region", { name: /Возможные повестки/ });
-    expect(within(discovery).getByText("По выбранной стране: Сербия")).toBeVisible();
-    expect(within(discovery).getByText(/По выбранной стране за этот период кандидаты пока не найдены/)).toBeVisible();
-    const general = within(discovery).getByRole("group", { name: /Международные темы без привязки к стране/ });
+    expect(within(discovery).getByText(/сообщений по стране пока нет/)).toBeVisible();
+    const general = within(discovery).getByRole("group", { name: /Другие международные сообщения/ });
     expect(within(general).getByText("НАТО обсуждает отношения с Россией")).not.toBeVisible();
-    fireEvent.click(within(general).getByText(/Международные темы без привязки к стране/));
-    expect(within(general).getByText(/Общий поток, не только выбранная страна/)).toBeVisible();
+    fireEvent.click(within(general).getByText(/Другие международные сообщения/));
+    expect(within(general).getByText(/Страна события пока не определена/)).toBeVisible();
     expect(within(general).getByText("НАТО обсуждает отношения с Россией")).toBeVisible();
-    expect(within(general).getAllByText("Требует проверки")).toHaveLength(5);
+    expect(within(general).queryByText("Требует проверки")).not.toBeInTheDocument();
     expect(within(general).getByText("Общий материал 205")).not.toBeVisible();
     fireEvent.click(within(general).getByText("Показать ещё 1"));
     expect(within(general).getByText("Общий материал 205")).toBeVisible();
     fireEvent.change(screen.getByRole("combobox", { name: "Период материалов" }), { target: { value: "week" } });
     expect(within(general).getByText("Недельный общий материал")).toBeVisible();
     expect(within(general).queryByText("НАТО обсуждает отношения с Россией")).not.toBeInTheDocument();
+  });
+
+  it("collapses untranslated leads again after changing country", async () => {
+    const serbia = response();
+    serbia.discovery = { day: [lead], week: [] };
+    const emirates = response("AE", "ОАЭ");
+    emirates.discovery = { day: [{ ...lead, article_id: 88, title_original: "Новость ОАЭ", publisher_country_code: "AE", countries: ["AE"] }], week: [] };
+    mocks.decisionWorkspace.mockImplementation((country: string | null) => Promise.resolve(country === "AE" ? emirates : serbia));
+    render(<DecisionWorkspace />);
+    const firstGroup = await screen.findByText(/Без перевода · 1/);
+    fireEvent.click(firstGroup);
+    expect(screen.getByText("Србија и Русија разговарају")).toBeVisible();
+    fireEvent.change(screen.getByRole("combobox", { name: "Выбранная страна" }), { target: { value: "AE" } });
+    expect(await screen.findByText("ОАЭ ↔ Россия")).toBeVisible();
+    const secondGroup = screen.getByText(/Без перевода · 1/).closest("details");
+    expect(secondGroup).not.toHaveAttribute("open");
+    expect(screen.queryByText("Србија и Русија разговарају")).not.toBeInTheDocument();
+    fireEvent.click(within(secondGroup!).getByText(/Без перевода · 1/));
+    expect(within(secondGroup!).getByText("Новость ОАЭ")).toBeVisible();
+  });
+
+  it("keeps the processing limit warning visible while detailed coverage is collapsed", async () => {
+    const value = response();
+    value.coverage.triage_status = "budget_exhausted";
+    value.coverage.pending_from_country_7d = 4;
+    mocks.decisionWorkspace.mockResolvedValue(value);
+    render(<DecisionWorkspace />);
+    await screen.findByText("Сербия ↔ Россия");
+    expect(screen.getByText("Обработка приостановлена: достигнут лимит.")).toBeVisible();
+    expect(screen.getByText("Подробнее о покрытии").closest("details")).not.toHaveAttribute("open");
   });
 });

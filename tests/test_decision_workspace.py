@@ -247,6 +247,8 @@ def test_postgres_projection_counts_country_involvement_without_publisher_confus
                      "annotation": json.dumps(record["annotation"]), "model": model,
                      "version": version, "analyzed": record["analyzed_at"]})
 
+        connection.execute(text("ALTER TABLE articles ADD COLUMN language varchar(5)"))
+
     Session = sessionmaker(bind=engine)
 
     @contextmanager
@@ -271,6 +273,7 @@ def test_postgres_projection_counts_country_involvement_without_publisher_confus
         assert result["coverage"]["local_publisher_families"] == 1
         with engine.begin() as connection:
             connection.execute(text(f'SET LOCAL search_path TO "{schema}"'))
+            connection.execute(text("UPDATE articles SET language='ru', title='Российские граждане обсуждают правила' WHERE id=7"))
             connection.execute(text("""INSERT INTO article_news_triage
                 SELECT id,title,LEFT(body,2000),
                 '{"countries":["RS"],"russia_relation":"uncertain","topic":"sanctions",
@@ -281,6 +284,7 @@ def test_postgres_projection_counts_country_involvement_without_publisher_confus
             connection.execute(text("UPDATE article_news_triage SET source_title='stale' WHERE article_id=2"))
         refreshed = load_decision_workspace("RS", now=NOW)
         assert {a["article_id"] for a in refreshed["discovery"]["day"]} == {1,7}
+        assert next(a for a in refreshed["discovery"]["day"] if a["article_id"] == 7)["title_ru"] == "Российские граждане обсуждают правила"
         assert refreshed["coverage"]["classified_from_country_7d"] == 1
         assert refreshed["coverage"]["pending_from_country_7d"] == 0
         assert refreshed["coverage"]["discovered_to_country_7d"] == 2
