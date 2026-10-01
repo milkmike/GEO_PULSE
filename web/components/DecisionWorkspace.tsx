@@ -2,20 +2,13 @@
 
 import { useEffect, useId, useState, type ReactNode } from "react";
 import Link from "next/link";
-import { ArrowUpRight, LoaderCircle } from "lucide-react";
+import { ArrowUpRight, Globe2, LoaderCircle } from "lucide-react";
 import { api } from "@/lib/api";
-import type { DecisionEvidence, DecisionWorkspaceResponse, NewsLead } from "@/lib/decisionTypes";
+import type { DecisionEvidence, DecisionWorkspaceResponse } from "@/lib/decisionTypes";
+
+import NewsReadingList, { newsDateTime as dateTime } from "./NewsReadingList";
 
 type LoadState = "loading" | "ready" | "refreshing" | "refreshError" | "error";
-
-function dateTime(value: string | null): string {
-  if (!value) return "нет данных";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "нет данных";
-  return `${new Intl.DateTimeFormat("ru-RU", {
-    day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "UTC",
-  }).format(date)} UTC`;
-}
 
 function safeSourceUrl(value: string | null): string | null {
   if (!value) return null;
@@ -69,58 +62,6 @@ function EvidenceRow({ item }: { item: DecisionEvidence }) {
   );
 }
 
-const topicLabels: Record<string, string> = {
-  sanctions: "Санкции", travel: "Поездки", business: "Бизнес",
-  education: "Образование", culture: "Культура", security: "Безопасность",
-  diplomacy: "Дипломатия", other: "Другие темы",
-};
-
-const eventLabels: Record<string, string> = {
-  statement: "заявление", proposal: "предложение", decision: "решение",
-  incident: "происшествие", analysis: "анализ", other: "другое сообщение",
-};
-
-const relationLabels: Record<NewsLead["russia_relation"], string> = {
-  direct: "прямая", indirect: "косвенная", uncertain: "требует уточнения",
-};
-
-function LeadRow({ lead }: { lead: NewsLead }) {
-  const href = safeSourceUrl(lead.url);
-  const title = lead.title_ru?.trim() || lead.title_original;
-  return <article className="border-t border-line py-4 first:border-t-0">
-    <p className="mb-1.5 text-[11px] leading-5 text-dim">{lead.publisher_name} · {dateTime(lead.published_at)}</p>
-    <h4 className="max-w-3xl break-words text-[17px] font-medium leading-7 text-ru-white">{title}</h4>
-    <div className="mt-2 flex flex-wrap items-start gap-x-5 gap-y-1 text-xs">
-      {href && <a className="inline-flex min-h-8 items-center gap-1 text-accent underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent" href={href} target="_blank" rel="noopener noreferrer">Читать источник <ArrowUpRight aria-hidden="true" size={13} /></a>}
-      <details className="min-w-0 flex-1 basis-40">
-        <summary className="w-fit cursor-pointer rounded-sm py-2 text-dim underline-offset-4 hover:text-fg hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">Подробнее</summary>
-        <div className="mt-2 space-y-2 break-words border-l border-line pl-3 leading-5 text-dim">
-          {lead.title_ru?.trim() && <p className="text-fg">{lead.title_original}</p>}
-          <p>Тема: {topicLabels[lead.topic.toLowerCase()] ?? "не определена"}</p>
-          <p>Тип: {eventLabels[lead.event_type.toLowerCase()] ?? "не определён"}</p>
-          <p>Связь с Россией: {relationLabels[lead.russia_relation]}</p>
-          <p>{lead.publisher_name}{lead.publisher_country_code ? ` · страна издателя: ${lead.publisher_country_code}` : ""}</p>
-          <p>Собрано: {dateTime(lead.collected_at)}</p>
-          {!href && <p>Ссылка на оригинал недоступна.</p>}
-        </div>
-      </details>
-    </div>
-  </article>;
-}
-
-function LeadList({ leads }: { leads: NewsLead[] }) {
-  const translated = leads.filter((lead) => Boolean(lead.title_ru?.trim()));
-  const untranslated = leads.filter((lead) => !lead.title_ru?.trim());
-  return <>
-    <div>{translated.map((lead) => <LeadRow key={lead.article_id} lead={lead} />)}</div>
-    {untranslated.length > 0 && <details className="mt-2 border-t border-line py-3">
-      <summary className="cursor-pointer py-1 text-xs text-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">Без перевода · {untranslated.length}</summary>
-      <p className="mt-2 text-xs leading-5 text-dim">Доступны заголовки на языке источника.</p>
-      <div>{untranslated.map((lead) => <LeadRow key={lead.article_id} lead={lead} />)}</div>
-    </details>}
-  </>;
-}
-
 function AttentionItem({ item, currentCountry, onSelect }: {
   item: DecisionWorkspaceResponse["attention"][number];
   currentCountry: string;
@@ -128,15 +69,15 @@ function AttentionItem({ item, currentCountry, onSelect }: {
 }) {
   return <button type="button" onClick={() => onSelect(item.code)} aria-current={currentCountry === item.code ? "true" : undefined}
     className={`flex min-h-11 w-full items-start justify-between gap-3 px-2 py-2.5 text-left focus-visible:outline-2 focus-visible:outline-inset focus-visible:outline-accent ${currentCountry === item.code ? "bg-panel2 text-ru-white" : "text-fg hover:bg-panel2/60"}`}>
-    <span className="min-w-0"><span className="block text-sm font-medium">{item.name}</span><span className="mt-0.5 block text-[11px] leading-4 text-dim">{item.reason}</span></span>
-    <span className="tnum shrink-0 text-right text-xs"><strong className="text-ru-white">{item.count_24h}</strong><span className="block text-[10px] text-dim">24 ч · {item.count_7d} / 7 д</span></span>
+    <span className="min-w-0"><span className="block text-sm font-medium">{item.name}</span><span className="mt-1 block text-xs leading-5 text-fg/75">{item.reason.replace(": появились сообщения для проверки", " · новые публикации")}</span></span>
+    <span className="tnum shrink-0 text-right text-xs"><strong className="text-ru-white">{item.count_24h}</strong><span className="block text-xs leading-5 text-fg/75">за сутки · {item.count_7d} за неделю</span></span>
   </button>;
 }
 
 function Heading({ title, description }: { title: string; description?: string }) {
   return <div>
-    <h3 className="display mt-1 text-[22px] leading-tight">{title}</h3>
-    {description && <p className="mt-1 max-w-2xl text-xs leading-5 text-dim">{description}</p>}
+    <h3 className="display mt-1 text-[25px] leading-tight">{title}</h3>
+    {description && <p className="mt-2 max-w-2xl text-sm leading-6 text-fg/75">{description}</p>}
   </div>;
 }
 
@@ -227,10 +168,10 @@ export default function DecisionWorkspace({ renderMap, mapControls, activeMapFil
           <h2 id={titleId} className="display text-[29px] leading-tight sm:text-[36px]">Россия и мир</h2>
         </div>
         {content && <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-          <p className="tnum text-[11px] text-dim">срез {dateTime(content.as_of)}</p>
+          <p className="tnum text-[11px] text-dim">Обновлено {dateTime(content.as_of)}</p>
           <button type="button" disabled={state === "refreshing"} onClick={() => setReload((value) => value + 1)}
             className="min-h-11 text-xs text-accent underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-wait disabled:opacity-60 sm:min-h-0">
-            Обновить срез
+            Обновить
           </button>
         </div>}
       </header>
@@ -252,7 +193,7 @@ export default function DecisionWorkspace({ renderMap, mapControls, activeMapFil
         <aside className="card min-w-0 overflow-hidden p-4 lg:flex lg:h-[520px] lg:flex-col xl:h-[540px]" aria-labelledby={`${titleId}-attention`}>
           <p className="text-[10px] font-medium uppercase tracking-[0.18em] text-ru-red">Свежие сигналы</p>
           <h3 id={`${titleId}-attention`} className="display mt-1 text-[23px] leading-tight">Где требуется внимание</h3>
-          <p className="mt-2 text-xs leading-5 text-dim">Предварительный отбор сообщений о России.</p>
+          <p className="mt-2 text-xs leading-5 text-dim">Страны, о которых появились новые публикации.</p>
           <label htmlFor={`${titleId}-country`} className="mt-4 block text-[10px] uppercase tracking-wide text-dim">Выбранная страна</label>
           <select
             id={`${titleId}-country`}
@@ -271,7 +212,7 @@ export default function DecisionWorkspace({ renderMap, mapControls, activeMapFil
             <div className="mt-3 min-h-0 divide-y divide-line overflow-y-auto border-y border-line lg:flex-1">
               {content.attention.slice(0, 4).map((item) => <AttentionItem key={item.code} item={item} currentCountry={currentCountry} onSelect={selectCountry} />)}
               {content.attention.length > 4 && <details className="border-t border-line px-2 py-2 text-xs">
-                <summary className="cursor-pointer py-1 text-accent focus-visible:outline-2 focus-visible:outline-accent">Все страны внимания ({content.attention.length})</summary>
+                <summary className="cursor-pointer py-1 text-accent focus-visible:outline-2 focus-visible:outline-accent">Показать остальные страны ({content.attention.length})</summary>
                 <div className="mt-2 divide-y divide-line">{content.attention.slice(4).map((item) => <AttentionItem key={item.code} item={item} currentCountry={currentCountry} onSelect={selectCountry} />)}</div>
               </details>}
             </div>
@@ -280,10 +221,10 @@ export default function DecisionWorkspace({ renderMap, mapControls, activeMapFil
       </div>
 
       <div id="country-overview" className="mt-8 min-w-0 scroll-mt-5 border-t border-line pt-5" aria-busy={state === "loading" || state === "refreshing"}>
-          {state === "loading" && <div role="status" className="card flex min-h-48 items-center gap-3 px-5 text-sm text-dim"><LoaderCircle aria-hidden="true" size={17} className="animate-spin motion-reduce:animate-none" />Собираем срез по стране…</div>}
-          {state === "error" && <div role="alert" className="card border-ru-red/50 p-5"><p className="text-sm text-fg">Не удалось загрузить аналитический срез.</p><button type="button" onClick={() => setReload((value) => value + 1)} className="mt-3 min-h-11 text-sm text-accent underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">Повторить загрузку</button></div>}
-          {state === "refreshing" && <p role="status" className="mb-3 flex items-center gap-2 border-l-2 border-ru-blue/70 pl-3 text-xs text-dim"><LoaderCircle aria-hidden="true" size={13} className="animate-spin motion-reduce:animate-none" />Обновляем срез…</p>}
-          {state === "refreshError" && content && <p role="alert" className="mb-3 border-l-2 border-ru-red/70 pl-3 text-xs leading-5 text-dim">Не удалось обновить срез. Показаны данные от {dateTime(content.as_of)}. Используйте «Обновить срез», чтобы повторить.</p>}
+          {state === "loading" && <div role="status" className="card flex min-h-48 items-center gap-3 px-5 text-sm text-dim"><LoaderCircle aria-hidden="true" size={17} className="animate-spin motion-reduce:animate-none" />Загружаем обзор…</div>}
+          {state === "error" && <div role="alert" className="card border-ru-red/50 p-5"><p className="text-sm text-fg">Не удалось загрузить обзор страны.</p><button type="button" onClick={() => setReload((value) => value + 1)} className="mt-3 min-h-11 text-sm text-accent underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">Повторить загрузку</button></div>}
+          {state === "refreshing" && <p role="status" className="mb-3 flex items-center gap-2 border-l-2 border-ru-blue/70 pl-3 text-xs text-dim"><LoaderCircle aria-hidden="true" size={13} className="animate-spin motion-reduce:animate-none" />Обновляем обзор…</p>}
+          {state === "refreshError" && content && <p role="alert" className="mb-3 border-l-2 border-ru-red/70 pl-3 text-xs leading-5 text-dim">Не удалось обновить обзор. Показаны данные от {dateTime(content.as_of)}. Используйте «Обновить», чтобы повторить.</p>}
           {content && <>
             <div className="mb-6 flex flex-wrap items-end justify-between gap-x-5 gap-y-3 border-b border-line pb-5">
               <div><p className="text-[10px] font-medium uppercase tracking-[0.18em] text-ru-red">Выбранная страна</p><h3 className="display mt-1 text-[30px] leading-tight sm:text-[36px]">{content.country.name} ↔ Россия</h3></div>
@@ -296,19 +237,10 @@ export default function DecisionWorkspace({ renderMap, mapControls, activeMapFil
             <div className="min-w-0 space-y-8">
             {leads === undefined && <p className="border-t border-line pt-4 text-sm leading-6 text-dim">Не удалось загрузить сообщения по стране.</p>}
             {leads !== undefined && !hasCountryMaterial && <p className="border-t border-line pt-4 text-sm leading-6 text-dim">По выбранной стране за этот период материалов пока нет. Отсутствие сообщений не означает отсутствия событий.</p>}
-            {leads && leads.length > 0 && <section className="min-w-0 border-t-2 border-cooling/70 pt-4" aria-labelledby={`${titleId}-discovery`}>
-              <div id={`${titleId}-discovery`}><Heading title="Возможные повестки" description="Предварительный отбор: сообщения ещё не подтверждены." /></div>
-              <LeadList key={`${currentCountry}-${windowSize}`} leads={leads} />
+            {leads && leads.length > 0 && <section className="min-w-0" aria-labelledby={`${titleId}-discovery`}>
+              <div id={`${titleId}-discovery`}><Heading title="В новостях" description="Что пишут СМИ о стране и России. Сообщения ещё не проверены." /></div>
+              <NewsReadingList key={`${currentCountry}-${windowSize}`} leads={leads} />
             </section>}
-            {unassignedLeads.length > 0 && <details className="min-w-0 border-t border-line pt-4" aria-labelledby={`${titleId}-unassigned`}>
-                <summary id={`${titleId}-unassigned`} className="display cursor-pointer text-lg leading-tight focus-visible:outline-2 focus-visible:outline-accent">Другие международные сообщения <span className="tnum text-xs text-dim">({unassignedLeads.length})</span></summary>
-                <p className="mt-1 text-xs leading-5 text-dim">Страна события пока не определена. Сообщения ещё не подтверждены.</p>
-                <LeadList key={`global-${currentCountry}-${windowSize}`} leads={unassignedLeads.slice(0, 4)} />
-                {unassignedLeads.length > 4 && <details className="mt-2 border-t border-line pt-2 text-xs">
-                  <summary className="w-fit cursor-pointer rounded-sm py-1 text-accent underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">Показать ещё {unassignedLeads.length - 4}</summary>
-                  <LeadList key={`more-${currentCountry}-${windowSize}`} leads={unassignedLeads.slice(4)} />
-                </details>}
-              </details>}
               {brief.length > 0 && <section className="min-w-0 border-t border-line pt-4" aria-labelledby={`${titleId}-brief`}>
                 <div id={`${titleId}-brief`}><Heading title="Страна за 60 секунд" /></div>
                 <div className="mt-2 grid gap-x-6 lg:grid-cols-2">{brief.map((item) => <EvidenceRow key={item.article_id} item={item} />)}</div>
@@ -333,23 +265,23 @@ export default function DecisionWorkspace({ renderMap, mapControls, activeMapFil
               </details>}
             </div>
 
-              <aside className="min-w-0 border-t border-line pt-4 lg:border-l lg:border-t-0 lg:pl-6 lg:pt-0" aria-labelledby={`${titleId}-coverage`}>
-                <div id={`${titleId}-coverage`}><Heading title="Покрытие" description="Местные источники · за 7 дней" /></div>
+              <aside className="min-w-0 self-start rounded-xl border border-line bg-panel/70 p-5" aria-labelledby={`${titleId}-coverage`}>
+                <div id={`${titleId}-coverage`}><Heading title="Что вошло в обзор" description="Местные источники · за 7 дней" /></div>
                 {coverage && <>
-                  <p className="mt-3 text-xs leading-5 text-dim">Обзор охватывает часть публикаций; отсутствие сообщений не означает отсутствия событий.</p>
+                  <p className="mt-3 text-sm leading-6 text-fg/75">Мы видим только часть информационной картины. Отсутствие новостей не означает, что ничего не происходит.</p>
                   {coverage.triage_status && <p role="status" className={`mt-3 text-xs leading-5 ${coverage.triage_status === "budget_exhausted" ? "text-cooling" : "text-dim"}`}>{{ not_started: "Обработка ещё не началась.", partial: "Обработана часть материалов.", up_to_date: "Поступившие материалы обработаны.", budget_exhausted: "Обработка приостановлена: достигнут лимит." }[coverage.triage_status]}</p>}
                   <dl className="mt-4 grid grid-cols-2 gap-4 text-xs">
-                    <div><dt className="text-dim">Публикаций собрано</dt><dd className="tnum mt-1 text-xl text-ru-white">{coverage.collected_from_country_7d}</dd></div>
-                    <div><dt className="text-dim">Групп местных издателей</dt><dd className="tnum mt-1 text-xl text-ru-white">{coverage.local_publisher_families}</dd></div>
+                    <div><dt className="text-dim">Публикаций за неделю</dt><dd className="tnum mt-1 text-xl text-ru-white">{coverage.collected_from_country_7d}</dd></div>
+                    <div><dt className="text-dim">Групп источников</dt><dd className="tnum mt-1 text-xl text-ru-white">{coverage.local_publisher_families}</dd></div>
                   </dl>
-                  <p className="mt-3 text-[11px] leading-5 text-dim">Последний сбор: {dateTime(coverage.last_collected_at)}</p>
+                  <p className="mt-3 text-[11px] leading-5 text-dim">Новые статьи получены: {dateTime(coverage.last_collected_at)}</p>
                   {coverage.truncated && <p role="status" className="mt-2 text-xs leading-5 text-cooling">Выборка ограничена: показана часть публикаций.</p>}
                   <details className="mt-4 border-t border-line pt-2">
-                    <summary className="cursor-pointer py-2 text-xs text-accent focus-visible:outline-2 focus-visible:outline-accent">Подробнее о покрытии</summary>
+                    <summary className="inline-flex min-h-11 cursor-pointer items-center text-sm text-accent focus-visible:outline-2 focus-visible:outline-accent">Как собраны данные</summary>
                   <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3 text-xs"><div><dt className="text-dim">Собрано у местных издателей</dt><dd className="tnum mt-1 text-lg text-ru-white">{coverage.collected_from_country_7d}</dd></div>{coverage.classified_from_country_7d !== undefined && <div><dt className="text-dim">Размечено</dt><dd className="tnum mt-1 text-lg text-ru-white">{coverage.classified_from_country_7d}</dd></div>}{coverage.pending_from_country_7d !== undefined && <div><dt className="text-dim">Ожидает разметки</dt><dd className="tnum mt-1 text-lg text-ru-white">{coverage.pending_from_country_7d}</dd></div>}<div><dt className="text-dim">Подробно проверено моделью</dt><dd className="tnum mt-1 text-lg text-ru-white">{coverage.reviewed_from_country_7d}</dd></div><div><dt className="text-dim">Выделена связь со страной и РФ</dt><dd className="tnum mt-1 text-lg text-ru-white">{coverage.relevant_to_country_7d}</dd></div><div><dt className="text-dim">Семейств издателей в выборке</dt><dd className="tnum mt-1 text-lg text-ru-white">{coverage.publisher_families}</dd></div></dl>
                   {coverage.discovered_to_country_7d !== undefined && <p className="mt-3 border-t border-line pt-3 text-xs leading-5 text-dim">Кандидаты о стране из всех источников: <strong className="tnum text-ru-white">{coverage.discovered_to_country_7d}</strong>. Это другой круг публикаций; число не входит в долю местных издателей.</p>}
                   {coverage.triage_status && <p className="mt-3 text-xs leading-5 text-dim">Последняя разметка: {dateTime(coverage.last_classified_at ?? null)}.</p>}
-                  <p className="mt-3 text-xs leading-5 text-dim">Местных семейств издателей в выборке: {coverage.local_publisher_families}. Последний сбор: {dateTime(coverage.last_collected_at)}. Последний анализ: {dateTime(coverage.last_analyzed_at)}.</p>
+                  <p className="mt-3 text-xs leading-5 text-dim">Связанные издания объединены в группы: несколько сайтов одной медиагруппы не считаются независимыми источниками. Новые статьи получены: {dateTime(coverage.last_collected_at)}. Последний анализ: {dateTime(coverage.last_analyzed_at)}.</p>
                   <p className="mt-2 border-l-2 border-ru-blue/70 pl-3 text-xs leading-5 text-dim">Независимость подтверждений не оценивалась. Перепечатки могут повторять одно сообщение.</p>
                   {coverage.limitations.length > 0 && <ul className="mt-2 list-disc space-y-1 pl-4 text-xs leading-5 text-dim">{coverage.limitations.map((item, index) => <li key={`${index}-${item}`}>{item}</li>)}</ul>}
                   </details>
@@ -358,6 +290,17 @@ export default function DecisionWorkspace({ renderMap, mapControls, activeMapFil
             </div>
           </>}
         </div>
+        {content && unassignedLeads.length > 0 && <section aria-labelledby={`${titleId}-world`}
+          className="mt-10 grid min-w-0 gap-x-10 gap-y-3 rounded-xl border border-line bg-panel/70 p-5 sm:p-6 lg:grid-cols-[minmax(180px,240px)_minmax(0,1fr)]">
+          <header>
+            <Globe2 aria-hidden="true" size={22} className="mb-3 text-accent" />
+            <h3 id={`${titleId}-world`} className="display text-[28px] leading-tight">В мире</h3>
+            <p className="mt-2 text-xs font-medium text-accent">{windowSize === "day" ? "За последние 24 часа" : "За последние 7 дней"}</p>
+            <p className="mt-3 text-sm leading-6 text-fg/80">Новости о России из разных стран. Связь этих публикаций с выбранной страной не установлена.</p>
+            <p className="mt-3 text-xs leading-5 text-fg/65">Сообщения СМИ ещё не проверены.</p>
+          </header>
+          <NewsReadingList key={`world-${currentCountry}-${windowSize}`} leads={unassignedLeads} initialCount={3} />
+        </section>}
     </section>
   );
 }

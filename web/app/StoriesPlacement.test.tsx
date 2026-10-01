@@ -125,10 +125,11 @@ describe("story placements", () => {
         <HomePage />
       </FeatureFlagsProvider>,
     );
-    fireEvent.click(screen.getByText("Другие данные и ленты"));
+    fireEvent.click(screen.getByText("Больше данных"));
     expect(await screen.findByText("Свежая повестка")).toBeVisible();
     expect(screen.getByRole("region", { name: "Аналитическое рабочее место" })
       .compareDocumentPosition(screen.getByText("Свежая повестка")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByText("Сравнить страны")).toBeVisible();
     expect(screen.queryByRole("link", { name: "Сюжет 15" })).not.toBeInTheDocument();
     expect(apiMocks.stories).not.toHaveBeenCalled();
     expect(apiMocks.agendas).toHaveBeenCalledWith({ limit: 6 }, expect.any(AbortSignal));

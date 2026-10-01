@@ -52,7 +52,7 @@ async function renderWithTopicResponse(response: TopicBriefResponse) {
   apiMocks.topicBrief.mockResolvedValue(response);
   render(<HomePage />);
   await selectTopic();
-  fireEvent.click(screen.getByText("Другие данные и ленты"));
+  fireEvent.click(screen.getByText("Больше данных"));
 }
 
 describe("thematic brief states", () => {
@@ -111,7 +111,7 @@ describe("thematic brief states", () => {
     apiMocks.topicBrief.mockRejectedValue(new Error("network down"));
     render(<HomePage />);
     await selectTopic();
-    fireEvent.click(screen.getByText("Другие данные и ленты"));
+    fireEvent.click(screen.getByText("Больше данных"));
 
     expect(await screen.findByText("Не удалось загрузить тематический брифинг")).toBeVisible();
     await waitFor(() => {
