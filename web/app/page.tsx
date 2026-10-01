@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { ChevronDown } from "lucide-react";
 import CountryRanking from "@/components/CountryRanking";
 import Filters, { type FilterState } from "@/components/Filters";
 import HealthBadge from "@/components/HealthBadge";
@@ -18,7 +19,7 @@ import { useFeatureFlags } from "@/components/FeatureFlagsProvider";
 import WorldMap from "@/components/WorldMap";
 import { api } from "@/lib/api";
 import { HOME_TIPS } from "@/lib/explain";
-import { fmtDate } from "@/lib/format";
+import { newsDateTime as fmtDate } from "@/components/NewsReadingList";
 import type { Brief, CountrySummary, Headline, Meta, Signal, TopicBriefResponse } from "@/lib/types";
 
 // Secondary data panels can still be reordered; the map and country brief stay fixed.
@@ -248,13 +249,19 @@ export default function HomePage() {
         activeMapFilters={Number(Boolean(filters.region)) + Number(Boolean(filters.level)) + Number(Boolean(filters.topic))}
       />
 
-      <details className="border-t border-line py-5">
-        <summary className="display cursor-pointer text-xl focus-visible:outline-2 focus-visible:outline-accent">Страны по индексу отношений</summary>
+      <details className="group border-t border-line py-3">
+        <summary className="flex min-h-16 cursor-pointer list-none items-center justify-between gap-4 rounded-lg px-3 py-3 hover:bg-panel focus-visible:outline-2 focus-visible:outline-accent [&::-webkit-details-marker]:hidden">
+          <span><span className="block text-lg font-medium text-ru-white">Сравнить страны</span><span className="mt-1 block text-sm text-fg/75">Индекс отношений с Россией и его изменения</span></span>
+          <ChevronDown aria-hidden="true" size={20} className="shrink-0 text-accent transition-transform group-open:rotate-180 motion-reduce:transition-none" />
+        </summary>
         <div className="card mt-4 max-h-[520px] overflow-y-auto"><CountryRanking countries={filtered} topicCounts={topicCounts ?? undefined} /></div>
       </details>
 
-      <details className="border-t border-line py-5">
-        <summary className="display cursor-pointer text-xl focus-visible:outline-2 focus-visible:outline-accent">Другие данные и ленты</summary>
+      <details className="group border-t border-line py-3">
+        <summary className="flex min-h-16 cursor-pointer list-none items-center justify-between gap-4 rounded-lg px-3 py-3 hover:bg-panel focus-visible:outline-2 focus-visible:outline-accent [&::-webkit-details-marker]:hidden">
+          <span><span className="block text-lg font-medium text-ru-white">Больше данных</span><span className="mt-1 block text-sm text-fg/75">Новостные ленты, сводки и сигналы изменений</span></span>
+          <ChevronDown aria-hidden="true" size={20} className="shrink-0 text-accent transition-transform group-open:rotate-180 motion-reduce:transition-none" />
+        </summary>
         <div className="reveal reveal-2 mt-4 grid grid-cols-12 gap-3">
           <SortableGrid storageKey="home-panel-order" defaultOrder={HOME_ORDER} items={homePanels} />
         </div>
