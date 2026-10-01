@@ -61,13 +61,17 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 
 describe("DecisionWorkspace", () => {
-  it("renders all six analyst sections with source dates, uncertainty and citation", async () => {
+  it("puts the map first and retains source dates, uncertainty and detail sections", async () => {
     render(<DecisionWorkspace />);
     expect(await screen.findByText("Сербия ↔ Россия")).toBeVisible();
-    for (const heading of ["Где требуется внимание сегодня", "Страна за 60 секунд", "Кто какую позицию занимает", "Что меняется для российских граждан и организаций", "Темы для разговора", "Насколько полна картина"]) {
+    expect(screen.getByRole("region", { name: "Карта отношений России и мира" })).toBeVisible();
+    for (const heading of ["Где требуется внимание", "Страна за 60 секунд", "Насколько полна картина"]) {
       expect(screen.getByText(heading)).toBeVisible();
     }
-    expect(screen.getByText(/машинным анализом/)).toBeVisible();
+    for (const heading of ["Кто какую позицию занимает", "Что меняется для российских граждан и организаций", "Темы для разговора"]) {
+      expect(screen.getByText(new RegExp(heading))).toBeVisible();
+    }
+    expect(screen.getByText(/Связь с Россией и значение события ещё требуют проверки/)).toBeVisible();
     expect(screen.getByText(/Независимость подтверждений не оценивалась/)).toBeVisible();
     expect(screen.getByText(/Охвачены не все издатели/)).toBeVisible();
     const citation = screen.getAllByText("Цитата и источник")[0].closest("details");
@@ -83,6 +87,21 @@ describe("DecisionWorkspace", () => {
     expect(await screen.findByText("Сербия ↔ Россия")).toBeVisible();
     expect(screen.getByRole("combobox", { name: "Выбранная страна" })).toHaveValue("RS");
     expect(mocks.decisionWorkspace).toHaveBeenCalledWith("RS", expect.any(AbortSignal));
+  });
+
+  it("uses the map selection in the same country request and URL", async () => {
+    mocks.decisionWorkspace.mockImplementation((country: string | null) => Promise.resolve(
+      country === "AE" ? response("AE", "ОАЭ") : response(),
+    ));
+    render(<DecisionWorkspace renderMap={({ selectedCountry, onSelectCountry }) =>
+      <button type="button" onClick={() => onSelectCountry("AE")}>Карта: {selectedCountry ?? "нет выбора"}</button>
+    } />);
+    expect(await screen.findByText("Карта: RS")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Карта: RS" }));
+    expect(await screen.findByText("ОАЭ ↔ Россия")).toBeVisible();
+    expect(screen.getByText("Карта: AE")).toBeVisible();
+    expect(window.location.search).toBe("?country=AE");
+    expect(mocks.decisionWorkspace).toHaveBeenNthCalledWith(2, "AE", expect.any(AbortSignal));
   });
 
   it("keeps the country in the URL and ignores an older response after switching", async () => {
@@ -123,6 +142,8 @@ describe("DecisionWorkspace", () => {
     render(<DecisionWorkspace />);
     expect(await screen.findByText("Сербия ↔ Россия")).toBeVisible();
     expect(screen.getByText(/За выбранный период среди обработанных источников нет публикаций/)).toBeVisible();
+    fireEvent.click(screen.getByText(/Кто какую позицию занимает/));
+    fireEvent.click(screen.getByText(/Темы для разговора/));
     expect(screen.getByText(/Модель не выделила явно атрибутированных позиций/)).toBeVisible();
     expect(screen.getByText(/Выборка ограничена/)).toBeVisible();
     expect(screen.queryByRole("link", { name: /Открыть публикацию/ })).not.toBeInTheDocument();
@@ -246,7 +267,9 @@ describe("DecisionWorkspace", () => {
     const discovery = await screen.findByRole("region", { name: /Возможные повестки/ });
     expect(within(discovery).getByText("По выбранной стране: Сербия")).toBeVisible();
     expect(within(discovery).getByText(/По выбранной стране за этот период кандидаты пока не найдены/)).toBeVisible();
-    const general = within(discovery).getByRole("region", { name: "Международные темы без привязки к стране" });
+    const general = within(discovery).getByRole("group", { name: /Международные темы без привязки к стране/ });
+    expect(within(general).getByText("НАТО обсуждает отношения с Россией")).not.toBeVisible();
+    fireEvent.click(within(general).getByText(/Международные темы без привязки к стране/));
     expect(within(general).getByText(/Общий поток, не только выбранная страна/)).toBeVisible();
     expect(within(general).getByText("НАТО обсуждает отношения с Россией")).toBeVisible();
     expect(within(general).getAllByText("Требует проверки")).toHaveLength(5);

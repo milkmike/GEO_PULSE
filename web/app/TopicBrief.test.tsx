@@ -17,7 +17,7 @@ const apiMocks = vi.hoisted(() => ({
 
 vi.mock("@/lib/api", () => ({ api: apiMocks }));
 vi.mock("@/components/SiteHeader", () => ({ default: () => <nav>header</nav> }));
-vi.mock("@/components/DecisionWorkspace", () => ({ default: () => null }));
+vi.mock("@/components/DecisionWorkspace", () => ({ default: ({ mapControls }: { mapControls?: ReactNode }) => <div>{mapControls}</div> }));
 vi.mock("@/components/SortableGrid", () => ({
   default: ({ items }: { items: { id: string; node: ReactNode }[] }) => (
     <>{items.map((item) => <div key={item.id}>{item.node}</div>)}</>
@@ -52,6 +52,7 @@ async function renderWithTopicResponse(response: TopicBriefResponse) {
   apiMocks.topicBrief.mockResolvedValue(response);
   render(<HomePage />);
   await selectTopic();
+  fireEvent.click(screen.getByText("Другие данные и ленты"));
 }
 
 describe("thematic brief states", () => {
@@ -110,6 +111,7 @@ describe("thematic brief states", () => {
     apiMocks.topicBrief.mockRejectedValue(new Error("network down"));
     render(<HomePage />);
     await selectTopic();
+    fireEvent.click(screen.getByText("Другие данные и ленты"));
 
     expect(await screen.findByText("Не удалось загрузить тематический брифинг")).toBeVisible();
     await waitFor(() => {

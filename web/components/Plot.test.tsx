@@ -1,5 +1,5 @@
 import { render, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import Plot, { type PlotClickPoint } from "./Plot";
 
 const plotly = vi.hoisted(() => ({
@@ -11,11 +11,29 @@ const plotly = vi.hoisted(() => ({
     });
   }),
   purge: vi.fn(),
+  resize: vi.fn(async () => {}),
 }));
 
-vi.mock("plotly.js-dist-min", () => ({ default: { react: plotly.react, purge: plotly.purge } }));
+vi.mock("plotly.js-dist-min", () => ({ default: { react: plotly.react, purge: plotly.purge, Plots: { resize: plotly.resize } } }));
+afterEach(() => vi.unstubAllGlobals());
 
 describe("Plot click contract", () => {
+  it("resizes after a disclosure changes its container and disconnects on unmount", async () => {
+    let resized: ResizeObserverCallback;
+    const observe = vi.fn();
+    const disconnect = vi.fn();
+    vi.stubGlobal("ResizeObserver", class {
+      constructor(callback: ResizeObserverCallback) { resized = callback; }
+      observe = observe;
+      disconnect = disconnect;
+    });
+    const { unmount } = render(<Plot data={[]} layout={{}} />);
+    await waitFor(() => expect(observe).toHaveBeenCalled());
+    resized!([{ contentRect: { width: 400, height: 280 } } as ResizeObserverEntry], {} as ResizeObserver);
+    expect(plotly.resize).toHaveBeenCalledWith(observe.mock.calls[0][0]);
+    unmount();
+    expect(disconnect).toHaveBeenCalled();
+  });
   it("preserves map locations and investigation customdata", async () => {
     const onClick = vi.fn((point: PlotClickPoint) => point.customdata);
     render(<Plot data={[]} layout={{}} onClick={onClick} />);

@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AgendaItem, Dossier, StoryListItem } from "@/lib/types";
+import type { AgendaItem, CountrySummary, Dossier, MapEntry, StoryListItem } from "@/lib/types";
 import HomePage from "./page";
 import CountryPage from "./country/[code]/page";
 import { FeatureFlagsProvider } from "@/components/FeatureFlagsProvider";
@@ -24,7 +24,10 @@ const apiMocks = vi.hoisted(() => ({
 vi.mock("@/lib/api", () => ({ api: apiMocks, apiBase: () => "http://api.test" }));
 vi.mock("@/components/SiteHeader", () => ({ default: () => <nav>header</nav> }));
 vi.mock("@/components/DecisionWorkspace", () => ({
-  default: () => <section aria-label="Аналитическое рабочее место">Рабочее место</section>,
+  default: ({ renderMap, mapControls }: {
+    renderMap: (props: { selectedCountry: string; onSelectCountry: (code: string) => void }) => ReactNode;
+    mapControls?: ReactNode;
+  }) => <section aria-label="Аналитическое рабочее место">Рабочее место{renderMap({ selectedCountry: "ES", onSelectCountry: () => {} })}{mapControls}</section>,
 }));
 vi.mock("@/components/SortableGrid", () => ({
   default: ({ items }: { items: { id: string; node: ReactNode }[] }) => <>{items.map((item) => <div key={item.id}>{item.node}</div>)}</>,
@@ -36,7 +39,8 @@ vi.mock("@/components/HeadlinesFeed", () => ({ default: () => null }));
 vi.mock("@/components/Markdown", () => ({ default: () => null }));
 vi.mock("@/components/RadarPanel", () => ({ default: () => null }));
 vi.mock("@/components/SignalFeed", () => ({ default: () => null }));
-vi.mock("@/components/WorldMap", () => ({ default: () => null }));
+vi.mock("@/components/WorldMap", () => ({ default: ({ entries, selectedCountry }: { entries: MapEntry[]; selectedCountry: string }) =>
+  <div data-testid="map-selection">{selectedCountry} · {entries.map((entry) => entry.code).join(",")}</div> }));
 vi.mock("@/components/AgreementsPanel", () => ({ default: () => null }));
 vi.mock("@/components/Plot", () => ({ default: () => null }));
 vi.mock("@/components/TradePanel", () => ({ default: () => null }));
@@ -47,7 +51,10 @@ vi.mock("@/components/TierDivergencePanel", () => ({ default: () => null }));
 vi.mock("@/components/SanctionsPanel", () => ({ default: () => null }));
 vi.mock("@/components/EnergyPanel", () => ({ default: () => null }));
 vi.mock("@/components/VoxPanel", () => ({ default: () => null }));
-vi.mock("@/components/Filters", () => ({ default: () => null }));
+vi.mock("@/components/Filters", () => ({ default: ({ value, onChange }: {
+  value: { region: string | null; level: string | null; topic: string | null };
+  onChange: (value: { region: string | null; level: string | null; topic: string | null }) => void;
+}) => <button type="button" onClick={() => onChange({ ...value, region: "asia" })}>Регион: Азия</button> }));
 
 function story(id: number): StoryListItem {
   return {
@@ -118,12 +125,27 @@ describe("story placements", () => {
         <HomePage />
       </FeatureFlagsProvider>,
     );
+    fireEvent.click(screen.getByText("Другие данные и ленты"));
     expect(await screen.findByText("Свежая повестка")).toBeVisible();
     expect(screen.getByRole("region", { name: "Аналитическое рабочее место" })
       .compareDocumentPosition(screen.getByText("Свежая повестка")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.queryByRole("link", { name: "Сюжет 15" })).not.toBeInTheDocument();
     expect(apiMocks.stories).not.toHaveBeenCalled();
     expect(apiMocks.agendas).toHaveBeenCalledWith({ limit: 6 }, expect.any(AbortSignal));
+  });
+
+  it("keeps the selected country on the map when a region filter excludes it", async () => {
+    const country = (code: string, region: string, iso3: string): CountrySummary => ({
+      code, name: code, name_en: code, iso3, flag: "", region, tier: 1,
+      score: 0, structural: 0, media: 0, level: "neutral", delta_24h: 0,
+      delta_7d: 0, article_count: 0, gdelt_volume: 0, gdelt_tone: 0,
+      updated_at: "2026-09-30T12:00:00Z",
+    });
+    apiMocks.countries.mockResolvedValue({ countries: [country("ES", "europe", "ESP"), country("AE", "asia", "ARE")], total: 2 });
+    render(<HomePage />);
+    await waitFor(() => expect(screen.getByTestId("map-selection")).toHaveTextContent("ES · ES,AE"));
+    fireEvent.click(await screen.findByRole("button", { name: "Регион: Азия" }));
+    expect(screen.getByTestId("map-selection")).toHaveTextContent("ES · AE,ES");
   });
 
   it("does not query or expose story panels while the server snapshot is off", async () => {
