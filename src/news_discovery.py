@@ -50,7 +50,7 @@ def project_leads(rows, *, country: str | None, now: datetime) -> dict:
                 or tags.get("topic") not in TOPICS or tags.get("event_type") not in EVENTS
                 or tags.get("actor_type") not in ACTORS):
             continue
-        translated = row.get("title_ru")
+        translated = row.get("title") if row.get("language") == "ru" else row.get("title_ru")
         if (not isinstance(translated, str) or not re.search(r"[А-Яа-яЁё]", translated)
                 or len(translated) > 500 or re.search(r"[<>`]|https?://", translated)):
             translated = None
@@ -96,7 +96,7 @@ def load_discovery(session, *, country: str, now: datetime, countries: list[dict
     # Small cache first for all-country evidence; the local coverage query uses
     # the existing selective article geography index.
     projection_sql = f"""
-        SELECT ar.id AS article_id,ar.title,
+        SELECT ar.id AS article_id,ar.title,ar.language,
           LEFT(COALESCE(NULLIF(ar.body,''),ar.summary,''),2000) AS body_excerpt,
           ar.published_at,ar.collected_at,nt.source_title,nt.source_excerpt,nt.classification,
           COALESCE(NULLIF(ar.resolved_url,''),ar.url) AS url,
