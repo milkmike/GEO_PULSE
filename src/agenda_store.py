@@ -235,14 +235,31 @@ def list_agendas(limit=20, q=''):
 
 
 def load_translation_candidates(limit=400):
-    """Current visible representatives first, then evidence; cache hits stay local."""
+    """Unreviewed leads, then agenda representatives; cache hits stay local."""
     if type(limit) is not int or not 1 <= limit <= 400:
         raise ValueError('Invalid translation candidate bound')
     items = list_agendas(limit=50)['items']
     cutoff = datetime.now(timezone.utc) - timedelta(hours=72)
     ordered = [item['articles'][0] for item in items]
     ordered.extend(article for item in items for article in item['articles'][1:])
-    candidates = {}
+    from src.news_discovery import MODEL as triage_model, VERSION as triage_version
+    with get_session() as session:
+        leads = session.execute(text("""
+            SELECT ar.id,ar.title FROM article_news_triage nt
+            JOIN articles ar ON ar.id=nt.article_id
+            JOIN article_country_facts src ON src.article_id=ar.id
+            LEFT JOIN article_title_translations tr ON tr.article_id=ar.id AND tr.source_title=ar.title
+            WHERE nt.model=:model AND nt.version=:version AND nt.source_title=ar.title
+              AND nt.source_excerpt=LEFT(COALESCE(NULLIF(ar.body,''),ar.summary,''),2000)
+              AND nt.classification->>'russia_relation' IN ('direct','indirect','uncertain')
+              AND jsonb_typeof(nt.classification->'countries')='array'
+              AND ar.published_at BETWEEN now()-interval '7 days' AND now()
+              AND ar.collected_at<=now() AND ar.is_duplicate IS FALSE
+              AND ar.geo_status IN ('source_verified','publisher_verified','publisher_reassigned')
+              AND tr.article_id IS NULL
+            ORDER BY ar.published_at DESC,ar.id DESC LIMIT :limit
+        """), {'model':triage_model,'version':triage_version,'limit':limit}).mappings().all()
+    candidates = {r['id']:dict(r) for r in leads}
     for article in ordered:
         if (article['collected_at'] >= cutoff and article['collected_at'] <= datetime.now(timezone.utc)
                 and not article.get('title_ru')):

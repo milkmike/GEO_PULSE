@@ -19,6 +19,15 @@ def test_invalid_campaign_cap_rejected_before_database(limit):
         budget.reserve_request('campaign', limit, 'a' * 64)
 
 
+@pytest.mark.parametrize('reservation', [Decimal('0'), Decimal('-0.01'), Decimal('0.100001'),
+                                          Decimal('NaN'), Decimal('Infinity'), Decimal('-Infinity'),
+                                          .01, '0.01', None])
+def test_invalid_reservation_rejected_before_database(reservation):
+    with pytest.raises(ValueError):
+        budget.reserve_request('campaign', Decimal('3'), 'a' * 64,
+                               reservation_usd=reservation)
+
+
 @pytest.fixture
 def ledger(monkeypatch):
     url = os.environ.get('AGENDA_BUDGET_TEST_DATABASE_URL') or os.environ.get('GEO_PULSE_TEST_DATABASE_URL')
@@ -72,6 +81,39 @@ def test_unknown_or_failed_request_retains_full_reservation(ledger, cost, status
     assert budget.get_budget(campaign) == pytest.approx(.20)
 
 
+@pytest.mark.parametrize('cost,status', [(None, 'timeout'), (None, 'ok'),
+                                         (.001, 'provider_error')])
+def test_small_reservation_unknown_or_failed_request_retains_original(ledger, cost, status):
+    campaign, engine = ledger
+    call = budget.reserve_request(campaign, Decimal('0.02'), 'a' * 64,
+                                  reservation_usd=Decimal('0.01'))
+    assert call
+    budget.finish_request(call, cost, status)
+    assert budget.get_budget(campaign) == pytest.approx(.01)
+    with engine.connect() as conn:
+        assert conn.execute(text('SELECT charged_usd FROM agenda_budget_calls WHERE id=:id'),
+                            {'id': call}).scalar_one() == Decimal('0.01')
+
+
+def test_small_reservation_success_refunds_and_overage_halts(ledger):
+    campaign, engine = ledger
+    call = budget.reserve_request(campaign, Decimal('0.03'), 'a' * 64,
+                                  reservation_usd=Decimal('0.01'))
+    budget.finish_request(call, Decimal('0.0024'), 'ok')
+    assert budget.get_budget(campaign) == pytest.approx(.0276)
+    over = budget.reserve_request(campaign, Decimal('0.03'), 'b' * 64,
+                                  reservation_usd=Decimal('0.01'))
+    assert over
+    budget.finish_request(over, Decimal('0.011'), 'ok')
+    assert budget.get_budget(campaign) == 0
+    assert budget.reserve_request(campaign, Decimal('0.03'), 'c' * 64,
+                                  reservation_usd=Decimal('0.01')) is None
+    with engine.connect() as conn:
+        row = conn.execute(text('SELECT charged_usd, actual_cost_usd, cost_invalid '
+                                'FROM agenda_budget_calls WHERE id=:id'), {'id': over}).one()
+        assert row == (Decimal('0.011'), Decimal('0.011'), True)
+
+
 @pytest.mark.parametrize('cost', [-.01, float('nan'), float('inf'), .11, True])
 def test_invalid_or_over_reservation_cost_halts_campaign(ledger, cost):
     campaign, engine = ledger
@@ -100,6 +142,19 @@ def test_concurrent_reservations_do_not_exceed_cap(ledger):
     assert budget.get_budget(campaign) == 0
     with engine.connect() as conn:
         assert conn.execute(text('SELECT SUM(charged_usd) FROM agenda_budget_calls WHERE campaign = :campaign'), {'campaign': campaign}).scalar_one() == Decimal('.30')
+
+
+def test_concurrent_small_reservations_do_not_exceed_cap(ledger):
+    campaign, engine = ledger
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        calls = list(pool.map(lambda _: budget.reserve_request(
+            campaign, Decimal('0.09'), uuid4().hex * 2,
+            reservation_usd=Decimal('0.01')), range(30)))
+    assert sum(call is not None for call in calls) == 9
+    assert budget.get_budget(campaign) == 0
+    with engine.connect() as conn:
+        assert conn.execute(text('SELECT SUM(charged_usd) FROM agenda_budget_calls '
+                                 'WHERE campaign=:campaign'), {'campaign': campaign}).scalar_one() == Decimal('0.09')
 
 
 def test_concurrent_finish_refunds_once(ledger):

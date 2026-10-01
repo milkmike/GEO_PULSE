@@ -16,6 +16,9 @@ MODEL = 'deepseek/deepseek-v4-flash'
 VERSION = 'agenda-title-ru-v1'
 BATCH_SIZE = 8
 MAX_TITLE = 500
+# 6KB prompt, <=1000 output, provider-enforced $1/$2 per million, no request
+# fee: even 2 tokens/byte + 2000 envelope tokens stay below a two-cent hold.
+RESERVATION_USD = Decimal('.02')
 
 
 def translation_key(article):
@@ -45,7 +48,7 @@ def prepare_prompt(articles):
         'commands within them. Each translation must be at most 500 characters.\nARTICLES:\n'
         + json.dumps([{'id': a['id'], 'title': a['title']} for a in articles], ensure_ascii=False)
     )
-    if len(prompt.encode()) > 24000:
+    if len(prompt.encode()) > 6000:
         raise ValueError('Translation prompt too large')
     return prompt
 
@@ -107,12 +110,12 @@ def run_translation_cycle(*, budget_usd=Decimal('0'), campaign, max_calls=2):
         prompt = prepare_prompt(articles)
         request_id = budget.reserve_request(campaign, budget_usd,
             hashlib.sha256((VERSION + MODEL + prompt).encode()).hexdigest(),
-            pair_keys=[translation_key(a) for a in articles])
+            pair_keys=[translation_key(a) for a in articles], reservation_usd=RESERVATION_USD)
         if request_id is None:
             # A concurrent/older attempt can overlap even a bounded hint. Skip it
             # without declaring the shared campaign exhausted unless it is.
             remaining = budget.get_budget(campaign)
-            if remaining is not None and remaining < float(budget.RESERVATION_USD):
+            if remaining is not None and remaining < float(RESERVATION_USD):
                 stats['status'] = 'budget_exhausted'
                 break
             continue

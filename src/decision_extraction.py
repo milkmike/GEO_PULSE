@@ -23,6 +23,8 @@ from src.decision_verification import verify_annotation
 
 MODEL = "deepseek/deepseek-v4-flash"
 VERSION = "decision-annotation-v3-reviewed"
+TRIAGE_MODEL = "typesafe/jev-1.13"
+TRIAGE_VERSION = "news-triage-v2"
 MAX_EXCERPT = 4000
 MAX_PROMPT_BYTES = 32000
 KINDS = {"decision", "conflict", "cooperation", "position", "incident", "other"}
@@ -118,21 +120,22 @@ def source_key(article: dict) -> str:
 
 
 def fair_candidates(rows: list[dict]) -> list[dict]:
-    """Relevance tiers, then country round robin in supplied recency order."""
+    """Current Jev leads first, then legacy relevance and country fairness."""
     ordered = []
-    for relevant in (True, False, None):
-        groups = defaultdict(deque)
-        countries = []
-        for row in rows:
-            if row.get("is_relevant") is relevant:
-                code = row["country_code"]
-                if code not in groups:
-                    countries.append(code)
-                groups[code].append(row)
-        while any(groups.values()):
-            for code in countries:
-                if groups[code]:
-                    ordered.append(groups[code].popleft())
+    for triage_positive in (True, False):
+        for relevant in (True, False, None):
+            groups = defaultdict(deque)
+            countries = []
+            for row in rows:
+                if bool(row.get("triage_positive")) is triage_positive and row.get("is_relevant") is relevant:
+                    code = row["country_code"]
+                    if code not in groups:
+                        countries.append(code)
+                    groups[code].append(row)
+            while any(groups.values()):
+                for code in countries:
+                    if groups[code]:
+                        ordered.append(groups[code].popleft())
     return ordered
 
 
@@ -155,31 +158,65 @@ _ELIGIBLE = """
      AND cache.source_excerpt=LEFT(COALESCE(NULLIF(ar.body,''),ar.summary,''),4000)
      AND cache.model=:model AND cache.version=:version)
 """
+_TRIAGE_JOIN = """
+ LEFT JOIN article_news_triage nt ON nt.article_id=ar.id
+   AND nt.source_title=ar.title
+   AND nt.source_excerpt=LEFT(COALESCE(NULLIF(ar.body,''),ar.summary,''),2000)
+   AND nt.model=:triage_model AND nt.version=:triage_version
+"""
+_TRIAGE_POSITIVE = """
+ nt.classification->>'russia_relation' IN ('direct','indirect','uncertain')
+ AND jsonb_array_length(CASE WHEN jsonb_typeof(nt.classification->'countries')='array'
+   THEN nt.classification->'countries' ELSE '[]'::jsonb END)>0
+"""
 # geo_country_code has a partial (country, published_at DESC, id DESC) index.
-# Each country probes its own recent rows; excluded cached rows do not consume
-# its 40 slots. Selecting IDs first avoids sorting/decompressing the full body.
+# Scan the small Jev cache first, then retain at most forty current positive
+# labels per publishing country. Unclassified fallback keeps its article index
+# probe; newer fallback rows cannot hide an older positive label.
 _CANDIDATES_SQL = text(f"""
+ WITH triage_leads AS MATERIALIZED (
+   SELECT nt.article_id,nt.source_title,nt.source_excerpt
+   FROM article_news_triage nt
+   WHERE nt.model=:triage_model AND nt.version=:triage_version
+     AND {_TRIAGE_POSITIVE}
+ ), positive AS MATERIALIZED (
+   SELECT ar.id,ROW_NUMBER() OVER (
+     PARTITION BY ar.geo_country_code ORDER BY ar.published_at DESC,ar.id DESC
+   ) AS country_rank
+   FROM triage_leads nt
+   JOIN articles ar ON ar.id=nt.article_id
+   JOIN countries country ON country.code=ar.geo_country_code
+   {_PUBLISHER_JOIN}
+   WHERE nt.source_title=ar.title
+     AND nt.source_excerpt=LEFT(COALESCE(NULLIF(ar.body,''),ar.summary,''),2000)
+     AND TRIM(publisher.country_code)=TRIM(country.code)
+     AND {_ELIGIBLE}
+ )
+ SELECT id FROM positive WHERE country_rank<=40
+ UNION
  SELECT candidate.id
  FROM countries country
  CROSS JOIN LATERAL (
-   SELECT ar.id FROM articles ar {_PUBLISHER_JOIN}
+   SELECT ar.id FROM articles ar {_PUBLISHER_JOIN} {_TRIAGE_JOIN}
    WHERE ar.geo_country_code=country.code
      AND TRIM(publisher.country_code)=TRIM(country.code)
-     AND {_ELIGIBLE}
+     AND {_ELIGIBLE} AND nt.article_id IS NULL
    ORDER BY ar.published_at DESC,ar.id DESC LIMIT 40
  ) candidate
 """)
 _BOOTSTRAP_SQL = text(f"""
- SELECT ar.id FROM articles ar {_PUBLISHER_JOIN}
+ SELECT ar.id FROM articles ar {_PUBLISHER_JOIN} {_TRIAGE_JOIN}
  WHERE ar.id=ANY(CAST(:article_ids AS bigint[])) AND {_ELIGIBLE}
+   AND (nt.article_id IS NULL OR {_TRIAGE_POSITIVE})
 """)
 _DETAIL_SQL = text(f"""
  SELECT ar.id,ar.title,
    LEFT(COALESCE(NULLIF(ar.body,''),ar.summary,''),4000) AS excerpt,
    ar.published_at,ar.collected_at,TRIM(publisher.country_code) AS country_code,
-   an.is_relevant
+   an.is_relevant,nt.article_id IS NOT NULL AS triage_positive
  FROM articles ar {_PUBLISHER_JOIN}
  LEFT JOIN analysis an ON an.article_id=ar.id
+ {_TRIAGE_JOIN} AND {_TRIAGE_POSITIVE}
  WHERE ar.id=ANY(CAST(:ids AS bigint[]))
    AND ar.geo_status IN ('source_verified','publisher_verified','publisher_reassigned')
 """)
@@ -200,10 +237,12 @@ def load_candidates(article_ids: list[int] | None = None) -> tuple[list[dict], s
     with get_session() as session:
         session.execute(text("SET LOCAL statement_timeout='15s'"))
         selection = _BOOTSTRAP_SQL if article_ids is not None else _CANDIDATES_SQL
-        ids = session.execute(selection, {"model": MODEL, "version": VERSION,
-            "article_ids": article_ids}).scalars().all()
+        params = {"model": MODEL, "version": VERSION, "triage_model": TRIAGE_MODEL,
+                  "triage_version": TRIAGE_VERSION, "article_ids": article_ids}
+        ids = session.execute(selection, params).scalars().all()
         rows = [dict(row) for row in session.execute(_DETAIL_SQL,
-            {"ids": ids}).mappings()] if ids else []
+            {"ids": ids, "triage_model": TRIAGE_MODEL,
+             "triage_version": TRIAGE_VERSION}).mappings()] if ids else []
         rows.sort(key=lambda row: (row["published_at"], row["id"]), reverse=True)
         codes = {str(code).strip() for code in session.execute(text("SELECT code FROM countries")).scalars()}
     return fair_candidates(rows), codes

@@ -89,6 +89,7 @@ def test_real_bounded_chat_reserves_first_and_settles_actual_usage(monkeypatch,h
     result=translation.run_translation_cycle(budget_usd=Decimal('3'),campaign='same')
     assert result['calls']==1
     assert reserve.call_args.args[:2]==('same',Decimal('3'))
+    assert reserve.call_args.kwargs['reservation_usd'] == Decimal('.02')
     finish.assert_called_once_with('reserved',.0003,'invalid_response' if unsafe else 'ok')
     assert saved.call_count==(0 if unsafe else 1)
 

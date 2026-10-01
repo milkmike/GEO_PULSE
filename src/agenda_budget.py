@@ -18,8 +18,9 @@ RESERVATION_USD = Decimal('0.10')
 MAX_CAMPAIGN_USD = Decimal('3')
 
 
-def reserve_request(campaign: str, limit_usd: Decimal, payload_hash: str, pair_keys=()) -> str | None:
-    """Commit one ten-cent reservation, or return None if no spend is allowed.
+def reserve_request(campaign: str, limit_usd: Decimal, payload_hash: str, pair_keys=(),
+                    *, reservation_usd: Decimal = RESERVATION_USD) -> str | None:
+    """Commit a bounded reservation, or return None if no spend is allowed.
 
     Invalid configuration raises ValueError without touching the database.
     An existing campaign requires exactly its original limit; changing a process
@@ -30,6 +31,9 @@ def reserve_request(campaign: str, limit_usd: Decimal, payload_hash: str, pair_k
     if (not isinstance(limit_usd, Decimal) or not limit_usd.is_finite()
             or not 0 < limit_usd <= MAX_CAMPAIGN_USD):
         raise ValueError('campaign limit must be a finite Decimal in (0, 3]')
+    if (not isinstance(reservation_usd, Decimal) or not reservation_usd.is_finite()
+            or not 0 < reservation_usd <= RESERVATION_USD):
+        raise ValueError('reservation must be a finite Decimal in (0, 0.10]')
     if not isinstance(campaign, str) or not campaign.strip() or len(campaign) > 200:
         raise ValueError('invalid campaign')
     if not isinstance(payload_hash, str) or re.fullmatch(r'[0-9a-f]{64}', payload_hash) is None:
@@ -64,14 +68,14 @@ def reserve_request(campaign: str, limit_usd: Decimal, payload_hash: str, pair_k
             WHERE campaign = :campaign AND limit_usd = :limit
               AND halted = FALSE AND charged_usd + :reservation <= limit_usd
             RETURNING campaign
-        '''), {'campaign': campaign, 'limit': limit_usd, 'reservation': RESERVATION_USD}).scalar_one_or_none()
+        '''), {'campaign': campaign, 'limit': limit_usd, 'reservation': reservation_usd}).scalar_one_or_none()
         if authorized is None:
             return None
         session.execute(text('''
             INSERT INTO agenda_budget_calls (id, campaign, payload_hash, pair_keys, charged_usd)
             VALUES (:id, :campaign, :hash, CAST(:pair_keys AS jsonb), :reservation)
         '''), {'id': call_id, 'campaign': campaign, 'hash': payload_hash,
-               'reservation': RESERVATION_USD, 'pair_keys': json.dumps(pair_keys)})
+               'reservation': reservation_usd, 'pair_keys': json.dumps(pair_keys)})
     return call_id
 
 
@@ -92,8 +96,6 @@ def finish_request(call_id: str, cost: float | None, status: str) -> None:
             if not actual.is_finite() or actual < 0:
                 actual = None
                 invalid = True
-            elif actual > RESERVATION_USD:
-                invalid = True
         except (InvalidOperation, ValueError):
             invalid = True
     safe_status = status if isinstance(status, str) and re.fullmatch(r'[a-z_]{1,40}', status) else 'invalid_status'
@@ -106,8 +108,12 @@ def finish_request(call_id: str, cost: float | None, status: str) -> None:
         '''), {'id': call_id}).mappings().one_or_none()
         if call is None or call['finished_at'] is not None:
             return
-        charge = RESERVATION_USD
-        if actual is not None and actual > RESERVATION_USD:
+        # An unfinished call's charge is its original committed reservation.
+        reservation_usd = call['charged_usd']
+        overage = actual is not None and actual > reservation_usd
+        invalid = invalid or overage
+        charge = reservation_usd
+        if overage:
             charge = actual
         elif not invalid and safe_status == 'ok' and actual is not None:
             charge = actual

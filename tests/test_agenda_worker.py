@@ -38,6 +38,7 @@ def harness(monkeypatch):
     monkeypatch.setattr(worker.store,'get_cached_decisions',lambda keys:{})
     monkeypatch.setattr(worker,'check_tariff',Mock())
     monkeypatch.setattr(worker,'run_translation_cycle',Mock(return_value={'status':'ok','calls':0,'translated':0}))
+    monkeypatch.setattr(worker,'run_triage_cycle',Mock(return_value={'status':'ok','calls':0,'saved':0}))
     monkeypatch.setattr(worker,'run_decision_cycle',Mock(return_value={'status':'ok','calls':0,'annotated':0}),raising=False)
     reserve=Mock(return_value='reservation')
     monkeypatch.setattr(worker.budget,'reserve_request',reserve)
@@ -81,8 +82,24 @@ def test_success_commits_reservation_before_network_and_persists_membership(monk
     assert result['status']=='ok' and result['accepted']==1 and result['calls']==1
     assert result['discovery_cursor']==22
     settled.assert_called_once_with('reservation',.00005,'ok')
+    assert reserve.call_args.kwargs['reservation_usd']==Decimal('.01')
     saved.assert_called_once()
     attached.assert_called_once()
+
+
+def test_pair_cost_over_one_cent_stops_before_save(monkeypatch,harness):
+    worker,articles,page,reserve,settled,saved,attached=harness
+    def expensive(payload,*args):
+        data=response(payload)
+        data['data']['usage']['cost']=.02
+        return data
+    monkeypatch.setattr(worker,'_request',expensive)
+    result=worker.run_cycle(budget_usd=Decimal('3'))
+    assert result['status']=='error' and result['calls']==1
+    assert reserve.call_args.kwargs['reservation_usd']==Decimal('.01')
+    settled.assert_called_once_with('reservation',.02,'invalid_response')
+    saved.assert_not_called()
+    attached.assert_not_called()
 
 
 def test_exhausted_campaign_makes_no_paid_call(monkeypatch,harness):
@@ -166,6 +183,19 @@ def test_decision_extraction_runs_with_same_budget_after_translation(monkeypatch
     monkeypatch.setattr(worker,'run_decision_cycle',extract)
     result=worker.run_cycle(budget_usd=Decimal('3'))
     assert result['decision_extraction']=={'status':'ok','calls':1,'annotated':1}
+
+
+def test_triage_runs_before_discovery_and_extraction_on_same_campaign(monkeypatch,harness):
+    worker,articles,page,*_=harness
+    def triage(**kwargs):
+        assert page.call_count == 0
+        assert kwargs == {'budget_usd':Decimal('3'),'campaign':worker.CAMPAIGN}
+        return {'status':'ok','calls':1,'saved':8}
+    monkeypatch.setattr(worker,'run_triage_cycle',triage)
+    monkeypatch.setattr(worker,'_request',lambda payload,*args:response(payload))
+    result=worker.run_cycle(budget_usd=Decimal('3'))
+    assert result['triage']=={'status':'ok','calls':1,'saved':8}
+    worker.run_decision_cycle.assert_called_once_with(budget_usd=Decimal('3'),campaign=worker.CAMPAIGN)
 
 
 def test_decision_extraction_failure_preserves_discovery_and_translation(monkeypatch,harness):

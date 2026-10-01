@@ -179,6 +179,13 @@ def test_postgres_projection_counts_country_involvement_without_publisher_confus
               analyzed_at timestamptz)
         """))
         connection.execute(text("""
+            CREATE TABLE article_news_triage (article_id bigint, source_title text,
+              source_excerpt text, classification jsonb, model text, version text,
+              classified_at timestamptz);
+            CREATE TABLE article_title_translations (article_id bigint,source_title text,title_ru text);
+            CREATE TABLE agenda_budget (campaign text,limit_usd numeric,charged_usd numeric,halted bool);
+        """))
+        connection.execute(text("""
             CREATE VIEW article_country_facts AS SELECT a.id AS article_id, s.name,
               s.country_code, s.url FROM articles a JOIN sources s ON s.id=a.source_id
         """))
@@ -251,6 +258,9 @@ def test_postgres_projection_counts_country_involvement_without_publisher_confus
     monkeypatch.setattr(module, "get_session", session)
     try:
         result = load_decision_workspace("RS", now=NOW)
+        assert result["discovery"] == {"day": [], "week": [], "unassigned_day": [], "unassigned_week": []}
+        assert result["coverage"]["classified_from_country_7d"] == 0
+        assert result["coverage"]["pending_from_country_7d"] == 1
         assert [a["article_id"] for a in result["brief"]["day"]] == [1]
         assert result["attention"][0]["count_24h"] == 1
         assert "Сербия изменила правила въезда" in result["attention"][0]["reason"]
@@ -259,6 +269,25 @@ def test_postgres_projection_counts_country_involvement_without_publisher_confus
         assert result["coverage"]["relevant_to_country_7d"] == 1
         assert result["coverage"]["publisher_families"] == 1
         assert result["coverage"]["local_publisher_families"] == 1
+        with engine.begin() as connection:
+            connection.execute(text(f'SET LOCAL search_path TO "{schema}"'))
+            connection.execute(text("""INSERT INTO article_news_triage
+                SELECT id,title,LEFT(body,2000),
+                '{"countries":["RS"],"russia_relation":"uncertain","topic":"sanctions",
+                  "event_type":"proposal","actor_type":"government","uncertain": true}'::jsonb,
+                'typesafe/jev-1.13','news-triage-v2',:as_of
+                FROM articles WHERE id IN (1,2,3,4,7,8)"""), {"as_of": NOW})
+            # Stale classification must not count as processed or visible.
+            connection.execute(text("UPDATE article_news_triage SET source_title='stale' WHERE article_id=2"))
+        refreshed = load_decision_workspace("RS", now=NOW)
+        assert {a["article_id"] for a in refreshed["discovery"]["day"]} == {1,7}
+        assert refreshed["coverage"]["classified_from_country_7d"] == 1
+        assert refreshed["coverage"]["pending_from_country_7d"] == 0
+        assert refreshed["coverage"]["discovered_to_country_7d"] == 2
+        assert refreshed["coverage"]["triage_status"] == "up_to_date"
+        # Discovery does not become a reviewed claim or alter confirmed counts.
+        assert refreshed["brief"] == result["brief"]
+        assert refreshed["changes"] == result["changes"]
     finally:
         with engine.begin() as connection:
             connection.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))

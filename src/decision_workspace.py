@@ -11,6 +11,7 @@ from sqlalchemy import text
 from src.api.public_urls import safe_public_url
 from src.collectors.publisher_attribution import normalize_publisher_domain, expected_site_domain
 from src.db import get_session
+from src.news_discovery import load_discovery
 
 
 MAX_DETAIL = 1000
@@ -250,7 +251,7 @@ def load_decision_workspace(country_code: str | None = None, *, now: datetime | 
                         if _valid_text(r["latest_headline"]) else "Новая публикация о связи страны с Россией"),
              "latest_at": _iso(r["latest_at"])}
             for r in attention_rows if r["code"] in valid_codes and r["code"] != "RU"
-        ][:20]
+        ]
         selected = (country_code or (attention[0]["code"] if attention else ("RS" if "RS" in valid_codes else (countries[0]["code"] if countries else None))))
         if selected not in valid_codes:
             raise ValueError("Unknown country code")
@@ -307,6 +308,8 @@ def load_decision_workspace(country_code: str | None = None, *, now: datetime | 
               AND ar.published_at BETWEEN :week_start AND :as_of
               AND ar.collected_at<=:as_of AND ar.is_duplicate IS FALSE
         """), params).mappings().one()
+        discovery = load_discovery(session, country=selected, now=now, countries=countries,
+                                   collected=int(local["collected_from_country_7d"]))
     local_families = {_family(url) for url in local["publisher_urls"]}
     all_families = {_family(url) for url in relevant["publisher_urls"]}
     coverage = {**dict(local), **dict(relevant)}
@@ -317,6 +320,14 @@ def load_decision_workspace(country_code: str | None = None, *, now: datetime | 
         "География издателя отражает покрытие, а не страну события.",
         "Независимое подтверждение конкретных утверждений не оценивалось.",
     ]
-    return project_decision_workspace(country=country, countries=countries,
+    result = project_decision_workspace(country=country, countries=countries,
                                       rows=detail_rows, now=now, attention=attention,
                                       coverage=coverage, truncated=len(detail_rows)>MAX_DETAIL)
+    result["discovery"] = discovery["discovery"]
+    result["coverage"].update(discovery["coverage"])
+    reviewed_countries = {item["code"] for item in attention}
+    merged_attention = attention + [item for item in discovery["attention"]
+                                    if item["code"] not in reviewed_countries]
+    result["attention"] = sorted(merged_attention,
+                                  key=lambda item: item["latest_at"], reverse=True)[:20]
+    return result

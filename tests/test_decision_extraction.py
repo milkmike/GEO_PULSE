@@ -86,6 +86,19 @@ def test_candidate_order_round_robins_countries_and_prioritizes_relevance():
     assert [row["id"] for row in extraction.fair_candidates(rows)] == [1, 3, 2, 4, 5]
 
 
+def test_current_triage_leads_precede_legacy_relevance():
+    rows = [article(id=1, is_relevant=True),
+            article(id=2, is_relevant=None, triage_positive=True),
+            article(id=3, is_relevant=False, triage_positive=True)]
+    assert [row["id"] for row in extraction.fair_candidates(rows)] == [3, 2, 1]
+
+
+def test_triage_selection_version_matches_producer():
+    from src import news_triage
+    assert extraction.TRIAGE_MODEL == news_triage.MODEL
+    assert extraction.TRIAGE_VERSION == news_triage.VERSION == "news-triage-v2"
+
+
 def test_source_key_changes_with_exact_input_and_limit_validation():
     a = article()
     assert extraction.source_key(a) != extraction.source_key(article(excerpt=a["excerpt"] + "!"))
@@ -158,6 +171,7 @@ def test_source_snapshot_is_invalidated_and_rechecked_before_save(monkeypatch):
                 INSERT INTO analysis VALUES(1,true);
             """)
             conn.exec_driver_sql(Path("scripts/migrations/037_article_decision_annotations.sql").read_text())
+            conn.exec_driver_sql(Path("scripts/migrations/038_article_news_triage.sql").read_text())
         factory = sessionmaker(bind=local)
         @contextmanager
         def session():
@@ -204,6 +218,34 @@ def test_source_snapshot_is_invalidated_and_rechecked_before_save(monkeypatch):
                 FROM articles WHERE id BETWEEN 101 AND 160
             """), {"model": extraction.MODEL, "version": extraction.VERSION})
         assert {row["id"] for row in extraction.load_candidates()[0]} == {1, 6}
+        with session() as db:
+            db.execute(text("""
+                INSERT INTO articles
+                  (id,source_id,title,body,published_at,collected_at,is_duplicate,geo_status,geo_country_code)
+                SELECT 200+i,1,'Newer unclassified report '||i,'No verified detail',
+                  now()-interval '5 minutes',now(),false,'source_verified','RS'
+                FROM generate_series(1,61) AS i
+            """))
+            db.execute(text("""
+                INSERT INTO article_news_triage
+                  (article_id,source_title,source_excerpt,classification,model,version)
+                SELECT id,title,LEFT(COALESCE(NULLIF(body,''),summary,''),2000),
+                  CAST(:classification AS jsonb),:model,:version
+                FROM articles WHERE id IN (1,261)
+            """), {"model": extraction.TRIAGE_MODEL, "version": extraction.TRIAGE_VERSION,
+                   "classification": json.dumps({"russia_relation":"direct", "countries":["RS"]})})
+            db.execute(text("""
+                UPDATE article_news_triage
+                SET classification=CAST(:classification AS jsonb) WHERE article_id=261
+            """), {"classification": json.dumps({"russia_relation":"none", "countries":[]})})
+        selected, _ = extraction.load_candidates()
+        assert selected[0]["id"] == 1 and selected[0]["triage_positive"] is True
+        assert 261 not in {row["id"] for row in selected}
+        assert any(row["id"] >= 201 for row in selected)
+        assert extraction.load_candidates(article_ids=[261])[0] == []
+        with session() as db:
+            db.execute(text("UPDATE articles SET body='Corrected unclassified source' WHERE id=261"))
+        assert {row["id"] for row in extraction.load_candidates(article_ids=[261])[0]} == {261}
     finally:
         local.dispose()
         with engine.begin() as conn:
