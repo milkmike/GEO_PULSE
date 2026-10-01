@@ -179,3 +179,16 @@ def test_first_invalid_provider_batch_stops_before_second_reservation(monkeypatc
     request.assert_called_once()
     finish.assert_called_once_with("id", .0001, "invalid_response")
     save.assert_not_called()
+
+
+def test_confident_secondary_cannot_rescue_low_confidence_primary():
+    payload, selected = triage.prepare_payload([article()], {"RS"})
+    data = response(payload, country_confidence=.4)
+    key = "article_1_country_secondary"
+    data["answers"][key] = answer("RS", payload["questions"][key]["criteria"])
+    records, _ = triage.parse_response(data, selected, {"RS"})
+    tags = records[0]["classification"]
+    assert tags["country_primary"] == "unknown"
+    assert tags["country_secondary"] == "RS"
+    assert tags["countries"] == []
+    assert tags["uncertain"] is True

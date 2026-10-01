@@ -137,6 +137,10 @@ def parse_response(data, articles, country_codes):
                 choices["country_secondary"]["probabilities"][secondary] < .5):
             secondary = "unknown"
         countries = list(dict.fromkeys(code for code in (primary, secondary) if code not in {"none", "unknown"}))
+        # Keep the secondary decision for audit, but never promote it when the
+        # primary country failed the confidence threshold.
+        if primary in {"none", "unknown"}:
+            countries = []
         relation = choices["relation"]["choice"]
         if choices["relation"]["confidence"] < .5 or choices["relation"]["probabilities"][relation] < .5:
             relation = "uncertain"
