@@ -210,7 +210,7 @@ describe("DecisionWorkspace", () => {
     expect(within(details!).getByText("Србија и Русија разговарају")).toBeVisible();
     expect(screen.getByText("Подробнее о покрытии").closest("details")).not.toHaveAttribute("open");
     expect(screen.getByText("Публикаций собрано").nextElementSibling).toHaveTextContent("12");
-    expect(screen.getByText("Местных издателей").nextElementSibling).toHaveTextContent("1");
+    expect(screen.getByText("Групп местных издателей").nextElementSibling).toHaveTextContent("1");
     fireEvent.change(screen.getByRole("combobox", { name: "Период материалов" }), { target: { value: "week" } });
     expect(within(discovery).queryByText("Переговоры Сербии и России")).not.toBeInTheDocument();
   });
