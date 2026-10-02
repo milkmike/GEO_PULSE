@@ -1,0 +1,2500 @@
+{
+  "metadata": {
+    "source_url": "https://unstats.un.org/unsd/methodology/m49/overview/",
+    "retrieved_on": "2026-10-02",
+    "source_coverage": "UN M49 country or area rows with ISO-alpha2 and ISO-alpha3; TW is an explicit fallback from the existing GEO PULSE registry because it is not a separate row in the UN table.",
+    "entry_count": 249
+  },
+  "entries": [
+    {
+      "code": "AD",
+      "name_en": "Andorra",
+      "iso3": "AND",
+      "m49": "020",
+      "region": "Europe",
+      "subregion": "Southern Europe",
+      "name_ru": "Андорра",
+      "source": "UN_M49"
+    },
+    {
+      "code": "AE",
+      "name_en": "United Arab Emirates",
+      "iso3": "ARE",
+      "m49": "784",
+      "region": "Asia",
+      "subregion": "Western Asia",
+      "name_ru": "Объединенные Арабские Эмираты",
+      "source": "UN_M49"
+    },
+    {
+      "code": "AF",
+      "name_en": "Afghanistan",
+      "iso3": "AFG",
+      "m49": "004",
+      "region": "Asia",
+      "subregion": "Southern Asia",
+      "name_ru": "Афганистан",
+      "source": "UN_M49"
+    },
+    {
+      "code": "AG",
+      "name_en": "Antigua and Barbuda",
+      "iso3": "ATG",
+      "m49": "028",
+      "region": "Americas",
+      "subregion": "Latin America and the Caribbean",
+      "name_ru": "Антигуа и Барбуда",
+      "source": "UN_M49"
+    },
+    {
+      "code": "AI",
+      "name_en": "Anguilla",
+      "iso3": "AIA",
+      "m49": "660",
+      "region": "Americas",
+      "subregion": "Latin America and the Caribbean",
+      "name_ru": "Ангилья",
+      "source": "UN_M49"
+    },
+    {
+      "code": "AL",
+      "name_en": "Albania",
+      "iso3": "ALB",
+      "m49": "008",
+      "region": "Europe",
+      "subregion": "Southern Europe",
+      "name_ru": "Албания",
+      "source": "UN_M49"
+    },
+    {
+      "code": "AM",
+      "name_en": "Armenia",
+      "iso3": "ARM",
+      "m49": "051",
+      "region": "Asia",
+      "subregion": "Western Asia",
+      "name_ru": "Армения",
+      "source": "UN_M49"
+    },
+    {
+      "code": "AO",
+      "name_en": "Angola",
+      "iso3": "AGO",
+      "m49": "024",
+      "region": "Africa",
+      "subregion": "Sub-Saharan Africa",
+      "name_ru": "Ангола",
+      "source": "UN_M49"
+    },
+    {
+      "code": "AQ",
+      "name_en": "Antarctica",
+      "iso3": "ATA",
+      "m49": "010",
+      "region": "",
+      "subregion": "",
+      "name_ru": "Антарктике",
+      "source": "UN_M49"
+    },
+    {
+      "code": "AR",
+      "name_en": "Argentina",
+      "iso3": "ARG",
+      "m49": "032",
+      "region": "Americas",
+      "subregion": "Latin America and the Caribbean",
+      "name_ru": "Аргентина",
+      "source": "UN_M49"
+    },
+    {
+      "code": "AS",
+      "name_en": "American Samoa",
+      "iso3": "ASM",
+      "m49": "016",
+      "region": "Oceania",
+      "subregion": "Polynesia",
+      "name_ru": "Американское Самоа",
+      "source": "UN_M49"
+    },
+    {
+      "code": "AT",
+      "name_en": "Austria",
+      "iso3": "AUT",
+      "m49": "040",
+      "region": "Europe",
+      "subregion": "Western Europe",
+      "name_ru": "Австрия",
+      "source": "UN_M49"
+    },
+    {
+      "code": "AU",
+      "name_en": "Australia",
+      "iso3": "AUS",
+      "m49": "036",
+      "region": "Oceania",
+      "subregion": "Australia and New Zealand",
+      "name_ru": "Австралия",
+      "source": "UN_M49"
+    },
+    {
+      "code": "AW",
+      "name_en": "Aruba",
+      "iso3": "ABW",
+      "m49": "533",
+      "region": "Americas",
+      "subregion": "Latin America and the Caribbean",
+      "name_ru": "Аруба",
+      "source": "UN_M49"
+    },
+    {
+      "code": "AX",
+      "name_en": "Åland Islands",
+      "iso3": "ALA",
+      "m49": "248",
+      "region": "Europe",
+      "subregion": "Northern Europe",
+      "name_ru": "Аландских островов",
+      "source": "UN_M49"
+    },
+    {
+      "code": "AZ",
+      "name_en": "Azerbaijan",
+      "iso3": "AZE",
+      "m49": "031",
+      "region": "Asia",
+      "subregion": "Western Asia",
+      "name_ru": "Азербайджан",
+      "source": "UN_M49"
+    },
+    {
+      "code": "BA",
+      "name_en": "Bosnia and Herzegovina",
+      "iso3": "BIH",
+      "m49": "070",
+      "region": "Europe",
+      "subregion": "Southern Europe",
+      "name_ru": "Босния и Герцеговина",
+      "source": "UN_M49"
+    },
+    {
+      "code": "BB",
+      "name_en": "Barbados",
+      "iso3": "BRB",
+      "m49": "052",
+      "region": "Americas",
+      "subregion": "Latin America and the Caribbean",
+      "name_ru": "Барбадос",
+      "source": "UN_M49"
+    },
+    {
+      "code": "BD",
+      "name_en": "Bangladesh",
+      "iso3": "BGD",
+      "m49": "050",
+      "region": "Asia",
+      "subregion": "Southern Asia",
+      "name_ru": "Бангладеш",
+      "source": "UN_M49"
+    },
+    {
+      "code": "BE",
+      "name_en": "Belgium",
+      "iso3": "BEL",
+      "m49": "056",
+      "region": "Europe",
+      "subregion": "Western Europe",
+      "name_ru": "Бельгия",
+      "source": "UN_M49"
+    },
+    {
+      "code": "BF",
+      "name_en": "Burkina Faso",
+      "iso3": "BFA",
+      "m49": "854",
+      "region": "Africa",
+      "subregion": "Sub-Saharan Africa",
+      "name_ru": "Буркина-Фасо",
+      "source": "UN_M49"
+    },
+    {
+      "code": "BG",
+      "name_en": "Bulgaria",
+      "iso3": "BGR",
+      "m49": "100",
+      "region": "Europe",
+      "subregion": "Eastern Europe",
+      "name_ru": "Болгария",
+      "source": "UN_M49"
+    },
+    {
+      "code": "BH",
+      "name_en": "Bahrain",
+      "iso3": "BHR",
+      "m49": "048",
+      "region": "Asia",
+      "subregion": "Western Asia",
+      "name_ru": "Бахрейн",
+      "source": "UN_M49"
+    },
+    {
+      "code": "BI",
+      "name_en": "Burundi",
+      "iso3": "BDI",
+      "m49": "108",
+      "region": "Africa",
+      "subregion": "Sub-Saharan Africa",
+      "name_ru": "Бурунди",
+      "source": "UN_M49"
+    },
+    {
+      "code": "BJ",
+      "name_en": "Benin",
+      "iso3": "BEN",
+      "m49": "204",
+      "region": "Africa",
+      "subregion": "Sub-Saharan Africa",
+      "name_ru": "Бенин",
+      "source": "UN_M49"
+    },
+    {
+      "code": "BL",
+      "name_en": "Saint Barthélemy",
+      "iso3": "BLM",
+      "m49": "652",
+      "region": "Americas",
+      "subregion": "Latin America and the Caribbean",
+      "name_ru": "Сен-Бартелеми",
+      "source": "UN_M49"
+    },
+    {
+      "code": "BM",
+      "name_en": "Bermuda",
+      "iso3": "BMU",
+      "m49": "060",
+      "region": "Americas",
+      "subregion": "Northern America",
+      "name_ru": "Бермудские острова",
+      "source": "UN_M49"
+    },
+    {
+      "code": "BN",
+      "name_en": "Brunei Darussalam",
+      "iso3": "BRN",
+      "m49": "096",
+      "region": "Asia",
+      "subregion": "South-eastern Asia",
+      "name_ru": "Бруней-Даруссалам",
+      "source": "UN_M49"
+    },
+    {
+      "code": "BO",
+      "name_en": "Bolivia (Plurinational State of)",
+      "iso3": "BOL",
+      "m49": "068",
+      "region": "Americas",
+      "subregion": "Latin America and the Caribbean",
+      "name_ru": "Боливия (Многонациональное Государство)",
+      "source": "UN_M49"
+    },
+    {
+      "code": "BQ",
+      "name_en": "Bonaire, Sint Eustatius and Saba",
+      "iso3": "BES",
+      "m49": "535",
+      "region": "Americas",
+      "subregion": "Latin America and the Caribbean",
+      "name_ru": "Бонайре, Синт-Эстатиус и Саба",
+      "source": "UN_M49"
+    },
+    {
+      "code": "BR",
+      "name_en": "Brazil",
+      "iso3": "BRA",
+      "m49": "076",
+      "region": "Americas",
+      "subregion": "Latin America and the Caribbean",
+      "name_ru": "Бразилия",
+      "source": "UN_M49"
+    },
+    {
+      "code": "BS",
+      "name_en": "Bahamas",
+      "iso3": "BHS",
+      "m49": "044",
+      "region": "Americas",
+      "subregion": "Latin America and the Caribbean",
+      "name_ru": "Багамские Острова",
+      "source": "UN_M49"
+    },
+    {
+      "code": "BT",
+      "name_en": "Bhutan",
+      "iso3": "BTN",
+      "m49": "064",
+      "region": "Asia",
+      "subregion": "Southern Asia",
+      "name_ru": "Бутан",
+      "source": "UN_M49"
+    },
+    {
+      "code": "BV",
+      "name_en": "Bouvet Island",
+      "iso3": "BVT",
+      "m49": "074",
+      "region": "Americas",
+      "subregion": "Latin America and the Caribbean",
+      "name_ru": "Остров Буве",
+      "source": "UN_M49"
+    },
+    {
+      "code": "BW",
+      "name_en": "Botswana",
+      "iso3": "BWA",
+      "m49": "072",
+      "region": "Africa",
+      "subregion": "Sub-Saharan Africa",
+      "name_ru": "Ботсвана",
+      "source": "UN_M49"
+    },
+    {
+      "code": "BY",
+      "name_en": "Belarus",
+      "iso3": "BLR",
+      "m49": "112",
+      "region": "Europe",
+      "subregion": "Eastern Europe",
+      "name_ru": "Беларусь",
+      "source": "UN_M49"
+    },
+    {
+      "code": "BZ",
+      "name_en": "Belize",
+      "iso3": "BLZ",
+      "m49": "084",
+      "region": "Americas",
+      "subregion": "Latin America and the Caribbean",
+      "name_ru": "Белиз",
+      "source": "UN_M49"
+    },
+    {
+      "code": "CA",
+      "name_en": "Canada",
+      "iso3": "CAN",
+      "m49": "124",
+      "region": "Americas",
+      "subregion": "Northern America",
+      "name_ru": "Канада",
+      "source": "UN_M49"
+    },
+    {
+      "code": "CC",
+      "name_en": "Cocos (Keeling) Islands",
+      "iso3": "CCK",
+      "m49": "166",
+      "region": "Oceania",
+      "subregion": "Australia and New Zealand",
+      "name_ru": "Кокосовых (Килинг) островов",
+      "source": "UN_M49"
+    },
+    {
+      "code": "CD",
+      "name_en": "Democratic Republic of the Congo",
+      "iso3": "COD",
+      "m49": "180",
+      "region": "Africa",
+      "subregion": "Sub-Saharan Africa",
+      "name_ru": "Демократическая Республика Конго",
+      "source": "UN_M49"
+    },
+    {
+      "code": "CF",
+      "name_en": "Central African Republic",
+      "iso3": "CAF",
+      "m49": "140",
+      "region": "Africa",
+      "subregion": "Sub-Saharan Africa",
+      "name_ru": "Центральноафриканская Республика",
+      "source": "UN_M49"
+    },
+    {
+      "code": "CG",
+      "name_en": "Congo",
+      "iso3": "COG",
+      "m49": "178",
+      "region": "Africa",
+      "subregion": "Sub-Saharan Africa",
+      "name_ru": "Конго",
+      "source": "UN_M49"
+    },
+    {
+      "code": "CH",
+      "name_en": "Switzerland",
+      "iso3": "CHE",
+      "m49": "756",
+      "region": "Europe",
+      "subregion": "Western Europe",
+      "name_ru": "Швейцария",
+      "source": "UN_M49"
+    },
+    {
+      "code": "CI",
+      "name_en": "Côte d’Ivoire",
+      "iso3": "CIV",
+      "m49": "384",
+      "region": "Africa",
+      "subregion": "Sub-Saharan Africa",
+      "name_ru": "Кот-д'Ивуар",
+      "source": "UN_M49"
+    },
+    {
+      "code": "CK",
+      "name_en": "Cook Islands",
+      "iso3": "COK",
+      "m49": "184",
+      "region": "Oceania",
+      "subregion": "Polynesia",
+      "name_ru": "Острова Кука",
+      "source": "UN_M49"
+    },
+    {
+      "code": "CL",
+      "name_en": "Chile",
+      "iso3": "CHL",
+      "m49": "152",
+      "region": "Americas",
+      "subregion": "Latin America and the Caribbean",
+      "name_ru": "Чили",
+      "source": "UN_M49"
+    },
+    {
+      "code": "CM",
+      "name_en": "Cameroon",
+      "iso3": "CMR",
+      "m49": "120",
+      "region": "Africa",
+      "subregion": "Sub-Saharan Africa",
+      "name_ru": "Камерун",
+      "source": "UN_M49"
+    },
+    {
+      "code": "CN",
+      "name_en": "China",
+      "iso3": "CHN",
+      "m49": "156",
+      "region": "Asia",
+      "subregion": "Eastern Asia",
+      "name_ru": "Китай",
+      "source": "UN_M49"
+    },
+    {
+      "code": "CO",
+      "name_en": "Colombia",
+      "iso3": "COL",
+      "m49": "170",
+      "region": "Americas",
+      "subregion": "Latin America and the Caribbean",
+      "name_ru": "Колумбия",
+      "source": "UN_M49"
+    },
+    {
+      "code": "CR",
+      "name_en": "Costa Rica",
+      "iso3": "CRI",
+      "m49": "188",
+      "region": "Americas",
+      "subregion": "Latin America and the Caribbean",
+      "name_ru": "Коста-Рика",
+      "source": "UN_M49"
+    },
+    {
+      "code": "CU",
+      "name_en": "Cuba",
+      "iso3": "CUB",
+      "m49": "192",
+      "region": "Americas",
+      "subregion": "Latin America and the Caribbean",
+      "name_ru": "Куба",
+      "source": "UN_M49"
+    },
+    {
+      "code": "CV",
+      "name_en": "Cabo Verde",
+      "iso3": "CPV",
+      "m49": "132",
+      "region": "Africa",
+      "subregion": "Sub-Saharan Africa",
+      "name_ru": "Кабо-Верде",
+      "source": "UN_M49"
+    },
+    {
+      "code": "CW",
+      "name_en": "Curaçao",
+      "iso3": "CUW",
+      "m49": "531",
+      "region": "Americas",
+      "subregion": "Latin America and the Caribbean",
+      "name_ru": "Кюрасао",
+      "source": "UN_M49"
+    },
+    {
+      "code": "CX",
+      "name_en": "Christmas Island",
+      "iso3": "CXR",
+      "m49": "162",
+      "region": "Oceania",
+      "subregion": "Australia and New Zealand",
+      "name_ru": "остров Рождества",
+      "source": "UN_M49"
+    },
+    {
+      "code": "CY",
+      "name_en": "Cyprus",
+      "iso3": "CYP",
+      "m49": "196",
+      "region": "Asia",
+      "subregion": "Western Asia",
+      "name_ru": "Кипр",
+      "source": "UN_M49"
+    },
+    {
+      "code": "CZ",
+      "name_en": "Czechia",
+      "iso3": "CZE",
+      "m49": "203",
+      "region": "Europe",
+      "subregion": "Eastern Europe",
+      "name_ru": "Чехия",
+      "source": "UN_M49"
+    },
+    {
+      "code": "DE",
+      "name_en": "Germany",
+      "iso3": "DEU",
+      "m49": "276",
+      "region": "Europe",
+      "subregion": "Western Europe",
+      "name_ru": "Германия",
+      "source": "UN_M49"
+    },
+    {
+      "code": "DJ",
+      "name_en": "Djibouti",
+      "iso3": "DJI",
+      "m49": "262",
+      "region": "Africa",
+      "subregion": "Sub-Saharan Africa",
+      "name_ru": "Джибути",
+      "source": "UN_M49"
+    },
+    {
+      "code": "DK",
+      "name_en": "Denmark",
+      "iso3": "DNK",
+      "m49": "208",
+      "region": "Europe",
+      "subregion": "Northern Europe",
+      "name_ru": "Дания",
+      "source": "UN_M49"
+    },
+    {
+      "code": "DM",
+      "name_en": "Dominica",
+      "iso3": "DMA",
+      "m49": "212",
+      "region": "Americas",
+      "subregion": "Latin America and the Caribbean",
+      "name_ru": "Доминика",
+      "source": "UN_M49"
+    },
+    {
+      "code": "DO",
+      "name_en": "Dominican Republic",
+      "iso3": "DOM",
+      "m49": "214",
+      "region": "Americas",
+      "subregion": "Latin America and the Caribbean",
+      "name_ru": "Доминиканская Республика",
+      "source": "UN_M49"
+    },
+    {
+      "code": "DZ",
+      "name_en": "阿尔及利亚",
+      "iso3": "DZA",
+      "m49": "012",
+      "region": "非洲",
+      "subregion": "北非",
+      "name_ru": "Алжир",
+      "source": "UN_M49"
+    },
+    {
+      "code": "EC",
+      "name_en": "Ecuador",
+      "iso3": "ECU",
+      "m49": "218",
+      "region": "Americas",
+      "subregion": "Latin America and the Caribbean",
+      "name_ru": "Эквадор",
+      "source": "UN_M49"
+    },
+    {
+      "code": "EE",
+      "name_en": "Estonia",
+      "iso3": "EST",
+      "m49": "233",
+      "region": "Europe",
+      "subregion": "Northern Europe",
+      "name_ru": "Эстония",
+      "source": "UN_M49"
+    },
+    {
+      "code": "EG",
+      "name_en": "埃及",
+      "iso3": "EGY",
+      "m49": "818",
+      "region": "非洲",
+      "subregion": "北非",
+      "name_ru": "Египет",
+      "source": "UN_M49"
+    },
+    {
+      "code": "EH",
+      "name_en": "Western Sahara",
+      "iso3": "ESH",
+      "m49": "732",
+      "region": "Africa",
+      "subregion": "Northern Africa",
+      "name_ru": "Западная Сахара",
+      "source": "UN_M49"
+    },
+    {
+      "code": "ER",
+      "name_en": "Eritrea",
+      "iso3": "ERI",
+      "m49": "232",
+      "region": "Africa",
+      "subregion": "Sub-Saharan Africa",
+      "name_ru": "Эритрея",
+      "source": "UN_M49"
+    },
+    {
+      "code": "ES",
+      "name_en": "Spain",
+      "iso3": "ESP",
+      "m49": "724",
+      "region": "Europe",
+      "subregion": "Southern Europe",
+      "name_ru": "Испания",
+      "source": "UN_M49"
+    },
+    {
+      "code": "ET",
+      "name_en": "Ethiopia",
+      "iso3": "ETH",
+      "m49": "231",
+      "region": "Africa",
+      "subregion": "Sub-Saharan Africa",
+      "name_ru": "Эфиопия",
+      "source": "UN_M49"
+    },
+    {
+      "code": "FI",
+      "name_en": "Finland",
+      "iso3": "FIN",
+      "m49": "246",
+      "region": "Europe",
+      "subregion": "Northern Europe",
+      "name_ru": "Финляндия",
+      "source": "UN_M49"
+    },
+    {
+      "code": "FJ",
+      "name_en": "Fiji",
+      "iso3": "FJI",
+      "m49": "242",
+      "region": "Oceania",
+      "subregion": "Melanesia",
+      "name_ru": "Фиджи",
+      "source": "UN_M49"
+    },
+    {
+      "code": "FK",
+      "name_en": "Falkland Islands (Malvinas)",
+      "iso3": "FLK",
+      "m49": "238",
+      "region": "Americas",
+      "subregion": "Latin America and the Caribbean",
+      "name_ru": "Фолклендские (Мальвинские) острова",
+      "source": "UN_M49"
+    },
+    {
+      "code": "FM",
+      "name_en": "Micronesia (Federated States of)",
+      "iso3": "FSM",
+      "m49": "583",
+      "region": "Oceania",
+      "subregion": "Micronesia",
+      "name_ru": "Микронезия (Федеративные Штаты)",
+      "source": "UN_M49"
+    },
+    {
+      "code": "FO",
+      "name_en": "Faroe Islands",
+      "iso3": "FRO",
+      "m49": "234",
+      "region": "Europe",
+      "subregion": "Northern Europe",
+      "name_ru": "Фарерские острова",
+      "source": "UN_M49"
+    },
+    {
+      "code": "FR",
+      "name_en": "France",
+      "iso3": "FRA",
+      "m49": "250",
+      "region": "Europe",
+      "subregion": "Western Europe",
+      "name_ru": "Франция",
+      "source": "UN_M49"
+    },
+    {
+      "code": "GA",
+      "name_en": "Gabon",
+      "iso3": "GAB",
+      "m49": "266",
+      "region": "Africa",
+      "subregion": "Sub-Saharan Africa",
+      "name_ru": "Габон",
+      "source": "UN_M49"
+    },
+    {
+      "code": "GB",
+      "name_en": "United Kingdom of Great Britain and Northern Ireland",
+      "iso3": "GBR",
+      "m49": "826",
+      "region": "Europe",
+      "subregion": "Northern Europe",
+      "name_ru": "Соединенное Королевство Великобритании и Северной Ирландии",
+      "source": "UN_M49"
+    },
+    {
+      "code": "GD",
+      "name_en": "Grenada",
+      "iso3": "GRD",
+      "m49": "308",
+      "region": "Americas",
+      "subregion": "Latin America and the Caribbean",
+      "name_ru": "Гренада",
+      "source": "UN_M49"
+    },
+    {
+      "code": "GE",
+      "name_en": "Georgia",
+      "iso3": "GEO",
+      "m49": "268",
+      "region": "Asia",
+      "subregion": "Western Asia",
+      "name_ru": "Грузия",
+      "source": "UN_M49"
+    },
+    {
+      "code": "GF",
+      "name_en": "French Guiana",
+      "iso3": "GUF",
+      "m49": "254",
+      "region": "Americas",
+      "subregion": "Latin America and the Caribbean",
+      "name_ru": "Французская Гвиана",
+      "source": "UN_M49"
+    },
+    {
+      "code": "GG",
+      "name_en": "Guernsey",
+      "iso3": "GGY",
+      "m49": "831",
+      "region": "Europe",
+      "subregion": "Northern Europe",
+      "name_ru": "Гернси",
+      "source": "UN_M49"
+    },
+    {
+      "code": "GH",
+      "name_en": "Ghana",
+      "iso3": "GHA",
+      "m49": "288",
+      "region": "Africa",
+      "subregion": "Sub-Saharan Africa",
+      "name_ru": "Гана",
+      "source": "UN_M49"
+    },
+    {
+      "code": "GI",
+      "name_en": "Gibraltar",
+      "iso3": "GIB",
+      "m49": "292",
+      "region": "Europe",
+      "subregion": "Southern Europe",
+      "name_ru": "Гибралтар",
+      "source": "UN_M49"
+    },
+    {
+      "code": "GL",
+      "name_en": "Greenland",
+      "iso3": "GRL",
+      "m49": "304",
+      "region": "Americas",
+      "subregion": "Northern America",
+      "name_ru": "Гренландия",
+      "source": "UN_M49"
+    },
+    {
+      "code": "GM",
+      "name_en": "Gambia",
+      "iso3": "GMB",
+      "m49": "270",
+      "region": "Africa",
+      "subregion": "Sub-Saharan Africa",
+      "name_ru": "Гамбия",
+      "source": "UN_M49"
+    },
+    {
+      "code": "GN",
+      "name_en": "Guinea",
+      "iso3": "GIN",
+      "m49": "324",
+      "region": "Africa",
+      "subregion": "Sub-Saharan Africa",
+      "name_ru": "Гвинея",
+      "source": "UN_M49"
+    },
+    {
+      "code": "GP",
+      "name_en": "Guadeloupe",
+      "iso3": "GLP",
+      "m49": "312",
+      "region": "Americas",
+      "subregion": "Latin America and the Caribbean",
+      "name_ru": "Гваделупа",
+      "source": "UN_M49"
+    },
+    {
+      "code": "GQ",
+      "name_en": "Equatorial Guinea",
+      "iso3": "GNQ",
+      "m49": "226",
+      "region": "Africa",
+      "subregion": "Sub-Saharan Africa",
+      "name_ru": "Экваториальная Гвинея",
+      "source": "UN_M49"
+    },
+    {
+      "code": "GR",
+      "name_en": "Greece",
+      "iso3": "GRC",
+      "m49": "300",
+      "region": "Europe",
+      "subregion": "Southern Europe",
+      "name_ru": "Греция",
+      "source": "UN_M49"
+    },
+    {
+      "code": "GS",
+      "name_en": "South Georgia and the South Sandwich Islands",
+      "iso3": "SGS",
+      "m49": "239",
+      "region": "Americas",
+      "subregion": "Latin America and the Caribbean",
+      "name_ru": "Южная Джорджия и Южные Сандвичевы острова",
+      "source": "UN_M49"
+    },
+    {
+      "code": "GT",
+      "name_en": "Guatemala",
+      "iso3": "GTM",
+      "m49": "320",
+      "region": "Americas",
+      "subregion": "Latin America and the Caribbean",
+      "name_ru": "Гватемала",
+      "source": "UN_M49"
+    },
+    {
+      "code": "GU",
+      "name_en": "Guam",
+      "iso3": "GUM",
+      "m49": "316",
+      "region": "Oceania",
+      "subregion": "Micronesia",
+      "name_ru": "Гуам",
+      "source": "UN_M49"
+    },
+    {
+      "code": "GW",
+      "name_en": "Guinea-Bissau",
+      "iso3": "GNB",
+      "m49": "624",
+      "region": "Africa",
+      "subregion": "Sub-Saharan Africa",
+      "name_ru": "Гвинея-Бисау",
+      "source": "UN_M49"
+    },
+    {
+      "code": "GY",
+      "name_en": "Guyana",
+      "iso3": "GUY",
+      "m49": "328",
+      "region": "Americas",
+      "subregion": "Latin America and the Caribbean",
+      "name_ru": "Гайана",
+      "source": "UN_M49"
+    },
+    {
+      "code": "HK",
+      "name_en": "China, Hong Kong Special Administrative Region",
+      "iso3": "HKG",
+      "m49": "344",
+      "region": "Asia",
+      "subregion": "Eastern Asia",
+      "name_ru": "Китай, Специальный административный район Гонконг",
+      "source": "UN_M49"
+    },
+    {
+      "code": "HM",
+      "name_en": "Heard Island and McDonald Islands",
+      "iso3": "HMD",
+      "m49": "334",
+      "region": "Oceania",
+      "subregion": "Australia and New Zealand",
+      "name_ru": "Остров Херд и острова Макдональд",
+      "source": "UN_M49"
+    },
+    {
+      "code": "HN",
+      "name_en": "Honduras",
+      "iso3": "HND",
+      "m49": "340",
+      "region": "Americas",
+      "subregion": "Latin America and the Caribbean",
+      "name_ru": "Гондурас",
+      "source": "UN_M49"
+    },
+    {
+      "code": "HR",
+      "name_en": "Croatia",
+      "iso3": "HRV",
+      "m49": "191",
+      "region": "Europe",
+      "subregion": "Southern Europe",
+      "name_ru": "Хорватия",
+      "source": "UN_M49"
+    },
+    {
+      "code": "HT",
+      "name_en": "Haiti",
+      "iso3": "HTI",
+      "m49": "332",
+      "region": "Americas",
+      "subregion": "Latin America and the Caribbean",
+      "name_ru": "Гаити",
+      "source": "UN_M49"
+    },
+    {
+      "code": "HU",
+      "name_en": "Hungary",
+      "iso3": "HUN",
+      "m49": "348",
+      "region": "Europe",
+      "subregion": "Eastern Europe",
+      "name_ru": "Венгрия",
+      "source": "UN_M49"
+    },
+    {
+      "code": "ID",
+      "name_en": "Indonesia",
+      "iso3": "IDN",
+      "m49": "360",
+      "region": "Asia",
+      "subregion": "South-eastern Asia",
+      "name_ru": "Индонезия",
+      "source": "UN_M49"
+    },
+    {
+      "code": "IE",
+      "name_en": "Ireland",
+      "iso3": "IRL",
+      "m49": "372",
+      "region": "Europe",
+      "subregion": "Northern Europe",
+      "name_ru": "Ирландия",
+      "source": "UN_M49"
+    },
+    {
+      "code": "IL",
+      "name_en": "Israel",
+      "iso3": "ISR",
+      "m49": "376",
+      "region": "Asia",
+      "subregion": "Western Asia",
+      "name_ru": "Израиль",
+      "source": "UN_M49"
+    },
+    {
+      "code": "IM",
+      "name_en": "Isle of Man",
+      "iso3": "IMN",
+      "m49": "833",
+      "region": "Europe",
+      "subregion": "Northern Europe",
+      "name_ru": "Остров Мэн",
+      "source": "UN_M49"
+    },
+    {
+      "code": "IN",
+      "name_en": "India",
+      "iso3": "IND",
+      "m49": "356",
+      "region": "Asia",
+      "subregion": "Southern Asia",
+      "name_ru": "Индия",
+      "source": "UN_M49"
+    },
+    {
+      "code": "IO",
+      "name_en": "British Indian Ocean Territory",
+      "iso3": "IOT",
+      "m49": "086",
+      "region": "Africa",
+      "subregion": "Sub-Saharan Africa",
+      "name_ru": "Британская территория в Индийском океане",
+      "source": "UN_M49"
+    },
+    {
+      "code": "IQ",
+      "name_en": "Iraq",
+      "iso3": "IRQ",
+      "m49": "368",
+      "region": "Asia",
+      "subregion": "Western Asia",
+      "name_ru": "Ирак",
+      "source": "UN_M49"
+    },
+    {
+      "code": "IR",
+      "name_en": "Iran (Islamic Republic of)",
+      "iso3": "IRN",
+      "m49": "364",
+      "region": "Asia",
+      "subregion": "Southern Asia",
+      "name_ru": "Иран (Исламская Республика)",
+      "source": "UN_M49"
+    },
+    {
+      "code": "IS",
+      "name_en": "Iceland",
+      "iso3": "ISL",
+      "m49": "352",
+      "region": "Europe",
+      "subregion": "Northern Europe",
+      "name_ru": "Исландия",
+      "source": "UN_M49"
+    },
+    {
+      "code": "IT",
+      "name_en": "Italy",
+      "iso3": "ITA",
+      "m49": "380",
+      "region": "Europe",
+      "subregion": "Southern Europe",
+      "name_ru": "Италия",
+      "source": "UN_M49"
+    },
+    {
+      "code": "JE",
+      "name_en": "Jersey",
+      "iso3": "JEY",
+      "m49": "832",
+      "region": "Europe",
+      "subregion": "Northern Europe",
+      "name_ru": "Джерси",
+      "source": "UN_M49"
+    },
+    {
+      "code": "JM",
+      "name_en": "Jamaica",
+      "iso3": "JAM",
+      "m49": "388",
+      "region": "Americas",
+      "subregion": "Latin America and the Caribbean",
+      "name_ru": "Ямайка",
+      "source": "UN_M49"
+    },
+    {
+      "code": "JO",
+      "name_en": "Jordan",
+      "iso3": "JOR",
+      "m49": "400",
+      "region": "Asia",
+      "subregion": "Western Asia",
+      "name_ru": "Иордания",
+      "source": "UN_M49"
+    },
+    {
+      "code": "JP",
+      "name_en": "Japan",
+      "iso3": "JPN",
+      "m49": "392",
+      "region": "Asia",
+      "subregion": "Eastern Asia",
+      "name_ru": "Япония",
+      "source": "UN_M49"
+    },
+    {
+      "code": "KE",
+      "name_en": "Kenya",
+      "iso3": "KEN",
+      "m49": "404",
+      "region": "Africa",
+      "subregion": "Sub-Saharan Africa",
+      "name_ru": "Кения",
+      "source": "UN_M49"
+    },
+    {
+      "code": "KG",
+      "name_en": "Kyrgyzstan",
+      "iso3": "KGZ",
+      "m49": "417",
+      "region": "Asia",
+      "subregion": "Central Asia",
+      "name_ru": "Кыргызстан",
+      "source": "UN_M49"
+    },
+    {
+      "code": "KH",
+      "name_en": "Cambodia",
+      "iso3": "KHM",
+      "m49": "116",
+      "region": "Asia",
+      "subregion": "South-eastern Asia",
+      "name_ru": "Камбоджа",
+      "source": "UN_M49"
+    },
+    {
+      "code": "KI",
+      "name_en": "Kiribati",
+      "iso3": "KIR",
+      "m49": "296",
+      "region": "Oceania",
+      "subregion": "Micronesia",
+      "name_ru": "Кирибати",
+      "source": "UN_M49"
+    },
+    {
+      "code": "KM",
+      "name_en": "Comoros",
+      "iso3": "COM",
+      "m49": "174",
+      "region": "Africa",
+      "subregion": "Sub-Saharan Africa",
+      "name_ru": "Коморские Острова",
+      "source": "UN_M49"
+    },
+    {
+      "code": "KN",
+      "name_en": "Saint Kitts and Nevis",
+      "iso3": "KNA",
+      "m49": "659",
+      "region": "Americas",
+      "subregion": "Latin America and the Caribbean",
+      "name_ru": "Сент-Китс и Невис",
+      "source": "UN_M49"
+    },
+    {
+      "code": "KP",
+      "name_en": "Democratic People's Republic of Korea",
+      "iso3": "PRK",
+      "m49": "408",
+      "region": "Asia",
+      "subregion": "Eastern Asia",
+      "name_ru": "Корейская Народно-Демократическая Республика",
+      "source": "UN_M49"
+    },
+    {
+      "code": "KR",
+      "name_en": "Republic of Korea",
+      "iso3": "KOR",
+      "m49": "410",
+      "region": "Asia",
+      "subregion": "Eastern Asia",
+      "name_ru": "Республика Корея",
+      "source": "UN_M49"
+    },
+    {
+      "code": "KW",
+      "name_en": "Kuwait",
+      "iso3": "KWT",
+      "m49": "414",
+      "region": "Asia",
+      "subregion": "Western Asia",
+      "name_ru": "Кувейт",
+      "source": "UN_M49"
+    },
+    {
+      "code": "KY",
+      "name_en": "Cayman Islands",
+      "iso3": "CYM",
+      "m49": "136",
+      "region": "Americas",
+      "subregion": "Latin America and the Caribbean",
+      "name_ru": "Кайман острова",
+      "source": "UN_M49"
+    },
+    {
+      "code": "KZ",
+      "name_en": "Kazakhstan",
+      "iso3": "KAZ",
+      "m49": "398",
+      "region": "Asia",
+      "subregion": "Central Asia",
+      "name_ru": "Казахстан",
+      "source": "UN_M49"
+    },
+    {
+      "code": "LA",
+      "name_en": "Lao People's Democratic Republic",
+      "iso3": "LAO",
+      "m49": "418",
+      "region": "Asia",
+      "subregion": "South-eastern Asia",
+      "name_ru": "Лаосская Народно-Демократическая Республика",
+      "source": "UN_M49"
+    },
+    {
+      "code": "LB",
+      "name_en": "Lebanon",
+      "iso3": "LBN",
+      "m49": "422",
+      "region": "Asia",
+      "subregion": "Western Asia",
+      "name_ru": "Ливан",
+      "source": "UN_M49"
+    },
+    {
+      "code": "LC",
+      "name_en": "Saint Lucia",
+      "iso3": "LCA",
+      "m49": "662",
+      "region": "Americas",
+      "subregion": "Latin America and the Caribbean",
+      "name_ru": "Сент-Люсия",
+      "source": "UN_M49"
+    },
+    {
+      "code": "LI",
+      "name_en": "Liechtenstein",
+      "iso3": "LIE",
+      "m49": "438",
+      "region": "Europe",
+      "subregion": "Western Europe",
+      "name_ru": "Лихтенштейн",
+      "source": "UN_M49"
+    },
+    {
+      "code": "LK",
+      "name_en": "Sri Lanka",
+      "iso3": "LKA",
+      "m49": "144",
+      "region": "Asia",
+      "subregion": "Southern Asia",
+      "name_ru": "Шри-Ланка",
+      "source": "UN_M49"
+    },
+    {
+      "code": "LR",
+      "name_en": "Liberia",
+      "iso3": "LBR",
+      "m49": "430",
+      "region": "Africa",
+      "subregion": "Sub-Saharan Africa",
+      "name_ru": "Либерия",
+      "source": "UN_M49"
+    },
+    {
+      "code": "LS",
+      "name_en": "Lesotho",
+      "iso3": "LSO",
+      "m49": "426",
+      "region": "Africa",
+      "subregion": "Sub-Saharan Africa",
+      "name_ru": "Лесото",
+      "source": "UN_M49"
+    },
+    {
+      "code": "LT",
+      "name_en": "Lithuania",
+      "iso3": "LTU",
+      "m49": "440",
+      "region": "Europe",
+      "subregion": "Northern Europe",
+      "name_ru": "Литва",
+      "source": "UN_M49"
+    },
+    {
+      "code": "LU",
+      "name_en": "Luxembourg",
+      "iso3": "LUX",
+      "m49": "442",
+      "region": "Europe",
+      "subregion": "Western Europe",
+      "name_ru": "Люксембург",
+      "source": "UN_M49"
+    },
+    {
+      "code": "LV",
+      "name_en": "Latvia",
+      "iso3": "LVA",
+      "m49": "428",
+      "region": "Europe",
+      "subregion": "Northern Europe",
+      "name_ru": "Латвия",
+      "source": "UN_M49"
+    },
+    {
+      "code": "LY",
+      "name_en": "利比亚",
+      "iso3": "LBY",
+      "m49": "434",
+      "region": "非洲",
+      "subregion": "北非",
+      "name_ru": "Ливия",
+      "source": "UN_M49"
+    },
+    {
+      "code": "MA",
+      "name_en": "摩洛哥",
+      "iso3": "MAR",
+      "m49": "504",
+      "region": "非洲",
+      "subregion": "北非",
+      "name_ru": "Марокко",
+      "source": "UN_M49"
+    },
+    {
+      "code": "MC",
+      "name_en": "Monaco",
+      "iso3": "MCO",
+      "m49": "492",
+      "region": "Europe",
+      "subregion": "Western Europe",
+      "name_ru": "Монако",
+      "source": "UN_M49"
+    },
+    {
+      "code": "MD",
+      "name_en": "Republic of Moldova",
+      "iso3": "MDA",
+      "m49": "498",
+      "region": "Europe",
+      "subregion": "Eastern Europe",
+      "name_ru": "Республика Молдова",
+      "source": "UN_M49"
+    },
+    {
+      "code": "ME",
+      "name_en": "Montenegro",
+      "iso3": "MNE",
+      "m49": "499",
+      "region": "Europe",
+      "subregion": "Southern Europe",
+      "name_ru": "Черногория",
+      "source": "UN_M49"
+    },
+    {
+      "code": "MF",
+      "name_en": "Saint Martin (French Part)",
+      "iso3": "MAF",
+      "m49": "663",
+      "region": "Americas",
+      "subregion": "Latin America and the Caribbean",
+      "name_ru": "Сен-Мартен (французская часть)",
+      "source": "UN_M49"
+    },
+    {
+      "code": "MG",
+      "name_en": "Madagascar",
+      "iso3": "MDG",
+      "m49": "450",
+      "region": "Africa",
+      "subregion": "Sub-Saharan Africa",
+      "name_ru": "Мадагаскар",
+      "source": "UN_M49"
+    },
+    {
+      "code": "MH",
+      "name_en": "Marshall Islands",
+      "iso3": "MHL",
+      "m49": "584",
+      "region": "Oceania",
+      "subregion": "Micronesia",
+      "name_ru": "Маршалловы Острова",
+      "source": "UN_M49"
+    },
+    {
+      "code": "MK",
+      "name_en": "North Macedonia",
+      "iso3": "MKD",
+      "m49": "807",
+      "region": "Europe",
+      "subregion": "Southern Europe",
+      "name_ru": "Северная Македония",
+      "source": "UN_M49"
+    },
+    {
+      "code": "ML",
+      "name_en": "Mali",
+      "iso3": "MLI",
+      "m49": "466",
+      "region": "Africa",
+      "subregion": "Sub-Saharan Africa",
+      "name_ru": "Мали",
+      "source": "UN_M49"
+    },
+    {
+      "code": "MM",
+      "name_en": "Myanmar",
+      "iso3": "MMR",
+      "m49": "104",
+      "region": "Asia",
+      "subregion": "South-eastern Asia",
+      "name_ru": "Мьянма",
+      "source": "UN_M49"
+    },
+    {
+      "code": "MN",
+      "name_en": "Mongolia",
+      "iso3": "MNG",
+      "m49": "496",
+      "region": "Asia",
+      "subregion": "Eastern Asia",
+      "name_ru": "Монголия",
+      "source": "UN_M49"
+    },
+    {
+      "code": "MO",
+      "name_en": "China, Macao Special Administrative Region",
+      "iso3": "MAC",
+      "m49": "446",
+      "region": "Asia",
+      "subregion": "Eastern Asia",
+      "name_ru": "Китай, Специальный административный район Макао",
+      "source": "UN_M49"
+    },
+    {
+      "code": "MP",
+      "name_en": "Northern Mariana Islands",
+      "iso3": "MNP",
+      "m49": "580",
+      "region": "Oceania",
+      "subregion": "Micronesia",
+      "name_ru": "Северные Марианские острова",
+      "source": "UN_M49"
+    },
+    {
+      "code": "MQ",
+      "name_en": "Martinique",
+      "iso3": "MTQ",
+      "m49": "474",
+      "region": "Americas",
+      "subregion": "Latin America and the Caribbean",
+      "name_ru": "Мартиника",
+      "source": "UN_M49"
+    },
+    {
+      "code": "MR",
+      "name_en": "Mauritania",
+      "iso3": "MRT",
+      "m49": "478",
+      "region": "Africa",
+      "subregion": "Sub-Saharan Africa",
+      "name_ru": "Мавритания",
+      "source": "UN_M49"
+    },
+    {
+      "code": "MS",
+      "name_en": "Montserrat",
+      "iso3": "MSR",
+      "m49": "500",
+      "region": "Americas",
+      "subregion": "Latin America and the Caribbean",
+      "name_ru": "Монтсеррат",
+      "source": "UN_M49"
+    },
+    {
+      "code": "MT",
+      "name_en": "Malta",
+      "iso3": "MLT",
+      "m49": "470",
+      "region": "Europe",
+      "subregion": "Southern Europe",
+      "name_ru": "Мальта",
+      "source": "UN_M49"
+    },
+    {
+      "code": "MU",
+      "name_en": "Mauritius",
+      "iso3": "MUS",
+      "m49": "480",
+      "region": "Africa",
+      "subregion": "Sub-Saharan Africa",
+      "name_ru": "Маврикий",
+      "source": "UN_M49"
+    },
+    {
+      "code": "MV",
+      "name_en": "Maldives",
+      "iso3": "MDV",
+      "m49": "462",
+      "region": "Asia",
+      "subregion": "Southern Asia",
+      "name_ru": "Мальдивские Острова",
+      "source": "UN_M49"
+    },
+    {
+      "code": "MW",
+      "name_en": "Malawi",
+      "iso3": "MWI",
+      "m49": "454",
+      "region": "Africa",
+      "subregion": "Sub-Saharan Africa",
+      "name_ru": "Малави",
+      "source": "UN_M49"
+    },
+    {
+      "code": "MX",
+      "name_en": "Mexico",
+      "iso3": "MEX",
+      "m49": "484",
+      "region": "Americas",
+      "subregion": "Latin America and the Caribbean",
+      "name_ru": "Мексика",
+      "source": "UN_M49"
+    },
+    {
+      "code": "MY",
+      "name_en": "Malaysia",
+      "iso3": "MYS",
+      "m49": "458",
+      "region": "Asia",
+      "subregion": "South-eastern Asia",
+      "name_ru": "Малайзия",
+      "source": "UN_M49"
+    },
+    {
+      "code": "MZ",
+      "name_en": "Mozambique",
+      "iso3": "MOZ",
+      "m49": "508",
+      "region": "Africa",
+      "subregion": "Sub-Saharan Africa",
+      "name_ru": "Мозамбик",
+      "source": "UN_M49"
+    },
+    {
+      "code": "NA",
+      "name_en": "Namibia",
+      "iso3": "NAM",
+      "m49": "516",
+      "region": "Africa",
+      "subregion": "Sub-Saharan Africa",
+      "name_ru": "Намибия",
+      "source": "UN_M49"
+    },
+    {
+      "code": "NC",
+      "name_en": "New Caledonia",
+      "iso3": "NCL",
+      "m49": "540",
+      "region": "Oceania",
+      "subregion": "Melanesia",
+      "name_ru": "Новая Каледония",
+      "source": "UN_M49"
+    },
+    {
+      "code": "NE",
+      "name_en": "Niger",
+      "iso3": "NER",
+      "m49": "562",
+      "region": "Africa",
+      "subregion": "Sub-Saharan Africa",
+      "name_ru": "Нигер",
+      "source": "UN_M49"
+    },
+    {
+      "code": "NF",
+      "name_en": "Norfolk Island",
+      "iso3": "NFK",
+      "m49": "574",
+      "region": "Oceania",
+      "subregion": "Australia and New Zealand",
+      "name_ru": "Остров Норфолк",
+      "source": "UN_M49"
+    },
+    {
+      "code": "NG",
+      "name_en": "Nigeria",
+      "iso3": "NGA",
+      "m49": "566",
+      "region": "Africa",
+      "subregion": "Sub-Saharan Africa",
+      "name_ru": "Нигерия",
+      "source": "UN_M49"
+    },
+    {
+      "code": "NI",
+      "name_en": "Nicaragua",
+      "iso3": "NIC",
+      "m49": "558",
+      "region": "Americas",
+      "subregion": "Latin America and the Caribbean",
+      "name_ru": "Никарагуа",
+      "source": "UN_M49"
+    },
+    {
+      "code": "NL",
+      "name_en": "Netherlands (Kingdom of the)",
+      "iso3": "NLD",
+      "m49": "528",
+      "region": "Europe",
+      "subregion": "Western Europe",
+      "name_ru": "Нидерланды (Королевство)",
+      "source": "UN_M49"
+    },
+    {
+      "code": "NO",
+      "name_en": "Norway",
+      "iso3": "NOR",
+      "m49": "578",
+      "region": "Europe",
+      "subregion": "Northern Europe",
+      "name_ru": "Норвегия",
+      "source": "UN_M49"
+    },
+    {
+      "code": "NP",
+      "name_en": "Nepal",
+      "iso3": "NPL",
+      "m49": "524",
+      "region": "Asia",
+      "subregion": "Southern Asia",
+      "name_ru": "Непал",
+      "source": "UN_M49"
+    },
+    {
+      "code": "NR",
+      "name_en": "Naoero",
+      "iso3": "NRU",
+      "m49": "520",
+      "region": "Oceania",
+      "subregion": "Micronesia",
+      "name_ru": "Наоэро",
+      "source": "UN_M49"
+    },
+    {
+      "code": "NU",
+      "name_en": "Niue",
+      "iso3": "NIU",
+      "m49": "570",
+      "region": "Oceania",
+      "subregion": "Polynesia",
+      "name_ru": "Ниуэ",
+      "source": "UN_M49"
+    },
+    {
+      "code": "NZ",
+      "name_en": "New Zealand",
+      "iso3": "NZL",
+      "m49": "554",
+      "region": "Oceania",
+      "subregion": "Australia and New Zealand",
+      "name_ru": "Новая Зеландия",
+      "source": "UN_M49"
+    },
+    {
+      "code": "OM",
+      "name_en": "Oman",
+      "iso3": "OMN",
+      "m49": "512",
+      "region": "Asia",
+      "subregion": "Western Asia",
+      "name_ru": "Оман",
+      "source": "UN_M49"
+    },
+    {
+      "code": "PA",
+      "name_en": "Panama",
+      "iso3": "PAN",
+      "m49": "591",
+      "region": "Americas",
+      "subregion": "Latin America and the Caribbean",
+      "name_ru": "Панама",
+      "source": "UN_M49"
+    },
+    {
+      "code": "PE",
+      "name_en": "Peru",
+      "iso3": "PER",
+      "m49": "604",
+      "region": "Americas",
+      "subregion": "Latin America and the Caribbean",
+      "name_ru": "Перу",
+      "source": "UN_M49"
+    },
+    {
+      "code": "PF",
+      "name_en": "French Polynesia",
+      "iso3": "PYF",
+      "m49": "258",
+      "region": "Oceania",
+      "subregion": "Polynesia",
+      "name_ru": "Французская Полинезия",
+      "source": "UN_M49"
+    },
+    {
+      "code": "PG",
+      "name_en": "Papua New Guinea",
+      "iso3": "PNG",
+      "m49": "598",
+      "region": "Oceania",
+      "subregion": "Melanesia",
+      "name_ru": "Папуа-Новая Гвинея",
+      "source": "UN_M49"
+    },
+    {
+      "code": "PH",
+      "name_en": "Philippines",
+      "iso3": "PHL",
+      "m49": "608",
+      "region": "Asia",
+      "subregion": "South-eastern Asia",
+      "name_ru": "Филиппины",
+      "source": "UN_M49"
+    },
+    {
+      "code": "PK",
+      "name_en": "Pakistan",
+      "iso3": "PAK",
+      "m49": "586",
+      "region": "Asia",
+      "subregion": "Southern Asia",
+      "name_ru": "Пакистан",
+      "source": "UN_M49"
+    },
+    {
+      "code": "PL",
+      "name_en": "Poland",
+      "iso3": "POL",
+      "m49": "616",
+      "region": "Europe",
+      "subregion": "Eastern Europe",
+      "name_ru": "Польша",
+      "source": "UN_M49"
+    },
+    {
+      "code": "PM",
+      "name_en": "Saint Pierre and Miquelon",
+      "iso3": "SPM",
+      "m49": "666",
+      "region": "Americas",
+      "subregion": "Northern America",
+      "name_ru": "Сен-Пьер и Микелон",
+      "source": "UN_M49"
+    },
+    {
+      "code": "PN",
+      "name_en": "Pitcairn",
+      "iso3": "PCN",
+      "m49": "612",
+      "region": "Oceania",
+      "subregion": "Polynesia",
+      "name_ru": "Питкэрн",
+      "source": "UN_M49"
+    },
+    {
+      "code": "PR",
+      "name_en": "Puerto Rico",
+      "iso3": "PRI",
+      "m49": "630",
+      "region": "Americas",
+      "subregion": "Latin America and the Caribbean",
+      "name_ru": "Пуэрто-Рико",
+      "source": "UN_M49"
+    },
+    {
+      "code": "PS",
+      "name_en": "State of Palestine",
+      "iso3": "PSE",
+      "m49": "275",
+      "region": "Asia",
+      "subregion": "Western Asia",
+      "name_ru": "Государство Палестина",
+      "source": "UN_M49"
+    },
+    {
+      "code": "PT",
+      "name_en": "Portugal",
+      "iso3": "PRT",
+      "m49": "620",
+      "region": "Europe",
+      "subregion": "Southern Europe",
+      "name_ru": "Португалия",
+      "source": "UN_M49"
+    },
+    {
+      "code": "PW",
+      "name_en": "Palau",
+      "iso3": "PLW",
+      "m49": "585",
+      "region": "Oceania",
+      "subregion": "Micronesia",
+      "name_ru": "Палау",
+      "source": "UN_M49"
+    },
+    {
+      "code": "PY",
+      "name_en": "Paraguay",
+      "iso3": "PRY",
+      "m49": "600",
+      "region": "Americas",
+      "subregion": "Latin America and the Caribbean",
+      "name_ru": "Парагвай",
+      "source": "UN_M49"
+    },
+    {
+      "code": "QA",
+      "name_en": "Qatar",
+      "iso3": "QAT",
+      "m49": "634",
+      "region": "Asia",
+      "subregion": "Western Asia",
+      "name_ru": "Катар",
+      "source": "UN_M49"
+    },
+    {
+      "code": "RE",
+      "name_en": "Réunion",
+      "iso3": "REU",
+      "m49": "638",
+      "region": "Africa",
+      "subregion": "Sub-Saharan Africa",
+      "name_ru": "Реюньон",
+      "source": "UN_M49"
+    },
+    {
+      "code": "RO",
+      "name_en": "Romania",
+      "iso3": "ROU",
+      "m49": "642",
+      "region": "Europe",
+      "subregion": "Eastern Europe",
+      "name_ru": "Румыния",
+      "source": "UN_M49"
+    },
+    {
+      "code": "RS",
+      "name_en": "Serbia",
+      "iso3": "SRB",
+      "m49": "688",
+      "region": "Europe",
+      "subregion": "Southern Europe",
+      "name_ru": "Сербия",
+      "source": "UN_M49"
+    },
+    {
+      "code": "RU",
+      "name_en": "Russian Federation",
+      "iso3": "RUS",
+      "m49": "643",
+      "region": "Europe",
+      "subregion": "Eastern Europe",
+      "name_ru": "Российская Федерация",
+      "source": "UN_M49"
+    },
+    {
+      "code": "RW",
+      "name_en": "Rwanda",
+      "iso3": "RWA",
+      "m49": "646",
+      "region": "Africa",
+      "subregion": "Sub-Saharan Africa",
+      "name_ru": "Руанда",
+      "source": "UN_M49"
+    },
+    {
+      "code": "SA",
+      "name_en": "Saudi Arabia",
+      "iso3": "SAU",
+      "m49": "682",
+      "region": "Asia",
+      "subregion": "Western Asia",
+      "name_ru": "Саудовская Аравия",
+      "source": "UN_M49"
+    },
+    {
+      "code": "SB",
+      "name_en": "Solomon Islands",
+      "iso3": "SLB",
+      "m49": "090",
+      "region": "Oceania",
+      "subregion": "Melanesia",
+      "name_ru": "Соломоновы Острова",
+      "source": "UN_M49"
+    },
+    {
+      "code": "SC",
+      "name_en": "Seychelles",
+      "iso3": "SYC",
+      "m49": "690",
+      "region": "Africa",
+      "subregion": "Sub-Saharan Africa",
+      "name_ru": "Сейшельские Острова",
+      "source": "UN_M49"
+    },
+    {
+      "code": "SD",
+      "name_en": "苏丹",
+      "iso3": "SDN",
+      "m49": "729",
+      "region": "非洲",
+      "subregion": "北非",
+      "name_ru": "Судан",
+      "source": "UN_M49"
+    },
+    {
+      "code": "SE",
+      "name_en": "Sweden",
+      "iso3": "SWE",
+      "m49": "752",
+      "region": "Europe",
+      "subregion": "Northern Europe",
+      "name_ru": "Швеция",
+      "source": "UN_M49"
+    },
+    {
+      "code": "SG",
+      "name_en": "Singapore",
+      "iso3": "SGP",
+      "m49": "702",
+      "region": "Asia",
+      "subregion": "South-eastern Asia",
+      "name_ru": "Сингапур",
+      "source": "UN_M49"
+    },
+    {
+      "code": "SH",
+      "name_en": "Saint Helena",
+      "iso3": "SHN",
+      "m49": "654",
+      "region": "Africa",
+      "subregion": "Sub-Saharan Africa",
+      "name_ru": "Остров Святой Елены",
+      "source": "UN_M49"
+    },
+    {
+      "code": "SI",
+      "name_en": "Slovenia",
+      "iso3": "SVN",
+      "m49": "705",
+      "region": "Europe",
+      "subregion": "Southern Europe",
+      "name_ru": "Словения",
+      "source": "UN_M49"
+    },
+    {
+      "code": "SJ",
+      "name_en": "Svalbard and Jan Mayen Islands",
+      "iso3": "SJM",
+      "m49": "744",
+      "region": "Europe",
+      "subregion": "Northern Europe",
+      "name_ru": "Острова Свальбард и Ян-Майен",
+      "source": "UN_M49"
+    },
+    {
+      "code": "SK",
+      "name_en": "Slovakia",
+      "iso3": "SVK",
+      "m49": "703",
+      "region": "Europe",
+      "subregion": "Eastern Europe",
+      "name_ru": "Словакия",
+      "source": "UN_M49"
+    },
+    {
+      "code": "SL",
+      "name_en": "Sierra Leone",
+      "iso3": "SLE",
+      "m49": "694",
+      "region": "Africa",
+      "subregion": "Sub-Saharan Africa",
+      "name_ru": "Сьерра-Леоне",
+      "source": "UN_M49"
+    },
+    {
+      "code": "SM",
+      "name_en": "San Marino",
+      "iso3": "SMR",
+      "m49": "674",
+      "region": "Europe",
+      "subregion": "Southern Europe",
+      "name_ru": "Сан-Марино",
+      "source": "UN_M49"
+    },
+    {
+      "code": "SN",
+      "name_en": "Senegal",
+      "iso3": "SEN",
+      "m49": "686",
+      "region": "Africa",
+      "subregion": "Sub-Saharan Africa",
+      "name_ru": "Сенегал",
+      "source": "UN_M49"
+    },
+    {
+      "code": "SO",
+      "name_en": "Somalia",
+      "iso3": "SOM",
+      "m49": "706",
+      "region": "Africa",
+      "subregion": "Sub-Saharan Africa",
+      "name_ru": "Сомали",
+      "source": "UN_M49"
+    },
+    {
+      "code": "SR",
+      "name_en": "Suriname",
+      "iso3": "SUR",
+      "m49": "740",
+      "region": "Americas",
+      "subregion": "Latin America and the Caribbean",
+      "name_ru": "Суринам",
+      "source": "UN_M49"
+    },
+    {
+      "code": "SS",
+      "name_en": "South Sudan",
+      "iso3": "SSD",
+      "m49": "728",
+      "region": "Africa",
+      "subregion": "Sub-Saharan Africa",
+      "name_ru": "Южный Судан",
+      "source": "UN_M49"
+    },
+    {
+      "code": "ST",
+      "name_en": "Sao Tome and Principe",
+      "iso3": "STP",
+      "m49": "678",
+      "region": "Africa",
+      "subregion": "Sub-Saharan Africa",
+      "name_ru": "Сан-Томе и Принсипи",
+      "source": "UN_M49"
+    },
+    {
+      "code": "SV",
+      "name_en": "El Salvador",
+      "iso3": "SLV",
+      "m49": "222",
+      "region": "Americas",
+      "subregion": "Latin America and the Caribbean",
+      "name_ru": "Сальвадор",
+      "source": "UN_M49"
+    },
+    {
+      "code": "SX",
+      "name_en": "Sint Maarten (Dutch part)",
+      "iso3": "SXM",
+      "m49": "534",
+      "region": "Americas",
+      "subregion": "Latin America and the Caribbean",
+      "name_ru": "Синт-Мартен (нидерландская часть)",
+      "source": "UN_M49"
+    },
+    {
+      "code": "SY",
+      "name_en": "Syrian Arab Republic",
+      "iso3": "SYR",
+      "m49": "760",
+      "region": "Asia",
+      "subregion": "Western Asia",
+      "name_ru": "Сирийская Арабская Республика",
+      "source": "UN_M49"
+    },
+    {
+      "code": "SZ",
+      "name_en": "Eswatini",
+      "iso3": "SWZ",
+      "m49": "748",
+      "region": "Africa",
+      "subregion": "Sub-Saharan Africa",
+      "name_ru": "Эсватини",
+      "source": "UN_M49"
+    },
+    {
+      "code": "TC",
+      "name_en": "Turks and Caicos Islands",
+      "iso3": "TCA",
+      "m49": "796",
+      "region": "Americas",
+      "subregion": "Latin America and the Caribbean",
+      "name_ru": "Острова Теркс и Кайкос",
+      "source": "UN_M49"
+    },
+    {
+      "code": "TD",
+      "name_en": "Chad",
+      "iso3": "TCD",
+      "m49": "148",
+      "region": "Africa",
+      "subregion": "Sub-Saharan Africa",
+      "name_ru": "Чад",
+      "source": "UN_M49"
+    },
+    {
+      "code": "TF",
+      "name_en": "French Southern Territories",
+      "iso3": "ATF",
+      "m49": "260",
+      "region": "Africa",
+      "subregion": "Sub-Saharan Africa",
+      "name_ru": "Южные земли (французская заморская территория)",
+      "source": "UN_M49"
+    },
+    {
+      "code": "TG",
+      "name_en": "Togo",
+      "iso3": "TGO",
+      "m49": "768",
+      "region": "Africa",
+      "subregion": "Sub-Saharan Africa",
+      "name_ru": "Того",
+      "source": "UN_M49"
+    },
+    {
+      "code": "TH",
+      "name_en": "Thailand",
+      "iso3": "THA",
+      "m49": "764",
+      "region": "Asia",
+      "subregion": "South-eastern Asia",
+      "name_ru": "Таиланд",
+      "source": "UN_M49"
+    },
+    {
+      "code": "TJ",
+      "name_en": "Tajikistan",
+      "iso3": "TJK",
+      "m49": "762",
+      "region": "Asia",
+      "subregion": "Central Asia",
+      "name_ru": "Таджикистан",
+      "source": "UN_M49"
+    },
+    {
+      "code": "TK",
+      "name_en": "Tokelau",
+      "iso3": "TKL",
+      "m49": "772",
+      "region": "Oceania",
+      "subregion": "Polynesia",
+      "name_ru": "Токелау",
+      "source": "UN_M49"
+    },
+    {
+      "code": "TL",
+      "name_en": "Timor-Leste",
+      "iso3": "TLS",
+      "m49": "626",
+      "region": "Asia",
+      "subregion": "South-eastern Asia",
+      "name_ru": "Тимор-Лешти",
+      "source": "UN_M49"
+    },
+    {
+      "code": "TM",
+      "name_en": "Turkmenistan",
+      "iso3": "TKM",
+      "m49": "795",
+      "region": "Asia",
+      "subregion": "Central Asia",
+      "name_ru": "Туркменистан",
+      "source": "UN_M49"
+    },
+    {
+      "code": "TN",
+      "name_en": "突尼斯",
+      "iso3": "TUN",
+      "m49": "788",
+      "region": "非洲",
+      "subregion": "北非",
+      "name_ru": "Тунис",
+      "source": "UN_M49"
+    },
+    {
+      "code": "TO",
+      "name_en": "Tonga",
+      "iso3": "TON",
+      "m49": "776",
+      "region": "Oceania",
+      "subregion": "Polynesia",
+      "name_ru": "Тонга",
+      "source": "UN_M49"
+    },
+    {
+      "code": "TR",
+      "name_en": "Türkiye",
+      "iso3": "TUR",
+      "m49": "792",
+      "region": "Asia",
+      "subregion": "Western Asia",
+      "name_ru": "Турция",
+      "source": "UN_M49"
+    },
+    {
+      "code": "TT",
+      "name_en": "Trinidad and Tobago",
+      "iso3": "TTO",
+      "m49": "780",
+      "region": "Americas",
+      "subregion": "Latin America and the Caribbean",
+      "name_ru": "Тринидад и Тобаго",
+      "source": "UN_M49"
+    },
+    {
+      "code": "TV",
+      "name_en": "Tuvalu",
+      "iso3": "TUV",
+      "m49": "798",
+      "region": "Oceania",
+      "subregion": "Polynesia",
+      "name_ru": "Тувалу",
+      "source": "UN_M49"
+    },
+    {
+      "code": "TW",
+      "name_en": "Taiwan",
+      "name_ru": "Тайвань",
+      "iso3": "TWN",
+      "m49": null,
+      "region": "Asia",
+      "subregion": "Eastern Asia",
+      "source": "existing_registry_fallback"
+    },
+    {
+      "code": "TZ",
+      "name_en": "United Republic of Tanzania",
+      "iso3": "TZA",
+      "m49": "834",
+      "region": "Africa",
+      "subregion": "Sub-Saharan Africa",
+      "name_ru": "Объединенная Республика Танзания",
+      "source": "UN_M49"
+    },
+    {
+      "code": "UA",
+      "name_en": "Ukraine",
+      "iso3": "UKR",
+      "m49": "804",
+      "region": "Europe",
+      "subregion": "Eastern Europe",
+      "name_ru": "Украина",
+      "source": "UN_M49"
+    },
+    {
+      "code": "UG",
+      "name_en": "Uganda",
+      "iso3": "UGA",
+      "m49": "800",
+      "region": "Africa",
+      "subregion": "Sub-Saharan Africa",
+      "name_ru": "Уганда",
+      "source": "UN_M49"
+    },
+    {
+      "code": "UM",
+      "name_en": "United States Minor Outlying Islands",
+      "iso3": "UMI",
+      "m49": "581",
+      "region": "Oceania",
+      "subregion": "Micronesia",
+      "name_ru": "Внешние малые острова Соединенных Штатов",
+      "source": "UN_M49"
+    },
+    {
+      "code": "US",
+      "name_en": "United States of America",
+      "iso3": "USA",
+      "m49": "840",
+      "region": "Americas",
+      "subregion": "Northern America",
+      "name_ru": "Соединенные Штаты Америки",
+      "source": "UN_M49"
+    },
+    {
+      "code": "UY",
+      "name_en": "Uruguay",
+      "iso3": "URY",
+      "m49": "858",
+      "region": "Americas",
+      "subregion": "Latin America and the Caribbean",
+      "name_ru": "Уругвай",
+      "source": "UN_M49"
+    },
+    {
+      "code": "UZ",
+      "name_en": "Uzbekistan",
+      "iso3": "UZB",
+      "m49": "860",
+      "region": "Asia",
+      "subregion": "Central Asia",
+      "name_ru": "Узбекистан",
+      "source": "UN_M49"
+    },
+    {
+      "code": "VA",
+      "name_en": "Holy See",
+      "iso3": "VAT",
+      "m49": "336",
+      "region": "Europe",
+      "subregion": "Southern Europe",
+      "name_ru": "Святой Престол",
+      "source": "UN_M49"
+    },
+    {
+      "code": "VC",
+      "name_en": "Saint Vincent and the Grenadines",
+      "iso3": "VCT",
+      "m49": "670",
+      "region": "Americas",
+      "subregion": "Latin America and the Caribbean",
+      "name_ru": "Сент-Винсент и Гренадины",
+      "source": "UN_M49"
+    },
+    {
+      "code": "VE",
+      "name_en": "Venezuela (Bolivarian Republic of)",
+      "iso3": "VEN",
+      "m49": "862",
+      "region": "Americas",
+      "subregion": "Latin America and the Caribbean",
+      "name_ru": "Венесуэла (Боливарианская Республика)",
+      "source": "UN_M49"
+    },
+    {
+      "code": "VG",
+      "name_en": "British Virgin Islands",
+      "iso3": "VGB",
+      "m49": "092",
+      "region": "Americas",
+      "subregion": "Latin America and the Caribbean",
+      "name_ru": "Британские Виргинские острова",
+      "source": "UN_M49"
+    },
+    {
+      "code": "VI",
+      "name_en": "United States Virgin Islands",
+      "iso3": "VIR",
+      "m49": "850",
+      "region": "Americas",
+      "subregion": "Latin America and the Caribbean",
+      "name_ru": "Виргинские острова Соединенных Штатов",
+      "source": "UN_M49"
+    },
+    {
+      "code": "VN",
+      "name_en": "Viet Nam",
+      "iso3": "VNM",
+      "m49": "704",
+      "region": "Asia",
+      "subregion": "South-eastern Asia",
+      "name_ru": "Вьетнам",
+      "source": "UN_M49"
+    },
+    {
+      "code": "VU",
+      "name_en": "Vanuatu",
+      "iso3": "VUT",
+      "m49": "548",
+      "region": "Oceania",
+      "subregion": "Melanesia",
+      "name_ru": "Вануату",
+      "source": "UN_M49"
+    },
+    {
+      "code": "WF",
+      "name_en": "Wallis and Futuna Islands",
+      "iso3": "WLF",
+      "m49": "876",
+      "region": "Oceania",
+      "subregion": "Polynesia",
+      "name_ru": "Острова Уоллис и Футуна",
+      "source": "UN_M49"
+    },
+    {
+      "code": "WS",
+      "name_en": "Samoa",
+      "iso3": "WSM",
+      "m49": "882",
+      "region": "Oceania",
+      "subregion": "Polynesia",
+      "name_ru": "Самоа",
+      "source": "UN_M49"
+    },
+    {
+      "code": "YE",
+      "name_en": "Yemen",
+      "iso3": "YEM",
+      "m49": "887",
+      "region": "Asia",
+      "subregion": "Western Asia",
+      "name_ru": "Йемен",
+      "source": "UN_M49"
+    },
+    {
+      "code": "YT",
+      "name_en": "Mayotte",
+      "iso3": "MYT",
+      "m49": "175",
+      "region": "Africa",
+      "subregion": "Sub-Saharan Africa",
+      "name_ru": "Остров Майотта",
+      "source": "UN_M49"
+    },
+    {
+      "code": "ZA",
+      "name_en": "South Africa",
+      "iso3": "ZAF",
+      "m49": "710",
+      "region": "Africa",
+      "subregion": "Sub-Saharan Africa",
+      "name_ru": "Южная Африка",
+      "source": "UN_M49"
+    },
+    {
+      "code": "ZM",
+      "name_en": "Zambia",
+      "iso3": "ZMB",
+      "m49": "894",
+      "region": "Africa",
+      "subregion": "Sub-Saharan Africa",
+      "name_ru": "Замбия",
+      "source": "UN_M49"
+    },
+    {
+      "code": "ZW",
+      "name_en": "Zimbabwe",
+      "iso3": "ZWE",
+      "m49": "716",
+      "region": "Africa",
+      "subregion": "Sub-Saharan Africa",
+      "name_ru": "Зимбабве",
+      "source": "UN_M49"
+    }
+  ]
+}

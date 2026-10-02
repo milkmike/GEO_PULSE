@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DecisionEvidence, DecisionWorkspaceResponse, NewsLead } from "@/lib/decisionTypes";
 import DecisionWorkspace from "./DecisionWorkspace";
 
-const mocks = vi.hoisted(() => ({ decisionWorkspace: vi.fn(), earlySignals: vi.fn() }));
+const mocks = vi.hoisted(() => ({ decisionWorkspace: vi.fn(), earlySignals: vi.fn(), globalCoverage: vi.fn() }));
 vi.mock("@/lib/api", () => ({ api: mocks }));
 
 const evidence: DecisionEvidence = {
@@ -58,6 +58,8 @@ beforeEach(() => {
   mocks.decisionWorkspace.mockReset();
   mocks.earlySignals.mockReset();
   mocks.earlySignals.mockResolvedValue({ as_of: "2026-09-30T10:00:00Z", items: [], notice: null });
+  mocks.globalCoverage.mockReset();
+  mocks.globalCoverage.mockResolvedValue({ status: "not_started", as_of: null, countries: [], scope_count: 0 });
   mocks.decisionWorkspace.mockResolvedValue(response());
 });
 afterEach(() => vi.useRealTimers());

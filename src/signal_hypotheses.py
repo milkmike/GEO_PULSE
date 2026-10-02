@@ -12,7 +12,7 @@ import re
 from urllib.parse import urlsplit
 
 from src.api.public_urls import safe_public_url
-from src.countries import COUNTRIES
+from src.monitoring_registry import MONITORING_COUNTRIES as COUNTRIES
 
 
 MAX_EVIDENCE = 12

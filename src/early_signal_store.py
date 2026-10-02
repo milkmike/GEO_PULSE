@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy import text
 
-from src.countries import COUNTRIES
+from src.monitoring_registry import MONITORING_COUNTRIES as COUNTRIES
 from src.db import get_session
 from src.early_signals import MECHANISM, SIGNAL, STAGE, source_key
 from src.signal_hypotheses import validate_dossier

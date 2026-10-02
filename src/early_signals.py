@@ -18,7 +18,7 @@ from urllib.parse import urlsplit
 from src.api.public_urls import safe_public_url
 
 MODEL = "typesafe/jev-1.13"
-VERSION = "early-signal-v3"
+VERSION = "early-signal-v4-global"
 MAX_INPUT = 30_000
 MAX_ARTICLES = 8
 MAX_REQUEST_BYTES = 24_000

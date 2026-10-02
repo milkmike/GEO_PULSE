@@ -259,7 +259,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.analyzer
-    command: python scripts/build_early_signals.py screen --loop --interval 3600 --max-calls 4
+    command: python scripts/build_early_signals.py monitor --loop --interval 3600 --max-calls 4
     environment:
       DATABASE_URL: ${DATABASE_URL}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}

@@ -16,7 +16,7 @@ from src.collectors.publisher_attribution import (
     upsert_article_discovery,
 )
 from src.config import load_sources
-from src.countries import COUNTRIES
+from src.monitoring_registry import MONITORING_COUNTRIES
 from src.db import get_session, wait_for_db, Source, Article
 from src.pipeline.dedup import normalize_title, find_duplicate
 from src.pipeline.title_cleaner import clean_title
@@ -137,7 +137,7 @@ def ensure_sources_in_db():
             cc = str(country_code).upper()
             # A bad YAML key (e.g. bare `NO`/`ON` → bool under YAML 1.1, or a typo)
             # must not corrupt the sync — skip codes outside the registry.
-            if cc not in COUNTRIES:
+            if cc not in MONITORING_COUNTRIES:
                 logger.warning(f"Skipping sources for unknown country code: {country_code!r}")
                 continue
             for src in country_data.get("sources", []):

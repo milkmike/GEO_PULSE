@@ -18,7 +18,7 @@ from src.collectors.publisher_attribution import (
     is_aggregator_domain,
     normalize_publisher_domain,
 )
-from src.countries import COUNTRIES
+from src.monitoring_registry import MONITORING_COUNTRIES
 
 
 _ROOT_FIELDS = frozenset({"version", "candidates"})
@@ -218,7 +218,7 @@ def _candidate_from_record(item: Mapping, index: int) -> tuple[SourceCandidate, 
     }
 
     country_code = values["country_code"].strip().upper()
-    if country_code not in COUNTRIES:
+    if country_code not in MONITORING_COUNTRIES:
         raise ValueError(f"{label} country_code is not supported")
     if values["type"] != "rss":
         raise ValueError(f"{label} type must be rss")
@@ -409,7 +409,7 @@ def load_production_source_inventory(
         country_code = _require_non_empty_string(
             record["country_code"], f"{label} country_code"
         ).strip().upper()
-        if country_code not in COUNTRIES:
+        if country_code not in MONITORING_COUNTRIES:
             raise ValueError(f"{label} country_code is not supported")
         source_url = _require_non_empty_string(record["url"], f"{label} url")
         _feed_url_identity(source_url, f"{label} url")
@@ -465,7 +465,7 @@ def load_production_source_inventory(
         country_code = _require_non_empty_string(
             record["country_code"], f"{label} country_code"
         ).strip().upper()
-        if country_code not in COUNTRIES:
+        if country_code not in MONITORING_COUNTRIES:
             raise ValueError(f"{label} country_code is not supported")
         source_url = _require_non_empty_string(record["url"], f"{label} url")
         _feed_url_identity(source_url, f"{label} url")
@@ -496,7 +496,7 @@ def validate_candidate_metadata(
         if domain
     }
 
-    if candidate.country_code not in COUNTRIES:
+    if candidate.country_code not in MONITORING_COUNTRIES:
         reasons.append("unknown_country")
     if candidate.source_type != "rss":
         reasons.append("wave1_requires_rss")

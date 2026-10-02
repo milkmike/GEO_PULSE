@@ -9,6 +9,7 @@ import type {
 } from "./types";
 import type { DecisionWorkspaceResponse } from "./decisionTypes";
 import type { EarlySignalsResponse } from "./earlySignalTypes";
+import type { GlobalCoverageResponse } from "./globalMonitoringTypes";
 
 /** API base: build-time env wins; otherwise same host on :8100 (compose default). */
 export function apiBase(): string {
@@ -89,6 +90,7 @@ function radarParams(request: RadarFilters, cursor?: string | null): URLSearchPa
 }
 
 export const api = {
+  globalCoverage: (signal?: AbortSignal) => get<GlobalCoverageResponse>("/api/v2/early-signals/coverage", signal),
   earlySignals: (country?: string | null, signal?: AbortSignal) => {
     const params = new URLSearchParams({ limit: "6" });
     if (country?.trim()) params.set("country", country.trim().toUpperCase());

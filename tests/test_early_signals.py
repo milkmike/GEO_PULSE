@@ -120,7 +120,7 @@ def test_prompt_covers_private_noise_strategic_visits_and_reported_stage():
     assert "Gazette" not in screening.encode(payload).decode()
 
 
-def test_changed_screening_version_invalidates_prior_source_key():
+def test_changed_screening_version_invalidates_prior_source_key(monkeypatch):
     row = article()
     for old_version in ("early-signal-v1", "early-signal-v2"):
         old_key = hashlib.sha256(screening.encode({
@@ -128,7 +128,11 @@ def test_changed_screening_version_invalidates_prior_source_key():
             "state": {"title": row["title"], "excerpt": row["excerpt"]},
         })).hexdigest()
         assert screening.source_key(row) != old_key
-    assert screening.VERSION == "early-signal-v3"
+    with monkeypatch.context() as patch:
+        patch.setattr(screening, 'VERSION', 'early-signal-v3')
+        old_catalog_key = screening.source_key(row)
+    assert screening.source_key(row) != old_catalog_key
+    assert screening.VERSION == "early-signal-v4-global"
     assert screening.source_key(row) != screening.source_key(dict(row, excerpt="Different report"))
 
 

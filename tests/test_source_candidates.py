@@ -1393,6 +1393,30 @@ def test_loader_validates_country_code_against_country_registry(tmp_path):
         _load_document(tmp_path, {"version": 1, "candidates": [record]})
 
 
+def test_world_catalog_country_passes_candidate_and_inventory_checks(tmp_path):
+    candidate = _load_document(tmp_path, {"version": 1, "candidates": [
+        _candidate(country_code="AD")
+    ]})[0]
+    assert candidate.country_code == "AD"
+    assert validate_candidate_metadata(candidate, configured_publishers={}).ok
+    inventory = load_production_source_inventory(_write_production_inventory(
+        tmp_path,
+        {"country_code": "AD", "url": "https://publisher.example/feed.xml", "config": {}},
+        publisher_domains=({"domain": "alias.example", "country_code": "AD",
+                            "url": "https://publisher.example/feed.xml",
+                            "source_expansion_wave": None},),
+    ))
+    assert inventory["publisher.example"] == {("AD", "https://publisher.example/feed.xml", None)}
+    assert inventory["alias.example"] == {("AD", "https://publisher.example/feed.xml", None)}
+
+
+def test_unknown_country_still_fails_inventory_validation(tmp_path):
+    with pytest.raises(ValueError, match="country_code is not supported"):
+        load_production_source_inventory(_write_production_inventory(
+            tmp_path, {"country_code": "ZZ", "url": "https://publisher.example/feed.xml", "config": {}}
+        ))
+
+
 def test_loader_only_accepts_rss_source_type(tmp_path):
     record = _candidate(**{"type": "atom"})
 
