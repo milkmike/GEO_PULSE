@@ -45,6 +45,35 @@ def _database():
     return engine, sessionmaker(bind=engine, expire_on_commit=False)
 
 
+def test_source_sync_accepts_world_catalog_code_and_skips_unknown_code(monkeypatch):
+    engine, SessionLocal = _database()
+
+    @contextmanager
+    def session_scope():
+        with SessionLocal() as session:
+            try:
+                yield session
+                session.commit()
+            except Exception:
+                session.rollback()
+                raise
+
+    monkeypatch.setattr(collect, "get_session", session_scope)
+    monkeypatch.setattr(collect, "SKIP_YAML_SYNC", False)
+    monkeypatch.setattr(collect, "load_sources", lambda: {"countries": {
+        "AD": {"sources": [{"name": "Andorra Example", "url": "https://andorra.example/rss",
+                            "type": "rss", "language": "ca"}]},
+        "ZZ": {"sources": [{"name": "Unknown Example", "url": "https://unknown.example/rss",
+                            "type": "rss", "language": "en"}]},
+    }})
+    collect.ensure_sources_in_db()
+    with SessionLocal() as session:
+        sources = session.scalars(select(Source)).all()
+        assert [(source.name, source.country_code) for source in sources] == [
+            ("Andorra Example", "AD")]
+    engine.dispose()
+
+
 def test_registry_sync_seeds_direct_and_site_wrapper_but_not_discovery():
     engine, SessionLocal = _database()
     with SessionLocal.begin() as session:

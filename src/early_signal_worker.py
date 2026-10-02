@@ -19,7 +19,7 @@ from src import agenda_budget as budget, early_signal_store as store
 from src.agenda_store import load_articles
 from src.agenda_worker import check_tariff
 from src.api_tracker import track_api_call
-from src.countries import COUNTRIES
+from src.monitoring_registry import MONITORING_COUNTRIES as COUNTRIES
 from src.db import get_session
 from src.early_signals import MODEL, encode, parse_response, prepare_payload, select_candidates, source_key
 from src.jev import _request
@@ -81,9 +81,14 @@ def run_screening_cycle(*, budget_usd=Decimal('0'), campaign=CAMPAIGN,
                 available.append(snapshot)
         except (KeyError, TypeError, ValueError):
             continue
-    candidates = select_candidates(available, as_of=now)
-    cached = store.load_screenings([source_key(a) for a in candidates])
-    pending = [a for a in candidates if source_key(a) not in cached and source_key(a) not in attempted]
+    # Imported/replayed decisions need not appear in this campaign's paid ledger.
+    # Remove them across the entire bounded corpus before the top-80 admission.
+    keys = [source_key(a) for a in available]
+    cached = {}
+    for offset in range(0, len(keys), 80):
+        cached.update(store.load_screenings(keys[offset:offset + 80]))
+    candidates = select_candidates([a for a in available if source_key(a) not in cached], as_of=now)
+    pending = candidates[:]
     stats.update(selected=len(candidates), cached=len(cached))
     codes = sorted(c for c in COUNTRIES if c != 'RU')
     tariff_checked = False

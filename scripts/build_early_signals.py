@@ -13,6 +13,7 @@ if str(ROOT) not in sys.path:
 
 from src.early_signal_store import save_dossier
 from src.early_signal_worker import locked_screening_cycle, write_draft, WRITER_MODEL, WRITER_MODELS
+from src.global_signal_monitor import locked_global_cycle
 from src.signal_workbench import instant
 
 
@@ -37,6 +38,12 @@ def main():
     screen.add_argument('--max-calls', type=int, default=4)
     screen.add_argument('--loop', action='store_true')
     screen.add_argument('--interval', type=int, default=3600)
+    monitor = sub.add_parser('monitor', help='Automatic world coverage and source-bound nominations')
+    monitor.add_argument('--budget-usd', type=Decimal, default=Decimal(os.getenv('EARLY_SIGNAL_BUDGET_USD', '0')))
+    monitor.add_argument('--max-calls', type=int, default=4)
+    monitor.add_argument('--max-drafts', type=int, default=0)
+    monitor.add_argument('--loop', action='store_true')
+    monitor.add_argument('--interval', type=int, default=3600)
     writer = sub.add_parser('write')
     writer.add_argument('--context', required=True)
     writer.add_argument('--out', required=True)
@@ -47,12 +54,17 @@ def main():
     publish.add_argument('--draft', required=True)
     publish.add_argument('--review-note', required=True)
     args = parser.parse_args()
-    if args.command == 'screen':
+    if args.command in ('screen', 'monitor'):
         if args.interval < 600:
             parser.error('interval must be at least 600 seconds')
         while True:
             try:
-                report = locked_screening_cycle(budget_usd=args.budget_usd, max_calls=args.max_calls)
+                if args.command == 'monitor':
+                    full = locked_global_cycle(budget_usd=args.budget_usd, max_screen_calls=args.max_calls,
+                                               max_drafts=args.max_drafts)
+                    report = {key: full[key] for key in ('as_of', 'status', 'scope_count', 'screening', 'writer', 'nominated') if key in full}
+                else:
+                    report = locked_screening_cycle(budget_usd=args.budget_usd, max_calls=args.max_calls)
             except Exception as exc:
                 report = {'status': 'error', 'error': type(exc).__name__}
             print(json.dumps(report, ensure_ascii=False), flush=True)

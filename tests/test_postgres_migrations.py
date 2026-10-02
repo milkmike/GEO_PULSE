@@ -42,6 +42,7 @@ def test_early_signal_dossier_migration_is_idempotent():
                        to_regclass('early_signal_screenings_article_idx')
             """)
             assert all(cursor.fetchone())  # Clean bootstrap contains the same schema.
+            cursor.execute("DROP TABLE IF EXISTS early_signal_work")
             cursor.execute("DROP TABLE early_signal_dossiers, early_signal_screenings")
             sql = (MIGRATIONS / "039_early_signal_dossiers.sql").read_text()
             cursor.execute(sql)
@@ -55,6 +56,59 @@ def test_early_signal_dossier_migration_is_idempotent():
             assert all(cursor.fetchone())
     finally:
         connection.close()
+
+
+def test_global_monitor_migration_and_private_queue_are_idempotent(monkeypatch):
+    dsn, psycopg2 = _requirements()
+    connection = psycopg2.connect(dsn)
+    connection.autocommit = True
+    try:
+        with connection.cursor() as cursor:
+            _reset(cursor, initialize=True)
+            cursor.execute('DROP TABLE early_signal_work,global_monitor_runs')
+            sql = (MIGRATIONS / '040_global_signal_monitor.sql').read_text()
+            cursor.execute(sql)
+            cursor.execute(sql)
+    finally:
+        connection.close()
+    from contextlib import contextmanager
+    from copy import deepcopy
+    import json
+    from src import global_signal_store as work
+    from src.global_signal_planner import plan_candidates
+    from src.signal_workbench import request_hash
+    from src.early_signals import source_key
+    session_factory = sessionmaker(bind=create_engine(dsn))
+    @contextmanager
+    def sessions():
+        with session_factory.begin() as session:
+            yield session
+    monkeypatch.setattr(work, 'get_session', sessions)
+    fixture = json.loads((ROOT / 'tests/fixtures/early_signal_example.json').read_text())
+    at = datetime.fromisoformat(fixture['context']['as_of'])
+    anchor = deepcopy(fixture['context']['articles'][0])
+    anchor['title'] = 'NIS ownership licence extended'
+    second = deepcopy(anchor)
+    second.update(id=anchor['id'] + 100, title='NIS ownership talks continue', url=anchor['url']+'second')
+    def record(article):
+        return {'source_key': source_key(article), 'snapshot_hash': request_hash(article), 'article': article,
+                'classification': {'signal':'change','mechanism':'trade','stage':'decision',
+                                   'country':'RS','status':'needs_review'}}
+    candidates = plan_candidates([record(anchor), record(second)], [anchor,second], as_of=at)
+    assert candidates[0]['status'] == 'context_ready'
+    work.sync_candidates(candidates, as_of=at)
+    changed = deepcopy(second)
+    changed['excerpt'] += ' Corrected source.'
+    assert work.claim_context(as_of=at, current_articles=[anchor, changed]) is None
+    work.sync_candidates(candidates, as_of=at)
+    claimed = work.claim_context(as_of=at, current_articles=[anchor, second])
+    assert claimed is not None
+    work.block_work(claimed, 'draft_failed')
+    work.sync_candidates(candidates, as_of=at)
+    with sessions() as session:
+        assert session.execute(text("SELECT status FROM early_signal_work WHERE id=:id"), claimed).scalar_one() == 'blocked'
+        assert session.execute(text('SELECT count(*) FROM early_signal_work')).scalar_one() == 2
+        assert session.execute(text("SELECT count(*) FROM early_signal_dossiers WHERE release='published'")).scalar_one() == 0
 
 
 def _requirements():

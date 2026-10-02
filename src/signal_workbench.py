@@ -7,7 +7,7 @@ from html import escape
 import json
 from zoneinfo import ZoneInfo
 
-from src.countries import COUNTRIES
+from src.monitoring_registry import MONITORING_COUNTRIES as COUNTRIES
 from src.early_signals import encode, prepare_payload, parse_response, select_candidates, source_key
 from src.signal_hypotheses import prepare_prompt, validate_dossier
 

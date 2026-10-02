@@ -128,6 +128,17 @@ def test_already_screened_top_rows_do_not_starve_unseen_local_reports(monkeypatc
     assert next(e[1] for e in events if e[0]=='save')[0]['article']['id']==81
 
 
+def test_imported_cached_rows_do_not_starve_unseen_local_reports(monkeypatch):
+    events=setup_screen(monkeypatch)
+    seen=[article(i,source_id=1,publisher='Gazette') for i in range(1,81)]
+    unseen=article(81,source_id=1,publisher='Gazette')
+    cached={early_signals.source_key(a): {'article': a} for a in seen}
+    monkeypatch.setattr(worker.store,'load_screenings',lambda keys:{key:cached[key] for key in keys if key in cached})
+    stats=worker.run_screening_cycle(articles=seen+[unseen],as_of=NOW,budget_usd=Decimal('2'))
+    assert stats['screened']==1 and stats['cached']==80
+    assert next(e[1] for e in events if e[0]=='save')[0]['article']['id']==81
+
+
 def test_invalid_cost_reaches_persistent_halt_guard(monkeypatch):
     events=setup_screen(monkeypatch)
     monkeypatch.setattr(worker,'_request',lambda *a:{'status':'ok','data':{'answers':{},'usage':{'cost':-1}}})

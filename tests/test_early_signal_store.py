@@ -117,6 +117,17 @@ def test_api_country_validation_and_read_only_projection(monkeypatch):
         assert client.get(f"/api/v2/early-signals?{query}").status_code == 422
 
 
+def test_world_coverage_reads_snapshot_without_country_prompt_or_paid_call(monkeypatch):
+    from src.api.routes import early_signals as route
+    snapshot = {'as_of': NOW.isoformat(), 'status': 'ok', 'scope_count': 248,
+                'countries': [{'code': 'AD', 'name_ru': 'Андорра', 'sampled_articles_7d': 0}]}
+    monkeypatch.setattr(route, 'latest_monitor', lambda: snapshot)
+    monkeypatch.setattr(route, 'list_dossiers', lambda **kw: {'country': kw['country'], 'items': []})
+    client = TestClient(app)
+    assert client.get('/api/v2/early-signals/coverage').json() == snapshot
+    assert client.get('/api/v2/early-signals?country=AD').json()['country'] == 'AD'
+
+
 def test_screening_cache_skips_bad_rows_and_bounds_requests(monkeypatch):
     from contextlib import contextmanager
     import hashlib
