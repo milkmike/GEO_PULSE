@@ -10,17 +10,26 @@ from src.global_signal_planner import plan_candidates
 from src import global_signal_store as store
 from src.early_signal_worker import CAMPAIGN, _bounds, run_screening_cycle, write_draft
 from src.signal_workbench import instant
+from src.source_research_worker import run_source_research
 
 
 def run_global_cycle(*, as_of=None, budget_usd=Decimal('0'), campaign=CAMPAIGN,
-                     max_screen_calls=4, max_drafts=0):
+                     max_screen_calls=4, max_drafts=0, max_source_searches=4):
     _bounds(budget_usd, max_screen_calls)
     if type(max_drafts) is not int or not 0 <= max_drafts <= 2:
         raise ValueError('max_drafts must be 0..2')
+    if type(max_source_searches) is not int or not 0 <= max_source_searches <= 4:
+        raise ValueError('max_source_searches must be 0..4')
     now = instant(as_of) if as_of else datetime.now(timezone.utc)
     if now > datetime.now(timezone.utc):
         raise ValueError('future monitor')
     snapshot = load_global_monitoring(as_of=now)
+    try:
+        research = run_source_research(snapshot['countries'], as_of=now,
+                                       max_searches=max_source_searches)
+    except Exception:
+        # Source discovery is independent of collection and paid interpretation.
+        research = {'status': 'blocked', 'reason': 'research_unavailable'}
     screening = {'status': 'disabled'}
     if budget_usd:
         try:
@@ -53,6 +62,7 @@ def run_global_cycle(*, as_of=None, budget_usd=Decimal('0'), campaign=CAMPAIGN,
     report = {'as_of': now.isoformat(), 'status': 'ok', 'scope_count': len(countries),
               'countries': countries, 'limits': snapshot['limits'],
               'screening': screening, 'writer': writer, 'nominated': nominated,
+              'source_research': research,
               'unknown_geography_work': queue.get('unknown', {}),
               'notice': 'Страна источника показывает охват. Она не определяет страну события. Отсутствие данных не означает отсутствия изменений.'}
     store.save_monitor_run(report)

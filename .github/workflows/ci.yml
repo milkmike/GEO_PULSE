@@ -90,6 +90,7 @@ jobs:
         run: >-
           python -m pytest -q -ra
           tests/test_postgres_migrations.py
+          tests/test_source_research_store_postgres.py
           tests/test_search_postgres.py
           tests/test_story_membership_mvcc.py
 
@@ -97,6 +98,7 @@ jobs:
         run: >-
           python -m pytest -q -ra
           --ignore=tests/test_postgres_migrations.py
+          --ignore=tests/test_source_research_store_postgres.py
           --ignore=tests/test_search_postgres.py
           --ignore=tests/test_story_membership_mvcc.py
 

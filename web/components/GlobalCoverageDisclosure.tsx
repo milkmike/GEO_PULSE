@@ -20,7 +20,7 @@ function collectionState(country: GlobalCoverageCountry): string {
   return "Источники не настроены";
 }
 
-export default function GlobalCoverageDisclosure({ refreshToken = 0 }: { refreshToken?: number }) {
+export default function GlobalCoverageDisclosure({ refreshToken = 0, onCountriesLoaded, onSelectSignalCountry }: { refreshToken?: number; onCountriesLoaded?: (countries: GlobalCoverageCountry[]) => void; onSelectSignalCountry?: (code: string) => void }) {
   const [snapshot, setSnapshot] = useState<GlobalCoverageResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
@@ -35,6 +35,7 @@ export default function GlobalCoverageDisclosure({ refreshToken = 0 }: { refresh
     api.globalCoverage(controller.signal).then((value) => {
       if (controller.signal.aborted) return;
       setSnapshot(value);
+      if (value.status === "ok" && value.countries.length > 0) onCountriesLoaded?.(value.countries);
       setLoading(false);
     }).catch(() => {
       if (controller.signal.aborted) return;
@@ -42,7 +43,7 @@ export default function GlobalCoverageDisclosure({ refreshToken = 0 }: { refresh
       setLoading(false);
     });
     return () => controller.abort();
-  }, [refreshToken, retry]);
+  }, [refreshToken, retry, onCountriesLoaded]);
 
   if (!snapshot) {
     if (loading) return null;
@@ -57,6 +58,9 @@ export default function GlobalCoverageDisclosure({ refreshToken = 0 }: { refresh
     (!gapsOnly || country.sampled_articles_7d === 0)
     && (!search || country.name_ru.toLocaleLowerCase("ru-RU").includes(search) || country.code.toLowerCase().includes(search)));
   const sampleLimit = snapshot.limits?.per_country;
+  const researchLeads = snapshot.source_research?.queue?.lead_count ?? 0;
+  const researchNoun = researchLeads % 10 === 1 && researchLeads % 100 !== 11 ? "кандидат"
+    : researchLeads % 10 >= 2 && researchLeads % 10 <= 4 && (researchLeads % 100 < 12 || researchLeads % 100 > 14) ? "кандидата" : "кандидатов";
 
   return <details className="mt-3 min-w-0 border-y border-line py-1 text-sm">
     <summary className="min-h-11 cursor-pointer rounded-sm py-3 text-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">
@@ -68,6 +72,7 @@ export default function GlobalCoverageDisclosure({ refreshToken = 0 }: { refresh
       <p className="mt-1 max-w-3xl text-xs leading-5 text-dim">Доступность — успешный опрос за последние 72 часа; публикации могут выходить реже.</p>
       <p className="mt-1 text-xs leading-5 text-dim">{snapshot.stale ? "Показан прежний срез сбора" : "Срез сбора"}{collectedAt(snapshot.as_of) ? ` · ${collectedAt(snapshot.as_of)}` : ""}. Время относится к сбору источников.</p>
       {snapshot.screening?.status !== "ok" && <p className="mt-3 max-w-3xl border-l-2 border-ru-red/60 pl-3 text-xs leading-5 text-fg/80">Автоматический разбор новых материалов приостановлен. Сбор источников продолжается.</p>}
+      {researchLeads > 0 && <p className="mt-2 text-xs leading-5 text-dim">Поиск местных источников: найдено {researchLeads} {researchNoun} для проверки.</p>}
       {error && <p role="alert" className="mt-3 text-xs leading-5 text-dim">Не удалось обновить обзор. Показан предыдущий срез. <button type="button" onClick={() => setRetry((value) => value + 1)} className="min-h-11 text-accent underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">Повторить</button></p>}
       <div className="mt-4 flex flex-wrap items-end gap-x-5 gap-y-2">
         <label className="min-w-[180px] flex-1 text-xs text-dim sm:max-w-xs">Найти страну или территорию
@@ -78,10 +83,10 @@ export default function GlobalCoverageDisclosure({ refreshToken = 0 }: { refresh
       <p className="mt-2 text-xs text-dim">Показано {rows.length} из {snapshot.countries.length}</p>
       <div className="mt-2 max-h-[360px] min-w-0 overflow-auto border-y border-line">
         <table className="w-full min-w-[650px] border-collapse text-left text-xs leading-5">
-          <thead className="sticky top-0 bg-panel text-dim"><tr><th scope="col" className="px-3 py-2 font-medium">Страна или территория</th><th scope="col" className="px-3 py-2 font-medium">Источников настроено</th><th scope="col" className="px-3 py-2 font-medium">Местных СМИ доступно</th><th scope="col" className="px-3 py-2 font-medium">Публикаций в выборке{sampleLimit ? ` (до ${sampleLimit})` : ""}</th><th scope="col" className="px-3 py-2 font-medium">Последний сбор</th><th scope="col" className="px-3 py-2 font-medium">Состояние</th></tr></thead>
-          <tbody className="divide-y divide-line">{rows.map((country) => <tr key={country.code} className="align-top"><th scope="row" className="min-w-[150px] px-3 py-2 font-medium text-fg">{country.name_ru}</th><td className="tnum px-3 py-2 text-dim">{country.configured_sources}</td><td className="tnum px-3 py-2 text-dim">{country.working_direct_publishers}</td><td className="tnum px-3 py-2 text-fg">{country.sampled_articles_7d}</td><td className="whitespace-nowrap px-3 py-2 text-dim">{collectedAt(country.latest_local_collected_at) ?? "—"}</td><td className="min-w-[150px] px-3 py-2 text-dim">{collectionState(country)}</td></tr>)}</tbody>
+          <thead className="sticky top-0 bg-panel text-dim"><tr><th scope="col" className="px-3 py-2 font-medium">Страна или территория</th><th scope="col" className="px-3 py-2 font-medium">Источников настроено</th><th scope="col" className="px-3 py-2 font-medium">Местных СМИ доступно</th><th scope="col" className="px-3 py-2 font-medium">Публикаций в выборке{sampleLimit ? ` (до ${sampleLimit})` : ""}</th><th scope="col" className="px-3 py-2 font-medium">Последний сбор</th><th scope="col" className="px-3 py-2 font-medium">Состояние</th>{onSelectSignalCountry && <th scope="col" className="px-3 py-2 font-medium">Гипотезы</th>}</tr></thead>
+          <tbody className="divide-y divide-line">{rows.map((country) => <tr key={country.code} className="align-top"><th scope="row" className="min-w-[150px] px-3 py-2 font-medium text-fg">{country.name_ru}</th><td className="tnum px-3 py-2 text-dim">{country.configured_sources}</td><td className="tnum px-3 py-2 text-dim">{country.working_direct_publishers}</td><td className="tnum px-3 py-2 text-fg">{country.sampled_articles_7d}</td><td className="whitespace-nowrap px-3 py-2 text-dim">{collectedAt(country.latest_local_collected_at) ?? "—"}</td><td className="min-w-[150px] px-3 py-2 text-dim">{collectionState(country)}</td>{onSelectSignalCountry && <td className="px-3 py-1"><button type="button" aria-label={`Ранние сигналы: ${country.name_ru}`} onClick={() => onSelectSignalCountry(country.code)} className="min-h-11 whitespace-nowrap text-accent underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">Ранние сигналы</button></td>}</tr>)}</tbody>
         </table>
-        {rows.length === 0 && <p className="px-3 py-4 text-xs text-dim">По этому поиску стран нет.</p>}
+        {rows.length === 0 && <p className="px-3 py-4 text-xs text-dim">{search ? gapsOnly ? "Среди пробелов по этому запросу стран нет." : "По этому запросу стран нет." : gapsOnly ? "Пробелов в выборке нет." : "Стран в выборке нет."}</p>}
       </div>
       {snapshot.notice && <p className="mt-3 max-w-3xl text-xs leading-5 text-dim">{snapshot.notice}</p>}
     </div>
