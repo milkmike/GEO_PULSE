@@ -139,6 +139,34 @@ def test_reservation_precedes_http_and_invalid_response_is_not_saved(monkeypatch
     assert calls == ["reserve", "http", ("finish", "reserved-id", 0.12, "invalid_response")]
 
 
+@pytest.mark.parametrize(("content", "finish_reason", "reason"), [
+    ('{"relevant":', "stop", "invalid_json"),
+    ('{"bad":"shape"}', "stop", "validation_error"),
+    ('{"bad":"shape"}', "length", "incomplete_output"),
+])
+def test_failed_extraction_reports_fixed_reason_without_changing_budget(
+        monkeypatch, content, finish_reason, reason):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setattr(extraction, "load_candidates", lambda article_ids=None: ([article()], {"RS"}))
+    monkeypatch.setattr(extraction.budget, "get_attempted_pair_keys", lambda campaign: set())
+    monkeypatch.setattr(extraction.budget, "get_budget", lambda campaign: 2.0)
+    monkeypatch.setattr(extraction.budget, "reserve_request", lambda *args, **kwargs: "reserved-id")
+    settled, tracked = [], []
+    monkeypatch.setattr(extraction.budget, "finish_request", lambda *args: settled.append(args))
+    monkeypatch.setattr(extraction, "track_api_call", lambda **kwargs: tracked.append(kwargs))
+    monkeypatch.setattr(extraction, "save_if_current", lambda *args: pytest.fail("invalid output saved"))
+    class FakeChat:
+        def __init__(self, *args, **kwargs):
+            self.requests = []
+        def chat(self, *args, **kwargs):
+            self.requests.append({"finish_reason": finish_reason, "usage": {"cost": .0003}})
+            return content, extraction.MODEL
+    monkeypatch.setattr(extraction, "BudgetedChat", FakeChat)
+    stats = extraction.run_decision_cycle(budget_usd=Decimal("3"), campaign="existing", max_calls=1)
+    assert stats["last_error"] == tracked[0]["error"] == reason
+    assert settled == [("reserved-id", .0003, "invalid_response")]
+
+
 def test_source_snapshot_is_invalidated_and_rechecked_before_save(monkeypatch):
     url = os.getenv("GEO_PULSE_TEST_DATABASE_URL")
     if not url:

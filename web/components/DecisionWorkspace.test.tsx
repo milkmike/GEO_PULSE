@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DecisionEvidence, DecisionWorkspaceResponse, NewsLead } from "@/lib/decisionTypes";
 import DecisionWorkspace from "./DecisionWorkspace";
 
-const mocks = vi.hoisted(() => ({ decisionWorkspace: vi.fn() }));
+const mocks = vi.hoisted(() => ({ decisionWorkspace: vi.fn(), earlySignals: vi.fn() }));
 vi.mock("@/lib/api", () => ({ api: mocks }));
 
 const evidence: DecisionEvidence = {
@@ -56,11 +56,20 @@ function response(code = "RS", name = "Сербия"): DecisionWorkspaceResponse
 beforeEach(() => {
   window.history.replaceState(null, "", "/");
   mocks.decisionWorkspace.mockReset();
+  mocks.earlySignals.mockReset();
+  mocks.earlySignals.mockResolvedValue({ as_of: "2026-09-30T10:00:00Z", items: [], notice: null });
   mocks.decisionWorkspace.mockResolvedValue(response());
 });
 afterEach(() => vi.useRealTimers());
 
 describe("DecisionWorkspace", () => {
+  it("starts with world signals and filters them after an explicit country choice", async () => {
+    render(<DecisionWorkspace />);
+    await screen.findByText("Сербия ↔ Россия");
+    expect(mocks.earlySignals).toHaveBeenCalledWith(null, expect.any(AbortSignal));
+    fireEvent.change(screen.getByRole("combobox", { name: "Выбранная страна" }), { target: { value: "AE" } });
+    expect(mocks.earlySignals).toHaveBeenCalledWith("AE", expect.any(AbortSignal));
+  });
   it("puts the map first and retains source dates, uncertainty and detail sections", async () => {
     const value = response();
     value.discovery = { day: [lead], week: [] };
@@ -122,7 +131,7 @@ describe("DecisionWorkspace", () => {
     render(<DecisionWorkspace />);
     await screen.findByText("Сербия ↔ Россия");
     fireEvent.change(screen.getByRole("combobox", { name: "Выбранная страна" }), { target: { value: "AE" } });
-    expect(screen.getByRole("status")).toHaveTextContent("Загружаем обзор");
+    expect(within(document.getElementById("country-overview")!).getByRole("status")).toHaveTextContent("Загружаем обзор");
     fireEvent.change(screen.getByRole("combobox", { name: "Выбранная страна" }), { target: { value: "RS" } });
     expect(await screen.findByText("Сербия ↔ Россия")).toBeVisible();
     await act(async () => finishOld(response("AE", "ОАЭ")));

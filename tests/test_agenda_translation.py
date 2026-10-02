@@ -94,6 +94,26 @@ def test_real_bounded_chat_reserves_first_and_settles_actual_usage(monkeypatch,h
     assert saved.call_count==(0 if unsafe else 1)
 
 
+@pytest.mark.parametrize(('content', 'finish_reason', 'reason'), [
+    ('{"1":', 'stop', 'invalid_json'),
+    ('{"1":"Рейс сел"}', 'stop', 'validation_error'),
+    ('{"1":"Рейс сел","2":"Рейс сел"}', 'length', 'incomplete_output'),
+])
+def test_failed_translation_reports_fixed_reason_and_keeps_hold(monkeypatch,harness,content,finish_reason,reason):
+    translation,pending,saved,reserve,finish=harness
+    logs=[]
+    monkeypatch.setattr(translation,'track_api_call',lambda **kwargs:logs.append(kwargs))
+    monkeypatch.setattr(httpx,'post',lambda url,**kwargs:httpx.Response(200,
+        request=httpx.Request('POST',url),json={
+            'choices':[{'finish_reason':finish_reason,'message':{'content':content}}],
+            'usage':{'cost':.0003}}))
+    stats=translation.run_translation_cycle(budget_usd=Decimal('3'),campaign='same')
+    assert stats['last_error']==reason
+    assert logs[0]['error']==reason
+    finish.assert_called_once_with('reserved',.0003,'invalid_response')
+    saved.assert_not_called()
+
+
 def test_two_call_bound_and_attempted_titles_are_not_rebilled(monkeypatch,harness):
     translation,pending,saved,reserve,finish=harness
     pending.return_value=rows(25)

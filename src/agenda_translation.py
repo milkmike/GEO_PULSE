@@ -126,21 +126,39 @@ def run_translation_cycle(*, budget_usd=Decimal('0'), campaign, max_calls=2):
         outcome = 'error'
         cost = None
         usage = {}
+        phase, failure_reason = 'request', None
         try:
             content, model = client.chat(prompt, max_tokens=1000, script='build_agendas.py')
             outcome = 'invalid_response'
-            if model != MODEL or client.requests[-1].get('finish_reason') != 'stop':
+            phase = 'response'
+            if model != MODEL:
+                failure_reason = 'model_mismatch'
+                raise ValueError('Unexpected translation model')
+            if client.requests[-1].get('finish_reason') != 'stop':
+                failure_reason = 'incomplete_output'
                 raise ValueError('Incomplete translation response')
+            phase = 'parse'
             translations = parse_translations(content, articles)
+            phase = 'save'
             store.save_title_translations(translations, MODEL)
             stats['translated'] += len(translations)
             outcome = 'ok'
-        except Exception:
+        except Exception as exc:
             # Never expose titles/provider content/secrets; discovery may continue.
+            if failure_reason is None:
+                failure_reason = (client.requests[-1].get('error_reason', 'request_error')
+                                  if phase == 'request' and client.requests else
+                                  'request_error' if phase == 'request' else
+                                  'save_error' if phase == 'save' else
+                                  'invalid_json' if isinstance(exc, json.JSONDecodeError) else
+                                  'validation_error')
             stats['status'] = 'error'
+            stats['last_error'] = failure_reason
         finally:
             if client.requests:
                 usage = client.requests[-1].get('usage') or {}
+                if not isinstance(usage, dict):
+                    usage = {}
                 cost = usage.get('cost')
             budget.finish_request(request_id, cost, outcome)
             track_api_call(service='openrouter', endpoint='/chat/completions', model=MODEL,
@@ -148,5 +166,5 @@ def run_translation_cycle(*, budget_usd=Decimal('0'), campaign, max_calls=2):
                 tokens_out=usage.get('completion_tokens', 0),
                 cost=cost if type(cost) in (int, float) and 0 <= cost <= .1 else None,
                 status='ok' if outcome == 'ok' else 'error',
-                error=None if outcome == 'ok' else outcome)
+                error=failure_reason)
     return stats

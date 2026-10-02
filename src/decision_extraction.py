@@ -377,26 +377,42 @@ def run_decision_cycle(*, budget_usd: Decimal, campaign: str, max_calls: int = 4
         outcome, cost, usage = "error", None, {}
         annotation = None
         client = BudgetedChat(api_key, Decimal(".10"), model=MODEL)
+        phase, failure_reason = "request", None
         try:
             content, model = client.chat(prompt, max_tokens=1000, script="build_agendas.py")
             outcome = "invalid_response"
-            if model != MODEL or client.requests[-1].get("finish_reason") != "stop":
+            phase = "response"
+            if model != MODEL:
+                failure_reason = "model_mismatch"
+                raise ValueError("unexpected model")
+            if client.requests[-1].get("finish_reason") != "stop":
+                failure_reason = "incomplete_output"
                 raise ValueError("incomplete response")
+            phase = "parse"
             annotation = parse_annotation(content, article, country_codes)
             outcome = "ok"
-        except Exception:
+        except Exception as exc:
+            if failure_reason is None:
+                failure_reason = (client.requests[-1].get("error_reason", "request_error")
+                                  if phase == "request" and client.requests else
+                                  "request_error" if phase == "request" else
+                                  "invalid_json" if isinstance(exc, json.JSONDecodeError) else
+                                  "validation_error")
             stats["invalid"] += 1
             stats["status"] = "partial"
+            stats["last_error"] = failure_reason
         finally:
             if client.requests:
                 usage = client.requests[-1].get("usage") or {}
+                if not isinstance(usage, dict):
+                    usage = {}
                 cost = usage.get("cost")
             budget.finish_request(request_id, cost, outcome)
             track_api_call(service="openrouter", endpoint="/chat/completions", model=MODEL,
                 script="build_agendas.py", tokens_in=usage.get("prompt_tokens", 0),
                 tokens_out=usage.get("completion_tokens", 0),
                 cost=cost if type(cost) in (int, float) and 0 <= cost <= .1 else None,
-                status="ok" if outcome == "ok" else "error", error=None if outcome == "ok" else outcome)
+                status="ok" if outcome == "ok" else "error", error=failure_reason)
         if annotation is not None:
             try:
                 if annotation["relevant"]:

@@ -1,5 +1,6 @@
 """Offline contract tests. Synthetic answers exercise parsing, not model accuracy."""
 from datetime import datetime, timedelta, timezone
+import hashlib
 import math
 
 import pytest
@@ -98,6 +99,59 @@ def test_payload_is_bounded_and_keeps_full_country_catalog_without_publisher_geo
     assert screening.source_key(rows[0]) == screening.source_key(dict(rows[0], excerpt="x"*2000+"not sent"))
     with pytest.raises(ValueError):
         screening.prepare_payload([article(title="x"*513)], {"RS"})
+
+
+def test_prompt_covers_private_noise_strategic_visits_and_reported_stage():
+    payload, _ = screening.prepare_payload([article()], {"RS", "ZA", "ET"})
+    questions = payload["questions"]
+    signals = questions["article_1_signal"]["criteria"]
+    stages = questions["article_1_stage"]["criteria"]
+    assert "private celebrity" in signals["routine"]
+    assert "court order" in signals["routine"]
+    assert "strategic industrial site" in signals["uncertain"]
+    assert "visit alone is not a project decision" in signals["uncertain"]
+    assert "small primary report" in signals["change"]
+    assert "without approval or execution" in stages["proposal"]
+    assert "execution is not established" in stages["decision"]
+    assert "actually started" in stages["implementation"]
+    assert "not completion" in stages["implementation"]
+    assert "Russia mention" in questions["article_1_signal"]["instructions"]
+    assert "publisher's location" in questions["article_1_country"]["instructions"]
+    assert "Gazette" not in screening.encode(payload).decode()
+
+
+def test_changed_screening_version_invalidates_prior_source_key():
+    row = article()
+    for old_version in ("early-signal-v1", "early-signal-v2"):
+        old_key = hashlib.sha256(screening.encode({
+            "version": old_version, "model": screening.MODEL, "id": row["id"],
+            "state": {"title": row["title"], "excerpt": row["excerpt"]},
+        })).hexdigest()
+        assert screening.source_key(row) != old_key
+    assert screening.VERSION == "early-signal-v3"
+    assert screening.source_key(row) != screening.source_key(dict(row, excerpt="Different report"))
+
+
+def test_source_key_changes_for_corrected_provenance_but_normalizes_timestamps():
+    row = article()
+    key = screening.source_key(row)
+    for change in (
+        {"url": "https://example.test/corrected"},
+        {"source_id": 99},
+        {"source_name": "Corrected Gazette"},
+        {"country_code": "GE"},
+        {"published_at": NOW-timedelta(days=2)},
+        {"collected_at": NOW-timedelta(hours=1)},
+    ):
+        assert screening.source_key(dict(row, **change)) != key
+    assert screening.source_key(dict(row,
+        published_at="2026-09-30T00:00:00Z",
+        collected_at="2026-10-01T00:00:00+00:00")) == key
+    assert screening.source_key(dict(row,
+        published_at="2026-09-30T03:00:00+03:00",
+        collected_at="2026-10-01T03:00:00+03:00")) == key
+    with pytest.raises(ValueError, match="provenance"):
+        screening.source_key(dict(row, collected_at=None))
 
 
 def test_parser_preserves_provisional_decisions_and_cost():

@@ -28,6 +28,35 @@ MIGRATIONS = ROOT / "scripts" / "migrations"
 RETRY_MIGRATIONS = ROOT / "tests" / "fixtures" / "migrations_retry"
 
 
+def test_early_signal_dossier_migration_is_idempotent():
+    dsn, psycopg2 = _requirements()
+    connection = psycopg2.connect(dsn)
+    connection.autocommit = True
+    try:
+        with connection.cursor() as cursor:
+            _reset(cursor, initialize=True)
+            cursor.execute("""
+                SELECT to_regclass('early_signal_dossiers'),
+                       to_regclass('early_signal_screenings'),
+                       to_regclass('early_signal_dossiers_published_idx'),
+                       to_regclass('early_signal_screenings_article_idx')
+            """)
+            assert all(cursor.fetchone())  # Clean bootstrap contains the same schema.
+            cursor.execute("DROP TABLE early_signal_dossiers, early_signal_screenings")
+            sql = (MIGRATIONS / "039_early_signal_dossiers.sql").read_text()
+            cursor.execute(sql)
+            cursor.execute(sql)
+            cursor.execute("""
+                SELECT to_regclass('early_signal_dossiers'),
+                       to_regclass('early_signal_screenings'),
+                       to_regclass('early_signal_dossiers_published_idx'),
+                       to_regclass('early_signal_screenings_article_idx')
+            """)
+            assert all(cursor.fetchone())
+    finally:
+        connection.close()
+
+
 def _requirements():
     dsn = os.getenv("GEO_PULSE_TEST_DATABASE_URL")
     reset = os.getenv("GEO_PULSE_TEST_DATABASE_RESET")

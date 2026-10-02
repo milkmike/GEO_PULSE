@@ -46,15 +46,20 @@ class BudgetedChat:
             "provider": {"max_price": {"prompt": 1, "completion": 2, "request": 0},
                          "allow_fallbacks": False, "require_parameters": True},
         }
+        phase = "transport"
         try:
             response = httpx.post(OPENROUTER_URL,
                 headers={"Authorization": f"Bearer {self.api_key}"}, json=payload, timeout=45)
             record["http_status"] = response.status_code
+            phase = "http_status"
             response.raise_for_status()
+            phase = "provider_json"
             data = response.json()
+            phase = "provider_envelope"
             choice = data["choices"][0]
             record["finish_reason"] = choice.get("finish_reason")
             record["usage"] = data.get("usage", {})
+            phase = "provider_usage"
             cost = Decimal(str(data.get("usage", {}).get("cost")))
             if not cost.is_finite() or cost < 0:
                 raise ValueError("Invalid provider cost")
@@ -62,13 +67,22 @@ class BudgetedChat:
             record.update(status="ok", cost_usd=str(cost))
             if cost > self.RESERVATION:
                 self.reserved = self.max_usd
+                record["error_reason"] = "cost_over_reservation"
                 raise ValueError("Provider exceeded reserved price; stop")
+            phase = "provider_content"
             content = choice["message"]["content"]
             if not isinstance(content, str) or not content.strip():
                 raise ValueError("Empty response")
             return content.strip(), self.model
-        except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError, InvalidOperation) as exc:
+        except (httpx.HTTPError, KeyError, IndexError, AttributeError, TypeError, ValueError, InvalidOperation) as exc:
             record["status"] = "failed"
+            record.setdefault("error_reason", {
+                "transport": "transport_error", "http_status": "provider_http_error",
+                "provider_json": "invalid_provider_json",
+                "provider_envelope": "invalid_provider_envelope",
+                "provider_usage": "invalid_provider_usage",
+                "provider_content": "invalid_provider_content",
+            }[phase])
             raise LLMError(f"Bounded request failed: {type(exc).__name__}") from None
         finally:
             record["duration_ms"] = round((time.monotonic() - started) * 1000)
