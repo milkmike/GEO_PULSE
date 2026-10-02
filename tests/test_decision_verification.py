@@ -6,6 +6,26 @@ import pytest
 from src import decision_verification as verify
 
 
+def test_review_uses_shared_model_identity():
+    from src import decision_model
+    assert verify.MODEL == decision_model.MODEL
+
+
+def test_grounded_chat_review_accepts_exact_source_quotes_without_probabilities():
+    payload = verify.prepare_payload(source(), proposed())
+    exact = "Vladimir Putin"
+    chat = {"type":"choice", "choice":"supported", "confidence":.95,
+            "confidence_kind":"self_reported", "evidence":[{"article_id":str(source()["id"]),"quote":exact}],
+            "probabilities":{}}
+    decisions, _ = verify.parse_response(response(payload["questions"],
+        {key:chat for key in payload["questions"]}), set(payload["questions"]), payload=payload)
+    assert verify.project_verified(proposed(), decisions) is not None
+    bad = dict(chat, evidence=[{"article_id":str(source()["id"]),"quote":"invented evidence"}])
+    with pytest.raises(ValueError):
+        verify.parse_response(response(payload["questions"], {"headline":bad}),
+                              set(payload["questions"]), payload=payload)
+
+
 @pytest.fixture(autouse=True)
 def no_telemetry(monkeypatch):
     monkeypatch.setattr(verify, "track_api_call", lambda **kwargs: None)
@@ -157,7 +177,7 @@ def test_no_network_for_irrelevant_or_zero_budget(monkeypatch):
 
 
 def test_exhausted_budget_never_opens_paid_transport(monkeypatch):
-    monkeypatch.setenv("OPENROUTER_API_KEY", "test-only")
+    monkeypatch.setenv(verify.decision_model.KEY_ENV, "test-only")
     monkeypatch.setattr(verify, "check_tariff", lambda: None)
     monkeypatch.setattr(verify.budget, "reserve_request", lambda *a, **kw: None)
     monkeypatch.setattr(verify, "_request", lambda *args: pytest.fail("paid request without reservation"))
@@ -166,13 +186,13 @@ def test_exhausted_budget_never_opens_paid_transport(monkeypatch):
 
 def test_one_successful_request_returns_pruned_claims_and_settles_cost(monkeypatch):
     calls = []
-    monkeypatch.setenv("OPENROUTER_API_KEY", "test-only")
+    monkeypatch.setenv(verify.decision_model.KEY_ENV, "test-only")
     monkeypatch.setattr(verify, "check_tariff", lambda: None)
     monkeypatch.setattr(verify.budget, "reserve_request", lambda *a, **kw: calls.append("reserve") or "id")
     monkeypatch.setattr(verify.budget, "finish_request", lambda ident, cost, status: calls.append(("finish", cost, status)))
     def request(payload, key, timeout):
         calls.append("request")
-        assert timeout == 5 and key == "test-only"
+        assert timeout == (5 if verify.decision_model.PROVIDER == "jev" else 45) and key == "test-only"
         return {"status": "ok", "data": response(payload["questions"],
             {"change_0": answer("unsupported", support=.01)}, cost=.0003)}
     monkeypatch.setattr(verify, "_request", request)
@@ -183,7 +203,7 @@ def test_one_successful_request_returns_pruned_claims_and_settles_cost(monkeypat
 
 def test_over_reservation_cost_abstains_and_passes_raw_cost_to_budget(monkeypatch):
     calls = []
-    monkeypatch.setenv("OPENROUTER_API_KEY", "test-only")
+    monkeypatch.setenv(verify.decision_model.KEY_ENV, "test-only")
     monkeypatch.setattr(verify, "check_tariff", lambda: None)
     monkeypatch.setattr(verify.budget, "reserve_request", lambda *a, **kw: "id")
     monkeypatch.setattr(verify.budget, "finish_request", lambda ident, cost, status: calls.append((cost, status)))
@@ -193,9 +213,21 @@ def test_over_reservation_cost_abstains_and_passes_raw_cost_to_budget(monkeypatc
     assert calls == [(.11, "invalid_response")]
 
 
+def test_invalid_response_preserves_known_provider_cost(monkeypatch):
+    calls=[]
+    monkeypatch.setenv(verify.decision_model.KEY_ENV, "test-only")
+    monkeypatch.setattr(verify, "check_tariff", lambda: None)
+    monkeypatch.setattr(verify.budget, "reserve_request", lambda *a, **kw: "id")
+    monkeypatch.setattr(verify.budget, "finish_request", lambda ident, cost, status: calls.append((cost,status)))
+    monkeypatch.setattr(verify, "_request", lambda *args: {
+        "status":"invalid_response", "usage":{"cost":.11,"prompt_tokens":100}})
+    assert verify.verify_annotation(source(), proposed(), campaign="existing", budget_usd=Decimal("3")) is None
+    assert calls==[(.11,"invalid_response")]
+
+
 def test_reserves_before_single_request_and_settles_unknown_failure(monkeypatch):
     calls = []
-    monkeypatch.setenv("OPENROUTER_API_KEY", "test-only")
+    monkeypatch.setenv(verify.decision_model.KEY_ENV, "test-only")
     monkeypatch.setattr(verify, "check_tariff", lambda: None)
     monkeypatch.setattr(verify.budget, "reserve_request", lambda *a, **kw: calls.append("reserve") or "id")
     monkeypatch.setattr(verify.budget, "finish_request", lambda ident, cost, status: calls.append(("finish", cost, status)))

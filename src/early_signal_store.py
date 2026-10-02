@@ -11,7 +11,8 @@ from sqlalchemy import text
 
 from src.monitoring_registry import MONITORING_COUNTRIES as COUNTRIES
 from src.db import get_session
-from src.early_signals import MECHANISM, SIGNAL, STAGE, source_key
+from src.early_signals import MODEL, VERSION, MECHANISM, SIGNAL, STAGE, source_key
+from src import decision_model
 from src.signal_hypotheses import validate_dossier
 
 
@@ -41,13 +42,33 @@ def _loaded(value):
     return json.loads(value) if isinstance(value, str) else value
 
 
-def _valid_classification(value) -> bool:
-    return (isinstance(value, dict) and set(value) == _CLASSIFICATION_KEYS
+def _valid_classification(value, article=None) -> bool:
+    if not (isinstance(value, dict)
+            and set(value) in (_CLASSIFICATION_KEYS, _CLASSIFICATION_KEYS | {'decisions', 'model', 'version'})
             and all(isinstance(value[key], str) for key in _CLASSIFICATION_KEYS)
             and value["signal"] in SIGNAL and value["mechanism"] in MECHANISM
             and value["stage"] in STAGE
             and value["country"] in (COUNTRIES.keys() | {"none", "unknown"})
-            and value["status"] == "needs_review")
+            and value["status"] == "needs_review"):
+        return False
+    if 'decisions' not in value:
+        return True
+    if value['model'] != MODEL or value['version'] != VERSION:
+        return False
+    decisions = value['decisions']
+    if not isinstance(decisions, dict) or set(decisions) != {'signal', 'mechanism', 'stage', 'country'}:
+        return False
+    try:
+        for suffix, labels in (('signal', SIGNAL), ('mechanism', MECHANISM), ('stage', STAGE),
+                               ('country', COUNTRIES.keys() | {'none', 'unknown'})):
+            answer = decision_model.parse_choice(decisions[suffix], labels)
+            if answer.get('confidence_kind') != 'self_reported':
+                return False
+            if article is not None:
+                decision_model.validate_evidence(answer, {f'article_{article["id"]}': article})
+    except (ValueError, KeyError, TypeError):
+        return False
+    return True
 
 
 def save_dossier(draft: dict, evidence: list[dict], as_of: datetime,
@@ -173,7 +194,7 @@ def save_screenings(records: list[dict]) -> int:
             snapshot = hashlib.sha256(_json(article).encode()).hexdigest()
             if record.get("snapshot_hash") not in (None, snapshot):
                 raise ValueError("screening snapshot changed")
-            if not _valid_classification(record.get("classification")):
+            if not _valid_classification(record.get("classification"), article):
                 raise ValueError("invalid screening classification")
             session.execute(text("""
                 INSERT INTO early_signal_screenings
@@ -205,7 +226,7 @@ def load_screenings(keys: list[str]) -> dict[str, dict]:
             classification = _loaded(row["classification"])
             if (key not in keys or key != source_key(article)
                     or hashlib.sha256(_json(article).encode()).hexdigest() != row["snapshot_hash"]
-                    or not _valid_classification(classification)):
+                    or not _valid_classification(classification, article)):
                 continue
             result[key] = {"article": article, "source_key": key,
                            "snapshot_hash": row["snapshot_hash"],

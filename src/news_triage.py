@@ -1,4 +1,4 @@
-"""Bounded Jev article screening. Labels are discovery leads, not verified claims."""
+"""Bounded article screening. Labels are discovery leads, not verified claims."""
 from __future__ import annotations
 
 from decimal import Decimal
@@ -12,11 +12,12 @@ import subprocess
 from src import agenda_budget as budget, news_triage_store as store
 from src.api_tracker import track_api_call
 from src.countries import COUNTRIES
-from src.jev import _request
+from src import decision_model
 
-MODEL = "typesafe/jev-1.13"
-VERSION = "news-triage-v2"
+MODEL = decision_model.MODEL
+VERSION = "news-triage-v3-chat-grounded"
 MAX_ARTICLES = 8
+MAX_CHAT_ARTICLES = 4
 MAX_REQUEST_BYTES = 24_000
 RELATION = {"direct": "Russia, a Russian person or organization is an explicit main actor or affected party, including action involving an international organization such as NATO. A named other country is not required.",
             "indirect": "Russia is explicitly and meaningfully involved or affected, but the link is contextual rather than the main action.",
@@ -38,17 +39,8 @@ def source_key(article):
 def _country_criteria(country_codes, article=None):
     valid = {code for code in country_codes if isinstance(code, str) and
              re.fullmatch(r"[A-Z]{2}", code) and code != "RU"}
-    if article is not None:
-        source = str(article.get("title") or "") + "\n" + str(article.get("excerpt") or "")[:2000]
-        matched = set()
-        for code in valid:
-            country = COUNTRIES.get(code, {})
-            names = (country.get("name_en"), country.get("name_ru"))
-            if any(name and re.search(r"(?<!\w)" + re.escape(name) + r"(?!\w)", source, re.I)
-                   for name in names):
-                matched.add(code)
-        if matched:
-            valid = matched
+    # A name in one language cannot exclude another country's demonym or city.
+    # The model sees the whole allowed catalog; grounded answers are checked later.
     criteria = {code: COUNTRIES.get(code, {}).get("name_en", code) for code in sorted(valid)}
     criteria.update(none="none", unknown="unclear")
     return criteria
@@ -69,8 +61,9 @@ def _questions(key, countries):
 def prepare_payload(articles, country_codes):
     payload = {"model": MODEL, "state": {"articles": {}}, "questions": {}}
     selected = []
+    limit = MAX_ARTICLES if decision_model.PROVIDER == "jev" else MAX_CHAT_ARTICLES
     for article in articles:
-        if len(selected) >= MAX_ARTICLES:
+        if len(selected) >= limit:
             break
         if type(article.get("id")) is not int or article["id"] <= 0 or not isinstance(article.get("title"), str):
             raise ValueError("invalid article")
@@ -91,23 +84,67 @@ def prepare_payload(articles, country_codes):
     return payload, selected
 
 
-def _probability(value):
-    if type(value) not in (int, float) or not math.isfinite(value) or not 0 <= value <= 1:
-        raise ValueError("invalid probability")
-    return float(value)
-
-
 def _choice(answer, labels):
-    if not isinstance(answer, dict) or set(answer) != {"type", "choice", "confidence", "probabilities"} or answer.get("type") != "choice" or answer.get("choice") not in labels:
-        raise ValueError("invalid choice")
-    probabilities = answer.get("probabilities")
-    if not isinstance(probabilities, dict) or set(probabilities) != set(labels):
-        raise ValueError("invalid probabilities")
-    normalized = {label: _probability(value) for label, value in probabilities.items()}
-    if abs(sum(normalized.values()) - 1) > .05 or normalized[answer["choice"]] < max(normalized.values()) - 1e-9:
-        raise ValueError("inconsistent choice probabilities")
-    return {"choice": answer["choice"], "confidence": _probability(answer.get("confidence")),
-            "probabilities": normalized}
+    return decision_model.parse_choice(answer, labels)
+
+
+def _supported(answer, labels, article, article_key):
+    """A chat lead needs a quote from this exact source snapshot."""
+    if not decision_model.supported_choice(answer, labels):
+        return False
+    if answer.get("confidence_kind") != "self_reported":
+        return True
+    if answer["choice"] in decision_model.ABSTAIN:
+        return True
+    evidence = answer.get("evidence", [])
+    source = article["title"] + "\n" + article["excerpt"][:2000]
+    return bool(evidence) and all(item["article_id"] == article_key and
+                                  item["quote"] in source for item in evidence)
+
+
+def _validate_evidence(answer, article, article_key):
+    if answer.get("confidence_kind") != "self_reported":
+        return
+    source = article["title"] + "\n" + article["excerpt"][:2000]
+    if any(item["article_id"] != article_key or item["quote"] not in source
+           for item in answer.get("evidence", [])):
+        raise ValueError("evidence does not match source article")
+
+
+_COUNTRY_EVIDENCE_ALIASES = {
+    "RU": ("Russia", "России", "Россия", "Россией"),
+    "MD": ("Moldovan", "молдав", "молдов"),
+    "ET": ("Addis Ababa", "Аддис-Абеб"),
+    "US": ("United States", "U.S.", "USA", "American", "США", "американ"),
+}
+
+
+def _country_mentioned(answer, code):
+    country = COUNTRIES.get(code, {})
+    aliases = tuple(name for name in (country.get('name_en'), country.get('name_ru')) if name)
+    aliases += _COUNTRY_EVIDENCE_ALIASES.get(code, ())
+    return any(re.search(r'(?<!\w)' + re.escape(alias) + r'(?!\w)', item['quote'], re.I)
+               for alias in aliases for item in answer.get('evidence', []))
+
+
+def _country_supported(answer, labels, article, article_key):
+    if not _supported(answer, labels, article, article_key):
+        return False
+    if answer.get("confidence_kind") != "self_reported":
+        return True
+    code = answer["choice"]
+    if code in {"none", "unknown"}:
+        return True
+    if _country_mentioned(answer, code):
+        return True
+    if any(_country_mentioned(answer, candidate) for candidate in set(COUNTRIES) | {'RU'}
+           if candidate != code):
+        # A quote identifying Moldova cannot establish a US action. Keep this
+        # contradiction guard without making English/Russian keywords a gate.
+        return False
+    # Local languages, cities and demonyms may identify a country without its
+    # English/Russian name. Let a strongly grounded model nominate it for review.
+    return answer['confidence'] >= .90
 
 
 def parse_response(data, articles, country_codes):
@@ -128,30 +165,46 @@ def parse_response(data, articles, country_codes):
                                   country_secondary=country_labels)
         choices = {suffix: _choice(data["answers"][prefix + suffix], labels)
                    for suffix, labels in labels_for_article.items()}
+        article_key = "article_" + str(article["id"])
+        for choice in choices.values():
+            _validate_evidence(choice, article, article_key)
         primary = choices["country_primary"]["choice"]
         secondary = choices["country_secondary"]["choice"]
-        if primary not in {"none", "unknown"} and (choices["country_primary"]["confidence"] < .5 or
-                choices["country_primary"]["probabilities"][primary] < .5):
+        if primary not in {"none", "unknown"} and not _country_supported(
+                data["answers"][prefix + "country_primary"], country_labels, article, article_key):
             primary = "unknown"
-        if secondary not in {"none", "unknown"} and (choices["country_secondary"]["confidence"] < .5 or
-                choices["country_secondary"]["probabilities"][secondary] < .5):
+        if secondary not in {"none", "unknown"} and not _country_supported(
+                data["answers"][prefix + "country_secondary"], country_labels, article, article_key):
             secondary = "unknown"
         countries = list(dict.fromkeys(code for code in (primary, secondary) if code not in {"none", "unknown"}))
         # Keep the secondary decision for audit, but never promote it when the
         # primary country failed the confidence threshold.
         if primary in {"none", "unknown"}:
             countries = []
+        unverified_countries = [code for suffix, code in (
+            ('country_primary', primary), ('country_secondary', secondary))
+            if code in countries and choices[suffix].get('confidence_kind') == 'self_reported'
+            and not _country_mentioned(choices[suffix], code)]
         relation = choices["relation"]["choice"]
-        if choices["relation"]["confidence"] < .5 or choices["relation"]["probabilities"][relation] < .5:
+        if not _supported(data["answers"][prefix + "relation"], RELATION, article, article_key):
             relation = "uncertain"
         event_type = choices["event_type"]["choice"]
-        if choices["event_type"]["confidence"] < .5 or choices["event_type"]["probabilities"][event_type] < .5:
+        if not _supported(data["answers"][prefix + "event_type"], EVENT_TYPE, article, article_key):
             event_type = "other"
-        classification = {"russia_relation": relation, "topic": choices["topic"]["choice"],
-            "event_type": event_type, "actor_type": choices["actor_type"]["choice"],
+        topic = choices["topic"]["choice"]
+        if not _supported(data["answers"][prefix + "topic"], TOPIC, article, article_key):
+            topic = "other"
+        actor_type = choices["actor_type"]["choice"]
+        if not _supported(data["answers"][prefix + "actor_type"], ACTOR_TYPE, article, article_key):
+            actor_type = "other"
+        classification = {"russia_relation": relation, "topic": topic,
+            "event_type": event_type, "actor_type": actor_type,
             "country_primary": primary, "country_secondary": secondary, "countries": countries,
-            "uncertain": relation == "uncertain" or (relation in {"direct", "indirect"} and not countries),
+            "uncertain": bool(unverified_countries) or relation == "uncertain" or (relation in {"direct", "indirect"} and not countries),
             "decisions": choices}
+        if unverified_countries:
+            # A local name/city is a provisional model nomination, not verified geography.
+            classification['country_evidence_unverified'] = list(dict.fromkeys(unverified_countries))
         records.append({"article": article, "classification": classification})
     usage = data.get("usage") or {}
     if not isinstance(usage, dict):
@@ -163,9 +216,11 @@ def parse_response(data, articles, country_codes):
 
 
 def check_tariff():
-    # Keep the provider guard shared with the already authorized Jev campaign.
-    from src.agenda_worker import check_tariff as shared_check_tariff
-    shared_check_tariff()
+    decision_model.check_tariff()
+
+
+def _request(payload, api_key, timeout):
+    return decision_model.request(payload, api_key, timeout)
 
 
 def run_triage_cycle(*, budget_usd: Decimal, campaign: str, max_calls: int = 12,
@@ -180,7 +235,7 @@ def run_triage_cycle(*, budget_usd: Decimal, campaign: str, max_calls: int = 12,
     stats = {"status": "ok", "calls": 0, "saved": 0, "invalid": 0, "stale": 0}
     if budget_usd == 0:
         return {**stats, "status": "disabled"}
-    api_key = os.environ.get("OPENROUTER_API_KEY")
+    api_key = os.environ.get(decision_model.KEY_ENV)
     if not api_key:
         return {**stats, "status": "missing_key"}
     candidates, country_codes = store.load_candidates(model=MODEL, version=VERSION, article_ids=article_ids)
@@ -203,7 +258,7 @@ def run_triage_cycle(*, budget_usd: Decimal, campaign: str, max_calls: int = 12,
             check_tariff()
             tariff_checked = True
         request_id = budget.reserve_request(campaign, budget_usd, hashlib.sha256(encoded).hexdigest(),
-            pair_keys=[source_key(row) for row in selected], reservation_usd=Decimal(".01"))
+            pair_keys=[source_key(row) for row in selected], reservation_usd=decision_model.RESERVATION_USD)
         if request_id is None:
             stats["status"] = "budget_exhausted"
             break
@@ -211,17 +266,20 @@ def run_triage_cycle(*, budget_usd: Decimal, campaign: str, max_calls: int = 12,
         outcome, cost, usage = "error", None, {}
         records = None
         try:
-            response = _request(payload, api_key, 5)
+            response = _request(payload, api_key, 45)
+            raw_usage = response.get("usage")
+            if raw_usage is None and isinstance(response.get("data"), dict):
+                raw_usage = response["data"].get("usage")
+            if isinstance(raw_usage, dict):
+                usage = raw_usage
+                cost = usage.get("cost")
             outcome = response.get("status", "error")
             if outcome != "ok":
                 raise ValueError("provider did not return decisions")
-            usage = response["data"].get("usage") or {}
-            if not isinstance(usage, dict):
-                usage = {}
+            if raw_usage is not None and not isinstance(raw_usage, dict):
                 raise ValueError("invalid usage")
-            cost = usage.get("cost")
             records, cost = parse_response(response["data"], selected, country_codes)
-            if cost is not None and cost > .01:
+            if cost is not None and Decimal(str(cost)) > decision_model.RESERVATION_USD:
                 records = None
                 raise ValueError("cost exceeds triage reservation")
         except (ValueError, TypeError, KeyError, AttributeError, subprocess.SubprocessError, OSError):
@@ -231,9 +289,9 @@ def run_triage_cycle(*, budget_usd: Decimal, campaign: str, max_calls: int = 12,
             stats["status"] = "partial"
         finally:
             budget.finish_request(request_id, cost, outcome)
-            track_api_call(service="openrouter", endpoint="/alpha/decisions", model=MODEL,
+            track_api_call(service=decision_model.SERVICE, endpoint=decision_model.ENDPOINT, model=MODEL,
                 script="build_agendas.py", tokens_in=usage.get("input_tokens", usage.get("prompt_tokens", 0)),
-                cost=cost if type(cost) in (int, float) and 0 <= cost <= .01 else None,
+                cost=cost if type(cost) in (int, float) and math.isfinite(cost) and cost >= 0 else None,
                 status="ok" if outcome == "ok" else "error", error=None if outcome == "ok" else outcome)
         if records is None:
             # A provider or parsing failure may repeat for every remaining

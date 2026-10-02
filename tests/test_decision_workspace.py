@@ -155,6 +155,7 @@ def test_postgres_projection_counts_country_involvement_without_publisher_confus
     from sqlalchemy.orm import sessionmaker
     import src.decision_workspace as module
     from src.decision_extraction import MODEL, VERSION
+    from src.news_triage import MODEL as TRIAGE_MODEL, VERSION as TRIAGE_VERSION
 
     engine = create_engine(os.environ["GEO_PULSE_TEST_DATABASE_URL"])
     schema = "decision_test_" + uuid4().hex[:12]
@@ -278,8 +279,9 @@ def test_postgres_projection_counts_country_involvement_without_publisher_confus
                 SELECT id,title,LEFT(body,2000),
                 '{"countries":["RS"],"country_primary":"RS","russia_relation":"uncertain","topic":"sanctions",
                   "event_type":"proposal","actor_type":"government","uncertain": true}'::jsonb,
-                'typesafe/jev-1.13','news-triage-v2',:as_of
-                FROM articles WHERE id IN (1,2,3,4,7,8)"""), {"as_of": NOW})
+                :triage_model,:triage_version,:as_of
+                FROM articles WHERE id IN (1,2,3,4,7,8)"""),
+                {"as_of": NOW, "triage_model": TRIAGE_MODEL, "triage_version": TRIAGE_VERSION})
             # Stale classification must not count as processed or visible.
             connection.execute(text("UPDATE article_news_triage SET source_title='stale' WHERE article_id=2"))
         refreshed = load_decision_workspace("RS", now=NOW)

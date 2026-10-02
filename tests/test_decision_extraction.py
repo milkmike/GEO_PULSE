@@ -96,7 +96,7 @@ def test_current_triage_leads_precede_legacy_relevance():
 def test_triage_selection_version_matches_producer():
     from src import news_triage
     assert extraction.TRIAGE_MODEL == news_triage.MODEL
-    assert extraction.TRIAGE_VERSION == news_triage.VERSION == "news-triage-v2"
+    assert extraction.TRIAGE_VERSION == news_triage.VERSION == "news-triage-v3-chat-grounded"
 
 
 def test_source_key_changes_with_exact_input_and_limit_validation():

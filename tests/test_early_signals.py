@@ -92,7 +92,7 @@ def test_payload_is_bounded_and_keeps_full_country_catalog_without_publisher_geo
     payload, selected = screening.prepare_payload(rows, {"RS", "GE", "RU"})
     assert 1 <= len(selected) <= 8
     assert len(screening.encode(payload)) <= 24000
-    assert payload["model"] == "typesafe/jev-1.13"
+    assert payload["model"] == screening.MODEL
     assert set(payload["questions"]["article_1_country"]["criteria"]) == {"RS", "GE", "RU", "none", "unknown"}
     assert payload["state"]["articles"]["article_1"] == {"title": "Russia absent here", "excerpt": "x"*2000}
     assert "Gazette" not in screening.encode(payload).decode()
@@ -132,7 +132,7 @@ def test_changed_screening_version_invalidates_prior_source_key(monkeypatch):
         patch.setattr(screening, 'VERSION', 'early-signal-v3')
         old_catalog_key = screening.source_key(row)
     assert screening.source_key(row) != old_catalog_key
-    assert screening.VERSION == "early-signal-v4-global"
+    assert screening.VERSION == "early-signal-v5-grounded-chat"
     assert screening.source_key(row) != screening.source_key(dict(row, excerpt="Different report"))
 
 
@@ -168,6 +168,29 @@ def test_parser_preserves_provisional_decisions_and_cost():
     assert records[0]["classification"]["signal"] == "change"
     assert records[0]["classification"]["country"] == "RS"
     assert records[0]["classification"]["status"] == "needs_review"
+
+
+def test_screening_uses_selected_decision_identity():
+    from src import decision_model
+    assert screening.MODEL == decision_model.MODEL
+
+
+def test_chat_screening_has_grounded_evidence_without_invented_probabilities():
+    row = article(country="US", title="Молдова ищет новые поставки газа",
+                  excerpt="Молдова обсуждает поставки газа. Решение пока не принято.")
+    payload, selected = screening.prepare_payload([row], {"MD", "US"})
+    labels = dict(signal="change", mechanism="trade", stage="proposal", country="MD")
+    data = {"answers": {key: {"type": "choice", "choice": labels[key.rsplit('_', 1)[-1]],
+            "confidence": .95, "confidence_kind": "self_reported", "evidence": [
+                {"article_id": "article_1", "quote": "Молдова обсуждает поставки газа."}]}
+            for key in payload['questions']}, "usage": {"cost": .001}}
+    records, _ = screening.parse_response(data, selected, {"MD", "US"})
+    assert records[0]['classification']['country'] == 'MD'
+    assert records[0]['classification']['decisions']['country']['confidence_kind'] == 'self_reported'
+    assert records[0]['classification']['decisions']['country']['probabilities'] == {}
+    data['answers']['article_1_country']['evidence'][0]['quote'] = 'United States agreed'
+    with pytest.raises(ValueError, match='evidence'):
+        screening.parse_response(data, selected, {"MD", "US"})
 
 
 def test_low_confidence_decisions_become_uncertain_or_unknown():

@@ -1,4 +1,4 @@
-"""Pure, bounded article-first retrieval and strict Jev relation decisions.
+"""Pure, bounded article-first retrieval and strict relation decisions.
 
 Retrieval only nominates suspects. It never establishes event identity, factual
 truth, or membership. All candidates must be judged against the stable anchor.
@@ -14,9 +14,10 @@ from bisect import bisect_left
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
+from src import decision_model
 
-MODEL = 'typesafe/jev-1.13'
-VERSION = 'article-agenda-v1'
+MODEL = decision_model.MODEL
+VERSION = 'article-agenda-v2'
 MAX_ARTICLES = 30_000
 MAX_PAIRS = 8
 MAX_REQUEST_BYTES = 24_000
@@ -102,7 +103,7 @@ def pair_cache_key(anchor, candidate):
     """Directional, versioned content fingerprint; changes invalidate old decisions."""
     def fingerprint(article):
         return {'state': _article_state(article), 'content_hash': _text(article.get('content_hash'), 256)}
-    return hashlib.sha256(_encode({'version': VERSION, 'model': MODEL,
+    return hashlib.sha256(_encode({'version': VERSION, 'model': decision_model.MODEL,
                                   'anchor': fingerprint(anchor), 'candidate': fingerprint(candidate)})).hexdigest()
 
 
@@ -128,7 +129,7 @@ def _similarity(left, right):
     if len(shared) >= 2:
         return 1.0 + len(shared) / max(len(stems_left | stems_right), 1)
     # One distinctive long name can nominate a suspect even in another language.
-    # This deliberately trades precision for recall; Jev must decide membership.
+    # This deliberately trades precision for recall; the model must decide membership.
     if any(len(token) >= 8 and token in right for token in left):
         return .8
     long_left = [t for t in left if len(t) >= 8]
@@ -248,10 +249,10 @@ def candidate_group_page(articles, existing_groups=(), max_groups=30, max_member
 
 
 def prepare_pair_payload(anchor, candidates):
-    """Return (Decisions API payload, exact pair metadata), at most eight pairs."""
+    """Return a typed decision payload and exact pair metadata, at most eight pairs."""
     if not _valid_article(anchor):
         raise ValueError('invalid_anchor')
-    payload = {'model': MODEL, 'state': {'articles': {str(anchor['id']): _article_state(anchor)}}, 'questions': {}}
+    payload = {'model': decision_model.MODEL, 'state': {'articles': {str(anchor['id']): _article_state(anchor)}}, 'questions': {}}
     pairs = {}
     for candidate in candidates:
         if not _valid_article(candidate) or candidate['id'] == anchor['id']:
@@ -276,7 +277,9 @@ def prepare_pair_payload(anchor, candidates):
             del payload['state']['articles'][str(candidate['id'])]
             break
         pairs[key] = {'anchor_id': anchor['id'], 'article_id': candidate['id'],
-                      'cache_key': pair_cache_key(anchor, candidate)}
+                      'cache_key': pair_cache_key(anchor, candidate),
+                      '_sources': {str(anchor['id']): payload['state']['articles'][str(anchor['id'])],
+                                   str(candidate['id']): payload['state']['articles'][str(candidate['id'])]}}
         if len(pairs) >= MAX_PAIRS:
             break
     return payload, pairs
@@ -289,20 +292,59 @@ def _probability(value):
 
 
 def parse_pair_response(data, expected_pairs):
-    """Reject the entire response if any question/label/probability is invalid."""
+    """Reject the entire response if any choice, confidence or citation is invalid."""
     if not isinstance(data, dict) or not isinstance(data.get('answers'), dict) or set(data['answers']) != set(expected_pairs):
         raise ValueError('unexpected_questions')
+    if data.get('model', decision_model.MODEL) != decision_model.MODEL:
+        raise ValueError('unexpected_model')
     decisions = []
     for key, pair in expected_pairs.items():
         answer = data['answers'][key]
         if not isinstance(answer, dict) or answer.get('type') != 'choice' or not isinstance(answer.get('choice'), str) or answer['choice'] not in CRITERIA:
             raise ValueError('invalid_choice')
-        probabilities = answer.get('probabilities')
-        if not isinstance(probabilities, dict) or set(probabilities) != set(CRITERIA):
-            raise ValueError('invalid_labels')
-        decisions.append({**pair, 'question_id': key, 'choice': answer['choice'],
-                          'confidence': _probability(answer.get('confidence')),
-                          'probabilities': {label: _probability(value) for label, value in probabilities.items()}})
+        confidence = _probability(answer.get('confidence'))
+        base = {k: v for k, v in pair.items() if not k.startswith('_')}
+        if answer.get('confidence_kind') == 'self_reported':
+            if answer.get('probabilities') not in (None, {}):
+                raise ValueError('fabricated_probabilities')
+            evidence = answer.get('evidence')
+            if not isinstance(evidence, list) or len(evidence) > 4:
+                raise ValueError('invalid_evidence')
+            sources = pair.get('_sources')
+            if not isinstance(sources, dict):
+                raise ValueError('missing_evidence_sources')
+            grounded = set()
+            clean_evidence = []
+            seen = set()
+            for citation in evidence:
+                if not isinstance(citation, dict) or set(citation) != {'article_id', 'quote'}:
+                    raise ValueError('invalid_evidence')
+                identity, quote = citation['article_id'], citation['quote']
+                if not isinstance(identity, str) or identity not in sources or not isinstance(quote, str) or not 4 <= len(quote.strip()) <= 320 or (identity, quote) in seen:
+                    raise ValueError('invalid_evidence')
+                source = sources[identity]
+                if quote not in source['title'] and quote not in source['excerpt']:
+                    raise ValueError('ungrounded_evidence')
+                grounded.add(identity)
+                seen.add((identity, quote))
+                clean_evidence.append({'article_id': identity, 'quote': quote})
+            if answer['choice'] != 'uncertain' and grounded != set(sources):
+                raise ValueError('missing_pair_evidence')
+            decisions.append(base | {'question_id': key, 'choice': answer['choice'],
+                                     'confidence': confidence, 'confidence_kind': 'self_reported',
+                                     'probabilities': {}, 'evidence': clean_evidence,
+                                     'evidence_grounded': grounded == set(sources),
+                                     'model': decision_model.MODEL})
+        else:
+            if answer.get('confidence_kind') not in (None, 'native_probability'):
+                raise ValueError('invalid_confidence_kind')
+            probabilities = answer.get('probabilities')
+            if not isinstance(probabilities, dict) or set(probabilities) != set(CRITERIA):
+                raise ValueError('invalid_labels')
+            decisions.append(base | {'question_id': key, 'choice': answer['choice'],
+                                     'confidence': confidence,
+                                     'probabilities': {label: _probability(value) for label, value in probabilities.items()},
+                                     'model': decision_model.MODEL})
     usage = data.get('usage', {})
     if not isinstance(usage, dict):
         raise ValueError('invalid_usage')
@@ -317,6 +359,13 @@ def accepted_decision(decision):
     if not isinstance(decision, dict) or not isinstance(decision.get('choice'), str) or decision['choice'] not in {'same_event', 'development'}:
         return False
     try:
+        if decision.get('confidence_kind') == 'self_reported':
+            evidence = decision.get('evidence')
+            if not isinstance(evidence, list) or not decision.get('evidence_grounded'):
+                return False
+            expected = {str(decision.get('anchor_id')), str(decision.get('article_id'))}
+            cited = {item.get('article_id') for item in evidence if isinstance(item, dict) and isinstance(item.get('quote'), str) and item['quote']}
+            return cited == expected and _probability(decision.get('confidence')) >= .90 and decision.get('probabilities') == {}
         probabilities = decision.get('probabilities')
         if not isinstance(probabilities, dict) or set(probabilities) != set(CRITERIA):
             return False

@@ -8,13 +8,12 @@ from sqlalchemy import text
 from src.db import get_session
 from src.api.public_urls import safe_public_url
 
-from src.agenda_discovery import VERSION, accepted_decision
+from src.agenda_discovery import MODEL, VERSION, accepted_decision
 
-MODEL = 'typesafe/jev-1.13'
-# Conservatively include every Jev state input, plus publisher identity. Epochs
+# Include the decision identity and every state input, plus publisher identity. Epochs
 # keep the persisted signature independent of a reader's session time zone.
 CONTENT_SQL = f"""md5(jsonb_build_array(
- '{VERSION}', ar.id, COALESCE(ar.title,''),
+ '{MODEL}', '{VERSION}', ar.id, COALESCE(ar.title,''),
  LEFT(COALESCE(NULLIF(ar.summary,''),ar.body,''),1200),
  EXTRACT(EPOCH FROM ar.published_at),EXTRACT(EPOCH FROM ar.collected_at),
  src.id,TRIM(src.country_code))::text)"""
@@ -46,7 +45,7 @@ VALID_MEMBERS = f"""
  JOIN ({CURRENT_ARTICLES}) anchor ON anchor.id=g.anchor_article_id
  JOIN news_agenda_articles seed ON seed.article_id=g.anchor_article_id
    AND seed.agenda_id=g.id AND seed.relation='seed'
- WHERE m.content_hash=ar.content_hash AND m.anchor_hash=anchor.content_hash
+ WHERE g.model='{MODEL}' AND m.content_hash=ar.content_hash AND m.anchor_hash=anchor.content_hash
    AND seed.content_hash=anchor.content_hash AND seed.anchor_hash=anchor.content_hash
 """
 
@@ -116,8 +115,9 @@ def get_discovery_state():
           SELECT stats->>'discovery_cursor' FROM news_agenda_runs
           WHERE jsonb_typeof(stats->'discovery_cursor')='number'
             AND stats->>'discovery_cursor' ~ '^[0-9]{1,10}$'
+            AND stats->>'model'=:model AND stats->>'version'=:version
           ORDER BY id DESC LIMIT 1
-        """)).scalar_one_or_none()
+        """), {'model':MODEL,'version':VERSION}).scalar_one_or_none()
         rows = session.execute(text("""
           SELECT cache_key,decision FROM news_agenda_decisions
           WHERE created_at>=now()-interval '72 hours'
@@ -144,10 +144,28 @@ def save_decisions(decisions):
              {**item,'decision':json.dumps(item)})
 
 
+def _grounded_pair(decision, anchor, article):
+    if decision.get('confidence_kind') != 'self_reported':
+        return True
+    sources = {str(anchor['id']):anchor, str(article['id']):article}
+    grounded = set()
+    for item in decision.get('evidence', []):
+        if not isinstance(item, dict):
+            return False
+        source = sources.get(item.get('article_id'))
+        quote = item.get('quote')
+        if (not source or not isinstance(quote, str) or not quote
+                or (quote not in source['title'] and quote not in source['excerpt'])):
+            return False
+        grounded.add(item['article_id'])
+    return grounded == set(sources)
+
+
 def attach_decisions(anchor, decisions, articles_by_id):
     # Recheck acceptance and exact article snapshots after the network wait.
-    accepted=[d for d in decisions if accepted_decision(d) and d['anchor_id']==anchor['id']
-              and d['article_id'] in articles_by_id and d['article_id']!=anchor['id']]
+    accepted=[d for d in decisions if d.get('model')==MODEL and accepted_decision(d) and d['anchor_id']==anchor['id']
+              and d['article_id'] in articles_by_id and d['article_id']!=anchor['id']
+              and _grounded_pair(d, anchor, articles_by_id[d['article_id']])]
     if not accepted:
         return None
     with get_session() as session:
@@ -175,7 +193,7 @@ def attach_decisions(anchor, decisions, articles_by_id):
         if not accepted:
             return None
         gid=session.execute(text("""INSERT INTO news_agendas(anchor_article_id,model)
-         VALUES(:id,:model) ON CONFLICT(anchor_article_id) DO UPDATE SET updated_at=now() RETURNING id"""),
+         VALUES(:id,:model) ON CONFLICT(anchor_article_id) DO UPDATE SET model=EXCLUDED.model,updated_at=now() RETURNING id"""),
          {'id':anchor['id'],'model':MODEL}).scalar_one()
         members=[(anchor,'seed',None,{})]+[(articles_by_id[d['article_id']],d['choice'],d['confidence'],d['probabilities']) for d in accepted]
         for article,relation,confidence,probabilities in members:
@@ -191,6 +209,7 @@ def attach_decisions(anchor, decisions, articles_by_id):
 
 
 def record_run(status, stats):
+    stats = {**stats, 'model':MODEL, 'version':VERSION}
     with get_session() as session:
         session.execute(text('INSERT INTO news_agenda_runs(status,stats) VALUES(:status,CAST(:stats AS jsonb))'),
                         {'status':status,'stats':json.dumps(stats,default=str)})
