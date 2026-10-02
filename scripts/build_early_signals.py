@@ -42,6 +42,7 @@ def main():
     monitor.add_argument('--budget-usd', type=Decimal, default=Decimal(os.getenv('EARLY_SIGNAL_BUDGET_USD', '0')))
     monitor.add_argument('--max-calls', type=int, default=4)
     monitor.add_argument('--max-drafts', type=int, default=0)
+    monitor.add_argument('--max-source-searches', type=int, choices=range(5), default=4)
     monitor.add_argument('--loop', action='store_true')
     monitor.add_argument('--interval', type=int, default=3600)
     writer = sub.add_parser('write')
@@ -61,8 +62,11 @@ def main():
             try:
                 if args.command == 'monitor':
                     full = locked_global_cycle(budget_usd=args.budget_usd, max_screen_calls=args.max_calls,
-                                               max_drafts=args.max_drafts)
+                                               max_drafts=args.max_drafts, max_source_searches=args.max_source_searches)
                     report = {key: full[key] for key in ('as_of', 'status', 'scope_count', 'screening', 'writer', 'nominated') if key in full}
+                    if 'source_research' in full:
+                        report['source_research'] = {key: full['source_research'][key] for key in
+                            ('status', 'countries_attempted', 'leads_saved', 'reason') if key in full['source_research']}
                 else:
                     report = locked_screening_cycle(budget_usd=args.budget_usd, max_calls=args.max_calls)
             except Exception as exc:

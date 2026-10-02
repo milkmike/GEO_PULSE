@@ -15,6 +15,7 @@ def setup(monkeypatch):
         {'code': 'AD', 'name_ru': 'Андорра', 'sampled_articles_7d': 0}],
         'articles': [], 'limits': {'counts_are_bounded': True}}
     monkeypatch.setattr(monitor, 'load_global_monitoring', lambda **kw: snapshot)
+    monkeypatch.setattr(monitor, 'run_source_research', lambda countries, **kw: {'status': 'ok', 'countries_attempted': 0})
     monkeypatch.setattr(monitor.store, 'current_screenings', lambda articles: [])
     monkeypatch.setattr(monitor, 'plan_candidates', lambda records, articles, **kw: [])
     monkeypatch.setattr(monitor.store, 'known_work_keys', lambda: set())
@@ -74,6 +75,17 @@ def test_provider_failure_stops_writer_batch_and_retains_error_state(monkeypatch
 def test_bad_bounds_fail_before_reading_country_data(monkeypatch):
     import pytest
     monkeypatch.setattr(monitor, 'load_global_monitoring', lambda **kw: (_ for _ in ()).throw(AssertionError('DB read')))
-    for kwargs in ({'budget_usd': Decimal('20')}, {'max_drafts': 3}, {'max_screen_calls': 0}):
+    for kwargs in ({'budget_usd': Decimal('20')}, {'max_drafts': 3}, {'max_screen_calls': 0}, {'max_source_searches': 5}):
         with pytest.raises(ValueError):
             monitor.run_global_cycle(**kwargs)
+
+
+def test_source_research_failure_cannot_erase_global_coverage(monkeypatch):
+    events = setup(monkeypatch)
+    def fail(*args, **kwargs):
+        raise OSError('untrusted remote body')
+    monkeypatch.setattr(monitor, 'run_source_research', fail)
+    result = monitor.run_global_cycle(as_of=NOW)
+    assert result['source_research'] == {'status': 'blocked', 'reason': 'research_unavailable'}
+    assert events[-1][0] == 'save' and result['scope_count'] == 3
+    assert 'untrusted' not in str(result)
