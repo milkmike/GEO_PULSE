@@ -20,6 +20,20 @@ def test_budget_reserved_before_request_and_price_ceiling_sent(monkeypatch):
     assert calls[0]["provider"]["max_price"] == {"prompt": 1, "completion": 2, "request": 0}
     assert calls[0]["provider"]["allow_fallbacks"] is False
     assert calls[0]["reasoning"] == {"enabled": False}
+    assert client.requests[0]["error_reason"] == "transport_error"
+
+
+def test_malformed_provider_usage_is_recorded_without_response_text(monkeypatch):
+    from src.budgeted_chat import BudgetedChat
+    monkeypatch.setattr(httpx, "post", lambda url, **kwargs: httpx.Response(200,
+        request=httpx.Request("POST", url), json={
+            "choices": [{"finish_reason": "stop", "message": {"content": "secret source text"}}],
+            "usage": ["malformed"]}))
+    client = BudgetedChat("test", Decimal("0.10"))
+    with pytest.raises(Exception):
+        client.chat("Sample")
+    assert client.requests[0]["error_reason"] == "invalid_provider_usage"
+    assert "secret source text" not in str(client.requests[0])
 
 
 def test_large_input_rejected_before_network(monkeypatch):

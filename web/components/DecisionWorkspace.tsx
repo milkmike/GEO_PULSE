@@ -7,6 +7,7 @@ import { api } from "@/lib/api";
 import type { DecisionEvidence, DecisionWorkspaceResponse } from "@/lib/decisionTypes";
 
 import NewsReadingList, { newsDateTime as dateTime } from "./NewsReadingList";
+import EarlySignalPanel from "./EarlySignalPanel";
 
 type LoadState = "loading" | "ready" | "refreshing" | "refreshError" | "error";
 
@@ -219,6 +220,8 @@ export default function DecisionWorkspace({ renderMap, mapControls, activeMapFil
           )}
         </aside>
       </div>
+
+      {initialized && <EarlySignalPanel country={selectedCountry} availableCountry={currentCountry || null} countryName={countryOptions.find((item) => item.code === currentCountry)?.name ?? content?.country.name} refreshToken={reload} />}
 
       <div id="country-overview" className="mt-8 min-w-0 scroll-mt-5 border-t border-line pt-5" aria-busy={state === "loading" || state === "refreshing"}>
           {state === "loading" && <div role="status" className="card flex min-h-48 items-center gap-3 px-5 text-sm text-dim"><LoaderCircle aria-hidden="true" size={17} className="animate-spin motion-reduce:animate-none" />Загружаем обзор…</div>}
