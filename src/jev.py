@@ -21,6 +21,10 @@ VERSION = "story-pair-shadow-v1"
 MAX_ARTICLES = 200
 MAX_PAIRS = 20
 MAX_REQUEST_BYTES = 24_000
+PROVIDER_PRICE_GUARD = {
+    "max_price": {"prompt": 0.1, "completion": 0, "request": 0},
+    "allow_fallbacks": False,
+}
 CRITERIA = {
     "same_event": "Both reports describe the same concrete occurrence, with compatible actors, action, place and event time; different reporting stances are allowed.",
     "different_event": "The reports describe distinct occurrences, dates or actions. Sharing a topic, country, person or organization alone is not the same event.",
@@ -114,12 +118,26 @@ def _prepare(articles, clusters):
     return payload, pairs
 
 
+def guarded_decisions_payload(payload):
+    """Route only the pinned Jev model under a server-enforced provider ceiling."""
+    if not isinstance(payload, dict) or payload.get("model") != MODEL:
+        raise ValueError("invalid Jev model")
+    source = {key: value for key, value in payload.items() if key != "provider"}
+    if len(_encode(source)) > MAX_REQUEST_BYTES:
+        raise ValueError("Jev payload exceeds request bound")
+    return {**source, "provider": {
+        "max_price": dict(PROVIDER_PRICE_GUARD["max_price"]),
+        "allow_fallbacks": False,
+    }}
+
+
 def _request(payload, api_key, timeout):
     # Killing the child also interrupts blocking DNS and slow response streams.
     # Credentials travel over stdin, never command-line arguments or logs.
+    guarded = guarded_decisions_payload(payload)
     result = subprocess.run(
         [sys.executable, str(Path(__file__).with_name("jev_http.py"))],
-        input=_encode({"payload": payload, "api_key": api_key, "timeout": timeout}),
+        input=_encode({"payload": guarded, "api_key": api_key, "timeout": timeout}),
         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
         timeout=timeout, check=True,
     )

@@ -4,6 +4,7 @@ import copy
 import json
 import time
 import subprocess
+from types import SimpleNamespace
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
@@ -20,6 +21,34 @@ def mock_http(monkeypatch, handler):
     monkeypatch.setattr(worker.httpx, "Client", lambda **kwargs: client(
         transport=httpx.MockTransport(handler), **kwargs))
     monkeypatch.setattr(jev, "_request", worker.send)
+
+
+def test_every_jev_request_sends_server_price_guard(monkeypatch):
+    import src.jev as jev
+
+    calls = []
+    def run(*args, **kwargs):
+        calls.append(json.loads(kwargs["input"]))
+        return SimpleNamespace(stdout=b'{"status":"timeout"}')
+    monkeypatch.setattr(jev.subprocess, "run", run)
+    payload = {"model": jev.MODEL, "state": {}, "questions": {},
+               "provider": {"max_price": {"prompt": 99}, "allow_fallbacks": True}}
+    assert jev._request(payload, "test-only", 5) == {"status": "timeout"}
+    assert calls[0]["payload"]["provider"] == {
+        "max_price": {"prompt": 0.1, "completion": 0, "request": 0},
+        "allow_fallbacks": False,
+    }
+    assert payload["provider"]["allow_fallbacks"] is True  # Caller was not mutated.
+
+
+def test_jev_request_rejects_wrong_model_or_oversize_before_transport(monkeypatch):
+    import src.jev as jev
+    monkeypatch.setattr(jev.subprocess, "run", lambda *a, **k: pytest.fail("unguarded request"))
+    with pytest.raises(ValueError):
+        jev._request({"model": "other/model", "state": {}, "questions": {}}, "test-only", 5)
+    with pytest.raises(ValueError):
+        jev._request({"model": jev.MODEL, "state": {"text": "x" * 24_000},
+                      "questions": {}}, "test-only", 5)
 
 
 def articles():
