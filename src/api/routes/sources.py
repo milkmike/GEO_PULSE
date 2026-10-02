@@ -12,6 +12,7 @@ from pydantic import BaseModel, field_validator
 from sqlalchemy import text
 
 from src.db import get_session, Source
+from src.monitoring_registry import MONITORING_COUNTRIES
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/sources", tags=["sources"])
@@ -38,6 +39,13 @@ def _cache_set(key, payload, ttl):
 
 
 # ---------- Schemas ----------
+def _monitoring_country_code(value: str) -> str:
+    code = value.strip().upper()
+    if code not in MONITORING_COUNTRIES:
+        raise ValueError("Выберите страну международного мониторинга")
+    return code
+
+
 class SourceCreate(BaseModel):
     name: str
     url: str
@@ -66,11 +74,7 @@ class SourceCreate(BaseModel):
     @field_validator("country_code")
     @classmethod
     def validate_cc(cls, v: str) -> str:
-        allowed = {"KZ", "AM", "UZ", "KG", "TJ", "TM", "AZ", "GE", "MD", "BY"}
-        v = v.upper()
-        if v not in allowed:
-            raise ValueError(f"Код страны должен быть одним из: {', '.join(sorted(allowed))}")
-        return v
+        return _monitoring_country_code(v)
 
 
 class SourceUpdate(BaseModel):
@@ -83,6 +87,11 @@ class SourceUpdate(BaseModel):
     config: Optional[dict] = None
     active: Optional[bool] = None
     tier: Optional[str] = None
+
+    @field_validator("country_code")
+    @classmethod
+    def validate_cc(cls, value: Optional[str]) -> Optional[str]:
+        return _monitoring_country_code(value) if value is not None else None
 
 
 # ---------- Helpers ----------

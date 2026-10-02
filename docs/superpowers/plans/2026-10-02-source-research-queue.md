@@ -9,6 +9,7 @@ An all-world inventory must lead to work on missing local sources without an ana
 - Search country entities by exact ISO alpha-2, verify P297, then search newspaper/news agency entities with that country's P17. Validate claims, retain Wikidata provenance/revision, and record safe public website URLs as unverified leads. Do not fetch those websites, fabricate RSS URLs, infer trust/ownership/independence or promote candidates into sources.yaml.
 - API failure records a content-free blocked task and preserves coverage and model work. Model budgets, production key location and public dossier release gates stay unchanged.
 - Existing vetted SourceCandidate/feed/domain checks remain the admission path. A global gap/research queue is not proof that all countries already have usable sources.
+- Administrative source country validation shares the foreign monitoring catalog; a legacy ten-country CIS whitelist must not reject reviewed publishers from other countries. Updates normalize and validate codes too.
 - Monitoring-only country selection filters early hypotheses separately from the legacy country overview and map. It must never submit unsupported codes to the RRI/decision-workspace routes or manufacture a score. Empty results offer a concise return to world signals.
 
 ## Ownership
