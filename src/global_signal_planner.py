@@ -35,6 +35,7 @@ _GENERIC = {
 _COUNTRY_NAMES = {word.casefold() for entry in MONITORING_COUNTRIES.values()
                   for field in ("name_en", "name_ru")
                   for word in _WORDS.findall(entry[field])}
+_COUNTRY_NAMES.update(entry["iso3"].casefold() for entry in MONITORING_COUNTRIES.values())
 # Covers common English adjectival forms (Serbia -> Serbian, Ethiopia ->
 # Ethiopian) without a hand-maintained shortlist of favored countries.
 _COUNTRY_NAMES.update(word + "n" for word in tuple(_COUNTRY_NAMES) if word.endswith("a"))
@@ -76,8 +77,6 @@ def _validated(records, latest):
         if not isinstance(classification, dict) or classification.get("status") != "needs_review":
             continue
         if classification.get("signal") not in ("change", "uncertain"):
-            continue
-        if classification.get("mechanism") in (None, "unknown", "other"):
             continue
         published, collected = instant(article["published_at"]), instant(article["collected_at"])
         if collected < published:
@@ -144,6 +143,9 @@ def plan_candidates(screenings, articles=None, *, as_of, limit=MAX_NOMINATIONS,
                 "retrieval_links": []}
         if event_country not in MONITORING_COUNTRIES:
             item["status"] = "needs_geography"
+            result.append(item)
+            continue
+        if label.get("mechanism") in (None, "unknown", "other"):
             result.append(item)
             continue
         # A malformed anchor cannot yield a usable writer prompt; surface the

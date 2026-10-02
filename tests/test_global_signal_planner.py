@@ -82,7 +82,7 @@ def test_corrected_source_metadata_requires_a_new_screening():
     assert plan_candidates([lead], [corrected], as_of=NOW) == []
 
 
-def test_routine_unknown_mechanism_duplicate_url_and_six_evidence_cap():
+def test_routine_is_excluded_unknown_mechanism_retained_and_six_evidence_cap():
     rows = [record(1, "NIS Petrohemija refinery modernization approved")]
     rows += [record(i, f"NIS Petrohemija refinery modernization phase {i}") for i in range(2, 10)]
     rows[2]["article"]["url"] = rows[1]["article"]["url"]
@@ -91,12 +91,27 @@ def test_routine_unknown_mechanism_duplicate_url_and_six_evidence_cap():
     rows += [record(20, "Celebrity dispute", signal="routine"),
              record(21, "Unclear item", mechanism="unknown")]
     result = plan_candidates(rows, as_of=NOW)
-    assert len(result) == 9
+    assert len(result) == 10
     first = next(item for item in result if item["source_key"] == rows[0]["source_key"])
     assert first["status"] == "context_ready"
     assert len(first["context"]["articles"]) == 6
     assert len({a["url"] for a in first["context"]["articles"]}) == 6
-    assert all(item["source_key"] not in {rows[-1]["source_key"], rows[-2]["source_key"]} for item in result)
+    assert rows[-2]["source_key"] not in {item["source_key"] for item in result}
+    unresolved = next(item for item in result if item["source_key"] == rows[-1]["source_key"])
+    assert unresolved["status"] == "needs_context" and unresolved["context"] is None
+
+
+def test_other_and_unknown_mechanisms_remain_private_unresolved_leads():
+    health = record(30, "District clinic opens emergency ward", mechanism="other")
+    health_followup = record(31, "District clinic opens emergency ward expansion", mechanism="other")
+    science = record(32, "Laboratory reports novel malaria assay", mechanism="unknown",
+                     signal="uncertain")
+    science_followup = record(33, "Laboratory reports novel malaria assay review",
+                              mechanism="unknown", signal="uncertain")
+    result = plan_candidates([health, health_followup, science, science_followup], as_of=NOW)
+    assert len(result) == 4
+    assert all(item["status"] == "needs_context" and item["context"] is None
+               and item["retrieval_links"] == [] for item in result)
 
 
 def test_quiet_event_country_survives_dominant_country_above_limit():
@@ -127,6 +142,15 @@ def test_country_names_from_world_registry_are_not_distinctive_event_links():
                    mechanism="education")
     result = plan_candidates([left, right], as_of=NOW)
     assert all(item["status"] == "needs_context" for item in result)
+
+
+def test_country_iso3_acronym_alone_does_not_link_unrelated_reports():
+    left = record(1, "USA schools approve village buses", event="US", mechanism="education")
+    right = record(2, "USA university opens science laboratory", event="US",
+                   mechanism="education")
+    result = plan_candidates([left, right], as_of=NOW)
+    assert all(item["status"] == "needs_context" and item["retrieval_links"] == []
+               for item in result)
 
 
 def test_invalid_defer_keys_rejected():
