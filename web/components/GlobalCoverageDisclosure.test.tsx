@@ -15,6 +15,7 @@ const coverage: GlobalCoverageResponse = {
   ],
   limits: { per_country: 40, window_days: 7, counts_are_bounded: true },
   screening: { status: "blocked", reason: "provider_error" }, writer: { status: "disabled" },
+  source_research: { status: "ok", queue: { lead_count: 3, countries: { AD: { queued: 3 } }, totals: { queued: 3 } } },
   notice: "Выборка показывает только часть местных публикаций.",
 };
 
@@ -30,6 +31,7 @@ describe("GlobalCoverageDisclosure", () => {
     fireEvent.click(summary);
     expect(within(disclosure).getByText(/Срез сбора/)).toHaveTextContent("мск");
     expect(within(disclosure).getByText("Автоматический разбор новых материалов приостановлен. Сбор источников продолжается.")).toBeVisible();
+    expect(within(disclosure).getByText("Поиск местных источников: найдено 3 кандидата для проверки.")).toBeVisible();
     expect(within(disclosure).getByRole("columnheader", { name: "Публикаций в выборке (до 40)" })).toBeVisible();
     expect(within(disclosure).getByRole("columnheader", { name: "Местных СМИ доступно" })).toBeVisible();
     expect(within(disclosure).getByText("Доступность — успешный опрос за последние 72 часа; публикации могут выходить реже.")).toBeVisible();
@@ -41,6 +43,18 @@ describe("GlobalCoverageDisclosure", () => {
     fireEvent.click(within(disclosure).getByRole("checkbox", { name: "Показать пробелы" }));
     expect(within(disclosure).queryByRole("rowheader", { name: "Сербия" })).not.toBeInTheDocument();
     expect(within(disclosure).getAllByRole("rowheader")).toHaveLength(2);
+    fireEvent.change(within(disclosure).getByRole("searchbox", { name: "Найти страну или территорию" }), { target: { value: "Сербия" } });
+    expect(within(disclosure).getByText("Среди пробелов по этому запросу стран нет.")).toBeVisible();
+  });
+
+  it("offers a country-specific signals action and reports monitoring names", async () => {
+    const onSelect = vi.fn();
+    const onCountriesLoaded = vi.fn();
+    render(<GlobalCoverageDisclosure onSelectSignalCountry={onSelect} onCountriesLoaded={onCountriesLoaded} />);
+    fireEvent.click(await screen.findByText("Какой мир мы видим"));
+    expect(onCountriesLoaded).toHaveBeenCalledWith(coverage.countries);
+    fireEvent.click(screen.getByRole("button", { name: "Ранние сигналы: Палау" }));
+    expect(onSelect).toHaveBeenCalledWith("PW");
   });
 
   it("hides a not-started snapshot and offers a small retry when the first request fails", async () => {

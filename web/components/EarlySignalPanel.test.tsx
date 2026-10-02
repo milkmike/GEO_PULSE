@@ -80,6 +80,20 @@ describe("EarlySignalPanel", () => {
     expect(await screen.findByText("На горизонте: мир")).toBeVisible();
   });
 
+  it("prioritizes an explicit signal country over the legacy overview country", async () => {
+    render(<EarlySignalPanel country="AD" availableCountry="RS" countryName="Андорра" signalOnly />);
+    expect(await screen.findByText("На горизонте: Андорра")).toBeVisible();
+    expect(mocks.earlySignals).toHaveBeenCalledWith("AD", expect.any(AbortSignal));
+    expect(screen.getByText(/Фильтр ранних сигналов: Андорра/)).toBeVisible();
+  });
+
+  it("uses a compact explanation for a monitoring country with no published hypotheses", async () => {
+    mocks.earlySignals.mockResolvedValue({ ...result, items: [] });
+    render(<EarlySignalPanel country="AD" availableCountry="RS" countryName="Андорра" signalOnly />);
+    expect(await screen.findByText(/опубликованных гипотез пока нет/)).toHaveTextContent("Андорра");
+    expect(screen.queryByText("На горизонте: Андорра")).not.toBeInTheDocument();
+  });
+
   it("places the matching publication below its observation", async () => {
     const withSources: EarlySignalsResponse = { ...result, items: [{ ...result.items[0], evidence: [
       { ...result.items[0].evidence[0], id: 99, title: "Unrelated", url: "https://example.org/unrelated" },

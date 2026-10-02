@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DecisionEvidence, DecisionWorkspaceResponse, NewsLead } from "@/lib/decisionTypes";
+import type { GlobalCoverageResponse } from "@/lib/globalMonitoringTypes";
 import DecisionWorkspace from "./DecisionWorkspace";
 
 const mocks = vi.hoisted(() => ({ decisionWorkspace: vi.fn(), earlySignals: vi.fn(), globalCoverage: vi.fn() }));
@@ -64,7 +65,57 @@ beforeEach(() => {
 });
 afterEach(() => vi.useRealTimers());
 
+const monitoring: GlobalCoverageResponse = {
+  as_of: "2026-10-06T10:00:00Z", status: "ok", scope_count: 2,
+  countries: [
+    { code: "AD", name_ru: "Андорра", configured_sources: 1, working_direct_publishers: 1, sampled_articles_7d: 1, latest_local_published_at: null, latest_local_collected_at: null, coverage_state: "sampled", work: {} },
+    { code: "RS", name_ru: "Сербия", configured_sources: 1, working_direct_publishers: 1, sampled_articles_7d: 1, latest_local_published_at: null, latest_local_collected_at: null, coverage_state: "sampled", work: {} },
+  ],
+  limits: { per_country: 40, window_days: 7, counts_are_bounded: true },
+  screening: { status: "ok" }, writer: { status: "disabled" }, notice: "Ограниченная выборка.",
+};
+
 describe("DecisionWorkspace", () => {
+  it("opens monitoring-only country signals from the URL without changing the legacy country overview", async () => {
+    window.history.replaceState(null, "", "/?country=RS&signal_country=AD");
+    mocks.globalCoverage.mockResolvedValue(monitoring);
+    render(<DecisionWorkspace />);
+    expect(await screen.findByText("Сербия ↔ Россия")).toBeVisible();
+    expect(mocks.decisionWorkspace).toHaveBeenCalledWith("RS", expect.any(AbortSignal));
+    expect(mocks.decisionWorkspace).not.toHaveBeenCalledWith("AD", expect.anything());
+    expect(screen.getByRole("combobox", { name: "Выбранная страна" })).toHaveValue("RS");
+    expect(await screen.findByText(/опубликованных гипотез пока нет/)).toHaveTextContent("Андорра");
+    expect(mocks.earlySignals).toHaveBeenCalledWith("AD", expect.any(AbortSignal));
+    fireEvent.click(screen.getByRole("button", { name: "Посмотреть ранние сигналы в мире" }));
+    expect(window.location.search).toContain("signal_country=world");
+    expect(mocks.earlySignals).toHaveBeenCalledWith(null, expect.any(AbortSignal));
+    expect(screen.getByText("Сербия ↔ Россия")).toBeVisible();
+  });
+
+  it("ignores an unknown signal-country URL code before querying early signals", async () => {
+    window.history.replaceState(null, "", "/?country=RS&signal_country=ZZ");
+    mocks.globalCoverage.mockResolvedValue(monitoring);
+    render(<DecisionWorkspace />);
+    await screen.findByText("Сербия ↔ Россия");
+    expect(mocks.earlySignals).not.toHaveBeenCalledWith("ZZ", expect.anything());
+    expect(window.location.search).not.toContain("signal_country=ZZ");
+  });
+
+  it("uses a coverage-row action for signal-only selection", async () => {
+    mocks.globalCoverage.mockResolvedValue(monitoring);
+    render(<DecisionWorkspace />);
+    await screen.findByText("Сербия ↔ Россия");
+    fireEvent.click(await screen.findByText("Какой мир мы видим"));
+    fireEvent.click(screen.getByRole("button", { name: "Ранние сигналы: Андорра" }));
+    expect(window.location.search).toContain("signal_country=AD");
+    expect(mocks.earlySignals).toHaveBeenCalledWith("AD", expect.any(AbortSignal));
+    const horizon = document.getElementById("early-signals");
+    expect(horizon).toHaveAttribute("tabindex", "-1");
+    await act(async () => { await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve())); });
+    expect(horizon).toHaveFocus();
+    expect(screen.getByRole("combobox", { name: "Выбранная страна" })).toHaveValue("RS");
+    expect(mocks.decisionWorkspace).not.toHaveBeenCalledWith("AD", expect.anything());
+  });
   it("starts with world signals and filters them after an explicit country choice", async () => {
     render(<DecisionWorkspace />);
     await screen.findByText("Сербия ↔ Россия");

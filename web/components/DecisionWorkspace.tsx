@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useId, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { ArrowUpRight, Globe2, LoaderCircle } from "lucide-react";
 import { api } from "@/lib/api";
 import type { DecisionEvidence, DecisionWorkspaceResponse } from "@/lib/decisionTypes";
+import type { GlobalCoverageCountry } from "@/lib/globalMonitoringTypes";
 
 import NewsReadingList, { newsDateTime as dateTime } from "./NewsReadingList";
 import EarlySignalPanel from "./EarlySignalPanel";
@@ -93,6 +94,8 @@ export default function DecisionWorkspace({ renderMap, mapControls, activeMapFil
   const titleId = useId();
   const [initialized, setInitialized] = useState(false);
   const [selectedCountry, setSelectedCountry] = useState<string | null>(null);
+  const [signalChoice, setSignalChoice] = useState<string | null>(null);
+  const [monitoringCountries, setMonitoringCountries] = useState<GlobalCoverageCountry[] | null>(null);
   const [payload, setPayload] = useState<DecisionWorkspaceResponse | null>(null);
   const [state, setState] = useState<LoadState>("loading");
   const [reload, setReload] = useState(0);
@@ -100,14 +103,28 @@ export default function DecisionWorkspace({ renderMap, mapControls, activeMapFil
 
   useEffect(() => {
     const readCountry = () => {
-      const country = new URLSearchParams(window.location.search).get("country")?.trim().toUpperCase();
+      const params = new URLSearchParams(window.location.search);
+      const country = params.get("country")?.trim().toUpperCase();
+      const signal = params.get("signal_country")?.trim().toUpperCase();
       setSelectedCountry(country || null);
+      setSignalChoice(signal === "WORLD" || signal && /^[A-Z]{2}$/.test(signal) ? signal : null);
     };
     readCountry();
     setInitialized(true);
     window.addEventListener("popstate", readCountry);
     return () => window.removeEventListener("popstate", readCountry);
   }, []);
+
+  const onCoverageCountries = useCallback((countries: GlobalCoverageCountry[]) => setMonitoringCountries(countries), []);
+
+  useEffect(() => {
+    if (!monitoringCountries || !signalChoice || signalChoice === "WORLD"
+      || monitoringCountries.some((country) => country.code === signalChoice)) return;
+    const url = new URL(window.location.href);
+    url.searchParams.delete("signal_country");
+    window.history.replaceState(window.history.state, "", url);
+    setSignalChoice(null);
+  }, [monitoringCountries, signalChoice]);
 
   useEffect(() => {
     if (!initialized) return;
@@ -145,13 +162,48 @@ export default function DecisionWorkspace({ renderMap, mapControls, activeMapFil
     if (!code || code === (selectedCountry ?? payload?.country.code)) return;
     const url = new URL(window.location.href);
     url.searchParams.set("country", code);
+    url.searchParams.delete("signal_country");
     window.history.pushState(window.history.state, "", url);
     setSelectedCountry(code);
+    setSignalChoice(null);
     setWindowSize("day");
+  }
+
+  function selectSignalCountry(code: string) {
+    if (!monitoringCountries?.some((country) => country.code === code)) return;
+    const url = new URL(window.location.href);
+    url.searchParams.set("signal_country", code);
+    window.history.pushState(window.history.state, "", url);
+    setSignalChoice(code);
+    window.requestAnimationFrame(() => {
+      const target = document.getElementById("early-signals");
+      target?.focus({ preventScroll: true });
+      if (typeof target?.scrollIntoView === "function") target.scrollIntoView({ block: "start" });
+    });
+  }
+
+  function showWorldSignals() {
+    const url = new URL(window.location.href);
+    url.searchParams.set("signal_country", "world");
+    window.history.pushState(window.history.state, "", url);
+    setSignalChoice("WORLD");
+  }
+
+  function showSelectedCountrySignals() {
+    const url = new URL(window.location.href);
+    url.searchParams.delete("signal_country");
+    window.history.pushState(window.history.state, "", url);
+    setSignalChoice(null);
   }
 
   const currentCountry = selectedCountry ?? payload?.country.code ?? "";
   const countryOptions = payload?.countries ?? [];
+  const signalCountry = signalChoice && signalChoice !== "WORLD"
+    ? monitoringCountries?.find((country) => country.code === signalChoice) : null;
+  const filteredSignalCountry = signalChoice === "WORLD" ? null
+    : signalCountry?.code ?? (signalChoice && !monitoringCountries ? null : selectedCountry);
+  const signalCountryName = signalCountry?.name_ru
+    ?? countryOptions.find((item) => item.code === currentCountry)?.name ?? payload?.country.name;
   const content = state !== "loading" && state !== "error"
     && (!selectedCountry || payload?.country.code === selectedCountry.toUpperCase()) ? payload : null;
   const brief = content?.brief[windowSize] ?? [];
@@ -222,8 +274,8 @@ export default function DecisionWorkspace({ renderMap, mapControls, activeMapFil
         </aside>
       </div>
 
-      {initialized && <EarlySignalPanel country={selectedCountry} availableCountry={currentCountry || null} countryName={countryOptions.find((item) => item.code === currentCountry)?.name ?? content?.country.name} refreshToken={reload} />}
-      {initialized && <GlobalCoverageDisclosure refreshToken={reload} />}
+      {initialized && <div id="early-signals" tabIndex={-1} className="scroll-mt-56 focus-visible:outline-2 focus-visible:outline-accent sm:scroll-mt-28"><EarlySignalPanel country={filteredSignalCountry} availableCountry={signalCountry?.code ?? (currentCountry || null)} countryName={signalCountryName} signalOnly={Boolean(signalCountry)} onWorld={showWorldSignals} onCountry={showSelectedCountrySignals} refreshToken={reload} /></div>}
+      {initialized && <GlobalCoverageDisclosure refreshToken={reload} onCountriesLoaded={onCoverageCountries} onSelectSignalCountry={selectSignalCountry} />}
 
       <div id="country-overview" className="mt-8 min-w-0 scroll-mt-5 border-t border-line pt-5" aria-busy={state === "loading" || state === "refreshing"}>
           {state === "loading" && <div role="status" className="card flex min-h-48 items-center gap-3 px-5 text-sm text-dim"><LoaderCircle aria-hidden="true" size={17} className="animate-spin motion-reduce:animate-none" />Загружаем обзор…</div>}

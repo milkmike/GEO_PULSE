@@ -72,10 +72,10 @@ function SignalArticle({ item }: { item: EarlySignal }) {
   </article>;
 }
 
-export default function EarlySignalPanel({ country, availableCountry, countryName, refreshToken = 0 }: { country: string | null; availableCountry?: string | null; countryName?: string | null; refreshToken?: number }) {
+export default function EarlySignalPanel({ country, availableCountry, countryName, signalOnly = false, onWorld, onCountry, refreshToken = 0 }: { country: string | null; availableCountry?: string | null; countryName?: string | null; signalOnly?: boolean; onWorld?: () => void; onCountry?: () => void; refreshToken?: number }) {
   const titleId = useId();
   const [scopeMode, setScopeMode] = useState<"world" | "country">(country ? "country" : "world");
-  const countryCode = (availableCountry || country)?.trim().toUpperCase() || null;
+  const countryCode = (country || availableCountry)?.trim().toUpperCase() || null;
   const scope = scopeMode === "country" && countryCode ? countryCode : "world";
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [loading, setLoading] = useState(true);
@@ -107,7 +107,7 @@ export default function EarlySignalPanel({ country, availableCountry, countryNam
   if (value && items.length === 0) {
     if (error) return <p role="alert" className="mt-5 text-xs leading-5 text-dim">Не удалось обновить ранние сигналы. <button type="button" onClick={() => setRetry((current) => current + 1)} className="min-h-11 px-1 text-accent underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">Повторить</button></p>;
     if (scope === "world") return null;
-    return <div className="mt-5 border-t border-line pt-2"><button type="button" onClick={() => setScopeMode("world")} className="min-h-11 text-sm text-accent underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">Посмотреть ранние сигналы в мире</button></div>;
+    return <div className="mt-5 border-t border-line pt-2">{signalOnly && <p className="text-xs leading-5 text-dim"><span className="font-medium text-ru-white">{countryName || countryCode}</span> · опубликованных гипотез пока нет.</p>}<button type="button" onClick={() => { setScopeMode("world"); onWorld?.(); }} className="min-h-11 text-sm text-accent underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">Посмотреть ранние сигналы в мире</button></div>;
   }
   if (!value && !error) return <p role="status" className="mt-5 flex min-h-11 items-center gap-2 text-xs text-dim"><LoaderCircle aria-hidden="true" size={14} className="animate-spin motion-reduce:animate-none" />Ищем ранние сигналы…</p>;
   if (!value && error) return <p role="alert" className="mt-5 text-xs leading-5 text-dim">Ранние сигналы сейчас недоступны. <button type="button" onClick={() => setRetry((current) => current + 1)} className="min-h-11 px-1 text-accent underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">Повторить</button></p>;
@@ -116,13 +116,14 @@ export default function EarlySignalPanel({ country, availableCountry, countryNam
       <div><p className="text-[10px] font-medium uppercase tracking-[0.18em] text-ru-red">Ранние сигналы</p><h3 id={titleId} className="display mt-1 break-words text-[27px] leading-tight sm:text-[32px]">{scope === "world" ? "На горизонте: мир" : `На горизонте: ${countryName || scope}`}</h3></div>
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
         {countryCode && <nav aria-label="Масштаб ранних сигналов" className="flex items-center gap-1 text-xs">
-          <button type="button" aria-pressed={scope === "world"} onClick={() => setScopeMode("world")} className={`min-h-11 rounded-sm px-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${scope === "world" ? "text-ru-white underline underline-offset-4" : "text-accent"}`}>Мир</button>
-          <button type="button" aria-pressed={scope !== "world"} onClick={() => setScopeMode("country")} className={`min-h-11 rounded-sm px-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${scope !== "world" ? "text-ru-white underline underline-offset-4" : "text-accent"}`}>{countryName || countryCode}</button>
+          <button type="button" aria-pressed={scope === "world"} onClick={() => { setScopeMode("world"); onWorld?.(); }} className={`min-h-11 rounded-sm px-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${scope === "world" ? "text-ru-white underline underline-offset-4" : "text-accent"}`}>Мир</button>
+          <button type="button" aria-pressed={scope !== "world"} onClick={() => { if (scope === "world") { setScopeMode("country"); onCountry?.(); } }} className={`min-h-11 rounded-sm px-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${scope !== "world" ? "text-ru-white underline underline-offset-4" : "text-accent"}`}>{countryName || countryCode}</button>
         </nav>}
         {latestReview && <p className="text-xs text-dim">Разбор от {latestReview}</p>}
       </div>
     </header>
     <p className="mt-2 max-w-3xl text-sm leading-6 text-fg/80">Небольшие изменения, за которыми стоит следить.</p>
+    {signalOnly && scope !== "world" && <p className="mt-1 text-xs leading-5 text-dim">Фильтр ранних сигналов: {countryName || countryCode}. Страновой обзор остаётся на прежней стране.</p>}
     {value?.notice && <p className="mt-3 max-w-3xl border-l-2 border-ru-blue/60 pl-3 text-xs leading-5 text-dim">{value.notice}</p>}
     {error && <p role="alert" className="mt-4 text-xs leading-5 text-dim">{value ? "Не удалось обновить сигналы. Показан предыдущий обзор." : "Ранние сигналы сейчас недоступны."} <button type="button" onClick={() => setRetry((current) => current + 1)} className="min-h-11 px-1 text-accent underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">Повторить</button></p>}
     {items.length > 0 && <div className="mt-4 min-w-0 border-b border-line">{items.map((item) => <SignalArticle key={item.id} item={item} />)}</div>}
