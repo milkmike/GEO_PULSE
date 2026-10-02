@@ -143,6 +143,8 @@ def _run_discovery(*,budget_usd,campaign,max_calls):
                 budget.finish_request(request_id,cost,outcome)
                 track_api_call(service=decision_model.SERVICE,endpoint=decision_model.ENDPOINT,model=decision_model.MODEL,
                     script='build_agendas.py',tokens_in=usage.get('prompt_tokens',usage.get('input_tokens',0)),
+                    tokens_out=usage.get('completion_tokens',usage.get('output_tokens',0)),
+                    estimate_missing_cost=False,
                     cost=cost if isinstance(cost,(int,float)) and not isinstance(cost,bool) and 0<=cost<=float(decision_model.RESERVATION_USD) else None,
                     status='ok' if outcome=='ok' else 'error',error=None if outcome=='ok' else outcome)
             if stop:

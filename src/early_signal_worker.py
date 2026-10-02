@@ -54,6 +54,7 @@ def _track(model, endpoint, usage, cost, outcome, reason=None, *, service='openr
                    script='build_early_signals.py',
                    tokens_in=usage.get('prompt_tokens', usage.get('input_tokens', 0)),
                    tokens_out=usage.get('completion_tokens', 0),
+                   estimate_missing_cost=False,
                    cost=cost if type(cost) in (int, float) and math.isfinite(cost) and cost >= 0 else None,
                    status='ok' if outcome == 'ok' else 'error', error=reason)
 

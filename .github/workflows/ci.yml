@@ -106,7 +106,7 @@ jobs:
         run: |
           for provider in deepseek gemini jev; do
             DECISION_PROVIDER="$provider" python -m pytest -q \
-              tests/test_decision_model.py \
+              tests/test_api_tracker_cost.py tests/test_decision_model.py \
               tests/test_agenda_discovery.py tests/test_agenda_worker.py \
               tests/test_news_triage.py tests/test_decision_verification.py \
               tests/test_early_signals.py tests/test_early_signal_worker.py

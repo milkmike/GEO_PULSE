@@ -291,6 +291,8 @@ def run_triage_cycle(*, budget_usd: Decimal, campaign: str, max_calls: int = 12,
             budget.finish_request(request_id, cost, outcome)
             track_api_call(service=decision_model.SERVICE, endpoint=decision_model.ENDPOINT, model=MODEL,
                 script="build_agendas.py", tokens_in=usage.get("input_tokens", usage.get("prompt_tokens", 0)),
+                tokens_out=usage.get('completion_tokens', usage.get('output_tokens', 0)),
+                estimate_missing_cost=False,
                 cost=cost if type(cost) in (int, float) and math.isfinite(cost) and cost >= 0 else None,
                 status="ok" if outcome == "ok" else "error", error=None if outcome == "ok" else outcome)
         if records is None:

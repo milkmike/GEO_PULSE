@@ -84,6 +84,9 @@ overage, including one from a rejected model answer, reaches the ledger and
 halts the account. Unknown bills, failures, and timeouts retain the full
 reservation. Native APIs do not report exact dollar costs here; their token
 usage is recorded, but no fictional exact bill or refund is created.
+Decision telemetry opts out of fallback price estimation: a missing provider
+bill is stored as SQL NULL, rather than a zero-dollar call. Input and generated
+token counts remain available independently of that unknown cost.
 
 Reviewed native standard prices on 2026-10-02:
 

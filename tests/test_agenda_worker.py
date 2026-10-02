@@ -126,6 +126,20 @@ def test_self_reported_choice_attaches_with_source_evidence_and_model_tracking(m
     assert worker.track_api_call.call_args.kwargs['model']==worker.decision_model.MODEL
 
 
+def test_unknown_bill_is_not_estimated_as_free_and_generated_tokens_are_tracked(monkeypatch,harness):
+    worker,articles,page,reserve,settled,saved,attached=harness
+    def request(payload,*args):
+        result=response(payload)
+        result['data']['usage']={'prompt_tokens':123,'completion_tokens':45,'cost':None}
+        return result
+    monkeypatch.setattr(worker,'_request',request)
+    assert worker.run_cycle(budget_usd=Decimal('3'))['status']=='ok'
+    settled.assert_called_once_with('reservation',None,'ok')
+    tracked=worker.track_api_call.call_args.kwargs
+    assert tracked['tokens_in']==123 and tracked['tokens_out']==45
+    assert tracked['cost'] is None and tracked['estimate_missing_cost'] is False
+
+
 def test_pair_cost_over_reservation_stops_before_save(monkeypatch,harness):
     worker,articles,page,reserve,settled,saved,attached=harness
     def expensive(payload,*args):

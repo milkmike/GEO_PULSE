@@ -97,11 +97,13 @@ def track_api_call(
     status: str = "ok",
     error: Optional[str] = None,
     duration_ms: Optional[int] = None,
+    estimate_missing_cost: bool = True,
 ) -> None:
-    """Log an API call to the api_usage table. Never raises — fails silently."""
+    """Log an API call; explicit unknown bills remain NULL. Never raises."""
     try:
         if cost is None:
-            cost_decimal = calculate_cost(service, model or "", tokens_in, tokens_out)
+            cost_decimal = (calculate_cost(service, model or "", tokens_in, tokens_out)
+                            if estimate_missing_cost else None)
         else:
             cost_decimal = Decimal(str(cost))
 
@@ -130,7 +132,7 @@ def track_api_call(
                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                 (
                     service, endpoint, model, script,
-                    tokens_in, tokens_out, float(cost_decimal),
+                    tokens_in, tokens_out, float(cost_decimal) if cost_decimal is not None else None,
                     status, error, duration_ms,
                 ),
             )

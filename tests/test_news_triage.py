@@ -160,7 +160,9 @@ def test_cycle_reserves_before_request_and_limits_calls(monkeypatch):
     def request(payload, api_key, timeout):
         assert reserve.called
         assert api_key == "test" and timeout == 45
-        return {"status": "ok", "data": response(payload)}
+        data=response(payload)
+        data['usage'].update(prompt_tokens=123,completion_tokens=45)
+        return {"status": "ok", "data": data}
     monkeypatch.setattr(triage, "_request", request)
     result = triage.run_triage_cycle(budget_usd=Decimal("3"), campaign="existing", max_calls=1)
     assert result["calls"] == 1 and result["saved"] == len(reserve.call_args.kwargs["pair_keys"])
@@ -170,6 +172,8 @@ def test_cycle_reserves_before_request_and_limits_calls(monkeypatch):
     assert track.call_args.kwargs["model"] == triage.MODEL
     assert track.call_args.kwargs["service"] == triage.decision_model.SERVICE
     assert track.call_args.kwargs["endpoint"] == triage.decision_model.ENDPOINT
+    assert track.call_args.kwargs['tokens_out']==45
+    assert track.call_args.kwargs['estimate_missing_cost'] is False
 
 
 def test_over_reservation_cost_does_not_save(monkeypatch):
