@@ -32,6 +32,15 @@ def test_jev_draft_uses_fragment_ids_and_does_not_repair_country_quote(monkeypat
         extraction.parse_annotation(json.dumps(draft), source, {'RS'})
 
 
+def test_pipeline_revision_changes_both_attempt_key_and_paid_prompt_identity(monkeypatch):
+    monkeypatch.setenv('JEV_EVIDENCE_MODE', 'apply')
+    original_key = extraction.source_key(article())
+    original_prompt = extraction.prepare_prompt(article())
+    monkeypatch.setattr(extraction.jev_evidence, 'VERSION', 'next-source-selection-revision')
+    assert extraction.source_key(article()) != original_key
+    assert extraction.prepare_prompt(article()) != original_prompt
+
+
 def test_only_reviewed_annotations_accept_bound_evidence_audit():
     source = article()
     lines = source_segments.segments(source)
