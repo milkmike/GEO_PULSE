@@ -12,12 +12,20 @@ embedding, sentiment, or early-signal writing clients. Those clients still need
 their own working provider access. Screening results are review leads, and
 draft hypotheses still require editorial publication.
 
-On 2026-10-02 production was running commit `c57d3c9`. Authenticated OpenRouter
-key inspection returned HTTP 403. Neither `DEEPSEEK_API_KEY` nor `GEMINI_API_KEY`
-was configured in the server environment or the early-signals container. An
-unauthenticated request to the native DeepSeek model catalog returned 401,
-establishing reachability, not successful authentication. No paid replacement
-calls were made during this implementation.
+On 2026-10-02 production was running commit `c57d3c9`. OpenRouter inspection
+inside early-signals returned HTTP 403; one bounded diagnostic generation also
+failed with 403. On 2026-10-03 the existing `OPENROUTER_HTTPS_PROXY` route was
+found in production's service-scoped Compose override. Public model and
+authenticated key requests inside briefs returned 200; agendas also returned
+200 for authenticated key and DeepSeek tariff inspection. Early-signals alone
+had an empty proxy environment. The earlier diagnosis incorrectly generalized
+that service's failure to every OpenRouter client.
+
+Decision workers now fall back to `OPENROUTER_HTTPS_PROXY` when `HTTPS_PROXY`
+is unset or empty; an explicit `HTTPS_PROXY` retains precedence. Credentials
+remain on the server. Native DeepSeek/Gemini keys are still absent and are
+not required for the already configured OpenRouter route. Successful generation
+and fresh persisted decisions must still be verified before calling it active.
 
 ## Provider selection
 
@@ -116,9 +124,11 @@ accounting charges, not a claim that each request actually costs ten cents.
 
 ## Activation sequence
 
-1. Add the native key in `/opt/geopulse/.env`, without sending it in chat.
-   Set `DECISION_PROVIDER=deepseek` (or explicitly choose `gemini`). Perform
-   read-only authentication/catalog inspection on the server first.
+1. Verify read-only authentication/catalog inspection through the existing
+   configured route first. With `DECISION_PROVIDER=openrouter`, workers inherit
+   `HTTPS_PROXY` or fall back to `OPENROUTER_HTTPS_PROXY`. Alternatively add the
+   native key in `/opt/geopulse/.env`, without sending it in chat, and explicitly
+   choose `DECISION_PROVIDER=deepseek` or `gemini`.
 2. If using a new agenda account, set
    `DECISION_CAMPAIGN=deepseek-decisions-2026-10-02` and
    `JEV_AGENDA_BUDGET_USD=2`, within the approved overall budget. Keep the
