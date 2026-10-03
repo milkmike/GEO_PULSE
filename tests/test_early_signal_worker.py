@@ -8,6 +8,7 @@ import pytest
 
 from src import early_signal_worker as worker
 from src import early_signals
+from src import decision_model
 from tests.test_early_signals import article, response
 from tests.test_signal_hypotheses import article as hypothesis_article, dossier as make_draft
 
@@ -17,6 +18,7 @@ NOW = datetime(2026, 10, 1, 12, tzinfo=timezone.utc)
 def setup_screen(monkeypatch):
     events=[]
     monkeypatch.setenv('OPENROUTER_API_KEY','test')
+    monkeypatch.setenv(decision_model.KEY_ENV,'test')
     monkeypatch.setattr(worker.store,'load_screenings',lambda keys:{})
     monkeypatch.setattr(worker.store,'save_screenings',lambda rows:events.append(('save',rows)))
     monkeypatch.setattr(worker.budget,'get_attempted_pair_keys',lambda campaign:set())
@@ -41,6 +43,13 @@ def test_disabled_screening_never_reads_sources_or_requests(monkeypatch):
     assert worker.run_screening_cycle()['status']=='disabled'
 
 
+def test_missing_selected_key_never_reads_sources_or_spends(monkeypatch):
+    monkeypatch.delenv(decision_model.KEY_ENV, raising=False)
+    monkeypatch.setattr(worker, 'load_articles', lambda **k: pytest.fail('missing key source read'))
+    monkeypatch.setattr(worker.budget, 'reserve_request', lambda *a, **k: pytest.fail('missing key spend'))
+    assert worker.run_screening_cycle(budget_usd=Decimal('2'))['status'] == 'missing_key'
+
+
 def test_screening_reserves_persistent_cap_then_saves_and_settles(monkeypatch):
     events=setup_screen(monkeypatch)
     stats=worker.run_screening_cycle(articles=[article()],as_of=NOW,budget_usd=Decimal('2'))
@@ -48,7 +57,7 @@ def test_screening_reserves_persistent_cap_then_saves_and_settles(monkeypatch):
     names=[x[0] for x in events]
     assert names.index('reserve')<names.index('request')<names.index('save')<names.index('finish')
     assert events[names.index('finish')][1]==('call',.0003,'ok')
-    assert events[names.index('reserve')][1]['reservation_usd']==Decimal('.01')
+    assert events[names.index('reserve')][1]['reservation_usd']==Decimal('.10')
 
 
 def test_ambiguous_failure_keeps_hold_and_has_no_retry(monkeypatch):
@@ -145,4 +154,13 @@ def test_invalid_cost_reaches_persistent_halt_guard(monkeypatch):
     stats=worker.run_screening_cycle(articles=[article()],as_of=NOW,budget_usd=Decimal('2'))
     assert stats['error']=='invalid cost'
     assert ('finish',('call',-1,'invalid_response')) in events
+    assert not any(x[0]=='save' for x in events)
+
+
+def test_chat_transport_failure_keeps_known_overage_for_halt(monkeypatch):
+    events=setup_screen(monkeypatch)
+    monkeypatch.setattr(worker,'_request',lambda *a:{'status':'invalid_response','usage':{'cost':.12}})
+    stats=worker.run_screening_cycle(articles=[article()],as_of=NOW,budget_usd=Decimal('2'))
+    assert stats['status']=='error'
+    assert ('finish',('call',.12,'error')) in events
     assert not any(x[0]=='save' for x in events)

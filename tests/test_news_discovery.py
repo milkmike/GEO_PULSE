@@ -6,6 +6,12 @@ import pytest
 NOW = datetime(2026, 10, 1, tzinfo=timezone.utc)
 
 
+def test_news_lead_cache_uses_current_triage_identity_without_resetting_campaign():
+    from src import news_discovery, news_triage
+    assert (news_discovery.MODEL, news_discovery.VERSION) == (news_triage.MODEL, news_triage.VERSION)
+    assert news_discovery.CAMPAIGN == "jev-agenda-2026-09-30"
+
+
 def row(**changes):
     return dict(article_id=1, title="Serbia considers sanctions on Russia",
                 body_excerpt="Serbia considers sanctions on Russia",
@@ -61,7 +67,8 @@ def test_selected_country_is_not_inferred_from_publisher():
 def test_processing_status_keeps_local_denominator_and_budget_distinct():
     from src.news_discovery import processing_status
     assert processing_status(100, 0, None) == "not_started"
-    assert processing_status(100, 10, .02) == "partial"
+    assert processing_status(100, 10, .10) == "partial"
+    assert processing_status(100, 10, .02) == "budget_exhausted"
     assert processing_status(100, 10, .009) == "budget_exhausted"
     assert processing_status(100, 100, .001) == "up_to_date"
     assert processing_status(0, 0, None) == "not_started"

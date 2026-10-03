@@ -16,9 +16,10 @@ import re
 from urllib.parse import urlsplit
 
 from src.api.public_urls import safe_public_url
+from src import decision_model
 
-MODEL = "typesafe/jev-1.13"
-VERSION = "early-signal-v4-global"
+MODEL = decision_model.MODEL
+VERSION = "early-signal-v5-grounded-chat"
 MAX_INPUT = 30_000
 MAX_ARTICLES = 8
 MAX_REQUEST_BYTES = 24_000
@@ -229,6 +230,9 @@ def _probability(value):
 
 
 def _choice(answer, labels):
+    if isinstance(answer, dict) and answer.get('confidence_kind') == 'self_reported':
+        parsed = decision_model.parse_choice(answer, labels)
+        return parsed['choice'] if decision_model.supported_choice(answer, labels) else None
     if (not isinstance(answer, dict) or set(answer) != {"type", "choice", "confidence", "probabilities"}
             or answer.get("type") != "choice" or answer.get("choice") not in labels):
         raise ValueError("invalid choice")
@@ -260,6 +264,18 @@ def parse_response(data, selected, country_codes):
                           "stage": choices["stage"] or "unknown",
                           "country": choices["country"] or "unknown",
                           "status": "needs_review"}
+        # Keep model provenance and self-reported evidence for private audit.
+        # Existing native Jev fixture/response shape remains backward compatible.
+        raw_answers = {suffix: data['answers'][key + suffix]
+                       for suffix in ('signal', 'mechanism', 'stage', 'country')}
+        if any(a.get('confidence_kind') == 'self_reported' for a in raw_answers.values()):
+            decisions = {}
+            for suffix, labels in (('signal', SIGNAL), ('mechanism', MECHANISM),
+                                   ('stage', STAGE), ('country', countries)):
+                answer = decision_model.parse_choice(raw_answers[suffix], labels)
+                decision_model.validate_evidence(answer, {f'article_{article["id"]}': _state(article)})
+                decisions[suffix] = answer
+            classification.update(decisions=decisions, model=MODEL, version=VERSION)
         records.append({"article": article, "source_key": source_key(article),
                         "classification": classification})
     usage = data.get("usage") or {}

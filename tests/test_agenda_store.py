@@ -54,9 +54,57 @@ def store(monkeypatch):
 
 
 def decision(choice='same_event',confidence=.95):
+    from src.agenda_discovery import MODEL
     return {'cache_key':'a'*64,'anchor_id':1,'article_id':2,'question_id':'pair_1_2',
-            'choice':choice,'confidence':confidence,
-            'probabilities':{'same_event':.95,'development':.02,'unrelated':.02,'uncertain':.01}}
+            'choice':choice,'confidence':confidence,'model':MODEL,
+            'confidence_kind':'self_reported','probabilities':{},
+            'evidence':[{'article_id':'1','quote':'Самолёт Flydubai сел в Табуке'},
+                        {'article_id':'2','quote':'Flydubai flight lands in Tabuk'}],
+            'evidence_grounded':True}
+
+
+def retarget(item, *, anchor_id=1, article_id=2, article_title=None):
+    item['anchor_id'], item['article_id'] = anchor_id, article_id
+    titles = {1:'Самолёт Flydubai сел в Табуке', 2:'Flydubai flight lands in Tabuk',
+              3:'Old date but new collection'}
+    item['evidence'] = [
+        {'article_id':str(anchor_id),'quote':titles[anchor_id]},
+        {'article_id':str(article_id),'quote':article_title or titles[article_id]},
+    ]
+    return item
+
+
+def test_content_identity_includes_model_and_version():
+    from src import agenda_store, agenda_discovery
+    assert agenda_store.MODEL == agenda_discovery.MODEL
+    assert agenda_store.VERSION == agenda_discovery.VERSION
+    assert agenda_store.MODEL in agenda_store.CONTENT_SQL
+    assert agenda_store.VERSION in agenda_store.CONTENT_SQL
+
+
+def test_model_switch_resets_cursor_and_does_not_relabel_legacy_group(store):
+    from src import agenda_discovery
+    rows={r['id']:r for r in store.load_articles()}
+    legacy=decision() | {'model':'typesafe/jev-1.13'}
+    assert store.attach_decisions(rows[1],[legacy],rows) is None
+    with store.get_session() as s:
+        s.execute(text("INSERT INTO news_agenda_runs(status,stats) VALUES('ok',CAST(:stats AS jsonb))"),
+                  {'stats':'{"discovery_cursor":47,"model":"typesafe/jev-1.13","version":"article-agenda-v1"}'})
+    assert store.get_discovery_state()['cursor']==0
+    fresh=legacy | {'model':store.MODEL,'confidence_kind':'self_reported','probabilities':{},
+        'evidence':[{'article_id':'1','quote':rows[1]['title']},
+                    {'article_id':'2','quote':rows[2]['title']}], 'evidence_grounded':True}
+    assert agenda_discovery.accepted_decision(fresh)
+    gid=store.attach_decisions(rows[1],[fresh],rows)
+    assert gid is not None
+    assert store.list_agendas()['items'][0]['model']==store.MODEL
+
+
+def test_forged_cached_quote_cannot_create_group(store):
+    rows={r['id']:r for r in store.load_articles()}
+    forged=decision()
+    forged['evidence'][1]['quote']='A quotation absent from article 2'
+    assert store.attach_decisions(rows[1],[forged],rows) is None
 
 
 def test_raw_articles_need_no_analysis_and_bad_date_remains_visible(store):
@@ -101,7 +149,7 @@ def test_changed_article_content_does_not_keep_stale_membership(store):
 
 def test_unsafe_source_links_are_not_exposed(store):
     rows={r['id']:r for r in store.load_articles()}
-    d=decision(); d.update(article_id=3,cache_key='b'*64)
+    d=retarget(decision(),article_id=3); d['cache_key']='b'*64
     store.attach_decisions(rows[1],[d],rows)
     item=store.list_agendas()['items'][0]
     assert next(a for a in item['articles'] if a['id']==3)['url'] is None
@@ -132,7 +180,7 @@ def test_changed_decision_context_invalidates_membership(store, change):
 ])
 def test_invalid_anchor_hides_otherwise_valid_members(store, change):
     rows={r['id']:r for r in store.load_articles()}
-    third=decision(); third['article_id']=3
+    third=retarget(decision(),article_id=3)
     store.attach_decisions(rows[1],[decision(),third],rows)
     with store.get_session() as s:
         s.execute(text(change))
@@ -143,12 +191,13 @@ def test_invalid_anchor_hides_otherwise_valid_members(store, change):
 def test_stale_member_can_join_new_group_but_valid_member_cannot(store):
     rows={r['id']:r for r in store.load_articles()}
     old_id=store.attach_decisions(rows[1],[decision()],rows)
-    other=decision(); other['anchor_id']=3
+    other=retarget(decision(),anchor_id=3)
     store.attach_decisions(rows[3],[other],rows)
     assert all(item['id']==old_id for item in store.list_agendas()['items'])
     with store.get_session() as s:
         s.execute(text("UPDATE articles SET title='Corrected report about another incident' WHERE id=2"))
     rows={r['id']:r for r in store.load_articles()}
+    other=retarget(other,anchor_id=3,article_title=rows[2]['title'])
     new_id=store.attach_decisions(rows[3],[other],rows)
     result=store.list_agendas()['items']
     assert len(result)==1 and result[0]['id']==new_id and new_id!=old_id
@@ -217,7 +266,7 @@ def test_concurrent_groups_cannot_share_an_article(store):
     from concurrent.futures import ThreadPoolExecutor
     rows={r['id']:r for r in store.load_articles()}
     first=decision()
-    second=decision(); second['anchor_id']=3
+    second=retarget(decision(),anchor_id=3)
     with ThreadPoolExecutor(max_workers=2) as executor:
         futures=[executor.submit(store.attach_decisions,rows[d['anchor_id']],[d],rows) for d in (first,second)]
         results=[future.result(timeout=10) for future in futures]
@@ -277,7 +326,9 @@ def test_translation_cache_projects_same_representative_and_invalidates_changed_
     store.save_title_translations([{'article_id':2,'source_title':rows[2]['title'],
                                     'title_ru':'Устаревший перевод'}], 'test-model')
     rows={r['id']:r for r in store.load_articles()}
-    store.attach_decisions(rows[1],[decision()],rows)
+    assert store.attach_decisions(rows[1],[decision()],rows) is None
+    fresh = retarget(decision(), article_title=rows[2]['title'])
+    store.attach_decisions(rows[1],[fresh],rows)
     item=store.list_agendas()['items'][0]
     assert item['title']=='Corrected Flydubai flight report' and item['title_ru'] is None
     assert [a['id'] for a in store.load_translation_candidates()]==[2,1]
@@ -291,6 +342,11 @@ def test_triage_leads_are_translated_without_waiting_for_agenda_group(store):
               '{"countries":["RS"],"russia_relation":"uncertain"}'::jsonb,
               'typesafe/jev-1.13','news-triage-v2' FROM articles WHERE id=2"""))
     assert store.list_agendas()['items'] == []
+    assert store.load_translation_candidates() == []
+    from src.news_triage import MODEL, VERSION
+    with store.get_session() as session:
+        session.execute(text('UPDATE article_news_triage SET model=:model,version=:version'),
+                        {'model':MODEL,'version':VERSION})
     assert store.load_translation_candidates() == [{'id':2,'title':'Flydubai flight lands in Tabuk'}]
     with store.get_session() as session:
         session.execute(text("UPDATE article_news_triage SET source_excerpt='stale' WHERE article_id=2"))

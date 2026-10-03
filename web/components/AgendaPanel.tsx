@@ -61,7 +61,7 @@ function SourceTitle({ title, titleRu, href, heading = false }: {
   </>;
 }
 
-function Evidence({ article }: { article: AgendaArticle }) {
+function Evidence({ article, model }: { article: AgendaArticle; model: string | null }) {
   const url = safeHttpUrl(article.url);
   const published = article.date_warning ? null : formatDate(article.published_at);
   const date = published ?? formatDate(article.collected_at);
@@ -83,7 +83,7 @@ function Evidence({ article }: { article: AgendaArticle }) {
         {article.date_warning && " · дата публикации требует проверки"}
       </p>
       {article.relation !== "seed" && article.confidence != null && Number.isFinite(article.confidence) && (
-        <p className="mt-1 text-xs leading-5 text-dim">Уверенность в связи: {Math.round(article.confidence * 100)}%</p>
+        <p className="mt-1 text-xs leading-5 text-dim">{/^typesafe\/jev(?:-|$)/i.test(model ?? "") ? "Уверенность в связи" : "Оценка модели"}: {Math.round(article.confidence * 100)}%</p>
       )}
     </li>
   );
@@ -92,13 +92,13 @@ function Evidence({ article }: { article: AgendaArticle }) {
 export function AgendaCard({ item }: { item: AgendaItem }) {
   const [expanded, setExpanded] = useState(false);
   const evidenceId = useId();
-  const verified = /^typesafe\/jev(?:-|$)/i.test(item.model ?? "")
-    && item.same_event_count + item.development_count > 0;
+  const verified = Boolean(item.model && item.model !== "lexical-fallback"
+    && item.same_event_count + item.development_count > 0);
   return (
     <article className="card min-w-0 p-4 sm:p-5">
       <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-dim">
         <span className="uppercase tracking-[0.08em]">Заголовок источника</span>
-        {verified && <span title={item.model ?? undefined} className="rounded border border-line px-2 py-1">Связи проверены Jev</span>}
+        {verified && <span title={item.model ?? undefined} className="rounded border border-line px-2 py-1">Связи сопоставлены ИИ</span>}
       </div>
       <SourceTitle title={item.title} titleRu={item.title_ru} heading />
       <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-dim">
@@ -120,8 +120,8 @@ export function AgendaCard({ item }: { item: AgendaItem }) {
       </button>
       {expanded && (
         <div id={evidenceId} className="mt-2 border-t border-line pt-4">
-          <p className="mb-4 text-xs leading-5 text-dim">Уверенность относится к связи публикаций, а не к достоверности утверждений. Перепечатки могут повторять один источник.</p>
-          <ul className="divide-y divide-line">{item.articles.map((article) => <Evidence key={article.id} article={article} />)}</ul>
+          <p className="mb-4 text-xs leading-5 text-dim">Оценка модели относится к связи публикаций, а не к достоверности утверждений. Перепечатки могут повторять один источник.</p>
+          <ul className="divide-y divide-line">{item.articles.map((article) => <Evidence key={article.id} article={article} model={item.model} />)}</ul>
           {item.article_count > item.articles.length && <p className="mt-4 text-xs text-dim">Показаны последние {item.articles.length} из {item.article_count} публикаций.</p>}
         </div>
       )}
@@ -178,7 +178,7 @@ export default function AgendaPanel() {
         <div className="mt-5 border-l-2 border-ru-blue/70 pl-3 text-xs leading-5 text-dim">
           <p role="status">{RUN_STATUS[coverage.status]}</p>
           {lastRun && <p>Последний проход: {lastRun} МСК</p>}
-          <p>Просмотрено публикаций: {coverage.articles_scanned} · Групп-кандидатов: {coverage.candidate_groups} · Проверено связей: {coverage.decisions} · Одобрено Jev: {coverage.accepted}</p>
+          <p>Просмотрено публикаций: {coverage.articles_scanned} · Групп-кандидатов: {coverage.candidate_groups} · Сопоставлено связей: {coverage.decisions} · Принято связей: {coverage.accepted}</p>
           <p>Страны обозначают местонахождение издателей.</p>
         </div>
       )}

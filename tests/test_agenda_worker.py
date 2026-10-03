@@ -12,13 +12,12 @@ def test_disabled_campaign_never_calls_provider(monkeypatch):
     assert worker.run_cycle(budget_usd=Decimal('0'))['status']=='disabled'
 
 
-def test_provider_price_guard_rejects_changed_or_unknown_tariff():
-    from src.agenda_worker import validate_tariff
-    with pytest.raises(ValueError):
-        validate_tariff({'data':[]})
-    with pytest.raises(ValueError):
-        validate_tariff({'data':[{'id':'typesafe/jev-1.13','pricing':{'prompt':'.01','completion':'0'}}]})
-    validate_tariff({'data':[{'id':'typesafe/jev-1.13','pricing':{'prompt':'.000000042','completion':'0','request':'0'}}]})
+def test_tariff_uses_selected_decision_provider(monkeypatch):
+    from src import agenda_worker as worker
+    check = Mock()
+    monkeypatch.setattr(worker.decision_model, 'check_tariff', check)
+    worker.check_tariff()
+    check.assert_called_once_with()
 
 
 @pytest.fixture
@@ -51,7 +50,7 @@ def harness(monkeypatch):
     monkeypatch.setattr(worker.store,'attach_decisions',attached)
     monkeypatch.setattr(worker.store,'record_run',Mock())
     monkeypatch.setattr(worker,'track_api_call',Mock())
-    monkeypatch.setenv('OPENROUTER_API_KEY','test')
+    monkeypatch.setenv(worker.decision_model.KEY_ENV,'test')
     return worker,articles,page,reserve,settled,saved,attached
 
 
@@ -59,6 +58,18 @@ def response(payload):
     return {'status':'ok','data':{'answers':{key:{'type':'choice','choice':'same_event','confidence':.99,
        'probabilities':{'same_event':.97,'development':.01,'unrelated':.01,'uncertain':.01}}
        for key in payload['questions']},'usage':{'cost':.00005,'input_tokens':1000}}}
+
+
+def chat_response(payload):
+    answers={}
+    for key in payload['questions']:
+        anchor_id,candidate_id=key.split('_')[1:]
+        articles=payload['state']['articles']
+        answers[key]={'type':'choice','choice':'same_event','confidence':.94,
+                      'confidence_kind':'self_reported','evidence':[
+                          {'article_id':anchor_id,'quote':articles[anchor_id]['title']},
+                          {'article_id':candidate_id,'quote':articles[candidate_id]['title']}]}
+    return {'status':'ok','data':{'answers':answers,'usage':{'cost':.02,'input_tokens':1000}}}
 
 
 def test_transport_failure_retains_reservation_and_never_attaches(monkeypatch,harness):
@@ -69,6 +80,15 @@ def test_transport_failure_retains_reservation_and_never_attaches(monkeypatch,ha
     saved.assert_not_called()
     attached.assert_not_called()
     assert reserve.call_args.kwargs['pair_keys']==[worker.pair_cache_key(*articles)]
+
+
+def test_invalid_chat_result_keeps_known_bill_for_halt(monkeypatch,harness):
+    worker,articles,page,reserve,settled,saved,attached=harness
+    monkeypatch.setattr(worker,'_request',lambda *a:{'status':'invalid_response','usage':{'cost':.12}})
+    assert worker.run_cycle(budget_usd=Decimal('3'))['status']=='error'
+    settled.assert_called_once_with('reservation',.12,'invalid_response')
+    saved.assert_not_called()
+    attached.assert_not_called()
 
 
 def test_success_commits_reservation_before_network_and_persists_membership(monkeypatch,harness):
@@ -82,22 +102,55 @@ def test_success_commits_reservation_before_network_and_persists_membership(monk
     assert result['status']=='ok' and result['accepted']==1 and result['calls']==1
     assert result['discovery_cursor']==22
     settled.assert_called_once_with('reservation',.00005,'ok')
-    assert reserve.call_args.kwargs['reservation_usd']==Decimal('.01')
+    assert reserve.call_args.kwargs['reservation_usd']==worker.decision_model.RESERVATION_USD
     saved.assert_called_once()
     attached.assert_called_once()
 
 
-def test_pair_cost_over_one_cent_stops_before_save(monkeypatch,harness):
+def test_self_reported_choice_attaches_with_source_evidence_and_model_tracking(monkeypatch,harness):
+    worker,articles,page,reserve,settled,saved,attached=harness
+    observed=[]
+    def request(payload,key,timeout):
+        reserve.assert_called_once()
+        assert key=='test'
+        observed.append(timeout)
+        return chat_response(payload)
+    monkeypatch.setattr(worker,'_request',request)
+    result=worker.run_cycle(budget_usd=Decimal('3'))
+    assert result['status']=='ok' and result['accepted']==1
+    assert observed==[5 if worker.decision_model.MODEL=='typesafe/jev-1.13' else 45]
+    assert saved.call_args.args[0][0]['probabilities']=={}
+    assert saved.call_args.args[0][0]['model']==worker.decision_model.MODEL
+    assert result['model']==worker.decision_model.MODEL
+    worker.track_api_call.assert_called_once()
+    assert worker.track_api_call.call_args.kwargs['model']==worker.decision_model.MODEL
+
+
+def test_unknown_bill_is_not_estimated_as_free_and_generated_tokens_are_tracked(monkeypatch,harness):
+    worker,articles,page,reserve,settled,saved,attached=harness
+    def request(payload,*args):
+        result=response(payload)
+        result['data']['usage']={'prompt_tokens':123,'completion_tokens':45,'cost':None}
+        return result
+    monkeypatch.setattr(worker,'_request',request)
+    assert worker.run_cycle(budget_usd=Decimal('3'))['status']=='ok'
+    settled.assert_called_once_with('reservation',None,'ok')
+    tracked=worker.track_api_call.call_args.kwargs
+    assert tracked['tokens_in']==123 and tracked['tokens_out']==45
+    assert tracked['cost'] is None and tracked['estimate_missing_cost'] is False
+
+
+def test_pair_cost_over_reservation_stops_before_save(monkeypatch,harness):
     worker,articles,page,reserve,settled,saved,attached=harness
     def expensive(payload,*args):
         data=response(payload)
-        data['data']['usage']['cost']=.02
+        data['data']['usage']['cost']=float(worker.decision_model.RESERVATION_USD)+.01
         return data
     monkeypatch.setattr(worker,'_request',expensive)
     result=worker.run_cycle(budget_usd=Decimal('3'))
     assert result['status']=='error' and result['calls']==1
-    assert reserve.call_args.kwargs['reservation_usd']==Decimal('.01')
-    settled.assert_called_once_with('reservation',.02,'invalid_response')
+    assert reserve.call_args.kwargs['reservation_usd']==worker.decision_model.RESERVATION_USD
+    settled.assert_called_once_with('reservation',float(worker.decision_model.RESERVATION_USD)+.01,'invalid_response')
     saved.assert_not_called()
     attached.assert_not_called()
 
@@ -131,32 +184,6 @@ def test_cached_success_attaches_without_new_charge(monkeypatch,harness):
     assert result['accepted']==1 and result['calls']==0
     attached.assert_called_once()
     reserve.assert_not_called()
-
-
-def test_tariff_reads_jev_provider_endpoints_not_chat_catalog(monkeypatch):
-    from src import agenda_worker as worker
-    reply=Mock()
-    reply.json.return_value={'data':{'id':'typesafe/jev-1.13','endpoints':[
-        {'provider_name':'TypeSafe','pricing':{'prompt':'0.000000042','completion':'0','discount':0}}]}}
-    get=Mock(return_value=reply)
-    monkeypatch.setattr(worker.httpx,'get',get)
-    monkeypatch.setenv('OPENROUTER_API_KEY','test-key')
-    worker.check_tariff()
-    assert get.call_args.args[0]=='https://openrouter.ai/api/v1/models/typesafe/jev-1.13/endpoints'
-    assert get.call_args.kwargs['headers']=={'Authorization':'Bearer test-key'}
-
-
-@pytest.mark.parametrize('data',[
-    {'id':'typesafe/jev-latest','endpoints':[{'pricing':{'prompt':'0','completion':'0'}}]},
-    {'id':'typesafe/jev-1.13','endpoints':[]},
-    {'id':'typesafe/jev-1.13','endpoints':[{'pricing':{'prompt':'.000000042','completion':'0'}},{'pricing':{'prompt':'1','completion':'0'}}]},
-])
-def test_endpoint_tariff_rejects_wrong_model_missing_or_expensive_provider(monkeypatch,data):
-    from src import agenda_worker as worker
-    reply=Mock();reply.json.return_value={'data':data}
-    monkeypatch.setattr(worker.httpx,'get',Mock(return_value=reply))
-    monkeypatch.setenv('OPENROUTER_API_KEY','test-key')
-    with pytest.raises(ValueError):worker.check_tariff()
 
 
 def test_translation_runs_after_discovery_and_failure_keeps_jev_result(monkeypatch,harness):

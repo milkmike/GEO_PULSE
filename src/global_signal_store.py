@@ -9,10 +9,10 @@ from sqlalchemy import text
 
 from src.db import get_session
 from src import early_signal_store as dossiers
-from src.early_signals import source_key
+from src.early_signals import MODEL, VERSION, source_key
 from src.signal_workbench import instant
 
-PLANNER_VERSION = 'global-context-v1'
+PLANNER_VERSION = f'global-context-v2:{MODEL}:{VERSION}'
 
 
 def _json(value):
@@ -100,10 +100,12 @@ def claim_context(*, as_of, current_articles):
                      FROM early_signal_work WHERE attempted_at IS NOT NULL GROUP BY country_code) prior
             ON prior.country_code=work.country_code
           WHERE work.status='context_ready' AND work.attempted_at IS NULL
+            AND work.planner_version=:version
             AND work.newest_published_at>=:cutoff AND work.newest_published_at<=:as_of
           ORDER BY prior.last_attempt ASC NULLS FIRST,work.created_at,work.id
           LIMIT 80 FOR UPDATE OF work SKIP LOCKED
-        """), {'as_of': instant(as_of), 'cutoff': instant(as_of) - timedelta(days=7)}).mappings().all()
+        """), {'as_of': instant(as_of), 'cutoff': instant(as_of) - timedelta(days=7),
+                'version': PLANNER_VERSION}).mappings().all()
         for row in rows:
             context = json.loads(row['context']) if isinstance(row['context'], str) else row['context']
             evidence = context['articles']
@@ -143,8 +145,10 @@ def queue_summary(*, as_of):
     with get_session() as session:
         rows = session.execute(text("""SELECT country_code,status,count(*) AS count FROM early_signal_work
           WHERE newest_published_at>=:cutoff AND newest_published_at<=:as_of
+            AND planner_version=:version
           GROUP BY country_code,status"""),
-          {'as_of': instant(as_of), 'cutoff': instant(as_of) - timedelta(days=7)}).mappings().all()
+          {'as_of': instant(as_of), 'cutoff': instant(as_of) - timedelta(days=7),
+           'version': PLANNER_VERSION}).mappings().all()
     result = {}
     for row in rows:
         result.setdefault(row['country_code'] or 'unknown', {})[row['status']] = row['count']

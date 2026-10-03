@@ -1,19 +1,20 @@
 """Read-only, explicitly unreviewed news leads for the decision workspace.
 
-No model clients are imported here. Country involvement comes from the cached
+No model calls run here. Country involvement comes from the cached
 classification only when its primary country is resolved. Local collection and
 processing counters use publisher origin.
 """
 from datetime import datetime, timedelta
+import os
 import re
 
 from sqlalchemy import text
 
 from src.api.public_urls import safe_public_url
+from src.news_triage import MODEL, VERSION
+from src.decision_model import RESERVATION_USD
 
-MODEL = "typesafe/jev-1.13"
-VERSION = "news-triage-v2"
-CAMPAIGN = "jev-agenda-2026-09-30"
+CAMPAIGN = os.getenv('DECISION_CAMPAIGN', 'jev-agenda-2026-09-30')
 TOPICS = {"sanctions": "Санкции", "travel": "Поездки", "business": "Бизнес",
           "education": "Образование", "culture": "Культура", "security": "Безопасность",
           "diplomacy": "Дипломатия", "other": "Другие темы"}
@@ -41,7 +42,7 @@ SCOPED_COUNTRIES = """(CASE WHEN
 def processing_status(collected: int, classified: int, remaining: float | None) -> str:
     if collected and classified >= collected:
         return "up_to_date"
-    if remaining is not None and remaining < .01:
+    if remaining is not None and remaining < float(RESERVATION_USD):
         return "budget_exhausted"
     return "partial" if classified else "not_started"
 

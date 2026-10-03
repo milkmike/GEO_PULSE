@@ -19,12 +19,13 @@ from src.api_tracker import track_api_call
 from src.budgeted_chat import BudgetedChat
 from src.countries import COUNTRIES
 from src.db import get_session
+from src import news_triage
 from src.decision_verification import verify_annotation
 
 MODEL = "deepseek/deepseek-v4-flash"
 VERSION = "decision-annotation-v3-reviewed"
-TRIAGE_MODEL = "typesafe/jev-1.13"
-TRIAGE_VERSION = "news-triage-v2"
+TRIAGE_MODEL = news_triage.MODEL
+TRIAGE_VERSION = news_triage.VERSION
 MAX_EXCERPT = 4000
 MAX_PROMPT_BYTES = 32000
 KINDS = {"decision", "conflict", "cooperation", "position", "incident", "other"}
@@ -120,7 +121,7 @@ def source_key(article: dict) -> str:
 
 
 def fair_candidates(rows: list[dict]) -> list[dict]:
-    """Current Jev leads first, then legacy relevance and country fairness."""
+    """Current triage leads first, then legacy relevance and country fairness."""
     ordered = []
     for triage_positive in (True, False):
         for relevant in (True, False, None):
@@ -170,7 +171,7 @@ _TRIAGE_POSITIVE = """
    THEN nt.classification->'countries' ELSE '[]'::jsonb END)>0
 """
 # geo_country_code has a partial (country, published_at DESC, id DESC) index.
-# Scan the small Jev cache first, then retain at most forty current positive
+# Scan the small triage cache first, then retain at most forty current positive
 # labels per publishing country. Unclassified fallback keeps its article index
 # probe; newer fallback rows cannot hide an older positive label.
 _CANDIDATES_SQL = text(f"""

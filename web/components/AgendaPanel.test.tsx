@@ -11,7 +11,7 @@ function payload(): AgendasResponse {
   return {
     items: [{ id: 1, title: "Открыт новый авиарейс", article_count: 3, source_count: 2,
       countries: ["RU", "AE"], first_seen: "2026-09-30T08:00:00Z", last_seen: "2026-09-30T09:00:00Z",
-      updated_at: "2026-09-30T09:10:00Z", same_event_count: 1, development_count: 1, model: "typesafe/jev-1.13",
+      updated_at: "2026-09-30T09:10:00Z", same_event_count: 1, development_count: 1, model: "deepseek/deepseek-chat",
       articles: [
         { id: 1, title: "Первое сообщение", url: "https://example.com/a", source_name: "Газета", country_code: "RU", published_at: "2026-09-30T08:00:00Z", collected_at: "2026-09-30T08:30:00Z", relation: "seed", confidence: null },
         { id: 2, title: "Второе сообщение", url: "javascript:alert(1)", source_name: "Агентство", country_code: "AE", published_at: "2099-01-01T00:00:00Z", collected_at: "2026-09-30T09:00:00Z", date_warning: true, relation: "same_event", confidence: 0.9 },
@@ -39,7 +39,7 @@ describe("AgendaPanel", () => {
     expect(screen.getByText("Исходная публикация")).toBeVisible();
     expect(screen.getByText("То же событие")).toBeVisible();
     expect(screen.getByText("Развитие и реакция")).toBeVisible();
-    expect(screen.getByText(/Уверенность в связи: 90%/)).toBeVisible();
+    expect(screen.getByText(/Оценка модели: 90%/)).toBeVisible();
     await user.click(expand);
     expect(screen.queryByText("Первое сообщение")).not.toBeInTheDocument();
   });
@@ -85,7 +85,7 @@ describe("AgendaPanel", () => {
     mocks.agendas.mockResolvedValue(fallback);
     const { unmount } = render(<AgendaPanel />);
     await screen.findByText("Открыт новый авиарейс");
-    expect(screen.queryByText("Связи проверены Jev")).not.toBeInTheDocument();
+    expect(screen.queryByText("Связи сопоставлены ИИ")).not.toBeInTheDocument();
     unmount();
     fallback.items[0].model = "typesafe/jev-1.13";
     fallback.items[0].same_event_count = 0; fallback.items[0].development_count = 0;
@@ -93,7 +93,7 @@ describe("AgendaPanel", () => {
     mocks.agendas.mockResolvedValue(fallback);
     render(<AgendaPanel />);
     await screen.findByText("Открыт новый авиарейс");
-    expect(screen.queryByText("Связи проверены Jev")).not.toBeInTheDocument();
+    expect(screen.queryByText("Связи сопоставлены ИИ")).not.toBeInTheDocument();
   });
 
   it("ignores a stale search response after a new request", async () => {
@@ -121,7 +121,7 @@ describe("Agenda titles in Russian", () => {
     render(<AgendaPanel />);
     expect(await screen.findByRole("heading", { name: "Открывается новый авиамаршрут" })).toBeVisible();
     expect(screen.getByText("Машинный перевод")).toBeVisible();
-    expect(screen.getByText("Связи проверены Jev")).toBeVisible();
+    expect(screen.getByText("Связи сопоставлены ИИ")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Показать оригинал" }));
     expect(screen.getByRole("heading", { name: "A new flight route opens" })).toBeVisible();
     expect(screen.queryByText("Машинный перевод")).not.toBeInTheDocument();

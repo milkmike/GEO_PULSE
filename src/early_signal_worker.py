@@ -17,12 +17,13 @@ from sqlalchemy import text
 
 from src import agenda_budget as budget, early_signal_store as store
 from src.agenda_store import load_articles
-from src.agenda_worker import check_tariff
+from src.decision_model import check_tariff
+from src import decision_model
 from src.api_tracker import track_api_call
 from src.monitoring_registry import MONITORING_COUNTRIES as COUNTRIES
 from src.db import get_session
 from src.early_signals import MODEL, encode, parse_response, prepare_payload, select_candidates, source_key
-from src.jev import _request
+from src.decision_model import request as _request
 from src.signal_hypotheses import prepare_prompt, validate_dossier
 from src.signal_workbench import article_snapshot, instant, request_hash
 
@@ -48,11 +49,12 @@ def _cost(data):
     return value, usage
 
 
-def _track(model, endpoint, usage, cost, outcome, reason=None):
-    track_api_call(service='openrouter', endpoint=endpoint, model=model,
+def _track(model, endpoint, usage, cost, outcome, reason=None, *, service='openrouter'):
+    track_api_call(service=service, endpoint=endpoint, model=model,
                    script='build_early_signals.py',
                    tokens_in=usage.get('prompt_tokens', usage.get('input_tokens', 0)),
                    tokens_out=usage.get('completion_tokens', 0),
+                   estimate_missing_cost=False,
                    cost=cost if type(cost) in (int, float) and math.isfinite(cost) and cost >= 0 else None,
                    status='ok' if outcome == 'ok' else 'error', error=reason)
 
@@ -63,9 +65,10 @@ def run_screening_cycle(*, budget_usd=Decimal('0'), campaign=CAMPAIGN,
     stats = {'status': 'ok', 'calls': 0, 'screened': 0, 'changes': 0, 'uncertain': 0}
     if not budget_usd:
         return {**stats, 'status': 'disabled'}
-    key = os.environ.get('OPENROUTER_API_KEY')
+    key = os.environ.get(decision_model.KEY_ENV)
     if not key:
-        return {**stats, 'status': 'missing_key'}
+        return {**stats, 'status': 'missing_key', 'provider': decision_model.PROVIDER,
+                'model': MODEL}
     now = instant(as_of) if as_of else datetime.now(timezone.utc)
     raw = articles if articles is not None else load_articles(hours=168)
     attempted = budget.get_attempted_pair_keys(campaign)
@@ -98,13 +101,16 @@ def run_screening_cycle(*, budget_usd=Decimal('0'), campaign=CAMPAIGN,
             check_tariff()
             tariff_checked = True
         call_id = budget.reserve_request(campaign, budget_usd, request_hash(payload),
-                pair_keys=[source_key(a) for a in selected], reservation_usd=Decimal('.01'))
+                pair_keys=[source_key(a) for a in selected], reservation_usd=decision_model.RESERVATION_USD)
         if not call_id:
             return {**stats, 'status': 'budget_exhausted'}
         stats['calls'] += 1
         cost, usage, outcome, reason = None, {}, 'error', 'transport_error'
         try:
-            result = _request(payload, key, 10)
+            result = _request(payload, key, 45 if decision_model.PROVIDER != 'jev' else 10)
+            if isinstance(result.get('usage'), dict):
+                usage = result['usage']
+                cost = usage.get('cost')
             if result.get('status') != 'ok':
                 raise OSError('provider_error')
             data = result['data']
@@ -112,7 +118,7 @@ def run_screening_cycle(*, budget_usd=Decimal('0'), campaign=CAMPAIGN,
             cost = (data.get('usage') or {}).get('cost') if isinstance(data.get('usage'), dict) else None
             cost, usage = _cost(data)
             records, _ = parse_response(data, selected, codes)
-            if cost is not None and cost > .01:
+            if cost is not None and cost > float(decision_model.RESERVATION_USD):
                 raise ValueError('screening_cost_exceeds_reservation')
             for record in records:
                 record['snapshot_hash'] = request_hash(record['article'])
@@ -129,12 +135,14 @@ def run_screening_cycle(*, budget_usd=Decimal('0'), campaign=CAMPAIGN,
             stats.update(status='error', error=reason)
         finally:
             budget.finish_request(call_id, cost, outcome)
-            _track(MODEL, '/alpha/decisions', usage, cost, outcome, reason)
+            _track(MODEL, decision_model.ENDPOINT, usage, cost, outcome, reason,
+                   service=decision_model.SERVICE)
         if outcome != 'ok':
             break
         ids = {a['id'] for a in selected}
         pending = [a for a in pending if a['id'] not in ids]
     stats['remaining_budget_usd'] = budget.get_budget(campaign)
+    stats.update(model=MODEL, provider=decision_model.PROVIDER)
     return stats
 
 

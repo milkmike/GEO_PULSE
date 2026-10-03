@@ -135,6 +135,43 @@ def test_parser_preserves_all_raw_probabilities_and_pair_identity():
     assert accepted_decision(decisions[0])
 
 
+def test_self_reported_relation_requires_exact_quotes_from_both_articles():
+    anchor = article(1, 'Orchid laboratory fire in Moscow', excerpt='Fire crews entered the laboratory.')
+    candidate = article(2, 'Moscow Orchid laboratory fire update', excerpt='Fire crews entered the laboratory again.')
+    _, pairs = prepare_pair_payload(anchor, [candidate])
+    value = {'type': 'choice', 'choice': 'same_event', 'confidence': .93,
+             'confidence_kind': 'self_reported', 'evidence': [
+                 {'article_id': '1', 'quote': 'Orchid laboratory fire'},
+                 {'article_id': '2', 'quote': 'laboratory fire update'}]}
+    decisions, _ = parse_pair_response(response(value), pairs)
+    assert decisions[0]['probabilities'] == {}
+    assert decisions[0]['confidence_kind'] == 'self_reported'
+    assert accepted_decision(decisions[0])
+    for bad in [value | {'confidence': .89},
+                value | {'evidence': value['evidence'][:1]},
+                value | {'evidence': [value['evidence'][0], {'article_id': '2', 'quote': 'fabricated incident'}]}]:
+        if bad['confidence'] == .89:
+            parsed, _ = parse_pair_response(response(bad), pairs)
+            assert not accepted_decision(parsed[0])
+        else:
+            with pytest.raises(ValueError):
+                parse_pair_response(response(bad), pairs)
+
+
+def test_self_reported_uncertain_may_have_no_evidence_but_cannot_be_accepted():
+    _, pairs = prepare_pair_payload(article(1, 'A'), [article(2, 'B')])
+    value = {'type': 'choice', 'choice': 'uncertain', 'confidence': .97,
+             'confidence_kind': 'self_reported', 'evidence': []}
+    decisions, _ = parse_pair_response(response(value), pairs)
+    assert not accepted_decision(decisions[0])
+
+
+def test_parser_rejects_mismatched_model_envelope():
+    _, pairs = prepare_pair_payload(article(1, 'A'), [article(2, 'B')])
+    with pytest.raises(ValueError):
+        parse_pair_response(response() | {'model': 'unexpected-model'}, pairs)
+
+
 @pytest.mark.parametrize('bad', [None, [], {}, {'type': 'score'},
     answer(choice='topic'), answer(confidence=True), answer(confidence=float('nan')),
     answer(confidence=1.1), answer(probabilities={}),
@@ -179,6 +216,14 @@ def test_cache_invalidates_for_changed_content_dates_or_anchor_direction():
                     b | {'published_at': NOW-timedelta(days=1)}]:
         assert pair_cache_key(a, changed) != key
     assert pair_cache_key(b, a) != key
+
+
+def test_cache_fingerprint_distinguishes_selected_model(monkeypatch):
+    from src import agenda_discovery as discovery
+    a, b = article(1, 'A'), article(2, 'B')
+    original = pair_cache_key(a, b)
+    monkeypatch.setattr(discovery.decision_model, 'MODEL', 'another-allowlisted-model')
+    assert pair_cache_key(a, b) != original
 
 
 @pytest.mark.parametrize('bad', [answer(choice=[]), answer(choice={}), answer(confidence=10**1000),
