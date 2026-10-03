@@ -43,3 +43,12 @@ mechanism, not global recall, article truth or a calibrated country-wide score.
 Rollback: set `JEV_EVIDENCE_MODE=off` and recreate the agendas worker through the
 normal deploy. Existing source proof remains readable; no schema rollback or
 ledger reset is needed.
+
+Selector v2 uses short request-local choice labels and compact selection rules,
+then maps choices back to the exact stable source offsets in code. This removes
+duplicated text that caused normal 4000-character Cyrillic sources to exceed
+24KB before a paid call. The full second-pass semantic rules, thresholds and
+request/cost caps remain unchanged. An operation revision changes the attempted
+source key for the corrected pipeline; the stored proof schema remains v1 so
+existing cards stay readable. A regression covers both passes with eight claims
+and a 4000-character source.

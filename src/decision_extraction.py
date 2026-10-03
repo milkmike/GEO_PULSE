@@ -123,7 +123,7 @@ def validate_annotation(value: dict, article: dict, country_codes: set[str], *, 
 def source_key(article: dict) -> str:
     identity = [VERSION, MODEL, article["id"], article["title"], article["excerpt"]]
     if jev_evidence.enabled():
-        identity.append(source_segments.VERSION)
+        identity.append(jev_evidence.VERSION)
     encoded = json.dumps(identity,
                          ensure_ascii=False, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()
