@@ -52,3 +52,10 @@ request/cost caps remain unchanged. An operation revision changes the attempted
 source key for the corrected pipeline; the stored proof schema remains v1 so
 existing cards stay readable. A regression covers both passes with eight claims
 and a 4000-character source.
+
+Full v2 pipeline live check: publication 1752131 was drafted, reviewed in both
+Jev passes and saved (`calls=1, saved=1, invalid=0, review_rejected=0`). Public
+Moldova API returned its headline/Russia/country proof. The publisher is Armenian
+(`AM`); the participant is Moldova (`MD`). Optional summary, explanation and
+actor position were pruned by the unchanged semantic thresholds. The two Jev
+passes cost $.000190722; the draft shares the existing $2 worker campaign cap.
