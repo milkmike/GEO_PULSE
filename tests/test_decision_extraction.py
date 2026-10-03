@@ -12,6 +12,39 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
 from src import decision_extraction as extraction
+from src import source_segments
+
+
+def test_jev_draft_uses_fragment_ids_and_does_not_repair_country_quote(monkeypatch):
+    source = article()
+    legacy_key = extraction.source_key(source)
+    monkeypatch.setenv('JEV_EVIDENCE_MODE', 'apply')
+    lines = source_segments.segments(source)
+    identity = next(key for key, line in lines.items() if 'Serbia' in line['quote'])
+    draft = annotation(russia_evidence_quote=identity, countries=[{'code': 'RS', 'evidence_quote': identity}], positions=[])
+    assert identity in extraction.prepare_prompt(source)
+    assert extraction.source_key(source) != legacy_key
+    result = extraction.parse_annotation(json.dumps(draft), source, {'RS'})
+    assert result['countries'][0]['evidence_quote'] == lines[identity]['quote']
+    assert result['russia_evidence_quote'] == lines[identity]['quote']
+    draft['countries'][0]['evidence_quote'] = 'Serbia'
+    with pytest.raises(ValueError):
+        extraction.parse_annotation(json.dumps(draft), source, {'RS'})
+
+
+def test_only_reviewed_annotations_accept_bound_evidence_audit():
+    source = article()
+    lines = source_segments.segments(source)
+    identity = next(key for key, line in lines.items() if 'Serbia' in line['quote'])
+    draft = annotation(russia_evidence_quote=lines[identity]['quote'],
+                       countries=[{'code':'RS','evidence_quote':lines[identity]['quote']}], summary_ru='')
+    signed = source_segments.seal_review(source, draft, {'headline':identity,'russia':identity,'country_RS':identity})
+    assert extraction.validate_annotation(signed, source, {'RS'}, reviewed=True) == signed
+    with pytest.raises(ValueError):
+        extraction.validate_annotation(signed, source, {'RS'})
+    signed['headline_ru'] = 'Выдуманный факт'
+    with pytest.raises(ValueError):
+        extraction.validate_annotation(signed, source, {'RS'}, reviewed=True)
 
 
 def article(**changes):
@@ -215,6 +248,18 @@ def test_source_snapshot_is_invalidated_and_rechecked_before_save(monkeypatch):
         assert len(rows) == 1 and codes == {"RS"}
         assert extraction.save_if_current(rows[0], annotation())
         assert extraction.load_candidates()[0] == []
+        with monkeypatch.context() as evidence_mode:
+            evidence_mode.setenv('JEV_EVIDENCE_MODE', 'apply')
+            assert [r['id'] for r in extraction.load_candidates()[0]] == [1]
+            original = rows[0]
+            lines = source_segments.segments(original)
+            identity = next(key for key, line in lines.items() if 'Serbia' in line['quote'])
+            proven = annotation(russia_evidence_quote=lines[identity]['quote'],
+                countries=[{'code':'RS', 'evidence_quote':lines[identity]['quote']}])
+            proven = source_segments.seal_review(original, proven,
+                {key:identity for key in ('headline','summary','russia','country_RS')})
+            assert extraction.save_if_current(original, proven)
+            assert extraction.load_candidates()[0] == []
         with session() as db:
             db.execute(text("UPDATE articles SET body='Corrected source' WHERE id=1"))
         assert not extraction.save_if_current(rows[0], annotation())

@@ -151,6 +151,92 @@ describe("DecisionWorkspace", () => {
     expect(window.location.search).toBe("?country=RS");
   });
 
+  it("shows checked source excerpts with claim labels once and hides legacy quotes when the new array exists", async () => {
+    const value = response();
+    value.brief.day = [{ ...evidence, supporting_quotes: [
+      { claim: "headline", quote: "visa rules", source_part: "title" },
+      { claim: "summary", quote: "proposal", source_part: "excerpt" },
+      { claim: "russia", quote: "Russian citizens", source_part: "excerpt" },
+      { claim: "country", quote: "Serbia", source_part: "title" },
+      { claim: "country", quote: "Russian citizens", source_part: "excerpt" },
+      { claim: "summary", quote: "  ", source_part: "excerpt" },
+    ] }];
+    mocks.decisionWorkspace.mockResolvedValue(value);
+    render(<DecisionWorkspace />);
+    await screen.findByText("Сербия ↔ Россия");
+    const brief = screen.getByText("Страна за 60 секунд").closest("section")!;
+    const citation = within(brief).getByText("Цитата и источник").closest("details")!;
+    expect(citation).not.toHaveAttribute("open");
+    fireEvent.click(within(citation).getByText("Цитата и источник"));
+    const excerpts = [...citation.querySelectorAll("blockquote")];
+    expect(excerpts.map((node) => node.textContent)).toEqual([
+      "«visa rules»", "«proposal»", "«Russian citizens»", "«Serbia»",
+    ]);
+    for (const label of ["Суть сообщения", "Подробности", "Связь с Россией", "Участие страны"]) {
+      expect(within(citation).getAllByText(label)[0]).toBeVisible();
+    }
+    expect(within(citation).queryByText(/Связь со страной:/)).not.toBeInTheDocument();
+  });
+
+  it("keeps every claim label when one exact source fragment supports three claims", async () => {
+    const value = response();
+    value.brief.day = [{ ...evidence, supporting_quotes: [
+      { claim: "headline", quote: "Serbia", source_part: "title" },
+      { claim: "russia", quote: "Serbia", source_part: "title" },
+      { claim: "country", quote: "Serbia", source_part: "title" },
+    ] }];
+    mocks.decisionWorkspace.mockResolvedValue(value);
+    render(<DecisionWorkspace />);
+    await screen.findByText("Сербия ↔ Россия");
+    const brief = screen.getByText("Страна за 60 секунд").closest("section")!;
+    const citation = within(brief).getByText("Цитата и источник").closest("details")!;
+    fireEvent.click(within(citation).getByText("Цитата и источник"));
+    expect([...citation.querySelectorAll("blockquote")].map((node) => node.textContent)).toEqual(["«Serbia»"]);
+    for (const label of ["Суть сообщения", "Связь с Россией", "Участие страны"]) {
+      expect(within(citation).getByText(label)).toBeVisible();
+    }
+  });
+
+  it("puts a position's own quote first and keeps legacy source quotes when supporting excerpts are absent", async () => {
+    render(<DecisionWorkspace />);
+    await screen.findByText("Сербия ↔ Россия");
+    fireEvent.click(screen.getByText(/Кто какую позицию занимает/));
+    const position = screen.getByText("Сообщается, что ведомство изучает предложение.").closest("article")!;
+    const citation = within(position).getByText("Цитата и источник").closest("details")!;
+    fireEvent.click(within(citation).getByText("Цитата и источник"));
+    expect(citation.querySelector("blockquote")).toHaveTextContent("«proposal»");
+    expect(within(citation).getByText("Связь с Россией: «Russian citizens»")).toBeVisible();
+    expect(within(citation).getByText("Связь со страной: «Serbia»")).toBeVisible();
+  });
+
+  it("keeps position and change quotes first when they repeat a supporting excerpt", async () => {
+    const value = response();
+    const withQuotes: DecisionEvidence = { ...evidence, supporting_quotes: [
+      { claim: "summary", quote: "proposal", source_part: "excerpt" },
+      { claim: "russia", quote: "Russian citizens", source_part: "excerpt" },
+    ] };
+    value.positions[0].evidence = withQuotes;
+    value.changes[0].evidence = withQuotes;
+    mocks.decisionWorkspace.mockResolvedValue(value);
+    render(<DecisionWorkspace />);
+    await screen.findByText("Сербия ↔ Россия");
+    for (const heading of [/Кто какую позицию занимает/, /Что меняется для российских граждан/]) {
+      fireEvent.click(screen.getByText(heading));
+    }
+    for (const [body, expected] of [
+      ["Сообщается, что ведомство изучает предложение.", "«proposal»"],
+      ["Предлагается изменить визовые правила для граждан РФ.", "«Russian citizens»"],
+    ]) {
+      const article = screen.getByText(body).closest("article")!;
+      const citation = within(article).getByText("Цитата и источник").closest("details")!;
+      fireEvent.click(within(citation).getByText("Цитата и источник"));
+      const excerpts = [...citation.querySelectorAll("blockquote")];
+      expect(excerpts[0]).toHaveTextContent(expected);
+      expect(excerpts.filter((node) => node.textContent === expected)).toHaveLength(1);
+      expect(within(citation).getByText(body.startsWith("Сообщается") ? "Подробности" : "Связь с Россией")).toBeVisible();
+    }
+  });
+
   it("selects and requests the country from a lowercase URL code", async () => {
     window.history.replaceState(null, "", "/?country=rs");
     render(<DecisionWorkspace />);

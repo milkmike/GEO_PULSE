@@ -21,8 +21,33 @@ function safeSourceUrl(value: string | null): string | null {
   } catch { return null; }
 }
 
+const quoteLabels = {
+  headline: "Суть сообщения",
+  summary: "Подробности",
+  russia: "Связь с Россией",
+  country: "Участие страны",
+} as const;
+
 function SourceEvidence({ evidence, quote }: { evidence: DecisionEvidence; quote?: string }) {
   const href = safeSourceUrl(evidence.url);
+  const byText = new Map<string, { text: string; labels: string[]; legacy: boolean }>();
+  const add = (text: string | undefined, label?: string, legacy?: boolean) => {
+    const clean = text?.trim();
+    if (!clean) return;
+    const existing = byText.get(clean);
+    if (existing) {
+      if (label && !existing.labels.includes(label)) existing.labels.push(label);
+      return;
+    }
+    byText.set(clean, { text: clean, labels: label ? [label] : [], legacy: Boolean(legacy) });
+  };
+  add(quote);
+  if (Array.isArray(evidence.supporting_quotes)) {
+    for (const item of evidence.supporting_quotes) add(item.quote, quoteLabels[item.claim]);
+  } else {
+    add(evidence.russia_evidence_quote, "Связь с Россией", true);
+    add(evidence.country_evidence_quote, "Связь со страной", true);
+  }
   return (
     <details className="group mt-2 border-t border-line pt-2 text-xs">
       <summary className="w-fit cursor-pointer rounded-sm py-1 text-accent underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">
@@ -30,13 +55,16 @@ function SourceEvidence({ evidence, quote }: { evidence: DecisionEvidence; quote
       </summary>
       <div className="mt-2 min-w-0 space-y-2 break-words border-l-2 border-ru-blue/60 pl-3 leading-5 text-dim">
         <p className="text-fg">{evidence.title_original}</p>
-        {quote && <blockquote className="whitespace-pre-wrap text-fg">«{quote}»</blockquote>}
-        {evidence.russia_evidence_quote && quote !== evidence.russia_evidence_quote && (
-          <p>Связь с Россией: «{evidence.russia_evidence_quote}»</p>
-        )}
-        {evidence.country_evidence_quote && quote !== evidence.country_evidence_quote && (
-          <p>Связь со страной: «{evidence.country_evidence_quote}»</p>
-        )}
+        {[...byText.values()].map((item) => item.legacy ? (
+          <p key={item.text}>{item.labels.join(" · ")}: «{item.text}»</p>
+        ) : (
+          <figure key={item.text}>
+            {item.labels.length > 0 && <figcaption className="text-[11px] font-medium text-dim">
+              {item.labels.map((label, index) => <span key={label}>{index > 0 && <span aria-hidden="true"> · </span>}{label}</span>)}
+            </figcaption>}
+            <blockquote className="mt-0.5 whitespace-pre-wrap text-fg">«{item.text}»</blockquote>
+          </figure>
+        ))}
         <p>{evidence.publisher_name}{evidence.publisher_country_code ? ` · издатель: ${evidence.publisher_country_code}` : ""}</p>
         <p>Опубликовано: {dateTime(evidence.published_at)} · собрано: {dateTime(evidence.collected_at)}</p>
         {href ? (
