@@ -96,6 +96,14 @@ def _evidence(row: Any, country_code: str, now: datetime) -> tuple[dict[str, Any
     kind = annotation.get("kind")
     if not isinstance(kind, str) or kind not in _KINDS:
         return None
+    from src.source_segments import public_quotes
+    try:
+        if 'evidence_review' in annotation and annotation['evidence_review'] is None:
+            return None
+        quotes = public_quotes({'id':int(_get(row, 'article_id')), 'title':title, 'excerpt':excerpt},
+                               annotation, country_code)
+    except (ValueError, KeyError, TypeError):
+        return None
     return ({
         "article_id": int(_get(row, "article_id")),
         "title_ru": annotation["headline_ru"],
@@ -110,6 +118,7 @@ def _evidence(row: Any, country_code: str, now: datetime) -> tuple[dict[str, Any
         "country_evidence_quote": country_items[0]["evidence_quote"],
         "summary_ru": annotation["summary_ru"],
         "kind": kind,
+        **({'supporting_quotes':quotes} if quotes else {}),
     }, annotation)
 
 

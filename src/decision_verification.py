@@ -240,6 +240,9 @@ def _request(payload, api_key, timeout):
 def verify_annotation(article: dict, annotation: dict, *, campaign: str,
                       budget_usd: Decimal) -> dict | None:
     """One paid attempt at most; return admitted claims or abstain."""
+    from src import jev_evidence
+    if jev_evidence.enabled():
+        return jev_evidence.verify_annotation(article, annotation, campaign=campaign, budget_usd=budget_usd)
     if not isinstance(budget_usd, Decimal) or not budget_usd.is_finite() or not 0 <= budget_usd <= 3:
         raise ValueError("invalid review budget")
     if not isinstance(annotation, dict) or annotation.get("relevant") is not True or not budget_usd:

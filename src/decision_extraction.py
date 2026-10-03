@@ -20,6 +20,7 @@ from src.budgeted_chat import BudgetedChat
 from src.countries import COUNTRIES
 from src.db import get_session
 from src import news_triage
+from src import jev_evidence, source_segments
 from src.decision_verification import verify_annotation
 
 MODEL = "deepseek/deepseek-v4-flash"
@@ -68,8 +69,13 @@ def _quote(value, source: str) -> str:
 
 def validate_annotation(value: dict, article: dict, country_codes: set[str], *, reviewed: bool = False) -> dict:
     """Accept exact JSON shape and exact source substrings; otherwise abstain."""
-    if not isinstance(value, dict) or set(value) != ROOT_KEYS or type(value["relevant"]) is not bool:
+    shapes = (ROOT_KEYS, ROOT_KEYS | {'evidence_review'}) if reviewed else (ROOT_KEYS,)
+    if not isinstance(value, dict) or set(value) not in shapes or type(value["relevant"]) is not bool:
         raise ValueError("invalid annotation shape")
+    if 'evidence_review' in value:
+        if not value['relevant'] or value['evidence_review'] is None:
+            raise ValueError('invalid evidence audit')
+        source_segments.validate_review(article, value)
     source = article["title"] + "\n" + article["excerpt"]
     relevant = value["relevant"]
     _plain(value["headline_ru"], 180, required=relevant, russian=True)
@@ -115,7 +121,10 @@ def validate_annotation(value: dict, article: dict, country_codes: set[str], *, 
 
 
 def source_key(article: dict) -> str:
-    encoded = json.dumps([VERSION, MODEL, article["id"], article["title"], article["excerpt"]],
+    identity = [VERSION, MODEL, article["id"], article["title"], article["excerpt"]]
+    if jev_evidence.enabled():
+        identity.append(source_segments.VERSION)
+    encoded = json.dumps(identity,
                          ensure_ascii=False, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()
 
@@ -157,7 +166,9 @@ _ELIGIBLE = """
    SELECT 1 FROM article_decision_annotations cache
    WHERE cache.article_id=ar.id AND cache.source_title=ar.title
      AND cache.source_excerpt=LEFT(COALESCE(NULLIF(ar.body,''),ar.summary,''),4000)
-     AND cache.model=:model AND cache.version=:version)
+     AND cache.model=:model AND cache.version=:version
+     AND (NOT :require_evidence OR cache.annotation->'relevant'='false'::jsonb
+          OR cache.annotation->'evidence_review'->>'version'=:evidence_version))
 """
 _TRIAGE_JOIN = """
  LEFT JOIN article_news_triage nt ON nt.article_id=ar.id
@@ -239,7 +250,8 @@ def load_candidates(article_ids: list[int] | None = None) -> tuple[list[dict], s
         session.execute(text("SET LOCAL statement_timeout='15s'"))
         selection = _BOOTSTRAP_SQL if article_ids is not None else _CANDIDATES_SQL
         params = {"model": MODEL, "version": VERSION, "triage_model": TRIAGE_MODEL,
-                  "triage_version": TRIAGE_VERSION, "article_ids": article_ids}
+                  "triage_version": TRIAGE_VERSION, "article_ids": article_ids,
+                  "require_evidence": jev_evidence.enabled(), "evidence_version": source_segments.VERSION}
         ids = session.execute(selection, params).scalars().all()
         rows = [dict(row) for row in session.execute(_DETAIL_SQL,
             {"ids": ids, "triage_model": TRIAGE_MODEL,
@@ -277,6 +289,12 @@ def prepare_prompt(article: dict) -> str:
         "russia_explanation_ru<=180; actor<=120; position_ru и change_ru<=240; цитаты<=200. "
         "Не вставляй ссылки, HTML или Markdown.\nSOURCE:\n" + source
     )
+    if jev_evidence.enabled():
+        prompt = prompt.replace(
+            'evidence_quote — короткая ТОЧНАЯ подстрока источника на исходном языке, не перевод и не пересказ.',
+            'В russia_evidence_quote и каждом evidence_quote укажи только ID существующего фрагмента '
+            'из SOURCE_FRAGMENTS, например t000000. Не пиши текст цитаты: программа скопирует его сама.')
+        prompt += '\nSOURCE_FRAGMENTS:\n' + json.dumps(source_segments.segments(article), ensure_ascii=False)
     if len(prompt.encode()) > MAX_PROMPT_BYTES:
         raise ValueError("prompt too large")
     return prompt
@@ -288,6 +306,9 @@ def parse_annotation(content: str, article: dict, country_codes: set[str]) -> di
     # Remove only one exact JSON code fence; other prose and duplicate keys fail.
     fenced = re.fullmatch(r"\s*```(?:json)?\s*\n(.*?)\n```\s*", content, re.S)
     value = json.loads(fenced.group(1) if fenced else content, object_pairs_hook=_unique_object)
+    evidence_mode = jev_evidence.enabled()
+    if evidence_mode:
+        value = source_segments.resolve_draft_quotes(value, article)
     source = article["title"] + "\n" + article["excerpt"]
     if isinstance(value, dict):
         for item in value.get("positions", []) if isinstance(value.get("positions"), list) else []:
@@ -296,7 +317,7 @@ def parse_annotation(content: str, article: dict, country_codes: set[str]) -> di
                 if not re.search(r"[А-Яа-яЁё]", actor):
                     _quote(actor, source)
                     item["actor"] = "Участник: " + actor
-        for item in value.get("countries", []) if isinstance(value.get("countries"), list) else []:
+        for item in value.get("countries", []) if not evidence_mode and isinstance(value.get("countries"), list) else []:
             if not isinstance(item, dict) or not isinstance(item.get("code"), str):
                 continue
             _quote(item.get("evidence_quote"), source)

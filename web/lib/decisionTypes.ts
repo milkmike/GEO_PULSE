@@ -16,6 +16,11 @@ export interface DecisionEvidence {
   russia_explanation_ru: string;
   russia_evidence_quote: string;
   country_evidence_quote: string;
+  supporting_quotes?: Array<{
+    claim: "headline" | "summary" | "russia" | "country";
+    quote: string;
+    source_part: "title" | "excerpt";
+  }>;
   summary_ru: string;
   kind: string;
 }

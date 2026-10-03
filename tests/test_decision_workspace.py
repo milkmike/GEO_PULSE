@@ -12,6 +12,25 @@ from src.decision_workspace import project_decision_workspace, load_decision_wor
 NOW = datetime(2026, 9, 30, 12, tzinfo=timezone.utc)
 
 
+def test_new_proof_is_public_and_tampered_proof_cannot_be_downgraded_to_legacy():
+    from src import source_segments
+    row = article()
+    source = {'id': row['article_id'], 'title':row['title'], 'excerpt':row['body_excerpt']}
+    lines = source_segments.segments(source)
+    identity = next(iter(lines))
+    row['annotation']['russia_evidence_quote'] = lines[identity]['quote']
+    row['annotation']['countries'][0]['evidence_quote'] = lines[identity]['quote']
+    row['annotation'] = source_segments.seal_review(source, row['annotation'],
+        {key:identity for key in ('headline','summary','russia','country_RS')})
+    def project():
+        return project_decision_workspace(country={'code':'RS','name':'Сербия','region':'europe'},
+            countries=[], rows=[row], now=NOW, attention=[], coverage={}, truncated=False)
+    result = project()
+    assert len(result['brief']['day'][0]['supporting_quotes']) == 4
+    row['annotation']['evidence_review']['quotes']['headline']['quote'] = 'Invented quote'
+    assert project()['brief']['day'] == []
+
+
 def test_api_annotation_contract_tracks_extractor_version_without_postgres():
     import src.decision_workspace as workspace
     from src.decision_extraction import MODEL, VERSION
