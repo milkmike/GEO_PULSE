@@ -141,5 +141,25 @@ def test_country_selection_prefers_explicit_country_over_company_in_title():
                           'excerpt': 'Gazprom extended its gas agreement with Serbia.'}
     payload = verify.selection_payload(source, proposed())
     country = payload['questions']['country_0']['criteria']
-    assert 't000000' not in country and 'e000000' in country and 'none' in country
-    assert 't000000' in payload['questions']['headline']['criteria']
+    title = next(key for key, line in payload['state']['source'].items() if line['source_part'] == 'title')
+    body = next(key for key, line in payload['state']['source'].items() if line['source_part'] == 'excerpt')
+    assert title not in country and body in country and 'none' in country
+    assert title in payload['questions']['headline']['criteria']
+
+
+def test_normal_4000_character_cyrillic_source_fits_both_bounded_passes():
+    import json
+    source = article() | {'title': 'Газовое соглашение продлено на три месяца',
+        'excerpt': ('Российская компания продлила соглашение с партнёрами в Сербии. '
+                    'Участники сообщили, что действующие условия останутся прежними. ' * 40)[:4000]}
+    value = proposed()
+    value['positions'] = [{'actor':'Компания', 'actor_type':'business',
+                          'position_ru':'Условия остаются прежними.', 'evidence_quote':'Участники сообщили'}]
+    payload = verify.selection_payload(source, value)
+    assert len(payload['questions']) == 8
+    assert len(json.dumps(payload, ensure_ascii=False, separators=(',', ':')).encode()) <= verify.MAX_BYTES
+    _, identities = verify._catalog(source)
+    selected = {key:identities[next(label for label in question['criteria'] if label != 'none')]
+                for key, question in payload['questions'].items()}
+    second = verify.verification_payload(source, value, selected)
+    assert len(json.dumps(second, ensure_ascii=False, separators=(',', ':')).encode()) <= verify.MAX_BYTES

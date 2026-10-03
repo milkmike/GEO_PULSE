@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DecisionEvidence, DecisionWorkspaceResponse, NewsLead } from "@/lib/decisionTypes";
 import type { GlobalCoverageResponse } from "@/lib/globalMonitoringTypes";
@@ -97,8 +97,8 @@ describe("DecisionWorkspace", () => {
     mocks.globalCoverage.mockResolvedValue(monitoring);
     render(<DecisionWorkspace />);
     await screen.findByText("Сербия ↔ Россия");
+    await waitFor(() => expect(window.location.search).toBe("?country=RS"));
     expect(mocks.earlySignals).not.toHaveBeenCalledWith("ZZ", expect.anything());
-    expect(window.location.search).not.toContain("signal_country=ZZ");
   });
 
   it("uses a coverage-row action for signal-only selection", async () => {

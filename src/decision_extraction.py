@@ -123,7 +123,7 @@ def validate_annotation(value: dict, article: dict, country_codes: set[str], *, 
 def source_key(article: dict) -> str:
     identity = [VERSION, MODEL, article["id"], article["title"], article["excerpt"]]
     if jev_evidence.enabled():
-        identity.append(source_segments.VERSION)
+        identity.append(jev_evidence.VERSION)
     encoded = json.dumps(identity,
                          ensure_ascii=False, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()
@@ -290,6 +290,10 @@ def prepare_prompt(article: dict) -> str:
         "Не вставляй ссылки, HTML или Markdown.\nSOURCE:\n" + source
     )
     if jev_evidence.enabled():
+        # The ledger guards both source attempts and payload identities. Bind
+        # the draft to the review operation too, so a corrected reviewer is not
+        # silently skipped by an earlier generation's payload hash.
+        prompt = 'Версия разбора источника: ' + jev_evidence.VERSION + '.\n' + prompt
         prompt = prompt.replace(
             'evidence_quote — короткая ТОЧНАЯ подстрока источника на исходном языке, не перевод и не пересказ.',
             'В russia_evidence_quote и каждом evidence_quote укажи только ID существующего фрагмента '
