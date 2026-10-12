@@ -35,6 +35,39 @@ def test_zero_searches_still_preserves_gap_work(monkeypatch):
     assert result['countries_attempted'] == 0 and events[0][0] == 'sync'
 
 
+def test_auto_activation_and_discovery_each_get_a_bounded_chance(monkeypatch):
+    setup(monkeypatch, [{'country_code': 'AO'}])
+    lead = {'id': 1, 'country_code': 'AD', 'website': 'https://daily.ad/'}
+    monkeypatch.setattr(worker.store, 'claim_activation', lambda **kw: lead)
+    monkeypatch.setattr(worker, 'find_valid_feed', lambda *a, **kw: 'https://daily.ad/feed')
+    monkeypatch.setattr(worker.store, 'finish_activation', lambda *a, **kw: {'status': 'active'})
+    discovered = []
+    monkeypatch.setattr(worker, 'discover_publishers', lambda code, **kw: discovered.append(code) or [])
+    result = worker.run_source_research([], as_of=NOW, auto_activate=True)
+    assert result['countries_attempted'] == 2 and discovered == ['AO']
+    assert result['feeds_validated'] == result['sources_activated'] == 1
+
+
+def test_repeated_blocked_leads_do_not_starve_discovery(monkeypatch):
+    setup(monkeypatch, [{'country_code': 'AO'}])
+    monkeypatch.setattr(worker.store, 'claim_activation', lambda **kw: {'id': 1, 'country_code': 'AD', 'website': 'https://daily.ad/'})
+    monkeypatch.setattr(worker, 'find_valid_feed', lambda *a, **kw: None)
+    monkeypatch.setattr(worker.store, 'finish_activation', lambda *a, **kw: {'status': 'blocked'})
+    discovered = []
+    monkeypatch.setattr(worker, 'discover_publishers', lambda code, **kw: discovered.append(code) or [])
+    result = worker.run_source_research([], as_of=NOW, auto_activate=True)
+    assert result['admission_failures'] == 1 and discovered == ['AO']
+
+
+def test_repaired_feed_is_reported_separately_from_new_admission(monkeypatch):
+    setup(monkeypatch, [])
+    monkeypatch.setattr(worker.store, 'claim_activation', lambda **kw: {'id': 1, 'country_code': 'AD', 'website': 'https://daily.ad/'})
+    monkeypatch.setattr(worker, 'find_valid_feed', lambda *a, **kw: 'https://daily.ad/new.xml')
+    monkeypatch.setattr(worker.store, 'finish_activation', lambda *a, **kw: {'status': 'repaired'})
+    result = worker.run_source_research([], as_of=NOW, auto_activate=True, max_searches=0)
+    assert (result['feeds_repaired'], result['sources_activated'], result['admission_failures']) == (1, 0, 0)
+
+
 def test_rate_limiting_stops_batch_and_keeps_unattempted_countries(monkeypatch):
     events = setup(monkeypatch, [{'country_code': 'AD'}, {'country_code': 'AO'}])
     def limited(*args, **kwargs):

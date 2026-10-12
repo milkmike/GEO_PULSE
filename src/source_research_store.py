@@ -6,6 +6,8 @@ and retry dates are database wall-clock timestamps, never replayed snapshot time
 from __future__ import annotations
 
 import re
+import json
+from datetime import datetime, timezone
 from uuid import uuid4
 
 from sqlalchemy import text
@@ -14,6 +16,7 @@ from src.db import get_session
 from src.monitoring_registry import MONITORING_COUNTRIES
 from src.signal_hypotheses import _url
 from src.signal_workbench import instant
+from src.collectors.publisher_attribution import feed_mode, is_aggregator_domain, normalize_publisher_domain
 
 GAP_TYPES = frozenset({
     "no_active_sources", "no_successful_direct_fetch", "no_qualifying_sample_in_7d",
@@ -113,17 +116,23 @@ def sync_gaps(countries, *, as_of):
 
 
 def claim_discovery(*, as_of):
-    """Claim one due missing-source country, recovering expired leases."""
+    """Claim one due country gap, favouring countries not recently researched."""
     instant(as_of)
     token = uuid4()
     with get_session() as session:
         row = session.execute(text("""
             WITH candidate AS (
-              SELECT id FROM source_research_tasks
-              WHERE gap_type='no_active_sources'
-                AND ((status='queued' AND (next_attempt_at IS NULL OR next_attempt_at<=now()))
-                  OR (status='researching' AND lease_until<=now()))
-              ORDER BY (attempted_at IS NOT NULL),attempted_at NULLS FIRST,country_code,id
+              SELECT task.id FROM source_research_tasks task
+              WHERE ((task.status='queued' AND (task.next_attempt_at IS NULL OR task.next_attempt_at<=now()))
+                  OR (task.status='researching' AND task.lease_until<=now()))
+                AND NOT EXISTS (SELECT 1 FROM source_research_tasks live
+                  WHERE live.country_code=task.country_code AND live.id<>task.id
+                    AND live.status='researching' AND live.lease_until>now())
+              ORDER BY (SELECT max(prior.attempted_at) FROM source_research_tasks prior
+                         WHERE prior.country_code=task.country_code) NULLS FIRST,
+                CASE task.gap_type WHEN 'no_active_sources' THEN 0
+                  WHEN 'no_successful_direct_fetch' THEN 1 ELSE 2 END,
+                task.country_code,task.id
               LIMIT 1 FOR UPDATE SKIP LOCKED
             )
             UPDATE source_research_tasks AS task SET status='researching',
@@ -217,3 +226,180 @@ def summary(*, as_of):
         totals[row["status"]] += count
     return {"as_of": observed.isoformat(), "totals": totals,
             "countries": countries, "lead_count": int(lead_count)}
+
+
+def claim_activation(*, as_of):
+    """Claim one old or new lead, preferring countries least recently attempted."""
+    instant(as_of)
+    token = uuid4()
+    with get_session() as session:
+        row = session.execute(text("""
+            WITH candidate AS (
+              SELECT lead.id FROM source_research_leads lead
+              WHERE ((lead.activation_status IN ('queued','blocked')
+                       AND (lead.activation_next_attempt_at IS NULL OR lead.activation_next_attempt_at<=now()))
+                  OR (lead.activation_status='validating' AND lead.activation_lease_until<=now()))
+                AND EXISTS (SELECT 1 FROM source_research_tasks task
+                    WHERE task.country_code=lead.country_code AND task.status<>'resolved')
+              ORDER BY (lead.activation_attempted_at IS NOT NULL),
+                       lead.activation_attempted_at NULLS FIRST,lead.country_code,lead.id
+              LIMIT 1 FOR UPDATE SKIP LOCKED
+            )
+            UPDATE source_research_leads lead SET activation_status='validating',
+              activation_attempted_at=now(),activation_lease_until=now()+interval '2 minutes',
+              activation_lease_token=:token,activation_attempts=activation_attempts+1,
+              activation_last_reason=NULL
+            FROM candidate WHERE lead.id=candidate.id
+            RETURNING lead.id,lead.country_code,lead.name,lead.website,
+              lead.provenance_url,lead.entity_id,lead.revision,
+              lead.activation_lease_token
+        """), {"token": token}).mappings().first()
+    return dict(row) if row else None
+
+
+def _activation_claim(lead):
+    if not isinstance(lead, dict) or type(lead.get("id")) is not int or lead["id"] <= 0:
+        raise ValueError("invalid activation lead")
+    _country(lead.get("country_code", "").strip())
+    token = lead.get("activation_lease_token")
+    if not token:
+        raise ValueError("missing activation lease")
+    return {"id": lead["id"], "token": str(token)}
+
+
+def finish_activation(lead, *, feed_url=None, reason=None, as_of):
+    """Atomically admit a proven same-domain feed or cool down a failed lead.
+
+    A domain lock serializes automatic admissions. A same-country mapping may
+    receive fresh evidence for the same source ID; assignments never change.
+    """
+    instant(as_of)
+    claim = _activation_claim(lead)
+    if (feed_url is None) == (reason is None):
+        raise ValueError("feed or reason required")
+    if reason is not None and reason not in {"unsafe", "unavailable", "no_valid_feed", "collision"}:
+        raise ValueError("invalid activation reason")
+    domain = normalize_publisher_domain(lead.get("website"))
+    if (not domain or is_aggregator_domain(domain)
+            or (feed_url is not None and normalize_publisher_domain(feed_url) != domain)):
+        raise ValueError("feed domain mismatch")
+    if feed_url is not None and len(feed_url) > 500:
+        raise ValueError("feed URL too long")
+    with get_session() as session:
+        live = session.execute(text("""
+            SELECT country_code,website,entity_id,provenance_url,name,revision
+            FROM source_research_leads
+            WHERE id=:id AND activation_lease_token=CAST(:token AS uuid)
+              AND activation_status='validating' AND activation_lease_until>now()
+            FOR UPDATE
+        """), claim).mappings().first()
+        if not live:
+            raise ValueError("stale activation lease")
+        if (live["website"] != lead.get("website") or live["country_code"].strip() != lead.get("country_code", "").strip()
+                or live["entity_id"] != lead.get("entity_id")):
+            raise ValueError("activation lead mismatch")
+        source_id = None
+        outcome = "blocked"
+        if feed_url is not None:
+            session.execute(text("SELECT pg_advisory_xact_lock(hashtext(:domain))"), {"domain": domain})
+            mapping = session.execute(text("""
+                SELECT publisher_source_id,country_code,status FROM publisher_domains
+                WHERE domain=:domain
+            """), {"domain": domain}).mappings().first()
+            sources = session.execute(text("""SELECT id,url,country_code,source_type,config,
+                active,last_status FROM sources""")).mappings().all()
+            matches = []
+            for source in sources:
+                config = source["config"] if isinstance(source["config"], dict) else {}
+                aliases = config.get("publisher_domain_aliases", config.get("publisher_aliases", ()))
+                if isinstance(aliases, str):
+                    aliases = [aliases]
+                if not isinstance(aliases, (list, tuple, set)):
+                    aliases = []
+                related = [source["url"], config.get("publisher_domain"), *aliases]
+                if any(normalize_publisher_domain(value) == domain for value in related if isinstance(value, str)):
+                    matches.append(source)
+            if not matches and mapping is None:
+                config = {"publisher_domain": domain,
+                          "source_research": {"provider": "wikidata", "entity_id": live["entity_id"],
+                              "revision": live["revision"], "website": live["website"],
+                              "provenance_url": live["provenance_url"],
+                              "validated_at": datetime.now(timezone.utc).isoformat()}}
+                source_id = session.execute(text("""
+                    INSERT INTO sources(name,url,country_code,source_type,language,config,
+                                        active,tier,state_affiliated,propaganda_risk)
+                    VALUES(:name,:feed,:country,'rss','und',CAST(:config AS jsonb),
+                           true,'mainstream',false,'medium') RETURNING id
+                """), {"name": live["name"][:100], "feed": feed_url,
+                       "country": live["country_code"], "config": json.dumps(config)}).scalar_one()
+                session.execute(text("""
+                    INSERT INTO publisher_domains(domain,publisher_source_id,country_code,
+                      status,method,confidence,evidence)
+                    VALUES(:domain,:source,:country,'verified','wikidata_feed',1,
+                           CAST(:evidence AS jsonb))
+                """), {"domain": domain, "source": source_id,
+                       "country": live["country_code"],
+                       "evidence": json.dumps(config["source_research"])} )
+                outcome = "active"
+            elif len(matches) == 1:
+                current = session.execute(text("""SELECT id,url,country_code,source_type,config,
+                    active,last_status FROM sources WHERE id=:id FOR UPDATE"""),
+                    {"id": matches[0]["id"]}).mappings().one()
+                mapping = session.execute(text("""
+                    SELECT publisher_source_id,country_code,status FROM publisher_domains
+                    WHERE domain=:domain FOR UPDATE
+                """), {"domain": domain}).mappings().first()
+                existing_config = current["config"] if isinstance(current["config"], dict) else {}
+                mapping_ok = (mapping is None or
+                    (mapping["status"] == "verified"
+                     and mapping["publisher_source_id"] == current["id"]
+                     and mapping["country_code"].strip() == live["country_code"].strip()))
+                broken = (current["active"] is False or
+                          current["last_status"] not in (None, "ok", "empty_feed", "pending_validation"))
+                if (mapping_ok and current["country_code"].strip() == live["country_code"].strip()
+                        and current["source_type"] == "rss"
+                        and normalize_publisher_domain(current["url"]) == domain
+                        and feed_mode(current["url"], existing_config) == "publisher"
+                        and current["url"] != feed_url and broken):
+                    evidence = {"provider": "wikidata", "entity_id": live["entity_id"],
+                        "revision": live["revision"], "website": live["website"],
+                        "provenance_url": live["provenance_url"],
+                        "validated_at": datetime.now(timezone.utc).isoformat(),
+                        "previous_feed_url": current["url"]}
+                    config = {**existing_config, "publisher_domain": domain,
+                              "source_research": evidence}
+                    source_id = current["id"]
+                    session.execute(text("""UPDATE sources SET url=:feed,
+                        config=CAST(:config AS jsonb),active=true,
+                        last_status='pending_validation',last_error=NULL,
+                        consecutive_failures=0 WHERE id=:id"""),
+                        {"feed": feed_url, "config": json.dumps(config), "id": source_id})
+                    if mapping is None:
+                        session.execute(text("""INSERT INTO publisher_domains
+                          (domain,publisher_source_id,country_code,status,method,confidence,evidence)
+                          VALUES(:domain,:source,:country,'verified','wikidata_feed',1,
+                                 CAST(:evidence AS jsonb))"""),
+                            {"domain": domain, "source": source_id,
+                             "country": live["country_code"], "evidence": json.dumps(evidence)})
+                    else:
+                        session.execute(text("""UPDATE publisher_domains
+                            SET method='wikidata_feed',confidence=1,
+                                evidence=CAST(:evidence AS jsonb),updated_at=now()
+                            WHERE domain=:domain"""),
+                            {"domain": domain, "evidence": json.dumps(evidence)})
+                    outcome = "repaired"
+                else:
+                    reason = "collision"
+            else:
+                reason = "collision"
+        lead_status = "active" if outcome in ("active", "repaired") else "blocked"
+        session.execute(text("""
+            UPDATE source_research_leads SET activation_status=:status,
+              activation_next_attempt_at=CASE WHEN :status='active' THEN NULL
+                  ELSE now()+interval '7 days' END,
+              activation_last_reason=:reason,activated_source_id=:source,
+              activation_lease_until=NULL,activation_lease_token=NULL
+            WHERE id=:id
+        """), {"id": claim["id"], "status": lead_status,
+               "reason": reason, "source": source_id})
+    return {"status": outcome, "source_id": source_id, "reason": reason}

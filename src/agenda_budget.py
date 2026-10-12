@@ -80,11 +80,12 @@ def reserve_request(campaign: str, limit_usd: Decimal, payload_hash: str, pair_k
 
 
 def finish_request(call_id: str, cost: float | None, status: str) -> None:
-    """Settle once; refund only successful calls with valid bounded actual cost.
+    """Settle once against a valid bounded provider bill, preserving the outcome.
 
     Invalid, negative, nonfinite or unexpectedly large costs halt the campaign.
     Known finite positive overages are recorded even when larger than the cap.
-    Missing cost and request errors keep the full conservative charge.
+    Missing cost or an invalid outcome keeps the full conservative charge.
+    A failed content check does not change a known provider bill or permit retry.
     """
     actual = None
     invalid = False
@@ -115,7 +116,7 @@ def finish_request(call_id: str, cost: float | None, status: str) -> None:
         charge = reservation_usd
         if overage:
             charge = actual
-        elif not invalid and safe_status == 'ok' and actual is not None:
+        elif not invalid and safe_status != 'invalid_status' and actual is not None:
             charge = actual
         session.execute(text('''
             UPDATE agenda_budget

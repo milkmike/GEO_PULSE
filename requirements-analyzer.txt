@@ -2,3 +2,4 @@
 anthropic==0.42.0
 tenacity==9.0.0
 redis>=5.0.0
+feedparser==6.0.11

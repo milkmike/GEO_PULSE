@@ -401,3 +401,20 @@ def test_old_translation_cannot_overwrite_concurrent_corrected_title_cache(store
     with original() as reader:
         cached=reader.execute(text('SELECT source_title,title_ru FROM article_title_translations WHERE article_id=2')).one()
     assert tuple(cached)==('Corrected headline','Исправленный перевод')
+
+
+def test_supplied_world_titles_require_current_source_and_skip_cached_rows(store):
+    from datetime import datetime,timezone
+    source={'id':2,'title':'Flydubai flight lands in Tabuk','country_code':'IL',
+            'source_id':2,'source_name':'Source B','url':'https://news.example/b',
+            'excerpt':'Aircraft diverted to Tabuk.',
+            'published_at':datetime.now(timezone.utc),'collected_at':datetime.now(timezone.utc)}
+    assert [a['id'] for a in store.load_current_translation_candidates([source])]==[2]
+    store.save_title_translations([{'article_id':2,'source_title':source['title'],
+                                    'title_ru':'Рейс сел в Табуке'}],'test-model')
+    assert store.load_current_translation_candidates([source])==[]
+    with store.get_session() as session:
+        session.execute(text("UPDATE articles SET title='Corrected headline' WHERE id=2"))
+    assert store.load_current_translation_candidates([source])==[]
+    corrected={**source,'title':'Corrected headline'}
+    assert [a['title'] for a in store.load_current_translation_candidates([corrected])]==['Corrected headline']

@@ -75,7 +75,7 @@ def test_provider_failure_stops_writer_batch_and_retains_error_state(monkeypatch
 def test_bad_bounds_fail_before_reading_country_data(monkeypatch):
     import pytest
     monkeypatch.setattr(monitor, 'load_global_monitoring', lambda **kw: (_ for _ in ()).throw(AssertionError('DB read')))
-    for kwargs in ({'budget_usd': Decimal('20')}, {'max_drafts': 3}, {'max_screen_calls': 0}, {'max_source_searches': 5}):
+    for kwargs in ({'budget_usd': Decimal('20')}, {'max_drafts': 3}, {'max_screen_calls': 0}, {'max_source_searches': 5}, {'auto_sources': 'yes'}):
         with pytest.raises(ValueError):
             monitor.run_global_cycle(**kwargs)
 
@@ -89,3 +89,68 @@ def test_source_research_failure_cannot_erase_global_coverage(monkeypatch):
     assert result['source_research'] == {'status': 'blocked', 'reason': 'research_unavailable'}
     assert events[-1][0] == 'save' and result['scope_count'] == 3
     assert 'untrusted' not in str(result)
+
+
+def test_automatic_sources_continue_when_models_are_disabled(monkeypatch):
+    events = setup(monkeypatch)
+    def research(countries, *, as_of, max_searches, auto_activate):
+        return {'status': 'ok', 'sources_activated': int(auto_activate),
+                'countries_attempted': 1, 'feeds_validated': 1}
+    monkeypatch.setattr(monitor, 'run_source_research', research)
+    monkeypatch.setattr(monitor, 'run_screening_cycle', lambda **kw: (_ for _ in ()).throw(AssertionError('paid call')))
+    result = monitor.run_global_cycle(as_of=NOW, auto_sources=True)
+    assert result['source_research']['sources_activated'] == 1
+    assert result['source_activation']['enabled'] is True
+    assert result['screening']['status'] == 'disabled'
+    assert len(events[-1][1]['countries']) == 3
+
+
+def test_analysis_counts_are_per_local_sample_not_event_country(monkeypatch):
+    setup(monkeypatch)
+    monkeypatch.setattr(monitor.store, 'current_screenings', lambda articles: [
+        {'article': {'id': 1, 'country_code': 'RS'},
+         'classification': {'country': 'ET', 'signal': 'none'}}])
+    result = monitor.run_global_cycle(as_of=NOW)
+    rows = {row['code']: row for row in result['countries']}
+    assert rows['RS']['screened_articles_7d'] == 1
+    assert rows['RS']['analysis_state'] == 'sample_complete'
+    assert rows['ET']['screened_articles_7d'] == 0
+    assert rows['ET']['analysis_state'] == 'no_sample'
+
+
+def test_monitor_uses_configured_fixed_campaign(monkeypatch):
+    setup(monkeypatch)
+    monkeypatch.setenv('EARLY_SIGNAL_CAMPAIGN', 'early-signals-2026-10-12-world')
+    calls = []
+    monkeypatch.setattr(monitor, 'run_screening_cycle', lambda **kw: calls.append(kw) or {'status': 'ok'})
+    monitor.run_global_cycle(as_of=NOW, budget_usd=Decimal('2'))
+    assert calls[0]['campaign'] == 'early-signals-2026-10-12-world'
+
+
+def test_local_observation_gets_background_translation_in_same_budget(monkeypatch):
+    setup(monkeypatch)
+    article = {'id': 1, 'country_code': 'RS', 'title': 'New university exchange'}
+    monkeypatch.setattr(monitor.store, 'current_screenings', lambda articles: [
+        {'article': article, 'classification': {'signal': 'change', 'mechanism': 'education',
+                                              'stage': 'proposal', 'country': 'RS'}}])
+    monkeypatch.setattr(monitor, 'run_screening_cycle', lambda **kw: {'status': 'ok'})
+    calls = []
+    monkeypatch.setattr(monitor, 'run_translation_cycle', lambda **kw: calls.append(kw) or {'translated': 1})
+    result = monitor.run_global_cycle(as_of=NOW, budget_usd=Decimal('2'))
+    assert calls[0]['articles'] == [article]
+    assert calls[0]['max_calls'] == 1 and calls[0]['budget_usd'] == Decimal('2')
+    assert result['translations']['translated'] == 1
+
+
+def test_cli_automatic_source_flag_uses_environment_and_explicit_override(monkeypatch):
+    import sys
+    from scripts import build_early_signals as cli
+    calls = []
+    monkeypatch.setenv('AUTO_SOURCE_ONBOARDING', '1')
+    monkeypatch.setattr(cli, 'locked_global_cycle', lambda **kw: calls.append(kw) or {'status': 'ok'})
+    monkeypatch.setattr(sys, 'argv', ['build_early_signals.py', 'monitor', '--budget-usd', '0'])
+    cli.main()
+    assert calls[-1]['auto_sources'] is True and calls[-1]['budget_usd'] == 0
+    monkeypatch.setattr(sys, 'argv', ['build_early_signals.py', 'monitor', '--no-auto-sources'])
+    cli.main()
+    assert calls[-1]['auto_sources'] is False

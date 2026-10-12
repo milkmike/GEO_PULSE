@@ -38,8 +38,30 @@ export interface EarlySignal {
   review_note: string | null;
 }
 
+export interface PreliminaryObservation {
+  id: string;
+  type: "observation";
+  status: "provisional";
+  country_code: string;
+  mechanism: string;
+  stage: string;
+  source_title: string;
+  title_ru: string | null;
+  title_origin: "machine_translation" | "reviewed_annotation" | "source" | "unavailable";
+  label_ru: string;
+  why_watch_ru: string;
+  source_name: string;
+  source_url: string;
+  publisher_country_code: string;
+  published_at: string;
+  collected_at: string;
+  evidence_quote: string;
+  source_fingerprint: string;
+}
+
 export interface EarlySignalsResponse {
   as_of: string;
   items: EarlySignal[];
+  observations?: PreliminaryObservation[];
   notice: string | null;
 }

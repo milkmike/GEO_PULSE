@@ -447,6 +447,12 @@ def sync_publisher_domains(session) -> RegistrySyncReport:
             method = selected["method"]
             confidence = 1.0
             evidence = {"candidate": selected}
+            if (existing is not None and existing.status == "verified"
+                    and existing.method == "wikidata_feed"
+                    and existing.publisher_source_id == chosen_source_id
+                    and existing.country_code == chosen_country):
+                method = existing.method
+                evidence = existing.evidence
 
         if existing is None:
             existing = PublisherDomain(domain=domain)

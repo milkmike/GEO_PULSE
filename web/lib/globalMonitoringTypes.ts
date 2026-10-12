@@ -4,6 +4,8 @@ export interface GlobalCoverageCountry {
   configured_sources: number;
   working_direct_publishers: number;
   sampled_articles_7d: number;
+  screened_articles_7d?: number;
+  analysis_state?: "no_sample" | "awaiting_analysis" | "sample_partial" | "sample_complete";
   latest_local_published_at: string | null;
   latest_local_collected_at: string | null;
   coverage_state: string;
@@ -23,7 +25,12 @@ export interface GlobalCoverageResponse {
     status: string;
     countries_attempted?: number;
     leads_saved?: number;
+    feeds_validated?: number;
+    sources_activated?: number;
+    feeds_repaired?: number;
+    admission_failures?: number;
     queue?: { totals?: Record<string, number>; countries?: Record<string, Record<string, number>>; lead_count?: number };
   };
+  source_activation?: { enabled: boolean };
   notice: string;
 }
