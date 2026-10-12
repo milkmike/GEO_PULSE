@@ -40,6 +40,14 @@ MAX_OUTPUT_TOKENS = 4000
 ABSTAIN = {'unknown', 'uncertain', 'insufficient_evidence', 'none'}
 
 
+def openrouter_provider():
+    """Optional tested provider route; no hostname or credential is accepted."""
+    value = os.environ.get('DECISION_OPENROUTER_PROVIDER', '').strip()
+    if value and not re.fullmatch(r'[a-z][a-z0-9-]{0,40}', value):
+        raise ValueError('invalid OpenRouter provider')
+    return value or None
+
+
 def _encode(value):
     return json.dumps(value, ensure_ascii=False, separators=(',', ':'), allow_nan=False).encode()
 
@@ -120,6 +128,41 @@ def _unique(pairs):
     return result
 
 
+def _chat_schema(payload, criteria, questions):
+    """Require the complete decision matrix while storing each label catalog once."""
+    article_ids = list(payload['state']['articles'])
+    choices = {}
+    for identity, labels in criteria.items():
+        choices['choice_' + identity] = {
+            'type': 'object',
+            'properties': {
+                'type': {'type': 'string', 'enum': ['choice']},
+                'choice': {'type': 'string', 'enum': list(labels)},
+                'confidence': {'type': 'number'},
+                'confidence_kind': {'type': 'string', 'enum': ['self_reported']},
+                'evidence': {'type': 'array', 'items': {
+                    'type': 'object',
+                    'properties': {
+                        'article_id': {'type': 'string', 'enum': article_ids},
+                        'quote': {'type': 'string'},
+                    },
+                    'required': ['article_id', 'quote'], 'additionalProperties': False}},
+            },
+            'required': ['type', 'choice', 'confidence', 'confidence_kind', 'evidence'],
+            'additionalProperties': False,
+        }
+    return {
+        'type': 'object',
+        'properties': {'answers': {
+            'type': 'object',
+            'properties': {key: {'$ref': '#/$defs/choice_' + question['criteria']}
+                           for key, question in questions.items()},
+            'required': list(questions), 'additionalProperties': False,
+        }},
+        'required': ['answers'], 'additionalProperties': False, '$defs': choices,
+    }
+
+
 def build_request(payload):
     if (not isinstance(payload, dict) or payload.get('model') != MODEL
             or not isinstance(payload.get('state'), dict)
@@ -169,9 +212,14 @@ def build_request(payload):
                   'temperature': 0, 'max_tokens': MAX_OUTPUT_TOKENS,
                   'response_format': {'type': 'json_object'}}
         if PROVIDER == 'openrouter':
+            result['response_format'] = {'type': 'json_schema', 'json_schema': {
+                'name': 'source_bound_decisions', 'strict': True,
+                'schema': _chat_schema(payload, criteria, questions)}}
             result.update(reasoning={'enabled': False}, provider={
                 'max_price': {'prompt': 1, 'completion': 2, 'request': 0},
                 'allow_fallbacks': False, 'require_parameters': True})
+            if route := openrouter_provider():
+                result['provider']['only'] = [route]
         else:
             result['thinking'] = {'type': 'disabled'}
     if len(_encode(result)) > MAX_CHAT_BYTES:
@@ -302,6 +350,10 @@ def check_tariff():
                     fits = fits and prompt <= Decimal('.0000001') and completion == 0
                     if not fits:
                         raise ValueError('Jev tariff exceeds reserved bound')
+                if PROVIDER == 'openrouter':
+                    fits = fits and 'structured_outputs' in endpoint.get('supported_parameters', [])
+                    if route := openrouter_provider():
+                        fits = fits and str(endpoint.get('tag', '')).split('/')[0] == route
                 eligible = eligible or fits
             except (KeyError, TypeError, ArithmeticError):
                 raise ValueError('invalid decision tariff') from None

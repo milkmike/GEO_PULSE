@@ -120,6 +120,22 @@ def test_prompt_covers_private_noise_strategic_visits_and_reported_stage():
     assert "Gazette" not in screening.encode(payload).decode()
 
 
+def test_sports_personnel_election_and_incidental_venue_are_not_local_change_criteria():
+    fifa = article(country="MA",
+                   title="Арсен Венгер может стать соперником Джанни Инфантино на выборах президента ФИФА",
+                   excerpt="Выборы президента ФИФА состоятся 18 марта 2027 года в Рабате.")
+    payload, _ = screening.prepare_payload([fifa], {"MA", "GB"})
+    questions = payload["questions"]
+    signals = questions["article_1_signal"]["criteria"]
+    assert "sports personnel" in signals["routine"]
+    assert "federation elections" in signals["routine"]
+    assert "public safety" in signals["change"]
+    assert "sports access" in signals["change"]
+    assert "infrastructure" in signals["change"]
+    assert "host venue" in questions["article_1_country"]["instructions"]
+    assert "nationality" in questions["article_1_country"]["instructions"]
+
+
 def test_changed_screening_version_invalidates_prior_source_key(monkeypatch):
     row = article()
     for old_version in ("early-signal-v1", "early-signal-v2"):
@@ -132,7 +148,11 @@ def test_changed_screening_version_invalidates_prior_source_key(monkeypatch):
         patch.setattr(screening, 'VERSION', 'early-signal-v3')
         old_catalog_key = screening.source_key(row)
     assert screening.source_key(row) != old_catalog_key
-    assert screening.VERSION == "early-signal-v5-grounded-chat"
+    with monkeypatch.context() as patch:
+        patch.setattr(screening, 'VERSION', 'early-signal-v5-grounded-chat')
+        prior_screening_key = screening.source_key(row)
+    assert screening.source_key(row) != prior_screening_key
+    assert screening.VERSION == "early-signal-v6-local-sport-scope"
     assert screening.source_key(row) != screening.source_key(dict(row, excerpt="Different report"))
 
 

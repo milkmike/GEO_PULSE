@@ -353,6 +353,24 @@ def test_triage_leads_are_translated_without_waiting_for_agenda_group(store):
     assert store.load_translation_candidates() == []
 
 
+def test_world_translation_reads_current_context_and_refuses_a_changed_excerpt(store):
+    source = next(a for a in store.load_articles() if a['id'] == 2)
+    source['excerpt'] = 'Stale context from before collection correction'
+    current = store.load_current_translation_candidates([source])[0]
+    assert current['excerpt'] == 'Aircraft diverted to Tabuk.'
+    translation = {'article_id': 2, 'source_title': current['title'],
+                   'source_excerpt': current['excerpt'], 'title_ru': 'Рейс сел в Табуке'}
+    with store.get_session() as session:
+        session.execute(text("UPDATE articles SET body='Correction: no diversion occurred.' WHERE id=2"))
+    store.save_title_translations([translation], 'test-model')
+    with store.get_session() as session:
+        assert session.execute(text('SELECT count(*) FROM article_title_translations')).scalar() == 0
+    translation['source_excerpt'] = 'Correction: no diversion occurred.'
+    store.save_title_translations([translation], 'test-model')
+    with store.get_session() as session:
+        assert session.execute(text('SELECT count(*) FROM article_title_translations')).scalar() == 1
+
+
 def test_translation_candidates_only_current_memberships_and_cards_first(store):
     rows={r['id']:r for r in store.load_articles()}
     store.attach_decisions(rows[1],[decision()],rows)

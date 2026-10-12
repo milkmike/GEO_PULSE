@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
+from jsonschema import Draft202012Validator
 
 from src import decision_model as dm
 
@@ -42,7 +43,14 @@ def test_chat_uses_price_caps_and_no_reasoning_or_provider_fallback(monkeypatch)
     assert body['provider'] == {'max_price': {'prompt': 1, 'completion': 2, 'request': 0},
                                 'allow_fallbacks': False, 'require_parameters': True}
     assert body['reasoning'] == {'enabled': False}
-    assert body['response_format'] == {'type': 'json_object'}
+    assert body['response_format']['type'] == 'json_schema'
+    assert body['response_format']['json_schema']['strict'] is True
+    schema = body['response_format']['json_schema']['schema']
+    Draft202012Validator.check_schema(schema)
+    assert schema['required'] == ['answers']
+    assert schema['properties']['answers']['required'] == ['article_1_country']
+    assert not list(Draft202012Validator(schema).iter_errors({'answers': {'article_1_country': answer()}}))
+    assert list(Draft202012Validator(schema).iter_errors({'answers': {}}))
     assert body['max_tokens'] <= 4000
     assert 'tools' not in body
     assert 'do not output probabilities' in body['messages'][0]['content']
@@ -81,12 +89,76 @@ def test_criteria_are_deduplicated_for_world_country_catalog(monkeypatch):
     assert 'publisher geography' in prompt
 
 
+def test_schema_requires_every_question_and_enumerates_choices_without_repeating_country_catalog(monkeypatch):
+    configure(monkeypatch, 'openrouter')
+    data = payload()
+    countries = {f'X{i:03d}':'C' for i in range(248)}
+    for index in range(2):
+        data['questions'][f'article_{index+2}_country'] = {'type':'choice',
+            'instructions':'Where does the action happen?', 'criteria':countries}
+    body=dm.build_request(data)
+    assert len(dm._encode(body)) <= dm.MAX_CHAT_BYTES
+    schema=body['response_format']['json_schema']['schema']
+    Draft202012Validator.check_schema(schema)
+    assert len(schema['$defs']) == 2
+    country_schema=next(v for v in schema['$defs'].values()
+                        if len(v['properties']['choice']['enum'])==248)
+    assert set(country_schema['properties']['choice']['enum']) == set(countries)
+    validator=Draft202012Validator(schema)
+    answer_country={**answer(), 'choice':'X001'}
+    all_answers={key:(answer_country if key!='article_1_country' else answer())
+                 for key in data['questions']}
+    assert not list(validator.iter_errors({'answers':all_answers}))
+    missing=dict(all_answers)
+    missing.pop('article_3_country')
+    assert any(error.validator == 'required' for error in validator.iter_errors({'answers':missing}))
+    wrong=dict(all_answers)
+    wrong['article_2_country']={**answer_country,'choice':'INVALID'}
+    assert any(error.validator == 'enum' for error in validator.iter_errors({'answers':wrong}))
+
+
+def test_real_world_screening_schema_keeps_full_country_request_bounded(monkeypatch):
+    from src import early_signals
+    from src.monitoring_registry import MONITORING_COUNTRIES
+    from tests.test_early_signals import article
+    from datetime import datetime, timezone
+    configure(monkeypatch,'openrouter')
+    now=datetime.now(timezone.utc)
+    rows=[article(i,country='GE',published_at=now,collected_at=now) for i in range(1,9)]
+    screening, selected=early_signals.prepare_payload(rows,set(MONITORING_COUNTRIES))
+    assert len(selected)>=3 and len(screening['questions'])>=12
+    request=dm.build_request(screening)
+    assert len(dm._encode(request))<=dm.MAX_CHAT_BYTES
+    schema=request['response_format']['json_schema']['schema']
+    assert set(schema['properties']['answers']['required'])==set(screening['questions'])
+    assert len(schema['$defs'])==4
+
+
 def test_chat_scores_never_become_probabilities(monkeypatch):
     configure(monkeypatch, 'openrouter')
     parsed = dm.parse_chat_response(envelope(), payload())
     result = parsed['answers']['article_1_country']
     assert result['confidence_kind'] == 'self_reported' and result['probabilities'] == {}
     assert dm.supported_choice(result, payload()['questions']['article_1_country']['criteria'])
+
+
+def test_optional_route_is_explicit_and_preflight_checks_its_capability(monkeypatch):
+    configure(monkeypatch, 'openrouter')
+    monkeypatch.setenv('OPENROUTER_API_KEY', 'test')
+    monkeypatch.setenv('DECISION_OPENROUTER_PROVIDER', 'streamlake')
+    assert dm.build_request(payload())['provider']['only'] == ['streamlake']
+    endpoint={'tag':'streamlake/fp8','pricing':{'prompt':'.0000001','completion':'.0000002'},
+              'supported_parameters':['structured_outputs']}
+    data={'data':{'id':dm.MODEL,'endpoints':[endpoint]}}
+    monkeypatch.setattr(dm.httpx, 'get', lambda *a,**kw:SimpleNamespace(
+        raise_for_status=lambda:None,json=lambda:data))
+    dm.check_tariff()
+    endpoint['tag']='another-provider/fp8'
+    with pytest.raises(ValueError,match='tariff'):
+        dm.check_tariff()
+    monkeypatch.setenv('DECISION_OPENROUTER_PROVIDER','https://untrusted.example')
+    with pytest.raises(ValueError,match='provider'):
+        dm.build_request(payload())
 
 
 @pytest.mark.parametrize('bad', [answer(choice='FR'), answer(confidence=True), answer(confidence=float('nan')),
@@ -185,12 +257,17 @@ def test_native_preflight_does_not_reuse_openrouter_key(monkeypatch):
 def test_preflight_accepts_only_an_enforced_eligible_price_route(monkeypatch):
     configure(monkeypatch, 'openrouter')
     monkeypatch.setenv('OPENROUTER_API_KEY', 'test')
-    data = {'data': {'id': dm.MODEL, 'endpoints': [{'pricing': {'prompt': '.000001', 'completion': '.000002', 'request': '0'}}]}}
+    data = {'data': {'id': dm.MODEL, 'endpoints': [{'pricing': {'prompt': '.000001', 'completion': '.000002', 'request': '0'},
+                                                   'supported_parameters':['structured_outputs']}]}}
     class Response:
         def raise_for_status(self): pass
         def json(self): return data
     monkeypatch.setattr(dm.httpx, 'get', lambda *a, **k: Response())
     dm.check_tariff()
+    data['data']['endpoints'][0]['supported_parameters'] = []
+    with pytest.raises(ValueError, match='tariff'):
+        dm.check_tariff()
+    data['data']['endpoints'][0]['supported_parameters'] = ['structured_outputs']
     data['data']['endpoints'][0]['pricing']['completion'] = '.00001'
     with pytest.raises(ValueError, match='tariff'):
         dm.check_tariff()

@@ -179,10 +179,19 @@ def test_provider_error_text_cannot_enter_public_status(monkeypatch):
     assert stats['error']=='transport_error'
 
 
+def test_model_invalid_response_is_not_mislabeled_transport(monkeypatch):
+    events=setup_screen(monkeypatch)
+    monkeypatch.setattr(worker,'_request',lambda *a:{'status':'invalid_response',
+        'usage':{'cost':.0003}})
+    stats=worker.run_screening_cycle(articles=[article()],as_of=NOW,budget_usd=Decimal('2'))
+    assert stats['status']=='error' and stats['error']=='invalid_response'
+    assert ('finish',('call',.0003,'invalid_response')) in events
+
+
 def test_chat_transport_failure_keeps_known_overage_for_halt(monkeypatch):
     events=setup_screen(monkeypatch)
     monkeypatch.setattr(worker,'_request',lambda *a:{'status':'invalid_response','usage':{'cost':.12}})
     stats=worker.run_screening_cycle(articles=[article()],as_of=NOW,budget_usd=Decimal('2'))
     assert stats['status']=='error'
-    assert ('finish',('call',.12,'error')) in events
+    assert ('finish',('call',.12,'invalid_response')) in events
     assert not any(x[0]=='save' for x in events)

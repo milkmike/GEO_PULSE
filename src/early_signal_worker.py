@@ -139,6 +139,8 @@ def run_screening_cycle(*, budget_usd=Decimal('0'), campaign=None,
                 usage = result['usage']
                 cost = usage.get('cost')
             if result.get('status') != 'ok':
+                if result.get('status') == 'invalid_response':
+                    outcome, reason = 'invalid_response', 'invalid_response'
                 raise OSError('provider_error')
             data = result['data']
             outcome, reason = 'invalid_response', 'invalid_response'

@@ -50,7 +50,9 @@ def database(monkeypatch):
 
 
 def test_changed_screenings_cannot_hide_valid_current_source(database):
-    now=datetime.now(timezone.utc).replace(microsecond=123400)
+    # Keep the fractional timestamp in the past; replacing microseconds on the
+    # current second can accidentally trigger the future-as-of rejection.
+    now=(datetime.now(timezone.utc)-timedelta(seconds=1)).replace(microsecond=123400)
     valid=screening(1,event='RS',publisher='GE')
     a=dict(valid['article'],published_at=(now-timedelta(hours=1)).isoformat(),collected_at=now.isoformat())
     a=article_snapshot(a,screened=True)

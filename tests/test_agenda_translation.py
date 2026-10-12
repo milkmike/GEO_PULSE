@@ -38,11 +38,35 @@ def test_valid_response_keeps_article_identity_and_original_title():
     assert 'untrusted' in prompt and 'Russian' in prompt
 
 
+def test_translation_uses_bounded_source_context_and_preserves_it_for_save_guard():
+    from src.agenda_translation import prepare_prompt, parse_translations
+    articles = [{'id': 1, 'title': 'Awazada Hazaryň suwunyň azalmagy boýunça komissiýa',
+                 'excerpt': 'Hazar ekologiýa sammitinde deňziň suw derejesiniň peselmegi.'}]
+    prompt = prepare_prompt(articles)
+    inputs = json.loads(prompt.split('\nARTICLES:\n')[1])
+    assert inputs[0]['excerpt'] == articles[0]['excerpt']
+    assert 'disambiguate' in prompt and 'untrusted' in prompt
+    parsed = parse_translations('{"1":"В Авазе обсудили обмеление Каспия"}', articles)
+    assert parsed[0]['source_excerpt'] == articles[0]['excerpt']
+
+
+@pytest.mark.parametrize('excerpt', ['я' * 2000, '\\"\n' * 1000, '🌍' * 2000])
+def test_context_never_exceeds_the_prepaid_prompt_envelope(excerpt):
+    from src.agenda_translation import prepare_prompt
+    articles = [{'id': i, 'title': 'Новость ' + 'я' * 116, 'excerpt': excerpt}
+                for i in range(1, 9)]
+    prompt = prepare_prompt(articles)
+    assert len(prompt.encode()) <= 6000
+    inputs = json.loads(prompt.split('\nARTICLES:\n')[1])
+    assert len(inputs) == 8
+    assert all(row.get('excerpt') and excerpt.startswith(row['excerpt']) for row in inputs)
+
+
 @pytest.fixture
 def harness(monkeypatch):
     from src import agenda_translation as translation
     pending=Mock(return_value=rows())
-    saved=Mock()
+    saved=Mock(side_effect=lambda translations, model: len(translations))
     reserve=Mock(return_value='reserved')
     finish=Mock()
     monkeypatch.setattr(translation.store,'load_translation_candidates',pending)
@@ -81,6 +105,11 @@ def test_real_bounded_chat_reserves_first_and_settles_actual_usage(monkeypatch,h
         reserve.assert_called_once()
         assert kwargs['json']['max_tokens']==1000
         assert kwargs['json']['model']=='deepseek/deepseek-v4-flash'
+        response_format=kwargs['json']['response_format']
+        assert response_format['type']=='json_schema'
+        assert response_format['json_schema']['strict'] is True
+        schema=response_format['json_schema']['schema']
+        assert schema['required']==['1','2'] and schema['additionalProperties'] is False
         content={'1':'Самолёт сел в Табуке','2':'<script>bad</script>' if unsafe else 'Рейс сел в Табуке 2'}
         return httpx.Response(200,request=httpx.Request('POST',url),json={
             'choices':[{'finish_reason':'stop','message':{'content':json.dumps(content)}}],
@@ -250,3 +279,34 @@ def test_attempted_world_titles_cannot_hide_unseen_titles(monkeypatch,harness):
     monkeypatch.setattr(httpx,'post',post)
     result=translation.run_translation_cycle(budget_usd=Decimal('2'),campaign='same',max_calls=1,articles=supplied)
     assert result['translated']>0
+
+
+def test_corrected_context_retries_once_and_noop_save_is_not_counted(monkeypatch, harness):
+    from datetime import datetime, timezone
+    from tests.test_early_signals import article
+    translation, pending, saved, reserve, finish = harness
+    now = datetime.now(timezone.utc)
+    stale = article(1, country='RS', published_at=now, collected_at=now)
+    current = {**stale, 'excerpt': 'A corrected context'}
+    attempted = {translation.translation_key(stale)}
+    monkeypatch.setattr(translation.budget, 'get_attempted_pair_keys', lambda _: attempted)
+    monkeypatch.setattr(translation.store, 'load_current_translation_candidates', lambda _: [current])
+    def reserve_once(*args, **kwargs):
+        attempted.update(kwargs['pair_keys'])
+        return 'corrected'
+    reserve.side_effect = reserve_once
+    saved.side_effect = lambda *args: 0  # Another correction happened during HTTP.
+    post = Mock(return_value=httpx.Response(200, request=httpx.Request('POST', 'https://openrouter.ai'),
+        json={'choices': [{'finish_reason': 'stop', 'message': {'content': '{"1":"Перевод"}'}}],
+              'usage': {'cost': .0003}}))
+    monkeypatch.setattr(httpx, 'post', post)
+    result = translation.run_translation_cycle(budget_usd=Decimal('2'), campaign='same', articles=[stale])
+    assert result['calls'] == 1 and result['translated'] == 0
+    assert saved.call_args.args[0][0]['source_excerpt'] == current['excerpt']
+    assert translation.run_translation_cycle(budget_usd=Decimal('2'), campaign='same', articles=[stale])['calls'] == 0
+    post.assert_called_once()
+
+
+def test_empty_context_still_guards_a_concurrent_source_correction():
+    from src.agenda_translation import parse_translations
+    assert parse_translations('{"1":"Перевод"}', [{'id': 1, 'title': 'Title', 'excerpt': ''}])[0]['source_excerpt'] == ''

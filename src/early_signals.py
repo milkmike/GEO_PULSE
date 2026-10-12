@@ -19,7 +19,7 @@ from src.api.public_urls import safe_public_url
 from src import decision_model
 
 MODEL = decision_model.MODEL
-VERSION = "early-signal-v5-grounded-chat"
+VERSION = "early-signal-v6-local-sport-scope"
 MAX_INPUT = 30_000
 MAX_ARTICLES = 8
 MAX_REQUEST_BYTES = 24_000
@@ -27,8 +27,8 @@ MAX_TITLE = 512
 MAX_EXCERPT = 2_000
 
 SIGNAL = {
-    "change": "A specific local public policy, institutional, industrial, infrastructure, trade, mobility, education, cultural, or safety action with a concrete possible mechanism. A small primary report suffices. Include a clearly reported proposal or decision, but do not treat it as implemented.",
-    "routine": "No plausible public or structural mechanism: isolated private celebrity or family disputes, routine sport or entertainment, lifestyle advice, and ordinary visits or speeches without a concrete action or strategic project. A court order in a private celebrity case is still routine.",
+    "change": "A specific local public policy, institutional, industrial, infrastructure, trade, mobility, education, cultural, or safety action with a concrete possible mechanism. Sports reporting qualifies when it describes a concrete public safety, sports access, infrastructure, or other local structural decision or project. A small primary report suffices. Include a clearly reported proposal or decision, but do not treat it as implemented.",
+    "routine": "No plausible public or structural mechanism: isolated private celebrity or family disputes, routine sport or entertainment, sports personnel moves or federation elections without a concrete local public effect, lifestyle advice, and ordinary visits or speeches without a concrete action or strategic project. A court order in a private celebrity case is still routine.",
     "uncertain": "A plausible public or structural lead is present but the supplied text cannot establish the action or mechanism. A planned official visit to a strategic industrial site can be uncertain if it may shift attention to that project; the visit alone is not a project decision.",
 }
 MECHANISM = {label: label for label in (
@@ -189,7 +189,7 @@ def _questions(key, countries):
         f"{key}_signal": {"type": "choice", "instructions": stem + "Is there a concrete public or structural lead, only routine news, or a plausible but unverified lead?", "criteria": SIGNAL},
         f"{key}_mechanism": {"type": "choice", "instructions": stem + "What public or structural mechanism is actually described? Choose unknown if none is clear.", "criteria": MECHANISM},
         f"{key}_stage": {"type": "choice", "instructions": stem + "Classify what has actually happened, separating an announced plan, approved decision, and execution.", "criteria": STAGE},
-        f"{key}_country": {"type": "choice", "instructions": stem + "Where does the reported action occur? Choose a country explicitly involved in the event, not the publisher's location or a merely mentioned country. Use none or unknown when needed.", "criteria": countries},
+        f"{key}_country": {"type": "choice", "instructions": stem + "Where does the reported public or structural action occur? Choose a country explicitly involved in that action, not the publisher's location or a merely mentioned country. A sports election's incidental host venue or a candidate's nationality alone does not establish a country-specific change. Use none or unknown when needed.", "criteria": countries},
     }
 
 

@@ -311,7 +311,8 @@ def load_current_translation_candidates(articles):
                 SELECT id,title FROM jsonb_to_recordset(CAST(:sources AS jsonb))
                   AS input(id bigint,title text)
             )
-            SELECT DISTINCT ar.id,ar.title FROM supplied input
+            SELECT DISTINCT ar.id,ar.title,
+              LEFT(COALESCE(NULLIF(ar.body,''),ar.summary,''),2000) AS excerpt FROM supplied input
             JOIN articles ar ON ar.id=input.id AND ar.title=input.title
             LEFT JOIN article_title_translations tr
               ON tr.article_id=ar.id AND tr.source_title=ar.title
@@ -321,29 +322,34 @@ def load_current_translation_candidates(articles):
             LIMIT 10000
         """), {'sources':json.dumps([{'id':a['id'],'title':a['title']} for a in articles],
                                         ensure_ascii=False)}).mappings().all()
-    current={(row['id'],row['title']) for row in rows}
+    current={(row['id'],row['title']): row['excerpt'] for row in rows}
     seen=set()
     result=[]
     for article in articles:
         key=(article['id'],article['title'])
         if key in current and key not in seen:
-            result.append(article)
+            result.append({**article, 'excerpt': current[key]})
             seen.add(key)
     return result
 
 
 def save_title_translations(translations, model):
     """A response for an old source headline cannot replace a current translation."""
+    saved = 0
     with get_session() as session:
         # Serialize source corrections and competing cache saves; the following
         # statement rechecks source titles after any concurrent writer commits.
         session.execute(text('SELECT id FROM articles WHERE id=ANY(:ids) ORDER BY id FOR UPDATE'),
                         {'ids':sorted({item['article_id'] for item in translations})}).all()
         for item in translations:
-            session.execute(text("""INSERT INTO article_title_translations
+            result = session.execute(text("""INSERT INTO article_title_translations
               (article_id,source_title,title_ru,model)
               SELECT id,title,:title_ru,:model FROM articles
               WHERE id=:article_id AND title=:source_title
+                AND (CAST(:source_excerpt AS text) IS NULL OR
+                  LEFT(COALESCE(NULLIF(body,''),summary,''),2000)=:source_excerpt)
               ON CONFLICT(article_id) DO UPDATE SET source_title=EXCLUDED.source_title,
                 title_ru=EXCLUDED.title_ru,model=EXCLUDED.model,translated_at=now()
-            """), {**item, 'model':model})
+            """), {'source_excerpt': None, **item, 'model':model})
+            saved += result.rowcount
+    return saved
