@@ -123,6 +123,7 @@ def test_real_world_screening_schema_keeps_full_country_request_bounded(monkeypa
     from tests.test_early_signals import article
     from datetime import datetime, timezone
     configure(monkeypatch,'openrouter')
+    monkeypatch.setattr(early_signals, 'MODEL', dm.MODEL)
     now=datetime.now(timezone.utc)
     rows=[article(i,country='GE',published_at=now,collected_at=now) for i in range(1,9)]
     screening, selected=early_signals.prepare_payload(rows,set(MONITORING_COUNTRIES))
