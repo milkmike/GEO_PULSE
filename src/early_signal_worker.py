@@ -133,6 +133,7 @@ def run_screening_cycle(*, budget_usd=Decimal('0'), campaign=None,
             return {**stats, 'status': 'budget_exhausted'}
         stats['calls'] += 1
         cost, usage, outcome, reason = None, {}, 'error', 'transport_error'
+        invalid_batch = False
         try:
             result = _request(payload, key, 45 if decision_model.PROVIDER != 'jev' else 10)
             if isinstance(result.get('usage'), dict):
@@ -141,12 +142,17 @@ def run_screening_cycle(*, budget_usd=Decimal('0'), campaign=None,
             if result.get('status') != 'ok':
                 if result.get('status') == 'invalid_response':
                     outcome, reason = 'invalid_response', 'invalid_response'
+                    invalid_batch = True
                 raise OSError('provider_error')
             data = result['data']
             outcome, reason = 'invalid_response', 'invalid_response'
             cost = (data.get('usage') or {}).get('cost') if isinstance(data.get('usage'), dict) else None
             cost, usage = _cost(data)
-            records, _ = parse_response(data, selected, codes)
+            try:
+                records, _ = parse_response(data, selected, codes)
+            except ValueError:
+                invalid_batch = True
+                raise
             if cost is not None and cost > float(decision_model.RESERVATION_USD):
                 raise ValueError('screening_cost_exceeds_reservation')
             for record in records:
@@ -167,7 +173,19 @@ def run_screening_cycle(*, budget_usd=Decimal('0'), campaign=None,
             _track(MODEL, decision_model.ENDPOINT, usage, cost, outcome, reason,
                    service=decision_model.SERVICE)
         if outcome != 'ok':
-            break
+            # A billed but malformed answer has already consumed this batch's
+            # pair keys. Continue only when its exact charge fits the hold;
+            # ambiguous transport or billing still stops the cycle.
+            bounded_cost = (type(cost) in (int, float)
+                            and 0 <= cost <= float(decision_model.RESERVATION_USD)
+                            and math.isfinite(cost))
+            if not (invalid_batch and outcome == 'invalid_response' and bounded_cost):
+                break
+            stats['rejected_batches'] = stats.get('rejected_batches', 0) + 1
+            if stats['screened']:
+                stats['status'] = 'partial'
+        elif stats.get('rejected_batches'):
+            stats['status'] = 'partial'
         ids = {a['id'] for a in selected}
         pending = [a for a in pending if a['id'] not in ids]
     stats['remaining_budget_usd'] = budget.get_budget(campaign)
