@@ -43,6 +43,8 @@ def main():
     monitor.add_argument('--max-calls', type=int, default=4)
     monitor.add_argument('--max-drafts', type=int, default=0)
     monitor.add_argument('--max-source-searches', type=int, choices=range(5), default=4)
+    monitor.add_argument('--auto-sources', action=argparse.BooleanOptionalAction, default=None,
+                         help='Validate and admit discovered RSS feeds automatically')
     monitor.add_argument('--loop', action='store_true')
     monitor.add_argument('--interval', type=int, default=3600)
     writer = sub.add_parser('write')
@@ -55,6 +57,11 @@ def main():
     publish.add_argument('--draft', required=True)
     publish.add_argument('--review-note', required=True)
     args = parser.parse_args()
+    if args.command == 'monitor' and args.auto_sources is None:
+        configured = os.getenv('AUTO_SOURCE_ONBOARDING', '0')
+        if configured not in ('0', '1'):
+            parser.error('AUTO_SOURCE_ONBOARDING must be 0 or 1')
+        args.auto_sources = configured == '1'
     if args.command in ('screen', 'monitor'):
         if args.interval < 600:
             parser.error('interval must be at least 600 seconds')
@@ -62,11 +69,13 @@ def main():
             try:
                 if args.command == 'monitor':
                     full = locked_global_cycle(budget_usd=args.budget_usd, max_screen_calls=args.max_calls,
-                                               max_drafts=args.max_drafts, max_source_searches=args.max_source_searches)
-                    report = {key: full[key] for key in ('as_of', 'status', 'scope_count', 'screening', 'writer', 'nominated') if key in full}
+                                               max_drafts=args.max_drafts, max_source_searches=args.max_source_searches,
+                                               auto_sources=args.auto_sources)
+                    report = {key: full[key] for key in ('as_of', 'status', 'scope_count', 'screening', 'translations', 'writer', 'nominated') if key in full}
                     if 'source_research' in full:
                         report['source_research'] = {key: full['source_research'][key] for key in
-                            ('status', 'countries_attempted', 'leads_saved', 'reason') if key in full['source_research']}
+                            ('status', 'countries_attempted', 'leads_saved', 'feeds_validated',
+                             'sources_activated', 'admission_failures', 'reason') if key in full['source_research']}
                 else:
                     report = locked_screening_cycle(budget_usd=args.budget_usd, max_calls=args.max_calls)
             except Exception as exc:

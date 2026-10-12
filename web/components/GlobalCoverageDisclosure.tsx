@@ -14,10 +14,35 @@ function collectedAt(value: string | null): string | null {
 }
 
 function collectionState(country: GlobalCoverageCountry): string {
-  if (country.sampled_articles_7d > 0) return "Есть публикации";
-  if (country.working_direct_publishers > 0) return "Публикаций пока нет";
-  if (country.configured_sources > 0) return "Нет местных публикаций в выборке";
-  return "Источники не настроены";
+  switch (country.coverage_state) {
+    case "sampled_articles": return "Есть публикации в выборке";
+    case "no_recent_articles": return "Нет публикаций за 7 дней в выборке";
+    case "no_working_direct_publishers": return "Нет успешного опроса местных СМИ за 72 часа";
+    case "no_sources": return "Источники не настроены";
+    default: return country.sampled_articles_7d > 0 ? "Есть публикации в выборке" : "Состояние сбора не уточнено";
+  }
+}
+
+function analysisProgress(country: GlobalCoverageCountry): string | null {
+  if (country.sampled_articles_7d === 0 || country.analysis_state === "no_sample") return null;
+  if (country.screened_articles_7d === undefined) return null;
+  if (country.analysis_state === "awaiting_analysis" || country.screened_articles_7d === 0) return "Публикации ещё не разобраны";
+  return `Разобрано ${country.screened_articles_7d} из ${country.sampled_articles_7d}`;
+}
+
+function searchStage(country: GlobalCoverageCountry, research?: Record<string, number>): string {
+  const stages: string[] = [];
+  if (research) {
+    if (research.researching) stages.push("Ищем СМИ");
+    if (research.queued) stages.push("Поиск СМИ в очереди");
+    if (research.needs_review) stages.push("Найдены кандидаты СМИ");
+    if (research.blocked) stages.push("Поиск СМИ ждёт повтора");
+  }
+  const work = country.work || {};
+  if (work.needs_geography) stages.push("Уточняем страну события");
+  if (work.needs_context || work.context_ready || work.drafting) stages.push("Готовим разбор");
+  if (work.needs_review) stages.push("Разбор ждёт проверки");
+  return stages.join(" · ") || "—";
 }
 
 export default function GlobalCoverageDisclosure({ refreshToken = 0, onCountriesLoaded, onSelectSignalCountry }: { refreshToken?: number; onCountriesLoaded?: (countries: GlobalCoverageCountry[]) => void; onSelectSignalCountry?: (code: string) => void }) {
@@ -65,13 +90,14 @@ export default function GlobalCoverageDisclosure({ refreshToken = 0, onCountries
   return <details className="mt-3 min-w-0 border-y border-line py-1 text-sm">
     <summary className="min-h-11 cursor-pointer rounded-sm py-3 text-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">
       <span className="font-medium underline underline-offset-4">Какой мир мы видим</span>
-      <span className="ml-2 text-fg/80">{snapshot.stale ? "Прежний срез" : "На дату среза"} · местные публикации за 7 дней: {freshCount} из {snapshot.scope_count} стран и территорий · пробелы по {gapCount}</span>
+      <span className="ml-2 text-fg/80">{snapshot.stale ? "Прежний срез" : "На дату среза"} · местные публикации за 7 дней: {freshCount} из {snapshot.scope_count} стран и территорий · без публикаций в выборке: {gapCount}</span>
     </summary>
     <div className="min-w-0 border-t border-line pb-4 pt-4">
       <p className="max-w-3xl text-sm leading-6 text-fg">Это ограниченная выборка местных публикаций, а не полный поток новостей из каждой страны.</p>
-      <p className="mt-1 max-w-3xl text-xs leading-5 text-dim">Доступность — успешный опрос за последние 72 часа; публикации могут выходить реже.</p>
+      <p className="mt-1 max-w-3xl text-xs leading-5 text-dim">Доступность СМИ означает успешный опрос за последние 72 часа. Страна источника не всегда совпадает со страной события.</p>
       <p className="mt-1 text-xs leading-5 text-dim">{snapshot.stale ? "Показан прежний срез сбора" : "Срез сбора"}{collectedAt(snapshot.as_of) ? ` · ${collectedAt(snapshot.as_of)}` : ""}. Время относится к сбору источников.</p>
       {snapshot.screening?.status !== "ok" && <p className="mt-3 max-w-3xl border-l-2 border-ru-red/60 pl-3 text-xs leading-5 text-fg/80">Автоматический разбор новых материалов приостановлен. Сбор источников продолжается.</p>}
+      {snapshot.source_research?.status === "blocked" && <p className="mt-2 text-xs leading-5 text-dim">Поиск местных СМИ временно недоступен.</p>}
       {researchLeads > 0 && <p className="mt-2 text-xs leading-5 text-dim">Поиск местных источников: найдено {researchLeads} {researchNoun} для проверки.</p>}
       {error && <p role="alert" className="mt-3 text-xs leading-5 text-dim">Не удалось обновить обзор. Показан предыдущий срез. <button type="button" onClick={() => setRetry((value) => value + 1)} className="min-h-11 text-accent underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">Повторить</button></p>}
       <div className="mt-4 flex flex-wrap items-end gap-x-5 gap-y-2">
@@ -83,8 +109,8 @@ export default function GlobalCoverageDisclosure({ refreshToken = 0, onCountries
       <p className="mt-2 text-xs text-dim">Показано {rows.length} из {snapshot.countries.length}</p>
       <div className="mt-2 max-h-[360px] min-w-0 overflow-auto border-y border-line">
         <table className="w-full min-w-[650px] border-collapse text-left text-xs leading-5">
-          <thead className="sticky top-0 bg-panel text-dim"><tr><th scope="col" className="px-3 py-2 font-medium">Страна или территория</th><th scope="col" className="px-3 py-2 font-medium">Источников настроено</th><th scope="col" className="px-3 py-2 font-medium">Местных СМИ доступно</th><th scope="col" className="px-3 py-2 font-medium">Публикаций в выборке{sampleLimit ? ` (до ${sampleLimit})` : ""}</th><th scope="col" className="px-3 py-2 font-medium">Последний сбор</th><th scope="col" className="px-3 py-2 font-medium">Состояние</th>{onSelectSignalCountry && <th scope="col" className="px-3 py-2 font-medium">Гипотезы</th>}</tr></thead>
-          <tbody className="divide-y divide-line">{rows.map((country) => <tr key={country.code} className="align-top"><th scope="row" className="min-w-[150px] px-3 py-2 font-medium text-fg">{country.name_ru}</th><td className="tnum px-3 py-2 text-dim">{country.configured_sources}</td><td className="tnum px-3 py-2 text-dim">{country.working_direct_publishers}</td><td className="tnum px-3 py-2 text-fg">{country.sampled_articles_7d}</td><td className="whitespace-nowrap px-3 py-2 text-dim">{collectedAt(country.latest_local_collected_at) ?? "—"}</td><td className="min-w-[150px] px-3 py-2 text-dim">{collectionState(country)}</td>{onSelectSignalCountry && <td className="px-3 py-1"><button type="button" aria-label={`Ранние сигналы: ${country.name_ru}`} onClick={() => onSelectSignalCountry(country.code)} className="min-h-11 whitespace-nowrap text-accent underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">Ранние сигналы</button></td>}</tr>)}</tbody>
+          <thead className="sticky top-0 bg-panel text-dim"><tr><th scope="col" className="px-3 py-2 font-medium">Страна или территория</th><th scope="col" className="px-3 py-2 font-medium">Источников настроено</th><th scope="col" className="px-3 py-2 font-medium">Местных СМИ доступно</th><th scope="col" className="px-3 py-2 font-medium">Публикаций в выборке{sampleLimit ? ` (до ${sampleLimit})` : ""}</th><th scope="col" className="px-3 py-2 font-medium">Последний сбор</th><th scope="col" className="px-3 py-2 font-medium">Состояние</th><th scope="col" className="px-3 py-2 font-medium">В работе</th>{onSelectSignalCountry && <th scope="col" className="px-3 py-2 font-medium">Наблюдения</th>}</tr></thead>
+          <tbody className="divide-y divide-line">{rows.map((country) => <tr key={country.code} className="align-top"><th scope="row" className="min-w-[150px] px-3 py-2 font-medium text-fg">{country.name_ru}</th><td className="tnum px-3 py-2 text-dim">{country.configured_sources}</td><td className="tnum px-3 py-2 text-dim">{country.working_direct_publishers}</td><td className="tnum px-3 py-2 text-fg"><span>{country.sampled_articles_7d}</span>{analysisProgress(country) && <span className="mt-0.5 block text-[11px] font-normal leading-4 text-dim">{analysisProgress(country)}</span>}</td><td className="whitespace-nowrap px-3 py-2 text-dim">{collectedAt(country.latest_local_collected_at) ?? "—"}</td><td className="min-w-[150px] px-3 py-2 text-dim">{collectionState(country)}</td><td className="min-w-[170px] px-3 py-2 text-dim">{searchStage(country, snapshot.source_research?.queue?.countries?.[country.code])}</td>{onSelectSignalCountry && <td className="px-3 py-1"><button type="button" aria-label={`Ранние сигналы: ${country.name_ru}`} onClick={() => onSelectSignalCountry(country.code)} className="min-h-11 whitespace-nowrap text-accent underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">Ранние сигналы</button></td>}</tr>)}</tbody>
         </table>
         {rows.length === 0 && <p className="px-3 py-4 text-xs text-dim">{search ? gapsOnly ? "Среди пробелов по этому запросу стран нет." : "По этому запросу стран нет." : gapsOnly ? "Пробелов в выборке нет." : "Стран в выборке нет."}</p>}
       </div>

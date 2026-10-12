@@ -13,6 +13,7 @@ from src import source_research_store as store
 
 ROOT = Path(__file__).resolve().parents[1]
 MIGRATION = ROOT / "scripts/migrations/042_source_research_queue.sql"
+ACTIVATION_MIGRATION = ROOT / "scripts/migrations/043_source_activation.sql"
 NOW = datetime.now(timezone.utc)
 
 
@@ -50,10 +51,36 @@ def _database(monkeypatch):
     connection.autocommit = True
     try:
         with connection.cursor() as cursor:
+            cursor.execute("""CREATE TABLE IF NOT EXISTS sources (
+                id SERIAL PRIMARY KEY,name VARCHAR(100) NOT NULL,url VARCHAR(500) NOT NULL,
+                country_code CHAR(2) NOT NULL,source_type VARCHAR(20) NOT NULL,
+                language VARCHAR(5),config JSONB,active BOOLEAN,tier VARCHAR(20),
+                state_affiliated BOOLEAN,propaganda_risk VARCHAR(10))""")
+            cursor.execute("""ALTER TABLE sources
+                ADD COLUMN IF NOT EXISTS source_type VARCHAR(20),
+                ADD COLUMN IF NOT EXISTS language VARCHAR(5),
+                ADD COLUMN IF NOT EXISTS config JSONB,
+                ADD COLUMN IF NOT EXISTS active BOOLEAN,
+                ADD COLUMN IF NOT EXISTS tier VARCHAR(20),
+                ADD COLUMN IF NOT EXISTS state_affiliated BOOLEAN,
+                ADD COLUMN IF NOT EXISTS propaganda_risk VARCHAR(10)""")
+            cursor.execute("CREATE SEQUENCE IF NOT EXISTS source_research_test_source_id_seq")
+            cursor.execute("ALTER TABLE sources ALTER COLUMN id SET DEFAULT nextval('source_research_test_source_id_seq')")
+            cursor.execute("SELECT setval('source_research_test_source_id_seq',COALESCE((SELECT max(id) FROM sources),0)+1,false)")
+            cursor.execute("""CREATE TABLE IF NOT EXISTS publisher_domains (
+                domain TEXT PRIMARY KEY,publisher_source_id INTEGER NOT NULL REFERENCES sources(id),
+                country_code CHAR(2) NOT NULL,status VARCHAR(16) NOT NULL,
+                method VARCHAR(32) NOT NULL,confidence NUMERIC(4,3) NOT NULL,evidence JSONB NOT NULL)""")
+            cursor.execute("""ALTER TABLE publisher_domains
+                ADD COLUMN IF NOT EXISTS method VARCHAR(32),
+                ADD COLUMN IF NOT EXISTS confidence NUMERIC(4,3),
+                ADD COLUMN IF NOT EXISTS evidence JSONB""")
             cursor.execute("DROP TABLE IF EXISTS source_research_leads,source_research_tasks")
             sql = MIGRATION.read_text()
             cursor.execute(sql)
             cursor.execute(sql)  # Both migration and data/init.sql are safe to reapply.
+            cursor.execute(ACTIVATION_MIGRATION.read_text())
+            cursor.execute(ACTIVATION_MIGRATION.read_text())
             cursor.execute("""SELECT to_regclass('source_research_tasks'),
                 to_regclass('source_research_leads'),
                 to_regclass('source_research_tasks_discovery_idx')""")
@@ -96,12 +123,15 @@ def test_gap_lifecycle_fair_claim_idempotent_leads_and_recovery(monkeypatch):
     with pytest.raises(ValueError, match="stale"):
         store.save_leads(first, [_lead()], as_of=NOW)
     assert store.save_leads(second, [], as_of=NOW) == 0
-    assert store.claim_discovery(as_of=NOW) is None  # Seven-day cooldown.
+    third = store.claim_discovery(as_of=NOW)
+    assert third["country_code"] == "AD" and third["gap_type"] == "no_qualifying_sample_in_7d"
+    assert store.claim_discovery(as_of=NOW) is None  # Other country gaps are cooling down.
     summary = store.summary(as_of=datetime.now(timezone.utc))
     assert summary["totals"]["needs_review"] == 1
     assert summary["totals"]["blocked"] == 1
     assert summary["lead_count"] == 1
     assert "website" not in str(summary)
+    store.save_leads(third, [], as_of=NOW)
 
     # A missing gap is resolved without losing prior research or other gap work.
     changed = [{"code": "AD", "source_gaps": ["no_qualifying_sample_in_7d"]}]
@@ -145,3 +175,59 @@ def test_bootstrap_schema_matches_migration():
     for table in ("source_research_tasks", "source_research_leads"):
         assert f"CREATE TABLE IF NOT EXISTS {table}" in sql
         assert f"CREATE TABLE IF NOT EXISTS {table}" in bootstrap
+
+
+def test_activation_migration_and_default_off_interface():
+    migration = (ROOT / "scripts/migrations/043_source_activation.sql").read_text()
+    bootstrap = (ROOT / "data/init.sql").read_text()
+    for column in ("activation_status", "activation_lease_token", "activation_next_attempt_at"):
+        assert column in migration and column in bootstrap
+
+
+def test_automatic_admission_is_atomic_and_does_not_override_domain(monkeypatch):
+    sessions = _database(monkeypatch)
+    with sessions() as session:
+        session.execute(text("DELETE FROM publisher_domains WHERE domain='auto-publisher.example'"))
+        session.execute(text("DELETE FROM sources WHERE url LIKE '%auto-publisher.example%'"))
+    store.sync_gaps([{"code": "AD", "source_gaps": ["no_active_sources"]}], as_of=NOW)
+    task = store.claim_discovery(as_of=NOW)
+    assert store.save_leads(task, [_lead(website="https://auto-publisher.example/")], as_of=NOW) == 1
+    first = store.claim_activation(as_of=NOW)
+    assert first["country_code"].strip() == "AD"
+    assert store.claim_activation(as_of=NOW) is None
+    admitted = store.finish_activation(first, feed_url="https://auto-publisher.example/feed",
+                                       as_of=NOW)
+    assert admitted["status"] == "active"
+    with pytest.raises(ValueError, match="stale"):
+        store.finish_activation(first, feed_url="https://auto-publisher.example/feed", as_of=NOW)
+    with sessions() as session:
+        source = session.execute(text("""SELECT active,source_type,country_code,config FROM sources
+            WHERE id=:id"""), {"id": admitted["source_id"]}).one()
+        mapping = session.execute(text("""SELECT publisher_source_id,status,method FROM publisher_domains
+            WHERE domain='auto-publisher.example'""")).one()
+        assert source.active and source.source_type == "rss" and source.country_code.strip() == "AD"
+        assert source.config["source_research"]["entity_id"] == "Q100"
+        assert (mapping.publisher_source_id, mapping.status, mapping.method) == (
+            admitted["source_id"], "verified", "wikidata_feed")
+
+    store.sync_gaps([{"code": "AO", "source_gaps": ["no_active_sources"]}], as_of=NOW)
+    task = store.claim_discovery(as_of=NOW)
+    second_lead = {**_lead(code="AO", website="https://auto-publisher.example/"),
+                   "entity_id": "Q101", "provenance_url": "https://www.wikidata.org/wiki/Q101"}
+    assert store.save_leads(task, [second_lead], as_of=NOW) == 1
+    second = store.claim_activation(as_of=NOW)
+    assert store.finish_activation(second, feed_url="https://auto-publisher.example/rss",
+                                   as_of=NOW)["reason"] == "collision"
+    with sessions() as session:
+        assert session.execute(text("SELECT count(*) FROM sources WHERE url LIKE '%auto-publisher.example%' ")).scalar_one() == 1
+        mapping = session.execute(text("SELECT publisher_source_id FROM publisher_domains WHERE domain='auto-publisher.example'")).scalar_one()
+        assert mapping == admitted["source_id"]
+
+
+def test_broken_active_feed_gap_is_researched_without_no_sources_gap(monkeypatch):
+    _database(monkeypatch)
+    store.sync_gaps([{"code": "AD", "source_gaps": ["no_successful_direct_fetch"]}], as_of=NOW)
+    claimed = store.claim_discovery(as_of=NOW)
+    assert claimed is not None
+    assert (claimed["country_code"].strip(), claimed["gap_type"]) == (
+        "AD", "no_successful_direct_fetch")

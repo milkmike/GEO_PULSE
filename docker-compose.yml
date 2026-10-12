@@ -273,6 +273,8 @@ services:
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       HTTPS_PROXY: ${HTTPS_PROXY:-${OPENROUTER_HTTPS_PROXY:-}}
       EARLY_SIGNAL_BUDGET_USD: ${EARLY_SIGNAL_BUDGET_USD:-0}
+      EARLY_SIGNAL_CAMPAIGN: ${EARLY_SIGNAL_CAMPAIGN:-early-signals-2026-10-02}
+      AUTO_SOURCE_ONBOARDING: ${AUTO_SOURCE_ONBOARDING:-0}
     depends_on:
       db:
         condition: service_healthy

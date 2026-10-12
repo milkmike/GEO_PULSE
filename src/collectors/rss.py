@@ -2,13 +2,14 @@
 import html
 import logging
 import time
-from datetime import datetime, timezone
-from time import mktime
+from datetime import datetime, timedelta, timezone
 
 import feedparser
 import httpx
 
 from src.collectors.publisher_attribution import normalize_publisher_domain
+from src.source_feed_validation import FeedUnsafe, FeedUnavailable, safe_fetch
+from src.source_feed_validation import safe_entry_link
 
 logger = logging.getLogger(__name__)
 
@@ -26,8 +27,11 @@ def _parse_entries(feed) -> list[dict]:
         for date_field in ("published_parsed", "updated_parsed", "created_parsed"):
             dt = getattr(entry, date_field, None)
             if dt:
-                published = datetime.fromtimestamp(mktime(dt), tz=timezone.utc)
-                break
+                try:
+                    published = datetime(*dt[:6], tzinfo=timezone.utc)
+                    break
+                except (TypeError, ValueError):
+                    continue
         if not published:
             published = datetime.now(timezone.utc)
 
@@ -68,7 +72,8 @@ def _parse_entries(feed) -> list[dict]:
 
 
 def collect_rss_status(source_url: str, source_name: str = "",
-                       retries: int = 1, timeout: float = 15.0) -> tuple[list[dict], str, str]:
+                       retries: int = 1, timeout: float = 15.0,
+                       config: dict | None = None) -> tuple[list[dict], str, str]:
     """Fetch and parse an RSS feed, classifying the outcome.
 
     Returns (articles, status, error_detail). Only genuinely transient server
@@ -78,6 +83,34 @@ def collect_rss_status(source_url: str, source_name: str = "",
     healthy feeds behind it. Hard failures (4xx/geoblock/malformed/empty) return
     immediately.
     """
+    provenance = (config or {}).get("source_research") if isinstance(config, dict) else None
+    if isinstance(provenance, dict) and provenance.get("provider") == "wikidata":
+        try:
+            document = safe_fetch(source_url, deadline=time.monotonic() + min(timeout, 15.0))
+        except (FeedUnsafe, FeedUnavailable):
+            return [], "conn_error", "auto source public fetch unavailable"
+        parsed = feedparser.parse(document)
+        if not parsed.version or (parsed.bozo and not parsed.entries):
+            return [], "malformed", "auto source malformed feed"
+        now = datetime.now(timezone.utc)
+        accepted = []
+        for entry in parsed.entries:
+            parsed_date = entry.get("published_parsed") or entry.get("updated_parsed")
+            if not parsed_date or not safe_entry_link(entry.get("link"), source_url):
+                continue
+            try:
+                published = datetime(*parsed_date[:6], tzinfo=timezone.utc)
+            except (TypeError, ValueError):
+                continue
+            if published > now + timedelta(hours=2):
+                continue
+            accepted.append(entry)
+        parsed.entries = accepted
+        articles = _parse_entries(parsed)
+        if not articles:
+            return [], "empty_feed", "0 entries"
+        return articles, "ok", ""
+
     last_status, last_error = "conn_error", ""
     for attempt in range(retries + 1):
         try:

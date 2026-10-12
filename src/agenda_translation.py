@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from datetime import datetime, timezone
 import hashlib
 import json
 import os
@@ -11,6 +12,7 @@ import unicodedata
 from src import agenda_budget as budget, agenda_store as store
 from src.api_tracker import track_api_call
 from src.budgeted_chat import BudgetedChat
+from src.early_signals import select_candidates
 
 MODEL = 'deepseek/deepseek-v4-flash'
 VERSION = 'agenda-title-ru-v1'
@@ -82,11 +84,13 @@ def parse_translations(content, articles):
     return result
 
 
-def run_translation_cycle(*, budget_usd=Decimal('0'), campaign, max_calls=2):
+def run_translation_cycle(*, budget_usd=Decimal('0'), campaign, max_calls=2, articles=None):
     """Caller holds the agenda advisory lock; at most two prepaid HTTP requests."""
     if (not isinstance(budget_usd, Decimal) or not budget_usd.is_finite()
             or not 0 <= budget_usd <= 3 or type(max_calls) is not int or not 1 <= max_calls <= 2):
         raise ValueError('Invalid translation budget or call bound')
+    if articles is not None and (not isinstance(articles, list) or len(articles) > 10000):
+        raise ValueError('Invalid supplied translation candidate bound')
     stats = {'status': 'ok', 'calls': 0, 'translated': 0}
     if not budget_usd:
         return {**stats, 'status': 'disabled'}
@@ -94,7 +98,14 @@ def run_translation_cycle(*, budget_usd=Decimal('0'), campaign, max_calls=2):
     if not api_key:
         return {**stats, 'status': 'missing_key'}
     attempted = budget.get_attempted_pair_keys(campaign)
-    pending = [a for a in store.load_translation_candidates()
+    if articles is None:
+        candidates = store.load_translation_candidates()
+    else:
+        supplied = [a for a in articles if isinstance(a, dict) and _valid_article(a)
+                    and translation_key(a) not in attempted]
+        candidates = select_candidates(store.load_current_translation_candidates(supplied),
+                                       as_of=datetime.now(timezone.utc))
+    pending = [a for a in candidates
                if _valid_article(a) and translation_key(a) not in attempted]
     offset = 0
     while offset < len(pending) and stats['calls'] < max_calls:

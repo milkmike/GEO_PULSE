@@ -90,7 +90,7 @@ describe("EarlySignalPanel", () => {
   it("uses a compact explanation for a monitoring country with no published hypotheses", async () => {
     mocks.earlySignals.mockResolvedValue({ ...result, items: [] });
     render(<EarlySignalPanel country="AD" availableCountry="RS" countryName="Андорра" signalOnly />);
-    expect(await screen.findByText(/опубликованных гипотез пока нет/)).toHaveTextContent("Андорра");
+    expect(await screen.findByText(/наблюдений и опубликованных гипотез пока нет/)).toHaveTextContent("Андорра");
     expect(screen.queryByText("На горизонте: Андорра")).not.toBeInTheDocument();
   });
 
@@ -144,5 +144,53 @@ describe("EarlySignalPanel", () => {
     render(<EarlySignalPanel country={null} />);
     expect(await screen.findByText("Разбор от 2 октября 2026 г.")).toBeVisible();
     expect(screen.queryByText(/6 октября 2026/)).not.toBeInTheDocument();
+  });
+
+  it("shows source-backed preliminary observations without promoting them to dossiers", async () => {
+    mocks.earlySignals.mockResolvedValue({ ...result, items: [], observations: [{
+      id: "observation-1", type: "observation", status: "provisional", country_code: "RS",
+      mechanism: "policy", stage: "published", source_title: "Cabinet announces review",
+      title_ru: null, title_origin: "unavailable", label_ru: "Начат пересмотр правил", why_watch_ru: "Пересмотр может изменить условия работы компаний.",
+      source_name: "Gazeta", source_url: "https://example.org/report", publisher_country_code: "AE",
+      published_at: "2026-10-01T08:00:00Z", collected_at: "2026-10-01T09:00:00Z",
+      evidence_quote: "Cabinet announced a review", source_fingerprint: "fingerprint",
+    }] });
+    render(<EarlySignalPanel country="RS" countryName="Сербия" signalOnly />);
+    expect(await screen.findByText("Начат пересмотр правил")).toBeVisible();
+    expect(screen.getByText("Первые наблюдения")).toBeVisible();
+    expect(screen.getByText("Пересмотр может изменить условия работы компаний.")).toBeVisible();
+    expect(screen.getByText(/Сербия · Gazeta · 1 октября 2026 г./)).toBeVisible();
+    expect(screen.getByText("Страна издания: ОАЭ")).toBeVisible();
+    expect(screen.queryByText("Автоматический перевод")).not.toBeInTheDocument();
+    expect(screen.queryByText("Гипотезы после проверки")).not.toBeInTheDocument();
+    expect(screen.queryByText(/опубликованных гипотез пока нет/)).not.toBeInTheDocument();
+    const disclosure = screen.getByText("Публикация и цитата").closest("details")!;
+    expect(disclosure).not.toHaveAttribute("open");
+    fireEvent.click(screen.getByText("Публикация и цитата"));
+    expect(within(disclosure).getByText("«Cabinet announced a review»")).toBeVisible();
+    expect(within(disclosure).getByRole("link", { name: "Открыть публикацию" })).toHaveAttribute("href", "https://example.org/report");
+  });
+
+  it("labels machine translated observation titles without adding provenance badges to other titles", async () => {
+    mocks.earlySignals.mockResolvedValue({ ...result, items: [], observations: [{
+      id: "translated-observation", type: "observation", status: "provisional", country_code: "RS",
+      mechanism: "policy", stage: "published", source_title: "Original title", title_ru: "Переведённый заголовок",
+      title_origin: "machine_translation", label_ru: "Объявлено изменение", why_watch_ru: "Следим за развитием.",
+      source_name: "Gazeta", source_url: "https://example.org/report", publisher_country_code: "RS",
+      published_at: "2026-10-01T08:00:00Z", collected_at: "2026-10-01T09:00:00Z",
+      evidence_quote: "Original quote", source_fingerprint: "fingerprint",
+    }] });
+    render(<EarlySignalPanel country={null} />);
+    expect(await screen.findByText("Переведённый заголовок")).toBeVisible();
+    expect(screen.getByText("Автоматический перевод")).toBeVisible();
+    expect(screen.getByText(/Сербия · Gazeta/)).toBeVisible();
+    expect(screen.queryByText(/страна издания/i)).not.toBeInTheDocument();
+  });
+
+  it("keeps the world panel hidden when both dossiers and observations are absent", async () => {
+    mocks.earlySignals.mockResolvedValue({ ...result, items: [], observations: [] });
+    render(<EarlySignalPanel country={null} />);
+    await act(async () => {});
+    expect(screen.queryByRole("region", { name: /На горизонте/ })).not.toBeInTheDocument();
   });
 });

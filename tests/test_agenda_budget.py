@@ -73,8 +73,8 @@ def test_committed_reservation_and_actual_cost_refund_are_idempotent(ledger):
     assert budget.get_budget(campaign) == pytest.approx(.275)
 
 
-@pytest.mark.parametrize('cost,status', [(None, 'timeout'), (None, 'ok'), (.01, 'provider_error')])
-def test_unknown_or_failed_request_retains_full_reservation(ledger, cost, status):
+@pytest.mark.parametrize('cost,status', [(None, 'timeout'), (None, 'ok'), (None, 'provider_error')])
+def test_unknown_request_cost_retains_full_reservation(ledger, cost, status):
     campaign, _ = ledger
     call = reserve(campaign)
     budget.finish_request(call, cost, status)
@@ -82,8 +82,8 @@ def test_unknown_or_failed_request_retains_full_reservation(ledger, cost, status
 
 
 @pytest.mark.parametrize('cost,status', [(None, 'timeout'), (None, 'ok'),
-                                         (.001, 'provider_error')])
-def test_small_reservation_unknown_or_failed_request_retains_original(ledger, cost, status):
+                                         (None, 'provider_error')])
+def test_small_reservation_unknown_request_cost_retains_original(ledger, cost, status):
     campaign, engine = ledger
     call = budget.reserve_request(campaign, Decimal('0.02'), 'a' * 64,
                                   reservation_usd=Decimal('0.01'))
@@ -93,6 +93,30 @@ def test_small_reservation_unknown_or_failed_request_retains_original(ledger, co
     with engine.connect() as conn:
         assert conn.execute(text('SELECT charged_usd FROM agenda_budget_calls WHERE id=:id'),
                             {'id': call}).scalar_one() == Decimal('0.01')
+
+
+@pytest.mark.parametrize('status', ['invalid_response', 'error', 'provider_error'])
+def test_known_bill_is_settled_even_when_model_content_fails(ledger, status):
+    campaign, engine = ledger
+    call = budget.reserve_request(campaign, Decimal('.30'), 'a' * 64,
+                                  pair_keys=['b' * 64])
+    budget.finish_request(call, Decimal('.002'), status)
+    assert budget.get_budget(campaign) == pytest.approx(.298)
+    budget.finish_request(call, 0, 'ok')
+    assert budget.get_budget(campaign) == pytest.approx(.298)
+    assert budget.reserve_request(campaign, Decimal('.30'), 'c' * 64,
+                                  pair_keys=['b' * 64]) is None
+    with engine.connect() as conn:
+        row = conn.execute(text('SELECT status,charged_usd,actual_cost_usd '
+                                'FROM agenda_budget_calls WHERE id=:id'), {'id': call}).one()
+        assert row == (status, Decimal('.002'), Decimal('.002'))
+
+
+def test_invalid_status_does_not_release_reservation(ledger):
+    campaign, _ = ledger
+    call = reserve(campaign)
+    budget.finish_request(call, .001, 'reserved')
+    assert budget.get_budget(campaign) == pytest.approx(.20)
 
 
 def test_small_reservation_success_refunds_and_overage_halts(ledger):

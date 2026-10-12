@@ -11,6 +11,7 @@ import hashlib
 import json
 import math
 import os
+import re
 
 import httpx
 from sqlalchemy import text
@@ -28,9 +29,34 @@ from src.signal_hypotheses import prepare_prompt, validate_dossier
 from src.signal_workbench import article_snapshot, instant, request_hash
 
 CAMPAIGN = 'early-signals-2026-10-02'
+_CAMPAIGN_ID = re.compile(r'early-signals-[0-9]{4}-[0-9]{2}-[0-9]{2}(?:-[a-z0-9][a-z0-9-]{0,30})?\Z')
 WRITER_MODEL = 'qwen/qwen3.6-flash'
 WRITER_MODELS = {WRITER_MODEL, 'deepseek/deepseek-v4-flash'}
 WRITER_VERSION = 'early-signal-writer-v2'
+
+
+def _validated_campaign(value):
+    if not isinstance(value, str) or not _CAMPAIGN_ID.fullmatch(value):
+        raise ValueError('invalid early-signal campaign')
+    return value
+
+
+def configured_campaign():
+    """An explicit campaign gets its own persistent cap; the default stays put."""
+    return _validated_campaign(os.environ.get('EARLY_SIGNAL_CAMPAIGN', CAMPAIGN))
+
+
+_PUBLIC_FAILURES = {
+    'unexpected questions', 'invalid cost', 'invalid usage',
+    'screening_cost_exceeds_reservation', 'invalid_response_size',
+    'incomplete_response', 'writer_cost_exceeds_reservation', 'duplicate_json_key',
+}
+
+
+def _failure_reason(exc, outcome):
+    message = str(exc)
+    return message if outcome == 'invalid_response' and message in _PUBLIC_FAILURES else (
+        'invalid_response' if outcome == 'invalid_response' else 'transport_error')
 
 
 def _bounds(amount, max_calls=10):
@@ -59,9 +85,10 @@ def _track(model, endpoint, usage, cost, outcome, reason=None, *, service='openr
                    status='ok' if outcome == 'ok' else 'error', error=reason)
 
 
-def run_screening_cycle(*, budget_usd=Decimal('0'), campaign=CAMPAIGN,
+def run_screening_cycle(*, budget_usd=Decimal('0'), campaign=None,
                         max_calls=10, articles=None, as_of=None):
     _bounds(budget_usd, max_calls)
+    campaign = configured_campaign() if campaign is None else _validated_campaign(campaign)
     stats = {'status': 'ok', 'calls': 0, 'screened': 0, 'changes': 0, 'uncertain': 0}
     if not budget_usd:
         return {**stats, 'status': 'disabled'}
@@ -129,7 +156,7 @@ def run_screening_cycle(*, budget_usd=Decimal('0'), campaign=CAMPAIGN,
             outcome, reason = 'ok', None
         except ValueError as exc:
             # Core validators use fixed messages, never interpolate source text.
-            reason = str(exc) if outcome == 'invalid_response' else 'transport_error'
+            reason = _failure_reason(exc, outcome)
             stats.update(status='error', error=reason)
         except Exception:
             stats.update(status='error', error=reason)
@@ -169,9 +196,10 @@ def _unique_object(pairs):
     return result
 
 
-def write_draft(context, *, budget_usd=Decimal('0'), campaign=CAMPAIGN, model=WRITER_MODEL):
+def write_draft(context, *, budget_usd=Decimal('0'), campaign=None, model=WRITER_MODEL):
     """One prepaid request; validates quotations and stores no public release."""
     _bounds(budget_usd)
+    campaign = configured_campaign() if campaign is None else _validated_campaign(campaign)
     if not budget_usd:
         raise ValueError('writer_disabled')
     if model not in WRITER_MODELS:
@@ -216,7 +244,7 @@ def write_draft(context, *, budget_usd=Decimal('0'), campaign=CAMPAIGN, model=WR
         outcome, reason = 'ok', None
         return {'draft': draft, 'validated': validated, 'model': model, 'cost_usd': cost}
     except ValueError as exc:
-        reason = str(exc) if outcome == 'invalid_response' else 'transport_error'
+        reason = _failure_reason(exc, outcome)
         raise ValueError(reason) from None
     except Exception:
         raise ValueError(reason) from None

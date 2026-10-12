@@ -10,7 +10,7 @@ const coverage: GlobalCoverageResponse = {
   as_of: "2026-10-06T09:00:00Z", status: "ok", scope_count: 3,
   countries: [
     { code: "RS", name_ru: "Сербия", configured_sources: 4, working_direct_publishers: 2, sampled_articles_7d: 7, latest_local_published_at: "2026-10-05T08:00:00Z", latest_local_collected_at: "2026-10-06T08:00:00Z", coverage_state: "sampled", work: {} },
-    { code: "AE", name_ru: "Объединённые Арабские Эмираты", configured_sources: 2, working_direct_publishers: 1, sampled_articles_7d: 0, latest_local_published_at: null, latest_local_collected_at: null, coverage_state: "quiet", work: {} },
+    { code: "AE", name_ru: "Объединённые Арабские Эмираты", configured_sources: 2, working_direct_publishers: 1, sampled_articles_7d: 0, latest_local_published_at: null, latest_local_collected_at: null, coverage_state: "no_recent_articles", work: {} },
     { code: "PW", name_ru: "Палау", configured_sources: 0, working_direct_publishers: 0, sampled_articles_7d: 0, latest_local_published_at: null, latest_local_collected_at: null, coverage_state: "no_sources", work: {} },
   ],
   limits: { per_country: 40, window_days: 7, counts_are_bounded: true },
@@ -25,7 +25,7 @@ describe("GlobalCoverageDisclosure", () => {
   it("shows a bounded collection summary and searchable country gaps inside the disclosure", async () => {
     render(<GlobalCoverageDisclosure />);
     const summary = await screen.findByText("Какой мир мы видим");
-    expect(summary.closest("summary")).toHaveTextContent("1 из 3 стран и территорий · пробелы по 2");
+    expect(summary.closest("summary")).toHaveTextContent("1 из 3 стран и территорий · без публикаций в выборке: 2");
     const disclosure = summary.closest("details")!;
     expect(disclosure).not.toHaveAttribute("open");
     fireEvent.click(summary);
@@ -34,7 +34,7 @@ describe("GlobalCoverageDisclosure", () => {
     expect(within(disclosure).getByText("Поиск местных источников: найдено 3 кандидата для проверки.")).toBeVisible();
     expect(within(disclosure).getByRole("columnheader", { name: "Публикаций в выборке (до 40)" })).toBeVisible();
     expect(within(disclosure).getByRole("columnheader", { name: "Местных СМИ доступно" })).toBeVisible();
-    expect(within(disclosure).getByText("Доступность — успешный опрос за последние 72 часа; публикации могут выходить реже.")).toBeVisible();
+    expect(within(disclosure).getByText(/Доступность СМИ означает успешный опрос за последние 72 часа/)).toBeVisible();
     fireEvent.change(within(disclosure).getByRole("searchbox", { name: "Найти страну или территорию" }), { target: { value: "палау" } });
     expect(within(disclosure).getByRole("rowheader", { name: "Палау" })).toBeVisible();
     expect(within(disclosure).getByText("Источники не настроены")).toBeVisible();
@@ -45,6 +45,41 @@ describe("GlobalCoverageDisclosure", () => {
     expect(within(disclosure).getAllByRole("rowheader")).toHaveLength(2);
     fireEvent.change(within(disclosure).getByRole("searchbox", { name: "Найти страну или территорию" }), { target: { value: "Сербия" } });
     expect(within(disclosure).getByText("Среди пробелов по этому запросу стран нет.")).toBeVisible();
+  });
+
+  it("separates failed collection, a quiet sample, and the actual country work stage", async () => {
+    mocks.globalCoverage.mockResolvedValue({ ...coverage,
+      countries: coverage.countries.map((country) => country.code === "RS"
+        ? { ...country, work: { needs_context: 1 } }
+        : country.code === "AE" ? { ...country, coverage_state: "no_working_direct_publishers", working_direct_publishers: 0 } : country),
+      source_research: { status: "ok", queue: { countries: { AE: { researching: 1 }, PW: { queued: 1 } }, lead_count: 0 } },
+    });
+    render(<GlobalCoverageDisclosure />);
+    fireEvent.click(await screen.findByText("Какой мир мы видим"));
+    const serbia = screen.getByRole("rowheader", { name: "Сербия" }).closest("tr")!;
+    const emirates = screen.getByRole("rowheader", { name: "Объединённые Арабские Эмираты" }).closest("tr")!;
+    const palau = screen.getByRole("rowheader", { name: "Палау" }).closest("tr")!;
+    expect(within(serbia).getByText("Готовим разбор")).toBeVisible();
+    expect(within(emirates).getByText("Нет успешного опроса местных СМИ за 72 часа")).toBeVisible();
+    expect(within(emirates).getByText("Ищем СМИ")).toBeVisible();
+    expect(within(palau).getByText("Поиск СМИ в очереди")).toBeVisible();
+    expect(screen.queryByText(/сигналов не найдено/i)).not.toBeInTheDocument();
+  });
+
+  it("shows analysis progress beside the sampled articles without treating fresh collection as analysis", async () => {
+    mocks.globalCoverage.mockResolvedValue({ ...coverage, countries: coverage.countries.map((country) => {
+      if (country.code === "RS") return { ...country, screened_articles_7d: 3, analysis_state: "sample_partial" };
+      if (country.code === "AE") return { ...country, sampled_articles_7d: 2, coverage_state: "sampled_articles", screened_articles_7d: 0, analysis_state: "awaiting_analysis" };
+      return { ...country, screened_articles_7d: 0, analysis_state: "no_sample" };
+    }) });
+    render(<GlobalCoverageDisclosure />);
+    fireEvent.click(await screen.findByText("Какой мир мы видим"));
+    const serbia = screen.getByRole("rowheader", { name: "Сербия" }).closest("tr")!;
+    const emirates = screen.getByRole("rowheader", { name: "Объединённые Арабские Эмираты" }).closest("tr")!;
+    const palau = screen.getByRole("rowheader", { name: "Палау" }).closest("tr")!;
+    expect(within(serbia).getByText("Разобрано 3 из 7")).toBeVisible();
+    expect(within(emirates).getByText("Публикации ещё не разобраны")).toBeVisible();
+    expect(within(palau).queryByText(/Разобрано|ещё не разобраны/)).not.toBeInTheDocument();
   });
 
   it("offers a country-specific signals action and reports monitoring names", async () => {

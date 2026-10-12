@@ -3,6 +3,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from src.monitoring_registry import MONITORING_COUNTRIES as COUNTRIES
 from src.early_signal_store import list_dossiers
+from src.early_signal_observations import list_observations
 from src.global_signal_store import latest_monitor
 
 router = APIRouter(prefix="/api/v2", tags=["early-signals"])
@@ -20,4 +21,5 @@ def early_signals(country: str | None = Query(default=None, pattern=r"^[A-Za-z]{
     country = country.upper() if country is not None else None
     if country is not None and country not in COUNTRIES:
         raise HTTPException(status_code=422, detail="invalid country")
-    return list_dossiers(country=country, limit=limit)
+    result = list_dossiers(country=country, limit=limit)
+    return {**result, "observations": list_observations(country=country, limit=limit)}

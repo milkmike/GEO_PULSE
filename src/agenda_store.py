@@ -286,6 +286,52 @@ def load_translation_candidates(limit=400):
     return list(candidates.values())[:limit]
 
 
+def load_current_translation_candidates(articles):
+    """Keep supplied world articles only when their title is still current and uncached.
+
+    Return the original snapshots so the caller can sample fairly by source and
+    publisher. This read does not depend on Russia triage or agenda membership.
+    """
+    if not isinstance(articles, list) or len(articles) > 10000:
+        raise ValueError('Invalid supplied translation candidate bound')
+    identities = {}
+    for article in articles:
+        if (not isinstance(article, dict) or type(article.get('id')) is not int
+                or article['id'] <= 0 or not isinstance(article.get('title'), str)
+                or not 1 <= len(article['title'].strip()) <= 500):
+            raise ValueError('Invalid supplied translation article')
+        previous = identities.setdefault(article['id'], article['title'])
+        if previous != article['title']:
+            raise ValueError('Conflicting supplied article title')
+    if not articles:
+        return []
+    with get_session() as session:
+        rows = session.execute(text("""
+            WITH supplied AS MATERIALIZED (
+                SELECT id,title FROM jsonb_to_recordset(CAST(:sources AS jsonb))
+                  AS input(id bigint,title text)
+            )
+            SELECT DISTINCT ar.id,ar.title FROM supplied input
+            JOIN articles ar ON ar.id=input.id AND ar.title=input.title
+            LEFT JOIN article_title_translations tr
+              ON tr.article_id=ar.id AND tr.source_title=ar.title
+            WHERE ar.is_duplicate IS FALSE
+              AND ar.geo_status IN ('source_verified','publisher_verified','publisher_reassigned')
+              AND tr.article_id IS NULL
+            LIMIT 10000
+        """), {'sources':json.dumps([{'id':a['id'],'title':a['title']} for a in articles],
+                                        ensure_ascii=False)}).mappings().all()
+    current={(row['id'],row['title']) for row in rows}
+    seen=set()
+    result=[]
+    for article in articles:
+        key=(article['id'],article['title'])
+        if key in current and key not in seen:
+            result.append(article)
+            seen.add(key)
+    return result
+
+
 def save_title_translations(translations, model):
     """A response for an old source headline cannot replace a current translation."""
     with get_session() as session:

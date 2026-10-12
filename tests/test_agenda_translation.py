@@ -191,3 +191,62 @@ def test_long_titles_pack_within_output_envelope(monkeypatch,harness):
     assert translation.run_translation_cycle(budget_usd=Decimal('3'),campaign='same')['calls']==2
     assert all(sum(len(a['title']) for a in batch)<=1000 for batch in batches)
     assert [len(batch) for batch in batches]==[5,5]
+
+
+def test_explicit_world_candidates_use_current_cache_and_fair_selection(monkeypatch,harness):
+    from src.signal_workbench import article_snapshot
+    from tests.test_early_signals import article
+    from datetime import datetime,timezone
+    translation,pending,saved,reserve,finish=harness
+    now=datetime.now(timezone.utc)
+    supplied=[article_snapshot(article(i,country='RS',published_at=now,collected_at=now),screened=True)
+              for i in range(1,25)]
+    supplied.append(article_snapshot(article(25,country='GE',published_at=now,collected_at=now),screened=True))
+    cache=Mock(return_value=supplied)
+    monkeypatch.setattr(translation.store,'load_current_translation_candidates',cache)
+    pending.side_effect=AssertionError('global translation queue must not be used')
+    def post(url,**kwargs):
+        batch=json.loads(kwargs['json']['messages'][0]['content'].split('\nARTICLES:\n')[1])
+        assert any(a['id']==25 for a in batch)
+        return httpx.Response(200,request=httpx.Request('POST',url),json={
+            'choices':[{'finish_reason':'stop','message':{'content':json.dumps({str(a['id']):'Перевод' for a in batch})}}],
+            'usage':{'cost':.0003}})
+    monkeypatch.setattr(httpx,'post',post)
+    result=translation.run_translation_cycle(budget_usd=Decimal('3'),campaign='same',
+                                             max_calls=1,articles=supplied)
+    assert result['calls']==1 and result['translated']<=8
+    cache.assert_called_once_with(supplied)
+    assert reserve.call_args.kwargs['reservation_usd']==Decimal('.02')
+
+
+def test_explicit_translation_missing_key_or_zero_budget_skips_db(monkeypatch):
+    from src import agenda_translation as translation
+    source=[{'id':1,'title':'Current title'}]
+    monkeypatch.setattr(translation.store,'load_current_translation_candidates',
+                        lambda *_:pytest.fail('no DB read'))
+    monkeypatch.delenv('OPENROUTER_API_KEY',raising=False)
+    assert translation.run_translation_cycle(budget_usd=Decimal('3'),campaign='same',articles=source)['status']=='missing_key'
+    assert translation.run_translation_cycle(budget_usd=Decimal('0'),campaign='same',articles=source)['status']=='disabled'
+
+
+def test_attempted_world_titles_cannot_hide_unseen_titles(monkeypatch,harness):
+    from tests.test_early_signals import article
+    from datetime import datetime,timezone
+    translation,pending,saved,reserve,finish=harness
+    now=datetime.now(timezone.utc)
+    supplied=[{**article(i,country='RS',published_at=now,collected_at=now),
+               'source_id':1,'source_name':'One publisher'} for i in range(1,91)]
+    attempted={translation.translation_key(a) for a in supplied[10:]}
+    assert all(translation.translation_key(a) in attempted
+               for a in translation.select_candidates(supplied,as_of=now))
+    monkeypatch.setattr(translation.budget,'get_attempted_pair_keys',lambda _:attempted)
+    monkeypatch.setattr(translation.store,'load_current_translation_candidates',lambda articles:articles)
+    def post(url,**kwargs):
+        batch=json.loads(kwargs['json']['messages'][0]['content'].split('\nARTICLES:\n')[1])
+        assert batch and all(a['id']<=10 for a in batch)
+        return httpx.Response(200,request=httpx.Request('POST',url),json={
+            'choices':[{'finish_reason':'stop','message':{'content':json.dumps({str(a['id']):'Перевод' for a in batch})}}],
+            'usage':{'cost':.0003}})
+    monkeypatch.setattr(httpx,'post',post)
+    result=translation.run_translation_cycle(budget_usd=Decimal('2'),campaign='same',max_calls=1,articles=supplied)
+    assert result['translated']>0

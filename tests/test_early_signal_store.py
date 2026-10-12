@@ -107,6 +107,7 @@ def test_duplicate_save_has_stable_id_and_publication_requires_note(monkeypatch)
 
 def test_api_country_validation_and_read_only_projection(monkeypatch):
     from src.api.routes import early_signals as route
+    monkeypatch.setattr(route, "list_observations", lambda **kw: [])
     monkeypatch.setattr(route, "list_dossiers", lambda country=None, limit=6: {
         "as_of": NOW.isoformat(), "items": [], "notice": store.NOTICE,
         "country": country, "limit": limit})
@@ -119,6 +120,7 @@ def test_api_country_validation_and_read_only_projection(monkeypatch):
 
 def test_world_coverage_reads_snapshot_without_country_prompt_or_paid_call(monkeypatch):
     from src.api.routes import early_signals as route
+    monkeypatch.setattr(route, "list_observations", lambda **kw: [])
     snapshot = {'as_of': NOW.isoformat(), 'status': 'ok', 'scope_count': 248,
                 'countries': [{'code': 'AD', 'name_ru': 'Андорра', 'sampled_articles_7d': 0}]}
     monkeypatch.setattr(route, 'latest_monitor', lambda: snapshot)

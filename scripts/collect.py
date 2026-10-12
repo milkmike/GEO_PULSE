@@ -216,7 +216,7 @@ COLLECT_WORKERS = int(os.environ.get("COLLECT_WORKERS", "10"))
 def _fetch_source(source) -> tuple[list[dict], str, str]:
     """Fetch one source (network-bound; safe to run in a thread pool)."""
     if source.source_type == "rss":
-        return collect_rss_status(source.url, source.name)
+        return collect_rss_status(source.url, source.name, config=source.config)
     if source.source_type == "web":
         return scrape_web_status(source.url, source.name)
     return [], "unknown_type", f"unknown source_type={source.source_type!r}"

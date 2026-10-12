@@ -157,6 +157,28 @@ def test_invalid_cost_reaches_persistent_halt_guard(monkeypatch):
     assert not any(x[0]=='save' for x in events)
 
 
+def test_campaign_env_is_validated_and_used_before_paid_request(monkeypatch):
+    events=setup_screen(monkeypatch)
+    campaigns=[]
+    monkeypatch.setenv('EARLY_SIGNAL_CAMPAIGN','early-signals-2026-10-12')
+    monkeypatch.setattr(worker.budget,'get_attempted_pair_keys',lambda campaign:campaigns.append(campaign) or set())
+    worker.run_screening_cycle(articles=[article()],as_of=NOW,budget_usd=Decimal('2'))
+    assert campaigns==['early-signals-2026-10-12']
+    monkeypatch.setenv('EARLY_SIGNAL_CAMPAIGN','legacy-other-ledger')
+    with pytest.raises(ValueError,match='campaign'):
+        worker.run_screening_cycle(articles=[article()],as_of=NOW,budget_usd=Decimal('2'))
+    assert campaigns==['early-signals-2026-10-12']
+
+
+def test_provider_error_text_cannot_enter_public_status(monkeypatch):
+    setup_screen(monkeypatch)
+    def leak(*a):
+        raise ValueError('secret credential and source content')
+    monkeypatch.setattr(worker,'_request',leak)
+    stats=worker.run_screening_cycle(articles=[article()],as_of=NOW,budget_usd=Decimal('2'))
+    assert stats['error']=='transport_error'
+
+
 def test_chat_transport_failure_keeps_known_overage_for_halt(monkeypatch):
     events=setup_screen(monkeypatch)
     monkeypatch.setattr(worker,'_request',lambda *a:{'status':'invalid_response','usage':{'cost':.12}})
