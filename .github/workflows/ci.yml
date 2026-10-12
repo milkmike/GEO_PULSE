@@ -79,6 +79,12 @@ jobs:
           psql --dbname=postgres -v ON_ERROR_STOP=1 -c "CREATE DATABASE geopulse_story_test"
           psql --dbname=geopulse_search_test -v ON_ERROR_STOP=1 -c "CREATE EXTENSION IF NOT EXISTS pg_trgm; CREATE EXTENSION IF NOT EXISTS vector;"
 
+      - name: Verify standalone analyzer dependencies
+        run: |
+          python -m venv /tmp/geopulse-analyzer-import
+          /tmp/geopulse-analyzer-import/bin/pip install -r requirements-analyzer.txt
+          /tmp/geopulse-analyzer-import/bin/python -c "import src.global_signal_monitor"
+
       - name: Verify live PostgreSQL gate configuration
         run: |
           command -v psql
