@@ -144,6 +144,53 @@ def test_registry_sync_preserves_automatic_feed_provenance_for_same_identity():
     engine.dispose()
 
 
+def test_catalog_sync_keeps_repaired_feed_until_catalog_url_changes(monkeypatch):
+    engine, SessionLocal = _database()
+    old_url = "https://daily.ad/old.xml"
+    repaired_url = "https://daily.ad/new.xml"
+    changed_url = "https://daily.ad/editorial.xml"
+    provenance = {"provider": "wikidata", "entity_id": "Q100",
+                  "previous_feed_url": old_url,
+                  "website": "https://daily.ad/",
+                  "provenance_url": "https://www.wikidata.org/wiki/Q100"}
+    with SessionLocal.begin() as session:
+        session.add(Source(id=100, name="Daily", url=repaired_url,
+                           country_code="AD", source_type="rss", language="ca",
+                           config={"publisher_domain": "daily.ad", "source_research": provenance},
+                           active=True))
+
+    @contextmanager
+    def sessions():
+        with SessionLocal.begin() as session:
+            yield session
+
+    catalog = {"countries": {"AD": {"sources": [{
+        "name": "Daily", "url": old_url, "type": "rss", "language": "ca",
+        "config": {"publisher_domain": "daily.ad"}}]}}}
+    monkeypatch.setattr(collect, "get_session", sessions)
+    monkeypatch.setattr(collect, "load_sources", lambda: catalog)
+    monkeypatch.setattr(collect, "SKIP_YAML_SYNC", False)
+    collect.ensure_sources_in_db()
+    with SessionLocal() as session:
+        source = session.get(Source, 100)
+        assert source.url == repaired_url
+        assert source.config["source_research"] == provenance
+        observed = []
+        monkeypatch.setattr(collect, "collect_rss_status", lambda url, name, **kw:
+                            observed.append((url, kw["config"])) or ([], "empty_feed", ""))
+        collect._fetch_source(source)
+        assert observed[0][0] == repaired_url
+        assert observed[0][1]["source_research"] == provenance
+
+    catalog["countries"]["AD"]["sources"][0]["url"] = changed_url
+    collect.ensure_sources_in_db()
+    with SessionLocal() as session:
+        source = session.get(Source, 100)
+        assert source.url == changed_url
+        assert source.config == {"publisher_domain": "daily.ad"}
+    engine.dispose()
+
+
 def test_registry_sync_skips_invalid_direct_and_site_domains():
     engine, SessionLocal = _database()
     invalid_direct_urls = [

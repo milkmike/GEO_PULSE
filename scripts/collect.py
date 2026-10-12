@@ -12,6 +12,7 @@ from src.collectors.rss import collect_rss_status
 from src.collectors.scraper import scrape_web_status
 from src.collectors.publisher_attribution import (
     classify_article,
+    normalize_publisher_domain,
     sync_publisher_domains,
     upsert_article_discovery,
 )
@@ -110,13 +111,31 @@ def _update_collector_stats():
 def _apply_source_metadata(source: Source, src: dict, country_code: str) -> None:
     """Refresh all catalog-owned fields on an existing source row."""
     lang = src.get("language", "ru")
+    current_config = source.config if isinstance(source.config, dict) else {}
+    provenance = current_config.get("source_research")
+    catalog_config = src.get("config") or {}
+    if not isinstance(catalog_config, dict):
+        catalog_config = {}
+    preserve_repair = (
+        isinstance(provenance, dict)
+        and provenance.get("provider") == "wikidata"
+        and provenance.get("previous_feed_url") == src["url"]
+        and source.url != src["url"]
+        and source.source_type == src["type"] == "rss"
+        and str(source.country_code).strip() == country_code
+        and normalize_publisher_domain(source.url) == normalize_publisher_domain(src["url"])
+        and normalize_publisher_domain(catalog_config.get("publisher_domain") or src["url"])
+            == normalize_publisher_domain(source.url)
+    )
     source.name = src["name"]
-    source.url = src["url"]
+    if not preserve_repair:
+        source.url = src["url"]
     source.country_code = country_code
     source.source_type = src["type"]
     source.weight = src.get("weight", 1.0)
     source.language = str(lang) if lang is not None else "ru"
-    source.config = src.get("config", {})
+    source.config = ({**catalog_config, "source_research": provenance}
+                     if preserve_repair else catalog_config)
     source.active = True
     source.tier = src.get("tier", "mainstream")
     source.state_affiliated = src.get("state_affiliated", False)

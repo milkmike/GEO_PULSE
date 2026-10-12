@@ -63,7 +63,11 @@ def _database(monkeypatch):
                 ADD COLUMN IF NOT EXISTS active BOOLEAN,
                 ADD COLUMN IF NOT EXISTS tier VARCHAR(20),
                 ADD COLUMN IF NOT EXISTS state_affiliated BOOLEAN,
-                ADD COLUMN IF NOT EXISTS propaganda_risk VARCHAR(10)""")
+                ADD COLUMN IF NOT EXISTS propaganda_risk VARCHAR(10),
+                ADD COLUMN IF NOT EXISTS last_fetch_at TIMESTAMPTZ,
+                ADD COLUMN IF NOT EXISTS last_status VARCHAR(24),
+                ADD COLUMN IF NOT EXISTS last_error TEXT,
+                ADD COLUMN IF NOT EXISTS consecutive_failures INTEGER DEFAULT 0""")
             cursor.execute("CREATE SEQUENCE IF NOT EXISTS source_research_test_source_id_seq")
             cursor.execute("ALTER TABLE sources ALTER COLUMN id SET DEFAULT nextval('source_research_test_source_id_seq')")
             cursor.execute("SELECT setval('source_research_test_source_id_seq',COALESCE((SELECT max(id) FROM sources),0)+1,false)")
@@ -74,7 +78,8 @@ def _database(monkeypatch):
             cursor.execute("""ALTER TABLE publisher_domains
                 ADD COLUMN IF NOT EXISTS method VARCHAR(32),
                 ADD COLUMN IF NOT EXISTS confidence NUMERIC(4,3),
-                ADD COLUMN IF NOT EXISTS evidence JSONB""")
+                ADD COLUMN IF NOT EXISTS evidence JSONB,
+                ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now()""")
             cursor.execute("DROP TABLE IF EXISTS source_research_leads,source_research_tasks")
             sql = MIGRATION.read_text()
             cursor.execute(sql)
@@ -231,3 +236,101 @@ def test_broken_active_feed_gap_is_researched_without_no_sources_gap(monkeypatch
     assert claimed is not None
     assert (claimed["country_code"].strip(), claimed["gap_type"]) == (
         "AD", "no_successful_direct_fetch")
+
+
+def test_failed_single_same_country_rss_source_is_repaired_in_place(monkeypatch):
+    sessions = _database(monkeypatch)
+    domain = "repair-publisher.example"
+    with sessions() as session:
+        session.execute(text("DELETE FROM publisher_domains WHERE domain=:domain"), {"domain": domain})
+        session.execute(text("DELETE FROM sources WHERE url LIKE :pattern"), {"pattern": f"%{domain}%"})
+        source_id = session.execute(text("""INSERT INTO sources
+            (name,url,country_code,source_type,language,config,active,last_status,last_error,consecutive_failures)
+            VALUES('Historical Daily',:old,'AD','rss','ca',CAST(:config AS jsonb),true,'http_5xx','old failure',4)
+            RETURNING id"""), {"old": f"https://{domain}/old.xml",
+                              "config": '{"publisher_domain":"repair-publisher.example","custom":"keep"}'}).scalar_one()
+        session.execute(text("""INSERT INTO publisher_domains
+            (domain,publisher_source_id,country_code,status,method,confidence,evidence)
+            VALUES(:domain,:id,'AD','verified','catalog',1,'{}'::jsonb)"""),
+            {"domain": domain, "id": source_id})
+    store.sync_gaps([{"code": "AD", "source_gaps": ["no_successful_direct_fetch"]}], as_of=NOW)
+    task = store.claim_discovery(as_of=NOW)
+    store.save_leads(task, [_lead(website=f"https://{domain}/")], as_of=NOW)
+    lead = store.claim_activation(as_of=NOW)
+    result = store.finish_activation(lead, feed_url=f"https://{domain}/new.xml", as_of=NOW)
+    assert result == {"status": "repaired", "source_id": source_id, "reason": None}
+    with sessions() as session:
+        source = session.execute(text("""SELECT id,name,url,country_code,language,active,
+            last_status,last_error,consecutive_failures,config FROM sources WHERE id=:id"""),
+            {"id": source_id}).one()
+        mapping = session.execute(text("""SELECT publisher_source_id,country_code,status,method
+            FROM publisher_domains WHERE domain=:domain"""), {"domain": domain}).one()
+        lead_status = session.execute(text("""SELECT activation_status,activated_source_id
+            FROM source_research_leads WHERE id=:id"""), {"id": lead["id"]}).one()
+        assert (source.id, source.name, source.country_code.strip(), source.language) == (
+            source_id, "Historical Daily", "AD", "ca")
+        assert source.url == f"https://{domain}/new.xml" and source.active
+        assert (source.last_status, source.last_error, source.consecutive_failures) == (
+            "pending_validation", None, 0)
+        assert source.config["custom"] == "keep"
+        assert source.config["source_research"]["previous_feed_url"] == f"https://{domain}/old.xml"
+        assert (mapping.publisher_source_id, mapping.country_code.strip(), mapping.status,
+                mapping.method) == (source_id, "AD", "verified", "wikidata_feed")
+        assert (lead_status.activation_status, lead_status.activated_source_id) == ("active", source_id)
+        assert session.execute(text("SELECT count(*) FROM sources WHERE url LIKE :pattern"),
+                               {"pattern": f"%{domain}%"}).scalar_one() == 1
+
+
+def test_healthy_same_domain_rss_source_remains_unchanged(monkeypatch):
+    sessions = _database(monkeypatch)
+    domain = "healthy-publisher.example"
+    with sessions() as session:
+        session.execute(text("DELETE FROM publisher_domains WHERE domain=:domain"), {"domain": domain})
+        session.execute(text("DELETE FROM sources WHERE url LIKE :pattern"), {"pattern": f"%{domain}%"})
+        source_id = session.execute(text("""INSERT INTO sources
+            (name,url,country_code,source_type,active,last_status)
+            VALUES('Healthy',:old,'AD','rss',true,'ok') RETURNING id"""),
+            {"old": f"https://{domain}/old.xml"}).scalar_one()
+    store.sync_gaps([{"code": "AD", "source_gaps": ["no_qualifying_sample_in_7d"]}], as_of=NOW)
+    task = store.claim_discovery(as_of=NOW)
+    store.save_leads(task, [_lead(website=f"https://{domain}/")], as_of=NOW)
+    lead = store.claim_activation(as_of=NOW)
+    result = store.finish_activation(lead, feed_url=f"https://{domain}/new.xml", as_of=NOW)
+    assert result["status"] == "blocked" and result["reason"] == "collision"
+    with sessions() as session:
+        assert session.execute(text("SELECT url FROM sources WHERE id=:id"),
+                               {"id": source_id}).scalar_one() == f"https://{domain}/old.xml"
+
+
+@pytest.mark.parametrize("conflict", ["foreign_mapping", "blocked_mapping", "multiple_sources"])
+def test_repair_rejects_ambiguous_or_foreign_publisher_assignment(monkeypatch, conflict):
+    sessions = _database(monkeypatch)
+    domain = f"repair-{conflict.replace('_', '-')}.example"
+    with sessions() as session:
+        session.execute(text("DELETE FROM publisher_domains WHERE domain=:domain"), {"domain": domain})
+        session.execute(text("DELETE FROM sources WHERE url LIKE :pattern"), {"pattern": f"%{domain}%"})
+        source_id = session.execute(text("""INSERT INTO sources
+            (name,url,country_code,source_type,active,last_status)
+            VALUES('Broken',:old,'AD','rss',true,'timeout') RETURNING id"""),
+            {"old": f"https://{domain}/old.xml"}).scalar_one()
+        if conflict == "multiple_sources":
+            session.execute(text("""INSERT INTO sources
+                (name,url,country_code,source_type,active,last_status)
+                VALUES('Other',:url,'AD','rss',false,'timeout')"""),
+                {"url": f"https://{domain}/other.xml"})
+        else:
+            session.execute(text("""INSERT INTO publisher_domains
+                (domain,publisher_source_id,country_code,status,method,confidence,evidence)
+                VALUES(:domain,:id,:country,:status,'catalog',1,'{}'::jsonb)"""),
+                {"domain": domain, "id": source_id,
+                 "country": "AO" if conflict == "foreign_mapping" else "AD",
+                 "status": "blocked" if conflict == "blocked_mapping" else "verified"})
+    store.sync_gaps([{"code": "AD", "source_gaps": ["no_successful_direct_fetch"]}], as_of=NOW)
+    task = store.claim_discovery(as_of=NOW)
+    store.save_leads(task, [_lead(website=f"https://{domain}/")], as_of=NOW)
+    lead = store.claim_activation(as_of=NOW)
+    result = store.finish_activation(lead, feed_url=f"https://{domain}/new.xml", as_of=NOW)
+    assert result["status"] == "blocked" and result["reason"] == "collision"
+    with sessions() as session:
+        assert session.execute(text("SELECT url FROM sources WHERE id=:id"),
+                               {"id": source_id}).scalar_one() == f"https://{domain}/old.xml"

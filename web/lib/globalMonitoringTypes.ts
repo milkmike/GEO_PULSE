@@ -27,6 +27,7 @@ export interface GlobalCoverageResponse {
     leads_saved?: number;
     feeds_validated?: number;
     sources_activated?: number;
+    feeds_repaired?: number;
     admission_failures?: number;
     queue?: { totals?: Record<string, number>; countries?: Record<string, Record<string, number>>; lead_count?: number };
   };

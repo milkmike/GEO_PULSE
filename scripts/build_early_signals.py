@@ -75,7 +75,7 @@ def main():
                     if 'source_research' in full:
                         report['source_research'] = {key: full['source_research'][key] for key in
                             ('status', 'countries_attempted', 'leads_saved', 'feeds_validated',
-                             'sources_activated', 'admission_failures', 'reason') if key in full['source_research']}
+                             'sources_activated', 'feeds_repaired', 'admission_failures', 'reason') if key in full['source_research']}
                 else:
                     report = locked_screening_cycle(budget_usd=args.budget_usd, max_calls=args.max_calls)
             except Exception as exc:

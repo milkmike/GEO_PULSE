@@ -16,7 +16,7 @@ from src.db import get_session
 from src.monitoring_registry import MONITORING_COUNTRIES
 from src.signal_hypotheses import _url
 from src.signal_workbench import instant
-from src.collectors.publisher_attribution import is_aggregator_domain, normalize_publisher_domain
+from src.collectors.publisher_attribution import feed_mode, is_aggregator_domain, normalize_publisher_domain
 
 GAP_TYPES = frozenset({
     "no_active_sources", "no_successful_direct_fetch", "no_qualifying_sample_in_7d",
@@ -270,8 +270,8 @@ def _activation_claim(lead):
 def finish_activation(lead, *, feed_url=None, reason=None, as_of):
     """Atomically admit a proven same-domain feed or cool down a failed lead.
 
-    A domain lock serializes automatic admissions. Existing publisher mappings
-    are never replaced, including blocked or ambiguous mappings.
+    A domain lock serializes automatic admissions. A same-country mapping may
+    receive fresh evidence for the same source ID; assignments never change.
     """
     instant(as_of)
     claim = _activation_claim(lead)
@@ -304,10 +304,11 @@ def finish_activation(lead, *, feed_url=None, reason=None, as_of):
             session.execute(text("SELECT pg_advisory_xact_lock(hashtext(:domain))"), {"domain": domain})
             mapping = session.execute(text("""
                 SELECT publisher_source_id,country_code,status FROM publisher_domains
-                WHERE domain=:domain FOR UPDATE
+                WHERE domain=:domain
             """), {"domain": domain}).mappings().first()
-            sources = session.execute(text("SELECT id,url,country_code,config FROM sources")).mappings().all()
-            conflict = mapping is not None
+            sources = session.execute(text("""SELECT id,url,country_code,source_type,config,
+                active,last_status FROM sources""")).mappings().all()
+            matches = []
             for source in sources:
                 config = source["config"] if isinstance(source["config"], dict) else {}
                 aliases = config.get("publisher_domain_aliases", config.get("publisher_aliases", ()))
@@ -317,9 +318,8 @@ def finish_activation(lead, *, feed_url=None, reason=None, as_of):
                     aliases = []
                 related = [source["url"], config.get("publisher_domain"), *aliases]
                 if any(normalize_publisher_domain(value) == domain for value in related if isinstance(value, str)):
-                    conflict = True
-                    break
-            if not conflict:
+                    matches.append(source)
+            if not matches and mapping is None:
                 config = {"publisher_domain": domain,
                           "source_research": {"provider": "wikidata", "entity_id": live["entity_id"],
                               "revision": live["revision"], "website": live["website"],
@@ -341,8 +341,58 @@ def finish_activation(lead, *, feed_url=None, reason=None, as_of):
                        "country": live["country_code"],
                        "evidence": json.dumps(config["source_research"])} )
                 outcome = "active"
+            elif len(matches) == 1:
+                current = session.execute(text("""SELECT id,url,country_code,source_type,config,
+                    active,last_status FROM sources WHERE id=:id FOR UPDATE"""),
+                    {"id": matches[0]["id"]}).mappings().one()
+                mapping = session.execute(text("""
+                    SELECT publisher_source_id,country_code,status FROM publisher_domains
+                    WHERE domain=:domain FOR UPDATE
+                """), {"domain": domain}).mappings().first()
+                existing_config = current["config"] if isinstance(current["config"], dict) else {}
+                mapping_ok = (mapping is None or
+                    (mapping["status"] == "verified"
+                     and mapping["publisher_source_id"] == current["id"]
+                     and mapping["country_code"].strip() == live["country_code"].strip()))
+                broken = (current["active"] is False or
+                          current["last_status"] not in (None, "ok", "empty_feed", "pending_validation"))
+                if (mapping_ok and current["country_code"].strip() == live["country_code"].strip()
+                        and current["source_type"] == "rss"
+                        and normalize_publisher_domain(current["url"]) == domain
+                        and feed_mode(current["url"], existing_config) == "publisher"
+                        and current["url"] != feed_url and broken):
+                    evidence = {"provider": "wikidata", "entity_id": live["entity_id"],
+                        "revision": live["revision"], "website": live["website"],
+                        "provenance_url": live["provenance_url"],
+                        "validated_at": datetime.now(timezone.utc).isoformat(),
+                        "previous_feed_url": current["url"]}
+                    config = {**existing_config, "publisher_domain": domain,
+                              "source_research": evidence}
+                    source_id = current["id"]
+                    session.execute(text("""UPDATE sources SET url=:feed,
+                        config=CAST(:config AS jsonb),active=true,
+                        last_status='pending_validation',last_error=NULL,
+                        consecutive_failures=0 WHERE id=:id"""),
+                        {"feed": feed_url, "config": json.dumps(config), "id": source_id})
+                    if mapping is None:
+                        session.execute(text("""INSERT INTO publisher_domains
+                          (domain,publisher_source_id,country_code,status,method,confidence,evidence)
+                          VALUES(:domain,:source,:country,'verified','wikidata_feed',1,
+                                 CAST(:evidence AS jsonb))"""),
+                            {"domain": domain, "source": source_id,
+                             "country": live["country_code"], "evidence": json.dumps(evidence)})
+                    else:
+                        session.execute(text("""UPDATE publisher_domains
+                            SET method='wikidata_feed',confidence=1,
+                                evidence=CAST(:evidence AS jsonb),updated_at=now()
+                            WHERE domain=:domain"""),
+                            {"domain": domain, "evidence": json.dumps(evidence)})
+                    outcome = "repaired"
+                else:
+                    reason = "collision"
             else:
                 reason = "collision"
+        lead_status = "active" if outcome in ("active", "repaired") else "blocked"
         session.execute(text("""
             UPDATE source_research_leads SET activation_status=:status,
               activation_next_attempt_at=CASE WHEN :status='active' THEN NULL
@@ -350,6 +400,6 @@ def finish_activation(lead, *, feed_url=None, reason=None, as_of):
               activation_last_reason=:reason,activated_source_id=:source,
               activation_lease_until=NULL,activation_lease_token=NULL
             WHERE id=:id
-        """), {"id": claim["id"], "status": outcome,
+        """), {"id": claim["id"], "status": lead_status,
                "reason": reason, "source": source_id})
     return {"status": outcome, "source_id": source_id, "reason": reason}

@@ -18,7 +18,7 @@ def run_source_research(countries, *, as_of, max_searches=4, auto_activate=False
         raise ValueError('future source research')
     synced = store.sync_gaps(countries, as_of=now)
     result = {'status': 'ok', 'countries_attempted': 0, 'leads_saved': 0,
-              'feeds_validated': 0, 'sources_activated': 0,
+              'feeds_validated': 0, 'sources_activated': 0, 'feeds_repaired': 0,
               'admission_failures': 0, 'synced': synced}
     deadline = time.monotonic() + 60
     if auto_activate:
@@ -32,7 +32,8 @@ def run_source_research(countries, *, as_of, max_searches=4, auto_activate=False
                 admission = store.finish_activation(lead, feed_url=feed,
                     reason=None if feed else 'no_valid_feed', as_of=datetime.now(timezone.utc))
                 result['sources_activated'] = int(admission['status'] == 'active')
-                result['admission_failures'] = int(admission['status'] != 'active')
+                result['feeds_repaired'] = int(admission['status'] == 'repaired')
+                result['admission_failures'] = int(admission['status'] not in ('active', 'repaired'))
             except (FeedUnsafe, FeedUnavailable) as exc:
                 reason = 'unsafe' if isinstance(exc, FeedUnsafe) else 'unavailable'
                 store.finish_activation(lead, reason=reason, as_of=datetime.now(timezone.utc))

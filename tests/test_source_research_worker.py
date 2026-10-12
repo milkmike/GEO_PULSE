@@ -59,6 +59,15 @@ def test_repeated_blocked_leads_do_not_starve_discovery(monkeypatch):
     assert result['admission_failures'] == 1 and discovered == ['AO']
 
 
+def test_repaired_feed_is_reported_separately_from_new_admission(monkeypatch):
+    setup(monkeypatch, [])
+    monkeypatch.setattr(worker.store, 'claim_activation', lambda **kw: {'id': 1, 'country_code': 'AD', 'website': 'https://daily.ad/'})
+    monkeypatch.setattr(worker, 'find_valid_feed', lambda *a, **kw: 'https://daily.ad/new.xml')
+    monkeypatch.setattr(worker.store, 'finish_activation', lambda *a, **kw: {'status': 'repaired'})
+    result = worker.run_source_research([], as_of=NOW, auto_activate=True, max_searches=0)
+    assert (result['feeds_repaired'], result['sources_activated'], result['admission_failures']) == (1, 0, 0)
+
+
 def test_rate_limiting_stops_batch_and_keeps_unattempted_countries(monkeypatch):
     events = setup(monkeypatch, [{'country_code': 'AD'}, {'country_code': 'AO'}])
     def limited(*args, **kwargs):
