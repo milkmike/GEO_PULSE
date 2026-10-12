@@ -189,7 +189,7 @@ def validate_feed(document: bytes, hostname: str, *, now: datetime) -> bool:
     if len(document) > MAX_BYTES:
         return False
     feed = feedparser.parse(document)
-    if not feed.version or len(feed.entries) < 2:
+    if not feed.version or not feed.entries:
         return False
     dated = []
     identities = set()
@@ -209,7 +209,7 @@ def validate_feed(document: bytes, hostname: str, *, now: datetime) -> bool:
             identities.add(identity)
             dated.append(datetime(*parsed[:6], tzinfo=timezone.utc))
     count = min(len(feed.entries), 20)
-    return (matched / count >= 0.8 and len(dated) >= 2
+    return (matched / count >= 0.8 and len(dated) >= 1
             and len(dated) / count >= 0.8
             and max(dated) >= now - timedelta(days=14)
             and max(dated) <= now + timedelta(hours=2))

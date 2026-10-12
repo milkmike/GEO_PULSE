@@ -13,11 +13,18 @@ RSS = b'''<rss version="2.0"><channel><title>Daily</title>
 </channel></rss>'''
 
 
-def test_feed_requires_multiple_dated_recent_same_domain_entries():
+def test_feed_requires_dated_recent_same_domain_entries():
     assert feeds.validate_feed(RSS, "daily.ad", now=NOW)
     assert not feeds.validate_feed(RSS.replace(b"https://daily.ad/two", b"https://other.ad/two"), "daily.ad", now=NOW)
     assert not feeds.validate_feed(RSS.replace(b"2026", b"2020"), "daily.ad", now=NOW)
     assert not feeds.validate_feed(RSS.split(b"<item>")[0] + b"</channel></rss>", "daily.ad", now=NOW)
+
+
+def test_low_frequency_publisher_can_qualify_with_one_fresh_item():
+    single = RSS[:RSS.index(b'<item><title>Two')]
+    single += b'</channel></rss>'
+    assert feeds.validate_feed(single, 'daily.ad', now=NOW)
+    assert not feeds.validate_feed(single.replace(b'2026', b'2020'), 'daily.ad', now=NOW)
 
 
 def test_pinned_fetch_blocks_private_dns_and_redirect(monkeypatch):
