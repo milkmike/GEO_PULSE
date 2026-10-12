@@ -14,6 +14,7 @@ from src import source_research_store as store
 ROOT = Path(__file__).resolve().parents[1]
 MIGRATION = ROOT / "scripts/migrations/042_source_research_queue.sql"
 ACTIVATION_MIGRATION = ROOT / "scripts/migrations/043_source_activation.sql"
+RATE_LIMIT_MIGRATION = ROOT / "scripts/migrations/044_source_research_rate_limit_cooldown.sql"
 NOW = datetime.now(timezone.utc)
 
 
@@ -236,6 +237,66 @@ def test_broken_active_feed_gap_is_researched_without_no_sources_gap(monkeypatch
     assert claimed is not None
     assert (claimed["country_code"].strip(), claimed["gap_type"]) == (
         "AD", "no_successful_direct_fetch")
+
+
+def test_rate_limit_short_retry_other_reasons_week_and_migration_only_shortens(monkeypatch):
+    sessions = _database(monkeypatch)
+    store.sync_gaps([
+        {"code": "AD", "source_gaps": ["no_active_sources"]},
+        {"code": "AO", "source_gaps": ["no_active_sources"]},
+        {"code": "AM", "source_gaps": ["no_active_sources"]},
+    ], as_of=NOW)
+    limited = store.claim_discovery(as_of=NOW)
+    store.block_task(limited, "rate_limited", as_of=NOW)
+    no_leads = store.claim_discovery(as_of=NOW)
+    store.block_task(no_leads, "no_leads", as_of=NOW)
+    live = store.claim_discovery(as_of=NOW)
+    with sessions() as session:
+        rows = session.execute(text("""SELECT id,last_reason,attempted_at,next_attempt_at
+            FROM source_research_tasks WHERE id IN (:limited,:no_leads)"""),
+            {"limited": limited["id"], "no_leads": no_leads["id"]}).mappings().all()
+        by_reason = {row["last_reason"]: row for row in rows}
+        assert timedelta(hours=5, minutes=59) < (
+            by_reason["rate_limited"]["next_attempt_at"] - by_reason["rate_limited"]["attempted_at"]
+        ) < timedelta(hours=6, minutes=1)
+        assert timedelta(days=6, hours=23) < (
+            by_reason["no_leads"]["next_attempt_at"] - by_reason["no_leads"]["attempted_at"]
+        ) < timedelta(days=7, minutes=1)
+        session.execute(text("""UPDATE source_research_tasks
+            SET next_attempt_at=attempted_at+interval '7 days'
+            WHERE id=:id"""), {"id": limited["id"]})
+        session.execute(text("""UPDATE source_research_tasks
+            SET last_reason='rate_limited' WHERE id=:id"""), {"id": live["id"]})
+        short = session.execute(text("""INSERT INTO source_research_tasks
+            (country_code,gap_type,status,gap_observed_at,last_observed_at,
+             attempted_at,next_attempt_at,last_reason)
+            VALUES('ZZ','no_active_sources','blocked',now(),now(),now(),
+                   now()+interval '1 hour','rate_limited') RETURNING id""")).scalar_one()
+        short_before = session.execute(text("""SELECT next_attempt_at FROM source_research_tasks
+            WHERE id=:id"""), {"id": short}).scalar_one()
+
+    sql = RATE_LIMIT_MIGRATION.read_text()
+    assert sql in (ROOT / "data/init.sql").read_text()
+    with sessions() as session:
+        session.execute(text(sql))
+        first = session.execute(text("""SELECT id,next_attempt_at,lease_until
+            FROM source_research_tasks WHERE id IN (:limited,:no_leads,:live,:short)"""),
+            {"limited": limited["id"], "no_leads": no_leads["id"],
+             "live": live["id"], "short": short}).mappings().all()
+    with sessions() as session:
+        session.execute(text(sql))
+        second = session.execute(text("""SELECT id,next_attempt_at,lease_until
+            FROM source_research_tasks WHERE id IN (:limited,:no_leads,:live,:short)"""),
+            {"limited": limited["id"], "no_leads": no_leads["id"],
+             "live": live["id"], "short": short}).mappings().all()
+    before = {row["id"]: row for row in first}
+    after = {row["id"]: row for row in second}
+    assert {key: (row["next_attempt_at"], row["lease_until"]) for key, row in before.items()} == {
+        key: (row["next_attempt_at"], row["lease_until"]) for key, row in after.items()}
+    assert before[limited["id"]]["next_attempt_at"] <= by_reason["rate_limited"]["attempted_at"] + timedelta(hours=6)
+    assert before[no_leads["id"]]["next_attempt_at"] == by_reason["no_leads"]["next_attempt_at"]
+    assert before[live["id"]]["lease_until"] == live["lease_until"]
+    assert before[short]["next_attempt_at"] == short_before
 
 
 def test_failed_single_same_country_rss_source_is_repaired_in_place(monkeypatch):

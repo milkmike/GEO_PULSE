@@ -191,7 +191,7 @@ def save_leads(task, leads, *, as_of):
 
 
 def block_task(task, reason, *, as_of):
-    """Record only a content-free failure code and a seven-day cooldown."""
+    """Record a content-free failure code with a shorter provider-limit retry."""
     instant(as_of)
     claim = _claim(task)
     if reason not in BLOCK_REASONS:
@@ -199,7 +199,8 @@ def block_task(task, reason, *, as_of):
     with get_session() as session:
         changed = session.execute(text("""
             UPDATE source_research_tasks SET status='blocked',researched_at=now(),
-              next_attempt_at=now()+interval '7 days',last_reason=:reason,
+              next_attempt_at=now()+CASE WHEN :reason='rate_limited'
+                THEN interval '6 hours' ELSE interval '7 days' END,last_reason=:reason,
               lease_until=NULL,lease_token=NULL,updated_at=now()
             WHERE id=:id AND country_code=:country AND lease_token=CAST(:token AS uuid)
               AND status='researching' AND lease_until>now()

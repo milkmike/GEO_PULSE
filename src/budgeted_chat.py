@@ -1,12 +1,14 @@
 """Small, sequential recovery/benchmark runs with conservative prepaid reservations.
 
 Each attempt consumes $0.10 of the local budget, even on timeout or cheap success.
-32KB input + <=1000 output tokens at provider-enforced $1/$2 per million and zero
+32KB prompt + <=2KB schema + <=1000 output tokens at enforced $1/$2 per million and zero
 per-request fee stays below that reservation: even two tokens per UTF-8 byte
-plus 2000 envelope tokens cost <=$0.068, below the $0.10 reservation.
+plus 2000 envelope tokens cost <$0.075, below the $0.10 reservation.
 No retries, provider fallback, tools, media, or normal worker use.
 """
 from decimal import Decimal, InvalidOperation
+import json
+import re
 import time
 
 import httpx
@@ -30,9 +32,16 @@ class BudgetedChat:
         self.requests = []
 
     def chat(self, prompt: str, max_tokens: int = 350,
-             temperature=None, script="recovery") -> tuple[str, str]:
+             temperature=None, script="recovery", *, response_schema=None,
+             provider=None) -> tuple[str, str]:
         if len(prompt.encode("utf-8")) > 32000 or not 1 <= max_tokens <= 1000:
             raise ValueError("Request exceeds recovery size limits")
+        if response_schema is not None and (not isinstance(response_schema, dict)
+                or len(json.dumps(response_schema, ensure_ascii=False).encode()) > 2048):
+            raise ValueError("Response schema exceeds recovery size limits")
+        if provider is not None and (not isinstance(provider, str)
+                or not re.fullmatch(r'[a-z][a-z0-9-]{0,40}', provider)):
+            raise ValueError("Invalid recovery provider")
         if self.reserved + self.RESERVATION > self.max_usd:
             raise LLMError("Recovery budget exhausted")
         self.reserved += self.RESERVATION
@@ -46,6 +55,11 @@ class BudgetedChat:
             "provider": {"max_price": {"prompt": 1, "completion": 2, "request": 0},
                          "allow_fallbacks": False, "require_parameters": True},
         }
+        if response_schema is not None:
+            payload['response_format'] = {'type': 'json_schema', 'json_schema': {
+                'name': 'bounded_response', 'strict': True, 'schema': response_schema}}
+        if provider is not None:
+            payload['provider']['only'] = [provider]
         phase = "transport"
         try:
             response = httpx.post(OPENROUTER_URL,
