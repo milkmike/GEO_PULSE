@@ -188,6 +188,66 @@ def test_model_invalid_response_is_not_mislabeled_transport(monkeypatch):
     assert ('finish',('call',.0003,'invalid_response')) in events
 
 
+@pytest.mark.parametrize('failure', ['parse', 'provider'])
+def test_bounded_invalid_batch_is_settled_and_later_batch_is_screened(monkeypatch, failure):
+    events=setup_screen(monkeypatch)
+    articles=[article(i, source_id=1, publisher='Gazette') for i in range(1,10)]
+    requests=[]
+    def request(payload,*_):
+        requests.append(payload)
+        if len(requests)==1:
+            if failure=='provider':
+                return {'status':'invalid_response','usage':{'cost':.0003}}
+            return {'status':'ok','data':{'answers':{},'usage':{'cost':.0003}}}
+        return {'status':'ok','data':response(payload)}
+    monkeypatch.setattr(worker,'_request',request)
+    stats=worker.run_screening_cycle(articles=articles, as_of=NOW,
+                                     budget_usd=Decimal('2'), max_calls=2)
+    assert stats['calls']==2 and stats['screened']>0 and stats['rejected_batches']==1
+    assert stats['status']=='partial'
+    assert len([e for e in events if e[0]=='reserve'])==2
+    assert [e[1][2] for e in events if e[0]=='finish']==['invalid_response','ok']
+    saved=[e[1] for e in events if e[0]=='save']
+    assert len(saved)==1 and len(saved[0])==stats['screened']
+    first_ids={int(key.split('_')[1]) for key in requests[0]['state']['articles']}
+    second_ids={int(key.split('_')[1]) for key in requests[1]['state']['articles']}
+    assert first_ids.isdisjoint(second_ids)
+    assert {record['article']['id'] for record in saved[0]}==second_ids
+
+
+@pytest.mark.parametrize('cost', [None, -1, float('nan'), float('inf'), True, .12])
+def test_invalid_batch_without_bounded_cost_still_halts_before_next_batch(monkeypatch, cost):
+    events=setup_screen(monkeypatch)
+    requests=[]
+    def request(payload,*_):
+        requests.append(payload)
+        return {'status':'invalid_response','usage':{'cost':cost}}
+    monkeypatch.setattr(worker,'_request',request)
+    stats=worker.run_screening_cycle(
+        articles=[article(i, source_id=1, publisher='Gazette') for i in range(1,10)],
+        as_of=NOW,budget_usd=Decimal('2'),max_calls=2)
+    assert stats['status']=='error' and stats['calls']==1 and len(requests)==1
+    assert stats.get('rejected_batches',0)==0
+    finished = next(e[1] for e in events if e[0] == 'finish')
+    assert finished[1] is cost and finished[2] == 'invalid_response'
+    assert not any(e[0]=='save' for e in events)
+
+
+def test_invalid_batch_cannot_bypass_the_next_budget_reservation(monkeypatch):
+    events=setup_screen(monkeypatch)
+    reservations=iter(['paid',None])
+    monkeypatch.setattr(worker.budget,'reserve_request',lambda *args,**kwargs:next(reservations))
+    requests=[]
+    monkeypatch.setattr(worker,'_request',lambda payload,*args:requests.append(payload) or
+                        {'status':'invalid_response','usage':{'cost':.0003}})
+    stats=worker.run_screening_cycle(
+        articles=[article(i,source_id=1,publisher='Gazette') for i in range(1,10)],
+        as_of=NOW,budget_usd=Decimal('2'),max_calls=2)
+    assert stats['status']=='budget_exhausted' and stats['calls']==1
+    assert len(requests)==1 and stats['rejected_batches']==1
+    assert ('finish',('paid',.0003,'invalid_response')) in events
+
+
 def test_chat_transport_failure_keeps_known_overage_for_halt(monkeypatch):
     events=setup_screen(monkeypatch)
     monkeypatch.setattr(worker,'_request',lambda *a:{'status':'invalid_response','usage':{'cost':.12}})
