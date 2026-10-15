@@ -84,7 +84,7 @@ def _call_openrouter(model: str, prompt: str, max_tokens: int,
     }
     if temperature is not None:
         body["temperature"] = temperature
-    if script in {"analyze.py", "briefs.py"} and model in {
+    if script in {"analyze.py", "briefs.py", "build_threads.py"} and model in {
         "deepseek/deepseek-v4-flash", "qwen/qwen3.6-flash", "qwen/qwen3.7-plus",
     }:
         # These models support disabling reasoning. Reserve the output budget

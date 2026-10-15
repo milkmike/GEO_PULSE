@@ -77,11 +77,12 @@ def test_all_empty_responses_raise_llm_error_without_caching(provider):
     assert len(records) == 1
 
 
+@pytest.mark.parametrize('script', ['briefs.py', 'build_threads.py'])
 @pytest.mark.parametrize('model', ['qwen/qwen3.7-plus', 'deepseek/deepseek-v4-flash', 'qwen/qwen3.6-flash'])
-def test_briefs_reserve_output_budget_for_visible_text(provider, model):
+def test_briefs_reserve_output_budget_for_visible_text(provider, model, script):
     install, _, payloads, _, _ = provider
     install({})
-    llm.chat('brief', script='briefs.py', models=[model])
+    llm.chat('brief', script=script, models=[model])
     assert payloads[0]['reasoning'] == {'enabled': False}
 
 
