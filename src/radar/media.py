@@ -12,7 +12,7 @@ from sqlalchemy import text
 
 from src.engine.health import _publisher_families
 
-from .repository import make_observation
+from .repository import make_observation, registered_country_codes
 from .types import Contour, Observation, ObservationWindow
 
 
@@ -238,8 +238,14 @@ def build_media_observations(session, window: ObservationWindow) -> list[Observa
     ``article_country_facts`` intentionally filters quarantined discovery rows;
     the additional article predicates make deduplication and future exclusion
     explicit for replayable callers and test doubles.
+
+    Publishers may belong to areas outside the 99-country registry (automatic
+    source onboarding covers the wider monitoring catalog). Radar rows have a
+    ``countries`` foreign key, so those publishers are skipped exactly like
+    unregistered countries in the action contour.
     """
 
+    registered_countries = registered_country_codes(session)
     rows = session.execute(_MEDIA_ROWS, {
         "window_start": window.start,
         "window_end": window.end,
@@ -255,6 +261,8 @@ def build_media_observations(session, window: ObservationWindow) -> list[Observa
             or bool(_value(row, "is_duplicate", False))
         ):
             continue
+        if str(country_code).strip().upper() not in registered_countries:
+            continue
         published_at = _utc(published_at)
         if not window.start <= published_at < window.end:
             continue
@@ -267,7 +275,7 @@ def build_media_observations(session, window: ObservationWindow) -> list[Observa
     national_coverage: dict[tuple[str, datetime], set[int]] = defaultdict(set)
     grouped: dict[tuple[str, str, str, str, datetime], list[Any]] = defaultdict(list)
     for row in qualified:
-        country = str(_value(row, "country_code")).upper()
+        country = str(_value(row, "country_code")).strip().upper()
         day = _day_start(_value(row, "published_at"))
         article_id = int(_value(row, "article_id"))
         national_coverage[country, day].add(article_id)

@@ -20,7 +20,7 @@ from sqlalchemy import text
 
 from src.api.public_urls import safe_public_url
 from src.db import SessionLocal
-from src.radar.service import DETECTOR_VERSION
+from src.radar.service import CONTRADICTION_REASON, DETECTOR_VERSION
 
 
 router = APIRouter(prefix="/api/v2", tags=["radar"])
@@ -402,27 +402,7 @@ class SqlRadarReadService:
                     WHEN 'confirmed' THEN 0 WHEN 'emerging' THEN 1 WHEN 'cooling' THEN 2
                     WHEN 'candidate' THEN 3 WHEN 'resolved' THEN 4 ELSE 5 END AS state_rank
                   FROM radar_trends trend
-                  WHERE trend.scope = 'meta'
-                    AND trend.subject_key <> 'media:coverage'
-                    AND ABS(COALESCE(trend.velocity, 0)) >= 0.05
-                    AND EXISTS (
-                      SELECT 1 FROM radar_trend_members active_member
-                      WHERE active_member.meta_trend_id = trend.id
-                        AND active_member.left_at IS NULL)
-                    AND (SELECT COUNT(DISTINCT quality_wave.country_code) >= 2
-                      FROM radar_trend_members quality_member
-                      JOIN radar_trends quality_wave
-                        ON quality_wave.id = quality_member.country_trend_id
-                      WHERE quality_member.meta_trend_id = trend.id
-                        AND quality_member.left_at IS NULL)
-                    AND EXISTS (
-                      SELECT 1 FROM radar_trend_evidence quality_evidence
-                      WHERE quality_evidence.evidence->>'_relation_only' IS DISTINCT FROM 'true'
-                        AND (quality_evidence.trend_id = trend.id OR EXISTS (
-                          SELECT 1 FROM radar_trend_members quality_evidence_member
-                          WHERE quality_evidence_member.meta_trend_id = trend.id
-                            AND quality_evidence_member.country_trend_id = quality_evidence.trend_id
-                            AND quality_evidence_member.left_at IS NULL)))
+                  WHERE {self._public_meta_gate_sql("trend")}
                     AND ((:state IS NOT NULL AND trend.state = :state)
                       OR (:state IS NULL AND trend.state = ANY(:public_states)))
                     AND (:contour IS NULL OR EXISTS (
@@ -463,6 +443,36 @@ class SqlRadarReadService:
         return self._page(rows, limit)
 
     @staticmethod
+    def _public_meta_gate_sql(meta: str) -> str:
+        """Public quality gate for a cross-country wave (global list and dossiers).
+
+        A meta trend is public only with active members from at least two
+        countries, a non-trivial acceleration and public evidence.
+        """
+
+        return f"""{meta}.scope = 'meta'
+                    AND {meta}.subject_key <> 'media:coverage'
+                    AND ABS(COALESCE({meta}.velocity, 0)) >= 0.05
+                    AND EXISTS (
+                      SELECT 1 FROM radar_trend_members active_member
+                      WHERE active_member.meta_trend_id = {meta}.id
+                        AND active_member.left_at IS NULL)
+                    AND (SELECT COUNT(DISTINCT quality_wave.country_code) >= 2
+                      FROM radar_trend_members quality_member
+                      JOIN radar_trends quality_wave
+                        ON quality_wave.id = quality_member.country_trend_id
+                      WHERE quality_member.meta_trend_id = {meta}.id
+                        AND quality_member.left_at IS NULL)
+                    AND EXISTS (
+                      SELECT 1 FROM radar_trend_evidence quality_evidence
+                      WHERE quality_evidence.evidence->>'_relation_only' IS DISTINCT FROM 'true'
+                        AND (quality_evidence.trend_id = {meta}.id OR EXISTS (
+                          SELECT 1 FROM radar_trend_members quality_proof_member
+                          WHERE quality_proof_member.meta_trend_id = {meta}.id
+                            AND quality_proof_member.country_trend_id = quality_evidence.trend_id
+                            AND quality_proof_member.left_at IS NULL)))"""
+
+    @staticmethod
     def _wave_json(trend_id: str) -> str:
         return f"""COALESCE((SELECT jsonb_agg(jsonb_build_object(
               'public_id', wave.public_id, 'country_code', wave.country_code, 'contour', wave.contour,
@@ -500,9 +510,22 @@ class SqlRadarReadService:
             trend_id,
             include_active_members=include_active_members,
         )
-        return f"""EXISTS (SELECT 1 FROM radar_trend_evidence evidence
+        # The detector holds a wave at ``emerging`` when the opposite direction
+        # of the same country/contour/subject is also confirmed. The reason is
+        # rewritten on every cycle, so the flag clears when the conflict does.
+        held = f"contradicted.explanation->>'lifecycle_reason' = '{CONTRADICTION_REASON}'"
+        members = ""
+        if include_active_members:
+            members = f"""
+            OR EXISTS (SELECT 1 FROM radar_trend_members contradicted_member
+              JOIN radar_trends contradicted ON contradicted.id = contradicted_member.country_trend_id
+              WHERE contradicted_member.meta_trend_id = {trend_id}
+                AND contradicted_member.left_at IS NULL AND {held})"""
+        return f"""(EXISTS (SELECT 1 FROM radar_trend_evidence evidence
             WHERE {scope} AND evidence.role = 'contradiction'
-              AND {_PUBLIC_EVIDENCE_PREDICATE})"""
+              AND {_PUBLIC_EVIDENCE_PREDICATE})
+            OR EXISTS (SELECT 1 FROM radar_trends contradicted
+              WHERE contradicted.id = {trend_id} AND {held}){members})"""
 
     @classmethod
     def _preview_json(cls, trend_id: str, *, include_active_members: bool) -> str:
@@ -582,6 +605,20 @@ class SqlRadarReadService:
                 WITH ranked AS (
                   SELECT trend.*, CASE trend.state WHEN 'confirmed' THEN 0 WHEN 'emerging' THEN 1 WHEN 'cooling' THEN 2 WHEN 'candidate' THEN 3 WHEN 'resolved' THEN 4 ELSE 5 END AS state_rank
                   FROM radar_trends trend WHERE trend.scope = 'country' AND trend.country_code = :country
+                    /* radar_country_public_gate: the same quality gate as /radar —
+                       only this country's part of a publicly listed cross-country
+                       wave, with its own public evidence. */
+                    AND EXISTS (
+                      SELECT 1 FROM radar_trend_evidence wave_evidence
+                      WHERE wave_evidence.trend_id = trend.id
+                        AND wave_evidence.evidence->>'_relation_only' IS DISTINCT FROM 'true')
+                    AND EXISTS (
+                      SELECT 1 FROM radar_trend_members public_member
+                      JOIN radar_trends public_meta ON public_meta.id = public_member.meta_trend_id
+                      WHERE public_member.country_trend_id = trend.id
+                        AND public_member.left_at IS NULL
+                        AND public_meta.state = ANY(:public_states)
+                        AND {self._public_meta_gate_sql("public_meta")})
                     AND ((:state IS NOT NULL AND trend.state = :state)
                       OR (:state IS NULL AND trend.state = ANY(:public_states)))
                     AND (:contour IS NULL OR trend.contour = :contour)

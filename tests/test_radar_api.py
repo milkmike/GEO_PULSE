@@ -740,7 +740,8 @@ def test_postgres_relation_filters_match_direct_and_active_member_evidence(monke
                 velocity NUMERIC NOT NULL, first_observed_at TIMESTAMPTZ NOT NULL,
                 detected_at TIMESTAMPTZ, confirmed_at TIMESTAMPTZ,
                 t0_auto TIMESTAMPTZ, t0_effective TIMESTAMPTZ,
-                updated_at TIMESTAMPTZ NOT NULL
+                updated_at TIMESTAMPTZ NOT NULL,
+                explanation JSONB NOT NULL DEFAULT '{}'
             );
             CREATE TEMP TABLE radar_trend_members (
                 meta_trend_id BIGINT NOT NULL, country_trend_id BIGINT NOT NULL,
@@ -899,10 +900,12 @@ def test_postgres_relation_filters_match_direct_and_active_member_evidence(monke
         assert "00000000-0000-0000-0000-000000000007" not in meta_ids
         assert country_ids == {
             "00000000-0000-0000-0000-000000000102",
-            "00000000-0000-0000-0000-000000000107",
             "00000000-0000-0000-0000-000000000108",
         }
         assert "00000000-0000-0000-0000-000000000103" not in country_ids
+        # 107 left its cross-country wave, so the dossier applies the same
+        # public gate as /radar and no longer lists it.
+        assert "00000000-0000-0000-0000-000000000107" not in country_ids
         assert meta_relation_ids == {
             "00000000-0000-0000-0000-000000000002",
         }
@@ -997,6 +1000,176 @@ def test_postgres_coverage_aggregates_observed_media_history_in_utc(monkeypatch)
         summary = client.get('/api/v2/radar/coverage').json()['observation_summary']
         assert summary == {'latest_observation_at': None, 'recent_observation_count': 0,
                            'recent_country_count': 0, 'days_with_observations_30d': 0}
+    finally:
+        connection.close()
+        engine.dispose()
+
+
+def test_sql_country_dossier_reuses_the_public_cross_country_gate(monkeypatch):
+    calls = []
+
+    class Rows:
+        def fetchall(self):
+            return []
+
+    class Session:
+        def execute(self, statement, params=None):
+            calls.append((str(statement), dict(params or {})))
+            return Rows()
+
+    @contextmanager
+    def read_session():
+        yield Session()
+
+    monkeypatch.setattr(radar_routes, "radar_read_session", read_session)
+    radar_routes.SqlRadarReadService().country_trends(
+        "RS", filters=radar_routes.RadarFilters(country="RS"), cursor=None, limit=20,
+    )
+
+    sql, params = calls[-1]
+    assert "radar_country_public_gate" in sql
+    assert "public_member.country_trend_id = trend.id" in sql
+    assert "public_member.left_at IS NULL" in sql
+    assert "public_meta.state = ANY(:public_states)" in sql
+    assert radar_routes.SqlRadarReadService._public_meta_gate_sql("public_meta") in sql
+    assert "ABS(COALESCE(public_meta.velocity, 0)) >= 0.05" in sql
+    assert "public_meta.subject_key <> 'media:coverage'" in sql
+    assert "wave_evidence.trend_id = trend.id" in sql
+    assert params["public_states"] == ["emerging", "confirmed", "cooling"]
+
+
+@pytest.mark.skipif(not POSTGRES_URL, reason="GEO_PULSE_TEST_DATABASE_URL is not configured")
+def test_postgres_country_dossier_gate_and_opposite_direction_contradictions(monkeypatch):
+    """Serbia regression: single-country, zero-velocity and opposite-direction waves."""
+
+    pytest.importorskip("psycopg2")
+    engine = create_engine(POSTGRES_URL)
+    connection = engine.connect()
+    try:
+        connection.execute(text("""
+            CREATE TEMP TABLE radar_trends (
+                id BIGINT PRIMARY KEY, public_id UUID NOT NULL, scope TEXT NOT NULL,
+                contour TEXT, country_code CHAR(2), subject_key TEXT NOT NULL,
+                title_ru TEXT NOT NULL, direction TEXT NOT NULL, state TEXT NOT NULL,
+                confidence NUMERIC NOT NULL, coverage_confidence NUMERIC NOT NULL,
+                velocity NUMERIC NOT NULL, first_observed_at TIMESTAMPTZ NOT NULL,
+                detected_at TIMESTAMPTZ, confirmed_at TIMESTAMPTZ,
+                t0_auto TIMESTAMPTZ, t0_effective TIMESTAMPTZ,
+                updated_at TIMESTAMPTZ NOT NULL,
+                explanation JSONB NOT NULL DEFAULT '{}'
+            );
+            CREATE TEMP TABLE radar_trend_members (
+                meta_trend_id BIGINT NOT NULL, country_trend_id BIGINT NOT NULL,
+                left_at TIMESTAMPTZ
+            );
+            CREATE TEMP TABLE radar_trend_evidence (
+                id BIGINT PRIMARY KEY, public_id UUID NOT NULL, trend_id BIGINT NOT NULL,
+                observation_id BIGINT, action_event_id BIGINT, article_id INTEGER,
+                story_id BIGINT, signal_id INTEGER, role TEXT NOT NULL,
+                contribution NUMERIC NOT NULL, evidence JSONB NOT NULL
+            );
+            CREATE TEMP TABLE radar_contour_links (
+                media_trend_id BIGINT, action_trend_id BIGINT, status TEXT
+            );
+            CREATE TEMP TABLE radar_observations (
+                id BIGINT PRIMARY KEY, evidence JSONB NOT NULL, article_id INTEGER
+            );
+            CREATE TEMP TABLE action_events (
+                id BIGINT PRIMARY KEY, details JSONB NOT NULL, evidence JSONB NOT NULL
+            );
+            CREATE TEMP TABLE articles (
+                id INTEGER PRIMARY KEY, title TEXT, resolved_url TEXT, url TEXT
+            );
+        """))
+        connection.execute(text("""
+            -- id, scope, contour, country, subject, direction, state, velocity, reason
+            INSERT INTO radar_trends(
+                id, public_id, scope, contour, country_code, subject_key, title_ru,
+                direction, state, confidence, coverage_confidence, velocity,
+                first_observed_at, updated_at, explanation
+            )
+            SELECT id, ('00000000-0000-0000-0000-' || lpad(id::text, 12, '0'))::uuid,
+                   scope, contour, country, subject, subject, direction, state,
+                   0.8, 0.8, velocity, '2026-10-01T00:00:00Z'::timestamptz,
+                   '2026-10-12T00:00:00Z'::timestamptz,
+                   CASE WHEN reason IS NULL THEN '{}'::jsonb
+                        ELSE jsonb_build_object('lifecycle_reason', reason) END
+            FROM (VALUES
+              -- Public cross-country media wave: RS + DE.
+              (1, 'meta', NULL, NULL, 'topic:diplomacy', 'negative', 'confirmed', 0.4, NULL),
+              (101, 'country', 'media', 'RS', 'topic:diplomacy', 'negative', 'confirmed', 0.6, NULL),
+              (201, 'country', 'media', 'DE', 'topic:diplomacy', 'negative', 'confirmed', 0.2, NULL),
+              -- A second RS episode in the same wave without its own evidence.
+              (107, 'country', 'media', 'RS', 'topic:diplomacy', 'negative', 'emerging', 0.1, NULL),
+              -- Single-country "wave": RS only.
+              (2, 'meta', NULL, NULL, 'topic:energy', 'negative', 'emerging', 0.4, NULL),
+              (102, 'country', 'media', 'RS', 'topic:energy', 'negative', 'confirmed', 0.4, NULL),
+              -- Annual action snapshots: two countries but zero acceleration.
+              (3, 'meta', NULL, NULL, 'economy:trade:russia', 'decrease', 'confirmed', 0, NULL),
+              (103, 'country', 'action', 'RS', 'economy:trade:russia', 'decrease', 'confirmed', 0, NULL),
+              (203, 'country', 'action', 'DE', 'economy:trade:russia', 'decrease', 'confirmed', 0, NULL),
+              -- Legacy collection-health proxy without any meta wave.
+              (104, 'country', 'media', 'RS', 'media:coverage', 'neutral', 'emerging', 1.1, NULL),
+              -- Opposite directions held by the detector as contradicted.
+              (5, 'meta', NULL, NULL, 'topic:security', 'positive', 'emerging', 0.3, NULL),
+              (105, 'country', 'media', 'RS', 'topic:security', 'positive', 'emerging', 0.3,
+               'contradicted_by_opposite_direction'),
+              (205, 'country', 'media', 'DE', 'topic:security', 'positive', 'confirmed', 0.3, NULL),
+              (6, 'meta', NULL, NULL, 'topic:security', 'negative', 'emerging', 0.3, NULL),
+              (106, 'country', 'media', 'RS', 'topic:security', 'negative', 'emerging', 0.3,
+               'contradicted_by_opposite_direction'),
+              (206, 'country', 'media', 'FR', 'topic:security', 'negative', 'confirmed', 0.3, NULL)
+            ) AS seed(id, scope, contour, country, subject, direction, state, velocity, reason);
+
+            INSERT INTO radar_trend_members(meta_trend_id, country_trend_id, left_at) VALUES
+              (1, 101, NULL), (1, 201, NULL), (1, 107, NULL),
+              (2, 102, NULL),
+              (3, 103, NULL), (3, 203, NULL),
+              (5, 105, NULL), (5, 205, NULL),
+              (6, 106, NULL), (6, 206, NULL);
+
+            INSERT INTO radar_trend_evidence(
+                id, public_id, trend_id, role, contribution, evidence, article_id
+            )
+            SELECT trend_id, ('20000000-0000-0000-0000-' || lpad(trend_id::text, 12, '0'))::uuid,
+                   trend_id, 'trigger', 1, '{}'::jsonb, NULL
+            FROM unnest(ARRAY[101, 201, 102, 103, 203, 104, 105, 205, 106, 206]) trend_id;
+        """))
+        connection.commit()
+
+        monkeypatch.setattr(
+            radar_routes, "SessionLocal",
+            sessionmaker(bind=connection, expire_on_commit=False),
+        )
+        app = FastAPI()
+        app.include_router(radar_routes.router)
+        client = TestClient(app)
+
+        def by_id(path, **params):
+            response = client.get(path, params={"limit": 100, **params})
+            assert response.status_code == 200
+            return {item["public_id"][-3:]: item for item in response.json()["items"]}
+
+        dossier = by_id("/api/v2/countries/RS/radar")
+        global_list = by_id("/api/v2/radar")
+
+        assert set(dossier) == {"101", "105", "106"}
+        assert dossier["101"]["state"] == "confirmed"
+        assert dossier["101"]["contradiction_marker"] is False
+        for contradicted in ("105", "106"):
+            assert dossier[contradicted]["state"] == "emerging"
+            assert dossier[contradicted]["contradiction_marker"] is True
+        assert set(global_list) == {"001", "005", "006"}
+        assert global_list["001"]["contradiction_marker"] is False
+        assert global_list["005"]["contradiction_marker"] is True
+        assert global_list["006"]["contradiction_marker"] is True
+        assert set(by_id("/api/v2/countries/RS/radar", state="confirmed")) == {"101"}
+        assert by_id("/api/v2/countries/DE/radar").keys() == {"201", "205"}
+        detail = client.get(
+            "/api/v2/radar/trends/00000000-0000-0000-0000-000000000105"
+        ).json()
+        assert detail["state"] == "emerging"
+        assert detail["contradiction_marker"] is True
     finally:
         connection.close()
         engine.dispose()

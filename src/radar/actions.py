@@ -8,7 +8,7 @@ from typing import Any
 
 from sqlalchemy import text
 
-from .repository import make_observation
+from .repository import make_observation, registered_country_codes
 from .types import Contour, Observation, ObservationWindow
 
 
@@ -17,12 +17,6 @@ ACTION_SUBJECTS = {
     "trade_data": "economy:trade:russia",
     "ru_fossil_imports": "energy:imports:russia",
 }
-
-_REGISTERED_COUNTRIES = text("""
-    /* radar_registered_country_codes */
-    SELECT code
-    FROM countries
-""")
 
 # A refreshed annual row has the same effective date and data fingerprint, so
 # it resolves to the same input hash rather than becoming a new action.
@@ -190,15 +184,6 @@ def _build_rows(session, sql, window: ObservationWindow) -> list[Any]:
     }).fetchall()
 
 
-def _registered_country_codes(session) -> frozenset[str]:
-    rows = session.execute(_REGISTERED_COUNTRIES).fetchall()
-    return frozenset(
-        str(_value(row, "code", "")).strip().upper()
-        for row in rows
-        if len(str(_value(row, "code", "")).strip()) == 2
-    )
-
-
 def _source_fingerprint(
     *, dataset: str, country: str, observed_at: datetime, resolution: str,
     current: Decimal | None, previous: Decimal | None, delta: Decimal,
@@ -273,7 +258,7 @@ def _structured_observation(
 def build_action_observations(session, window: ObservationWindow) -> list[Observation]:
     """Use registry/formal changes only; media analysis is never an input."""
 
-    registered_countries = _registered_country_codes(session)
+    registered_countries = registered_country_codes(session)
     datasets = (
         ("un_votes", _UN_VOTES, "formal", "agreement_pct_delta", "year"),
         ("trade_data", _TRADE, "registry", "trade_change", "year"),

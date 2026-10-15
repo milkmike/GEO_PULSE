@@ -33,6 +33,14 @@ from .types import (
 
 
 DETECTOR_VERSION = "radar-wave-1"
+# Persisted in ``radar_trends.explanation.lifecycle_reason``; the public API
+# reports it as ``contradiction_marker``.
+CONTRADICTION_REASON = "contradicted_by_opposite_direction"
+_OPPOSITE_DIRECTIONS = {
+    "increase": "decrease", "decrease": "increase",
+    "positive": "negative", "negative": "positive",
+    "warming": "hardening", "hardening": "warming",
+}
 
 _PRIOR_WAVES = text("""
 /* radar_prior_waves */
@@ -323,14 +331,20 @@ def _previous_waves(session, as_of: datetime) -> tuple[CountryWave, ...]:
 def _identity_params(
     observations: Iterable[Observation],
 ) -> dict[str, list[str]]:
+    # The opposite direction is loaded too, so an incremental cycle sees both
+    # sides of a possible contradiction (see _hold_contradicted_confirmations).
     identities = sorted({
         (
             observation.country_code,
             observation.contour.value,
             observation.subject_key,
-            observation.direction,
+            direction,
         )
         for observation in observations
+        for direction in (
+            observation.direction,
+            _OPPOSITE_DIRECTIONS.get(observation.direction, observation.direction),
+        )
     })
     return {
         "identity_countries": [identity[0] for identity in identities],
@@ -890,12 +904,20 @@ def _analyze_wave(
         _bucket_index(wave.last_observed_at, as_of)
         if wave.last_observed_at is not None else None
     )
-    trailing_indices = set(range((last_index + 1) if last_index is not None else 0, 90))
-    missing_cycles = len(trailing_indices - healthy_buckets)
-    quiet_since = wave.last_observed_at if (
-        wave.last_observed_at is not None
-        and any(index > (last_index if last_index is not None else -1) for index in healthy_buckets)
-    ) else None
+    if wave.contour is Contour.ACTION:
+        # Registry/formal datasets are published records, not a sampled
+        # collection stream: there is no collector telemetry that could make a
+        # quiet day unknown. Without this, every confirmed action was held
+        # forever with ``collection_gap`` and never cooled or resolved.
+        missing_cycles = 0
+        quiet_since = wave.last_observed_at
+    else:
+        trailing_indices = set(range((last_index + 1) if last_index is not None else 0, 90))
+        missing_cycles = len(trailing_indices - healthy_buckets)
+        quiet_since = wave.last_observed_at if (
+            wave.last_observed_at is not None
+            and any(index > (last_index if last_index is not None else -1) for index in healthy_buckets)
+        ) else None
     detected_at, historical_confirmed_at = _historical_timeline(wave, as_of)
     timeline = TrendTimeline(
         first_observed_at=wave.first_observed_at,
@@ -957,6 +979,39 @@ def _analyze_wave(
         t0_status=t0_status,
         velocity=_baseline_velocity(baseline),
     )
+
+
+def _hold_contradicted_confirmations(
+    scored: tuple[CountryWave, ...], prior: tuple[CountryWave, ...],
+) -> tuple[CountryWave, ...]:
+    """Never confirm both directions of one country/contour/subject at once.
+
+    Direction is part of a wave's identity, so opposite readings of the same
+    subject are separate trends. When both pass confirmation in one cycle,
+    neither direction is established: each is held at ``emerging`` (keeping
+    any earlier confirmation timestamp) with ``CONTRADICTION_REASON``.
+    """
+
+    confirmed = {
+        (wave.country_code, wave.contour, wave.subject_key, wave.direction)
+        for wave in scored if wave.state is TrendState.CONFIRMED
+    }
+    held: list[CountryWave] = []
+    for wave, before in zip(scored, prior, strict=True):
+        opposite = _OPPOSITE_DIRECTIONS.get(wave.direction)
+        if (
+            wave.state is TrendState.CONFIRMED
+            and opposite is not None
+            and (wave.country_code, wave.contour, wave.subject_key, opposite) in confirmed
+        ):
+            wave = replace(
+                wave,
+                state=TrendState.EMERGING,
+                confirmed_at=before.confirmed_at,
+                lifecycle_reason=CONTRADICTION_REASON,
+            )
+        held.append(wave)
+    return tuple(held)
 
 
 def _observation_signature(observation: Observation) -> dict[str, Any]:
@@ -2002,13 +2057,16 @@ def run_radar_cycle(
     # latest observations are regenerated. Missing health is not healthy silence.
     for country, buckets in _media_collection_health(session, window).items():
         healthy_buckets.setdefault((country, Contour.MEDIA), set()).update(buckets)
-    scored_waves = tuple(
-        _analyze_wave(
-            wave,
-            as_of,
-            healthy_buckets.get((wave.country_code, wave.contour), set()),
-        )
-        for wave in cycle_waves
+    scored_waves = _hold_contradicted_confirmations(
+        tuple(
+            _analyze_wave(
+                wave,
+                as_of,
+                healthy_buckets.get((wave.country_code, wave.contour), set()),
+            )
+            for wave in cycle_waves
+        ),
+        cycle_waves,
     )
     metas = assign_meta_trends(scored_waves, _story_anchors(session, as_of))
     state_counts = _state_distribution(wave.state for wave in scored_waves)
