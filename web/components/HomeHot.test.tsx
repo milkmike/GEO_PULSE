@@ -5,11 +5,11 @@ import HomeHot, { briefHighlights, hotSignals, weeklyMovers } from "./HomeHot";
 
 const NOW = Date.parse("2026-10-15T12:00:00Z");
 
-function country(code: string, name: string, delta7d: number | null, score = 0): CountrySummary {
+function country(code: string, name: string, delta7d: number | null, score = 0, extra: Partial<CountrySummary> = {}): CountrySummary {
   return {
     code, name, name_en: name, iso3: `${code}X`, flag: "", region: "europe", tier: 2, score,
     structural: null, media: null, level: "neutral", delta_24h: 0, delta_7d: delta7d,
-    article_count: null, gdelt_volume: null, gdelt_tone: null, updated_at: "2026-10-15T11:00:00Z",
+    article_count: null, gdelt_volume: null, gdelt_tone: null, updated_at: "2026-10-15T11:00:00Z", ...extra,
   };
 }
 
@@ -52,6 +52,19 @@ describe("HomeHot helpers", () => {
     expect(cooled.map((c) => c.code)).toEqual(["BA", "RS"]);
     expect(warmed.map((c) => c.code)).toEqual(["ID", "MA"]);
   });
+
+  it("leaves out moves whose media layer rests on one or two articles or an empty GDELT reading", () => {
+    const { cooled, warmed } = weeklyMovers([
+      country("BA", "Босния и Герцеговина", -45, -28.4, { media: -66.7, article_count: 1 }),
+      country("BR", "Бразилия", -19, -4.9, { media: -33.3, article_count: 2 }),
+      country("AE", "ОАЭ", -13, 20.1, { media: 20.6, article_count: 3 }),
+      country("NZ", "Новая Зеландия", 12.6, -18.8, { media: 0, gdelt_volume: 0, gdelt_tone: 0 }),
+      country("VN", "Вьетнам", 8, 12.7, { media: 9.3, gdelt_volume: 0.4, gdelt_tone: 0.8 }),
+      country("MN", "Монголия", 5, 5.8),
+    ]);
+    expect(cooled.map((c) => c.code)).toEqual(["AE"]);
+    expect(warmed.map((c) => c.code)).toEqual(["VN", "MN"]);
+  });
 });
 
 describe("HomeHot", () => {
@@ -82,6 +95,13 @@ describe("HomeHot", () => {
 
   it("renders nothing when there is nothing hot", () => {
     const { container } = render(<HomeHot brief={null} countries={[country("FR", "Франция", 0.2)]} signals={[]} now={NOW} />);
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("renders nothing when the only weekly moves rest on a single article", () => {
+    const { container } = render(
+      <HomeHot brief={null} countries={[country("BA", "Босния и Герцеговина", -45, -28.4, { media: -66.7, article_count: 1 })]} signals={[]} now={NOW} />,
+    );
     expect(container).toBeEmptyDOMElement();
   });
 });
