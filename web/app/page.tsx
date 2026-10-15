@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import CountryTable from "@/components/CountryTable";
 import HealthBadge from "@/components/HealthBadge";
 import HomeHot from "@/components/HomeHot";
 import RelationsThermometer from "@/components/RelationsThermometer";
@@ -11,7 +10,7 @@ import WorldMap from "@/components/WorldMap";
 import { useFeatureFlags } from "@/components/FeatureFlagsProvider";
 import { api } from "@/lib/api";
 import { fmtDate, pluralRu } from "@/lib/format";
-import type { Brief, CountrySummary, Meta, Signal } from "@/lib/types";
+import type { Brief, CountrySummary, Signal } from "@/lib/types";
 
 const REFRESH_MS = 120_000;
 
@@ -39,7 +38,6 @@ export default function HomePage() {
   const [countriesError, setCountriesError] = useState(false);
   const [signals, setSignals] = useState<Signal[]>([]);
   const [brief, setBrief] = useState<Brief | null>(null);
-  const [meta, setMeta] = useState<Meta | null>(null);
   const [highlighted, setHighlighted] = useState<string | null>(null);
 
   useEffect(() => {
@@ -51,7 +49,6 @@ export default function HomePage() {
       api.worldBrief().then(setBrief).catch(() => {});
     };
     load();
-    api.meta().then(setMeta).catch(() => {});
     const timer = setInterval(load, REFRESH_MS);
     return () => clearInterval(timer);
   }, []);
@@ -103,13 +100,6 @@ export default function HomePage() {
       </section>
 
       <HomeHot brief={brief} countries={countries} signals={signals} signalDetail={signalDetail} />
-
-      {countries.length > 0 && (
-        <section aria-labelledby="all-countries-title" className="mt-10">
-          <h2 id="all-countries-title" className="display mb-3 text-[26px] leading-tight">Все страны</h2>
-          <CountryTable countries={countries} regions={meta?.regions} />
-        </section>
-      )}
 
       <p className="mt-8 text-sm text-dim">
         Новости по отдельной стране и ранние наблюдения по всему миру собраны в{" "}

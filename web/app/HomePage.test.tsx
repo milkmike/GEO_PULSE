@@ -10,7 +10,7 @@ vi.mock("next/navigation", () => ({
 }));
 
 const apiMocks = vi.hoisted(() => ({
-  countries: vi.fn(), signals: vi.fn(), worldBrief: vi.fn(), meta: vi.fn(), health: vi.fn(),
+  countries: vi.fn(), signals: vi.fn(), worldBrief: vi.fn(), health: vi.fn(),
 }));
 vi.mock("@/lib/api", () => ({ api: apiMocks, apiBase: () => "http://api.test" }));
 vi.mock("@/components/SiteHeader", () => ({ default: () => <nav>header</nav> }));
@@ -46,7 +46,6 @@ beforeEach(() => {
   apiMocks.countries.mockResolvedValue({ countries: COUNTRIES, total: COUNTRIES.length });
   apiMocks.signals.mockResolvedValue({ signals: [], total: 0 });
   apiMocks.worldBrief.mockRejectedValue(new Error("404"));
-  apiMocks.meta.mockResolvedValue({ regions: { europe: "Европа" }, topics: {}, levels: [], countries: [] });
   apiMocks.health.mockResolvedValue({ verdict: "HEALTHY", sources_total: 10, sources_ok: 10, coverage_pct: 100, gdelt: { status: "ok" } });
 });
 
@@ -75,14 +74,13 @@ describe("home page", () => {
     expect(screen.getByTestId("map")).toHaveTextContent("выделена: нет");
   });
 
-  it("puts weekly movers in «Горячее» and lists all countries below", async () => {
+  it("puts weekly movers in «Горячее» without a second list of all countries", async () => {
     render(<HomePage />);
     const movers = await screen.findByRole("region", { name: "Сильнее всего за неделю" });
     const links = within(movers).getAllByRole("link");
     expect(links[0]).toHaveTextContent("Босния и Герцеговина");
     expect(links[0]).toHaveAttribute("href", "/country/BA");
-    expect(screen.getByRole("heading", { name: "Все страны" })).toBeVisible();
-    expect(screen.getByText("6 стран")).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "Все страны" })).not.toBeInTheDocument();
   });
 
   it("explains a failed index load instead of showing an empty page", async () => {
