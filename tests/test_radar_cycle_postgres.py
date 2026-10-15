@@ -205,3 +205,42 @@ def test_annual_action_trend_cools_and_resolves_in_incremental_cycles(radar_engi
     assert [tuple(row) for row in transitions] == [
         (None, "confirmed"), ("confirmed", "cooling"), ("cooling", "resolved"),
     ]
+
+
+def test_subjects_sharing_a_story_anchor_persist_as_separate_meta_trends(radar_engine):
+    """Prod 2026-10-12: story 33 anchored two subjects; their meta public ids
+    collided and the unique violation rolled back every hourly cycle."""
+
+    from src.radar.grouping import CountryWave, MetaTrend
+    from src.radar.service import _persist_meta_and_contours
+    from src.radar.types import TrendState
+
+    anchor = "anchor:story:33:энергетическое перемирие украина россия:positive"
+    first_seen = datetime(2026, 10, 11, tzinfo=timezone.utc)
+    metas = tuple(
+        MetaTrend(
+            subject, "positive",
+            (CountryWave(
+                "US", "media", subject, "positive", (), first_seen, None,
+                wave_key=f"{subject}-wave", last_observed_at=first_seen,
+                state=TrendState.RESOLVED,
+            ),),
+            None, meta_key=anchor,
+        )
+        for subject in ("topic:energy", "topic:ukraine_war")
+    )
+
+    with Session(bind=radar_engine) as session:
+        _persist_meta_and_contours(session, metas, {}, AS_OF)
+        session.commit()
+        # A second cycle finds both rows by identity instead of re-inserting.
+        _persist_meta_and_contours(session, metas, {}, AS_OF + timedelta(hours=1))
+        session.commit()
+
+    with radar_engine.connect() as connection:
+        rows = connection.execute(text("""
+            SELECT subject_key, public_id FROM radar_trends
+            WHERE scope = 'meta' AND meta_key = :anchor ORDER BY subject_key
+        """), {"anchor": anchor}).all()
+    assert [row.subject_key for row in rows] == ["topic:energy", "topic:ukraine_war"]
+    assert rows[0].public_id != rows[1].public_id
