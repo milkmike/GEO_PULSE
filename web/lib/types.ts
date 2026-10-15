@@ -11,6 +11,8 @@ export interface CountrySummary {
   score: number;
   structural: number | null;
   media: number | null;
+  media_confidence?: number | null;
+  low_data?: boolean;
   level: Level;
   delta_24h: number | null;
   delta_7d: number | null;
@@ -79,6 +81,7 @@ export interface Dossier {
   };
   index: {
     score: number; level: Level; structural: number | null; media: number | null;
+    media_confidence?: number | null; low_data?: boolean;
     boost: number | null; delta_24h: number | null; delta_7d: number | null;
     details: Record<string, unknown> | null; updated_at: string; version: string;
   } | null;

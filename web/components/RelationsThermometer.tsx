@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useId } from "react";
+import LowDataBadge from "./LowDataBadge";
 import { fmt, LEVEL_COLOR, pluralRu } from "@/lib/format";
 import type { CountrySummary, Level } from "@/lib/types";
 
@@ -87,8 +88,9 @@ export default function RelationsThermometer({
                     >
                       <span aria-hidden="true" className="w-5 shrink-0 text-center">{c.flag}</span>
                       <span className="min-w-0 flex-1 truncate text-fg">{c.name}</span>
+                      {c.low_data && <LowDataBadge />}
                       <WeeklyDelta value={c.delta_7d} />
-                      <span className="tnum w-12 shrink-0 text-right font-semibold" style={{ color: LEVEL_COLOR[c.level] }}>
+                      <span className="tnum w-12 shrink-0 text-right font-semibold" style={{ color: c.low_data ? "var(--color-dim)" : LEVEL_COLOR[c.level] }}>
                         {fmt(c.score)}
                       </span>
                     </Link>

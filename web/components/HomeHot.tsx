@@ -46,12 +46,11 @@ export function hotSignals(signals: Signal[], now: number): Signal[] {
 }
 
 /**
- * True when the media layer of the index rests on too little material for its
- * weekly move to mean anything: one or two own articles, or a GDELT reading
- * with no measured volume. Countries without any media layer are not thin —
- * their moves come from the structural layer.
+ * Prefer the server confidence flag. Older responses fall back to the article
+ * and volume heuristic. Countries without media rest on structural facts.
  */
 export function thinMediaEvidence(country: CountrySummary): boolean {
+  if (country.low_data !== undefined) return country.low_data;
   if (country.article_count != null) return country.article_count < MIN_MOVER_ARTICLES;
   return country.media != null && !country.gdelt_volume;
 }
@@ -129,7 +128,7 @@ function MoversCard({ cooled, warmed }: ReturnType<typeof weeklyMovers>) {
       <CardHeader id={titleId} title="Сильнее всего за неделю" />
       <p className="text-xs text-dim">
         Изменение индекса за 7 дней; справа от названия текущий индекс.
-        Страны, где о России почти не пишут (меньше {MIN_MOVER_ARTICLES} статей за две недели), не показываем.
+        Страны, где о России почти не пишут и данных мало, не показываем.
       </p>
       {cooled.length > 0 && <>
         <h4 className="mt-1 text-xs font-medium text-dim">Похолодели</h4>

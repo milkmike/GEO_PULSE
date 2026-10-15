@@ -74,7 +74,7 @@ def get_index_explanation(
     window_hours: Optional[int] = Query(default=None, ge=1, le=720),
     date_from: Optional[datetime] = Query(default=None, alias="from"),
     date_to: Optional[datetime] = Query(default=None, alias="to"),
-    rri_version: str = Query(default=INDEX_VERSION, pattern=r"^v[0-9]+$"),
+    rri_version: str = Query(default=INDEX_VERSION, pattern=r"^v[0-9]+(?:\.[0-9]+)?$"),
     service: ExplanationService = Depends(get_explanation_service),
 ):
     """Explain a persisted RRI interval without provider or write side effects."""

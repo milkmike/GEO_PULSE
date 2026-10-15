@@ -3,6 +3,7 @@
 import { use, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import LowDataBadge from "@/components/LowDataBadge";
 import SiteHeader from "@/components/SiteHeader";
 import AgreementsPanel from "@/components/AgreementsPanel";
 import Markdown from "@/components/Markdown";
@@ -649,6 +650,7 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
           <span className="tnum text-5xl font-bold" style={{ color }}>
             {fmt(index.score)}
           </span>
+          {index.low_data && <LowDataBadge />}
           <span
             className="mb-1.5 rounded-full border px-3 py-0.5 text-xs"
             style={{ color, borderColor: color }}
