@@ -56,6 +56,17 @@ def _quiet_transition(
         and previous_state in (TrendState.CONFIRMED, TrendState.COOLING)
     ):
         return _decision(previous_state, "collection_gap", metrics)
+    if metrics.evidence_expired and previous_state in (
+        TrendState.CANDIDATE, TrendState.EMERGING,
+    ):
+        # An unconfirmed wave whose evidence predates the window can never
+        # confirm, so there is no quiet period left to prove with collection
+        # health; a recurrence starts a new wave.
+        return _decision(
+            TrendState.REJECTED,
+            "unconfirmed_evidence_expired",
+            metrics,
+        )
     if metrics.quiet_since is None or metrics.as_of is None:
         return None
     quiet_for = metrics.as_of - metrics.quiet_since

@@ -792,6 +792,7 @@ def _wave_metrics(
     timeline: TrendTimeline,
     quiet_since: datetime | None = None,
     missing_collection_cycles: int = 0,
+    evidence_expired: bool = False,
 ) -> TrendMetrics:
     observed_indices = {
         index for point in wave.observations
@@ -815,6 +816,7 @@ def _wave_metrics(
         as_of=as_of,
         quiet_since=quiet_since,
         missing_collection_cycles=missing_collection_cycles,
+        evidence_expired=evidence_expired,
         timeline=timeline,
     )
 
@@ -911,7 +913,15 @@ def _analyze_wave(
         # forever with ``collection_gap`` and never cooled or resolved.
         missing_cycles = 0
         quiet_since = wave.last_observed_at
+        evidence_expired = False
     else:
+        # With no observation left in the window, the trailing range spans all
+        # 90 buckets, so the health gate alone could hold an unconfirmed wave
+        # open indefinitely; ``decide_state`` rejects it as expired instead.
+        evidence_expired = (
+            wave.last_observed_at is not None
+            and _utc(wave.last_observed_at) < as_of - timedelta(days=90)
+        )
         trailing_indices = set(range((last_index + 1) if last_index is not None else 0, 90))
         missing_cycles = len(trailing_indices - healthy_buckets)
         quiet_since = wave.last_observed_at if (
@@ -935,6 +945,7 @@ def _analyze_wave(
             timeline=timeline,
             quiet_since=quiet_since,
             missing_collection_cycles=missing_cycles,
+            evidence_expired=evidence_expired,
         ),
         wave.state,
     )
@@ -1102,7 +1113,8 @@ INSERT INTO radar_trends (
 
 _UPDATE_TREND = text("""
 UPDATE radar_trends trend SET
-  state = :state, confidence = :confidence, coverage_confidence = :coverage_confidence,
+  state = :state, confidence = :confidence,
+  coverage_confidence = COALESCE(:coverage_confidence, trend.coverage_confidence),
   velocity = :velocity,
   detected_at = COALESCE(trend.detected_at, :detected_at),
   confirmed_at = COALESCE(trend.confirmed_at, :confirmed_at), t0_auto = :t0_auto,
@@ -1364,7 +1376,11 @@ def _persist_sql(
             result = session.execute(_UPDATE_TREND, {
                 "id": trend_id, "state": state, "t0_auto": wave.t0_auto,
                 "t0_effective": wave.t0_effective, "confidence": _confidence(wave),
-                "coverage_confidence": _wave_coverage(wave),
+                # A re-score without evidence measures nothing; its zero would
+                # make /api/v2/radar/coverage report the country as blind.
+                "coverage_confidence": (
+                    _wave_coverage(wave) if wave.observations else None
+                ),
                 "velocity": _velocity(wave), "detected_at": wave.detected_at,
                 "confirmed_at": decision.timeline.confirmed_at,
                 "baseline": json.dumps(_baseline_payload(wave)),

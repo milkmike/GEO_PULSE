@@ -974,6 +974,135 @@ def test_unmatched_previous_media_wave_stays_confirmed_without_collection_health
     assert wave.lifecycle_reason == "collection_gap"
 
 
+# Prod 2026-10-15: ~20k media candidates from the initial backfill kept
+# evidence older than the 90-day window. Their quiet period could only be
+# proven by 90 consecutive healthy days, which no country had, so they stayed
+# open forever. Partial health mirrors that: some days healthy, never all.
+_PARTIAL_MEDIA_HEALTH = {"ES": set(range(70, 85))}
+
+
+def _unconfirmed_previous_media(state, days_ago):
+    wave = replace(
+        _stale_previous_media(state, days_ago),
+        t0_auto=None, t0_effective=None, confirmed_at=None,
+    )
+    return replace(wave, detected_at=None) if state is TrendState.CANDIDATE else wave
+
+
+def _score_previous_media(monkeypatch, previous, health=_PARTIAL_MEDIA_HEALTH):
+    import src.radar.service as service
+
+    monkeypatch.setattr(service, "_previous_waves", lambda *_: (previous,))
+    monkeypatch.setattr(service, "build_media_observations", lambda *_: [])
+    monkeypatch.setattr(service, "build_action_observations", lambda *_: [])
+    monkeypatch.setattr(service, "_media_collection_health", lambda *_: health)
+    [wave] = run_radar_cycle(_Session(), AS_OF, shadow=True).country_waves
+    return wave
+
+
+@pytest.mark.parametrize("state", (TrendState.CANDIDATE, TrendState.EMERGING))
+@pytest.mark.parametrize("health", (_PARTIAL_MEDIA_HEALTH, {}))
+def test_unconfirmed_media_wave_with_evidence_before_the_window_is_rejected(
+    monkeypatch, state, health,
+):
+    previous = _unconfirmed_previous_media(state, 110)
+
+    wave = _score_previous_media(monkeypatch, previous, health)
+
+    assert wave.state is TrendState.REJECTED
+    assert wave.lifecycle_reason == "unconfirmed_evidence_expired"
+
+
+@pytest.mark.parametrize("state", (TrendState.CONFIRMED, TrendState.COOLING))
+def test_confirmed_media_wave_with_evidence_before_the_window_still_needs_health(
+    monkeypatch, state,
+):
+    wave = _score_previous_media(monkeypatch, _stale_previous_media(state, 110))
+
+    assert wave.state is state
+    assert wave.lifecycle_reason == "collection_gap"
+
+
+def test_unconfirmed_media_wave_inside_the_window_still_needs_healthy_quiet_days(
+    monkeypatch,
+):
+    previous = _unconfirmed_previous_media(TrendState.CANDIDATE, 89)
+
+    wave = _score_previous_media(monkeypatch, previous)
+
+    assert wave.state is TrendState.CANDIDATE
+
+
+def test_historical_replay_does_not_expire_a_wave_with_later_evidence(monkeypatch):
+    # A replay at an earlier as_of loads trends first seen before it whose
+    # evidence continues after it; that evidence is not out of the window.
+    previous = replace(
+        _unconfirmed_previous_media(TrendState.CANDIDATE, 110),
+        last_observed_at=AS_OF + timedelta(days=5),
+    )
+
+    wave = _score_previous_media(monkeypatch, previous)
+
+    assert wave.state is TrendState.CANDIDATE
+
+
+class _PersistedTrendSqlSession(_RecordingSqlSession):
+    """Serves one persisted country trend so a full cycle updates it."""
+
+    def __init__(self, row):
+        super().__init__()
+        self.row = row
+
+    def execute(self, statement, params=None):
+        sql = str(statement)
+        if "radar_prior_waves" in sql or "SELECT id, state, first_observed_at" in sql:
+            self.calls.append((sql, params or {}))
+            return _Result(rows=[self.row])
+        return super().execute(statement, params)
+
+
+def test_rescoring_without_observations_keeps_the_stored_coverage(monkeypatch):
+    """An evidence-less re-score is not a measurement: writing its zero coverage
+    would make /api/v2/radar/coverage report the country as blind."""
+
+    import src.radar.service as service
+
+    previous = _unconfirmed_previous_media(TrendState.CANDIDATE, 110)
+    row = {
+        "id": 41, "wave_key": previous.wave_key, "country_code": "ES",
+        "contour": "media", "subject_key": previous.subject_key,
+        "direction": previous.direction, "state": "candidate",
+        "first_observed_at": previous.first_observed_at, "detected_at": None,
+        "confirmed_at": None, "t0_auto": None, "t0_effective": None,
+        "has_analyst_t0_override": False,
+        "last_observed_at": previous.last_observed_at,
+    }
+    monkeypatch.setattr(service, "build_media_observations", lambda *_: [])
+    monkeypatch.setattr(service, "build_action_observations", lambda *_: [])
+    monkeypatch.setattr(
+        service, "_media_collection_health", lambda *_: _PARTIAL_MEDIA_HEALTH,
+    )
+    session = _PersistedTrendSqlSession(row)
+
+    run_radar_cycle(session, AS_OF, shadow=False)
+
+    [update] = [
+        params for sql, params in session.calls
+        if "UPDATE radar_trends trend SET" in sql and params.get("id") == 41
+    ]
+    assert update["state"] == "rejected"
+    assert update["coverage_confidence"] is None
+    assert "COALESCE(:coverage_confidence, trend.coverage_confidence)" in str(
+        service._UPDATE_TREND
+    )
+    assert any(
+        "INSERT INTO radar_state_events" in sql and params["trend_id"] == 41
+        and (params["from_state"], params["to_state"]) == ("candidate", "rejected")
+        and params["reason"] == "unconfirmed_evidence_expired"
+        for sql, params in session.calls
+    )
+
+
 def _stale_previous_action(state, observed_at, direction="decrease"):
     return CountryWave(
         country_code="RS", contour="action", subject_key="economy:trade:russia",

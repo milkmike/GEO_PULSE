@@ -207,6 +207,123 @@ def test_annual_action_trend_cools_and_resolves_in_incremental_cycles(radar_engi
     ]
 
 
+def test_full_cycle_rejects_unconfirmed_media_trends_whose_evidence_expired(radar_engine):
+    """Prod 2026-10-15: ~20k backfill candidates outlived the 90-day window.
+
+    No collection health is seeded, as on most prod countries: the expired
+    candidate is still rejected, the expired confirmed trend is still held,
+    and neither evidence-less re-score overwrites the stored coverage with 0.
+    """
+
+    from src.radar.grouping import CountryWave, assign_meta_trends
+    from src.radar.repository import make_observation
+    from src.radar.service import _persist_sql
+
+    # Meta memberships record joined_at with the wall clock and may only be
+    # closed later, so seeding and replay both run after "now".
+    as_of = datetime(datetime.now(timezone.utc).year + 1, 6, 1, 14, tzinfo=timezone.utc)
+
+    def media_point(subject: str, days_ago: int, coverage: float):
+        return make_observation(
+            country_code="ES", contour="media", subject_key=subject,
+            direction="negative", metric="attention_share",
+            observed_at=as_of - timedelta(days=days_ago),
+            evidence_ids=(f"article:{subject}:{days_ago}",),
+            value=0.8, publisher_family_count=2, source_count=2,
+            coverage_confidence=coverage,
+            evidence={"article_ids": (days_ago,)},
+        )
+
+    expired = (media_point("event:expired_note", 110, 0.38),)
+    held = tuple(media_point("event:held_note", days_ago, 0.6) for days_ago in (112, 110))
+    active = (media_point("event:active_note", 5, 1.0),)
+    waves = (
+        CountryWave(
+            country_code="ES", contour="media", subject_key="event:expired_note",
+            direction="negative", observations=expired,
+            first_observed_at=expired[0].observed_at, t0_auto=None,
+            wave_key="expired-candidate", state="candidate",
+        ),
+        CountryWave(
+            country_code="ES", contour="media", subject_key="event:held_note",
+            direction="negative", observations=held,
+            first_observed_at=held[0].observed_at,
+            t0_auto=held[0].observed_at, t0_effective=held[0].observed_at,
+            wave_key="expired-confirmed", state="confirmed",
+            detected_at=held[0].observed_at, confirmed_at=held[1].observed_at,
+        ),
+        CountryWave(
+            country_code="ES", contour="media", subject_key="event:active_note",
+            direction="negative", observations=active,
+            first_observed_at=active[0].observed_at, t0_auto=None,
+            wave_key="active-candidate", state="candidate",
+        ),
+    )
+    with radar_engine.begin() as connection:
+        connection.execute(text("""
+            INSERT INTO countries(code, name_ru, name_en, iso3, region)
+            VALUES ('ES', 'Испания', 'Spain', 'ESP', 'europe')
+        """))
+        session = Session(bind=connection)
+        _persist_sql(
+            session, [*expired, *held, *active], waves,
+            assign_meta_trends(waves, ()).meta_trends,
+            active[0].observed_at + timedelta(hours=1),
+        )
+        session.flush()
+        # A stale stored value proves in-window re-scores still overwrite it.
+        connection.execute(text("""
+            UPDATE radar_trends SET coverage_confidence = 0.2
+            WHERE wave_key = 'active-candidate'
+        """))
+
+    @contextmanager
+    def session_factory():
+        session = Session(bind=radar_engine)
+        try:
+            yield session
+        finally:
+            session.close()
+
+    payload = run_once(
+        parse_args([
+            "--apply", "--days", "90", "--generation-days", "90",
+            "--as-of", as_of.isoformat(),
+        ]),
+        session_factory=session_factory,
+    )
+
+    assert payload["shadow"] is False
+    with radar_engine.connect() as connection:
+        rows = connection.execute(text("""
+            SELECT wave_key, state, explanation->>'lifecycle_reason' AS reason,
+                   coverage_confidence
+            FROM radar_trends WHERE scope = 'country'
+        """)).all()
+        transitions = connection.execute(text("""
+            SELECT event.from_state, event.to_state, event.transition_reason
+            FROM radar_state_events event
+            JOIN radar_trends trend ON trend.id = event.trend_id
+            WHERE trend.wave_key = 'expired-candidate'
+            ORDER BY event.occurred_at
+        """)).all()
+    trends = {
+        row.wave_key: (row.state, row.reason, float(row.coverage_confidence))
+        for row in rows
+    }
+    assert trends["expired-candidate"] == (
+        "rejected", "unconfirmed_evidence_expired", pytest.approx(0.38),
+    )
+    assert trends["expired-confirmed"] == (
+        "confirmed", "collection_gap", pytest.approx(0.6),
+    )
+    assert trends["active-candidate"][2] == pytest.approx(1.0)
+    assert [tuple(row) for row in transitions] == [
+        (None, "candidate", "unscored"),
+        ("candidate", "rejected", "unconfirmed_evidence_expired"),
+    ]
+
+
 def test_subjects_sharing_a_story_anchor_persist_as_separate_meta_trends(radar_engine):
     """Prod 2026-10-12: story 33 anchored two subjects; their meta public ids
     collided and the unique violation rolled back every hourly cycle."""

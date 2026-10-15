@@ -213,6 +213,9 @@ class TrendMetrics:
     as_of: Optional[datetime] = None
     quiet_since: Optional[datetime] = None
     missing_collection_cycles: int = 0
+    # All evidence predates the scored window, so no new observation can join
+    # the wave (see ``grouping.MAX_WAVE_GAP``) and it cannot gain coverage.
+    evidence_expired: bool = False
     timeline: TrendTimeline = field(default_factory=TrendTimeline)
 
     def __post_init__(self) -> None:

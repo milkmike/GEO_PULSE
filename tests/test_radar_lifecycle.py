@@ -252,6 +252,41 @@ def test_unconfirmed_trend_is_rejected_after_healthy_quiet_window(previous_state
     assert decision.reason == "unconfirmed_quiet_window_elapsed"
 
 
+@pytest.mark.parametrize("previous_state", ("candidate", "emerging"))
+@pytest.mark.parametrize("quiet_since", (None, NOW - timedelta(days=110)))
+def test_unconfirmed_trend_with_expired_evidence_is_rejected_despite_gaps(
+    previous_state, quiet_since,
+):
+    decision = decide_state(
+        _metrics(
+            coverage=0.0,
+            quiet_since=quiet_since,
+            missing_collection_cycles=74,
+            evidence_expired=True,
+        ),
+        previous_state,
+    )
+
+    assert decision.state == "rejected"
+    assert decision.reason == "unconfirmed_evidence_expired"
+
+
+@pytest.mark.parametrize("previous_state", ("confirmed", "cooling"))
+def test_expired_evidence_never_bypasses_the_collection_gap_hold(previous_state):
+    decision = decide_state(
+        _metrics(
+            coverage=0.0,
+            quiet_since=NOW - timedelta(days=110),
+            missing_collection_cycles=74,
+            evidence_expired=True,
+        ),
+        previous_state,
+    )
+
+    assert decision.state == previous_state
+    assert decision.reason == "collection_gap"
+
+
 @pytest.mark.parametrize(("authority", "expected"), (
     ("registry", "resolved"),
     (None, "rejected"),
