@@ -108,3 +108,10 @@ STATE_TMP="${STATE_FILE}.tmp.$$"
 printf '%s\n' "$AFTER" > "$STATE_TMP"
 mv "$STATE_TMP" "$STATE_FILE"
 log "DEPLOYED ${BEFORE:0:8} -> ${AFTER:0:8}"
+
+# Every rebuild leaves the previous images untagged, and the disk filled up
+# with them. Drop dangling images and build cache unused for a week (recent
+# cache keeps the next build fast). Volumes are never touched, and a failed
+# cleanup must not undo a successful deploy.
+docker image prune -f >>"$LOG" 2>&1 || log "WARN: image prune failed"
+docker builder prune -f --filter until=168h >>"$LOG" 2>&1 || log "WARN: build cache prune failed"

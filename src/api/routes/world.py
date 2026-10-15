@@ -9,10 +9,11 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
+from src.api.admin import is_admin
 from src.api.public_urls import safe_public_url
 from src.api.signal_article_context import load_signal_article_previews
 from src.countries import COUNTRIES, REGIONS, country_name_ru
@@ -542,9 +543,12 @@ def country_headlines(code: str, days: int = Query(3, ge=1, le=30),
 
 
 @router.get("/countries/{code}/brief")
-def country_brief(code: str, generate: bool = False, refresh: bool = False):
+def country_brief(request: Request, code: str, generate: bool = False, refresh: bool = False):
     """AI dossier brief. Default: cached only (fast, no LLM). generate=1 builds
-    it on demand (cached 6h); refresh=1 forces regeneration."""
+    it on demand (cached 6h); refresh=1 forces regeneration and, since it
+    bypasses the cache and spends LLM budget, requires the admin key."""
+    if refresh and not is_admin(request):
+        raise HTTPException(403, "forbidden")
     code = code.upper()
     if code not in COUNTRIES:
         raise HTTPException(404, f"Unknown country: {code}")

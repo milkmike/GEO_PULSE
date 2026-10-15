@@ -7,6 +7,7 @@ import yaml
 
 
 ROOT = Path(__file__).resolve().parents[1]
+PRUNE_CALLS = ["image prune -f", "builder prune -f --filter until=168h"]
 
 
 def _fake_deploy_env(
@@ -49,6 +50,7 @@ def _fake_deploy_env(
         "  printf 'api\\nweb\\n'\n"
         "fi\n"
         "if [ \"$*\" = 'compose --parallel 1 build web' ] && [ \"${DEPLOY_TEST_FAIL_BUILD:-0}\" = 1 ]; then exit 43; fi\n"
+        "case \"$1\" in image|builder) [ \"${DEPLOY_TEST_FAIL_PRUNE:-0}\" != 1 ] || exit 45 ;; esac\n"
         "if [ \"$*\" = 'compose run --rm migrate' ]; then\n"
         "  count=0\n"
         "  [ ! -f \"$DEPLOY_TEST_ATTEMPTS\" ] || count=\"$(cat \"$DEPLOY_TEST_ATTEMPTS\")\"\n"
@@ -147,13 +149,14 @@ def test_auto_update_retries_after_migration_failure_then_records_success(tmp_pa
         "compose --parallel 1 build api",
         "compose --parallel 1 build web",
         "compose up -d",
+        *PRUNE_CALLS,
     ]
     assert marker.read_text().strip() == "bbbbbbbb"
 
     third = _run_auto_update(tmp_path, env)
     assert third.returncode == 0
     assert attempts.read_text() == "2"
-    assert len(calls.read_text().splitlines()) == 6
+    assert len(calls.read_text().splitlines()) == 8
 
 
 def test_auto_update_without_marker_deploys_current_head_once(tmp_path):
@@ -170,11 +173,12 @@ def test_auto_update_without_marker_deploys_current_head_once(tmp_path):
         "compose --parallel 1 build api",
         "compose --parallel 1 build web",
         "compose up -d",
+        *PRUNE_CALLS,
     ]
 
     second = _run_auto_update(tmp_path, env)
     assert second.returncode == 0
-    assert len(calls.read_text().splitlines()) == 5
+    assert len(calls.read_text().splitlines()) == 7
 
 
 def test_auto_update_does_not_record_success_until_api_is_healthy(tmp_path):
@@ -241,6 +245,7 @@ def test_auto_update_skips_overlapping_invocation_before_git_or_docker(tmp_path)
         "compose --parallel 1 build api",
         "compose --parallel 1 build web",
         "compose up -d",
+        *PRUNE_CALLS,
     ]
 
 
@@ -292,3 +297,36 @@ def test_auto_update_stops_when_service_inventory_fails(tmp_path):
     assert result.returncode == 44
     assert 'compose up -d' not in calls.read_text()
     assert not (tmp_path / '.deploy-state' / 'last-successful-commit').exists()
+
+
+def test_auto_update_prune_failure_does_not_fail_a_successful_deploy(tmp_path):
+    env, calls, _ = _fake_deploy_env(tmp_path, head="bbbbbbbb")
+    env["DEPLOY_TEST_FAIL_PRUNE"] = "1"
+
+    result = _run_auto_update(tmp_path, env)
+
+    assert result.returncode == 0, result.stderr
+    assert calls.read_text().splitlines()[-2:] == PRUNE_CALLS
+    assert (tmp_path / ".deploy-state" / "last-successful-commit").read_text().strip() == "bbbbbbbb"
+    log = (tmp_path / "deploy.log").read_text()
+    assert "WARN: image prune failed" in log
+    assert "WARN: build cache prune failed" in log
+
+
+def test_auto_update_cleanup_never_touches_volumes():
+    script = (ROOT / "deploy" / "auto-update.sh").read_text()
+
+    assert "system prune" not in script
+    assert "volume prune" not in script
+    assert "--volumes" not in script
+    assert script.index('log "DEPLOYED') < script.index("image prune")
+
+
+def test_every_service_caps_its_container_log():
+    services = yaml.safe_load((ROOT / "docker-compose.yml").read_text())["services"]
+
+    for name, service in services.items():
+        assert service.get("logging") == {
+            "driver": "json-file",
+            "options": {"max-size": "20m", "max-file": "3"},
+        }, name

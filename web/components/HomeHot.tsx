@@ -9,6 +9,8 @@ import type { Brief, CountrySummary, Signal } from "@/lib/types";
 const BRIEF_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const SIGNAL_WINDOW_MS = 72 * 60 * 60 * 1000;
 const MOVERS_PER_SIDE = 4;
+/** Fewest own articles (14-day index window) behind a media reading worth calling a move. */
+const MIN_MOVER_ARTICLES = 3;
 const SIGNALS_SHOWN = 6;
 const SEVERITY_RANK: Record<Signal["severity"], number> = { critical: 0, warning: 1, info: 2 };
 const SEVERITY_DOT: Record<Signal["severity"], string> = {
@@ -43,8 +45,19 @@ export function hotSignals(signals: Signal[], now: number): Signal[] {
     .slice(0, SIGNALS_SHOWN);
 }
 
+/**
+ * True when the media layer of the index rests on too little material for its
+ * weekly move to mean anything: one or two own articles, or a GDELT reading
+ * with no measured volume. Countries without any media layer are not thin —
+ * their moves come from the structural layer.
+ */
+export function thinMediaEvidence(country: CountrySummary): boolean {
+  if (country.article_count != null) return country.article_count < MIN_MOVER_ARTICLES;
+  return country.media != null && !country.gdelt_volume;
+}
+
 export function weeklyMovers(countries: CountrySummary[]) {
-  const moved = countries.filter((c) => c.delta_7d != null && Math.abs(c.delta_7d) >= 1);
+  const moved = countries.filter((c) => c.delta_7d != null && Math.abs(c.delta_7d) >= 1 && !thinMediaEvidence(c));
   return {
     cooled: moved.filter((c) => (c.delta_7d ?? 0) < 0)
       .sort((a, b) => (a.delta_7d ?? 0) - (b.delta_7d ?? 0)).slice(0, MOVERS_PER_SIDE),
@@ -108,14 +121,16 @@ function MoverRow({ country }: { country: CountrySummary }) {
   );
 }
 
-function MoversCard({ countries }: { countries: CountrySummary[] }) {
+function MoversCard({ cooled, warmed }: ReturnType<typeof weeklyMovers>) {
   const titleId = useId();
-  const { cooled, warmed } = weeklyMovers(countries);
   if (!cooled.length && !warmed.length) return null;
   return (
     <section aria-labelledby={titleId} className="card flex min-w-0 flex-col gap-2 p-4">
       <CardHeader id={titleId} title="Сильнее всего за неделю" />
-      <p className="text-xs text-dim">Изменение индекса за 7 дней; справа от названия текущий индекс.</p>
+      <p className="text-xs text-dim">
+        Изменение индекса за 7 дней; справа от названия текущий индекс.
+        Страны, где о России почти не пишут (меньше {MIN_MOVER_ARTICLES} статей за две недели), не показываем.
+      </p>
       {cooled.length > 0 && <>
         <h4 className="mt-1 text-xs font-medium text-dim">Похолодели</h4>
         <ul>{cooled.map((c) => <MoverRow key={c.code} country={c} />)}</ul>
@@ -171,7 +186,8 @@ export default function HomeHot({
   const titleId = useId();
   const freshBrief = brief && now - Date.parse(brief.created_at) <= BRIEF_MAX_AGE_MS ? brief : null;
   const fresh = hotSignals(signals, now);
-  const hasMovers = countries.some((c) => c.delta_7d != null && Math.abs(c.delta_7d) >= 1);
+  const movers = weeklyMovers(countries);
+  const hasMovers = movers.cooled.length > 0 || movers.warmed.length > 0;
   if (!freshBrief && !fresh.length && !hasMovers) return null;
   return (
     <section aria-labelledby={titleId} className="mt-10">
@@ -181,7 +197,7 @@ export default function HomeHot({
       </div>
       <div className="grid items-start gap-3 lg:grid-cols-3">
         {freshBrief && <BriefCard brief={freshBrief} now={now} />}
-        <MoversCard countries={countries} />
+        <MoversCard cooled={movers.cooled} warmed={movers.warmed} />
         <SignalsCard signals={fresh} detailEnabled={signalDetail} />
       </div>
     </section>

@@ -149,7 +149,7 @@ boost      — события action level ≥ 5 за последние 14 дн
 | `GET /api/v2/countries/{code}/topics` | Тематический расклад с тоном по теме |
 | `GET /api/v2/countries/{code}/headlines` | Заголовки: свои СМИ или GDELT-сэмплы |
 | `GET /api/v2/countries/{code}/un-votes` · `/trade` · `/agreements` | Голосования ООН · торговля с РФ · договоры и намерения |
-| `GET /api/v2/countries/{code}/brief` | AI-досье страны (кеш 6ч, `?refresh=true`) |
+| `GET /api/v2/countries/{code}/brief` | AI-досье страны (кеш 6ч; `?refresh=true` — только с заголовком `X-Admin-Key`) |
 | `GET /api/v2/brief` · `/topics/{topic}/brief` | Мировой брифинг · тематический брифинг (по линзе) |
 | `GET /api/v2/headlines?hours=&tier=&country=&region=&topic=` | Лента заголовков с диверсификацией по странам |
 | `GET /api/v2/signals?country=&signal_type=&active_only=` | Лента сигналов (по важности) |
