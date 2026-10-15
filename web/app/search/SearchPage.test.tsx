@@ -123,6 +123,68 @@ it("warns that saturated candidates are not the whole archive", async () => {
 });
 
 describe("SearchPage URL and request lifecycle", () => {
+  it("stays idle on a bare URL and offers example queries instead", async () => {
+    render(<SearchPage />);
+
+    const examples = screen.getByRole("group", { name: "Примеры запросов" });
+    expect(within(examples).getAllByRole("button").map((button) => button.textContent)).toEqual([
+      "Путин",
+      "\"Северный поток\"",
+      "санкции -спорт",
+      "Газпром OR Gazprom",
+    ]);
+    expect(screen.getByText(/кавычки ищут точную фразу/i)).toBeVisible();
+    await act(async () => {});
+    expect(navigation.replace).not.toHaveBeenCalled();
+    expect(apiMocks.searchArticles).not.toHaveBeenCalled();
+    expect(screen.queryByText(/не удалось получить результаты/i)).not.toBeInTheDocument();
+  });
+
+  it("fills the field and runs the search from an example query", async () => {
+    const user = userEvent.setup();
+    render(<SearchPage />);
+
+    await user.click(screen.getByRole("button", { name: "\"Северный поток\"" }));
+
+    expect(screen.getByRole("searchbox")).toHaveValue("\"Северный поток\"");
+    const pushed = new URL(String(navigation.push.mock.calls.at(-1)?.[0]), "https://massaraksh.tech");
+    expect(pushed.pathname).toBe("/search");
+    expect(pushed.searchParams.get("q")).toBe("\"Северный поток\"");
+  });
+
+  it("does not search for a URL that carries only a date range", async () => {
+    navigation.params = "from=2026-07-17";
+    render(<SearchPage />);
+
+    expect(screen.getByRole("group", { name: "Примеры запросов" })).toBeVisible();
+    expect(screen.getByLabelText("От даты")).toHaveValue("2026-07-17");
+    await act(async () => {});
+    expect(navigation.replace).not.toHaveBeenCalled();
+    expect(apiMocks.searchArticles).not.toHaveBeenCalled();
+  });
+
+  it("keeps filter-only deep links searchable", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-07-15T12:00:00Z"));
+    navigation.params = "country=ES";
+    const view = render(<SearchPage />);
+
+    await waitFor(() =>
+      expect(navigation.replace).toHaveBeenCalledWith("/search?country=ES&from=2026-04-16"),
+    );
+    expect(screen.queryByRole("group", { name: "Примеры запросов" })).not.toBeInTheDocument();
+
+    navigation.params = "country=ES&from=2026-04-16";
+    view.rerender(<SearchPage />);
+    await waitFor(() =>
+      expect(apiMocks.searchArticles).toHaveBeenCalledWith(
+        expect.objectContaining({ country: "ES", from: "2026-04-16" }),
+        null,
+        expect.any(AbortSignal),
+      ),
+    );
+  });
+
   it("canonicalizes the default 90-day range into the URL before searching", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-07-15T12:00:00Z"));

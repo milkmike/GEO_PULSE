@@ -36,6 +36,13 @@ const URL_STATE_KEYS = [
   "range",
 ] as const;
 
+// Filters that say what to look for. A date range only narrows a search, so a
+// URL carrying nothing but dates (e.g. the old auto-canonical /search?from=…)
+// must not start an archive-wide request.
+const INTENT_FILTERS = API_FILTERS.filter((key) => key !== "from" && key !== "to");
+
+const EXAMPLE_QUERIES = ["Путин", "\"Северный поток\"", "санкции -спорт", "Газпром OR Gazprom"];
+
 type Draft = Record<(typeof URL_STATE_KEYS)[number], string>;
 
 function defaultRangeStart(): string {
@@ -75,7 +82,7 @@ function requestFromParams(params: URLSearchParams): ArticleSearchRequest {
 
 function hasSearchIntent(params: URLSearchParams): boolean {
   const request = requestFromParams(params);
-  return API_FILTERS.some((key) => Boolean(request[key]?.trim()));
+  return INTENT_FILTERS.some((key) => Boolean(request[key]?.trim()));
 }
 
 function SearchPageContent() {
@@ -104,17 +111,18 @@ function SearchPageContent() {
 
   const currentParams = useMemo(() => new URLSearchParams(paramsKey), [paramsKey]);
   const currentRequest = useMemo(() => requestFromParams(currentParams), [currentParams]);
+  const searchIntent = useMemo(() => hasSearchIntent(currentParams), [currentParams]);
+  // The default 90-day window is added only once there is something to search
+  // for; a bare /search stays idle and shows example queries instead.
   const needsDefaultRange = useMemo(
     () =>
+      searchIntent &&
       !currentParams.has("from") &&
       !currentParams.has("to") &&
       currentParams.get("range") !== "all",
-    [currentParams],
+    [currentParams, searchIntent],
   );
-  const shouldSearch = useMemo(
-    () => hasSearchIntent(currentParams) && !needsDefaultRange,
-    [currentParams, needsDefaultRange],
-  );
+  const shouldSearch = searchIntent && !needsDefaultRange;
   const activeParamsKeyRef = useRef(paramsKey);
   activeParamsKeyRef.current = paramsKey;
 
@@ -223,23 +231,33 @@ function SearchPageContent() {
     setDraft((current) => ({ ...current, [key]: value }));
   }
 
-  function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const query = draft.q.trim();
+  function pushDraft(next: Draft) {
+    const query = next.q.trim();
     if (query.length === 1) {
       setError("Поисковый запрос должен содержать не менее двух символов.");
       return;
     }
-    if (draft.from && draft.to && draft.from > draft.to) {
+    if (next.from && next.to && next.from > next.to) {
       setError("Начальная дата не может быть позже конечной.");
       return;
     }
     const params = new URLSearchParams();
     for (const key of URL_STATE_KEYS) {
-      const value = draft[key].trim();
+      const value = next[key].trim();
       if (value) params.set(key, key === "country" ? value.toUpperCase() : value);
     }
     router.push(`/search?${params.toString()}`);
+  }
+
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    pushDraft(draft);
+  }
+
+  function runExample(query: string) {
+    const next = { ...draft, q: query };
+    setDraft(next);
+    pushDraft(next);
   }
 
   function chooseEntity(entity: EntitySuggestion) {
@@ -569,13 +587,27 @@ function SearchPageContent() {
       </form>
 
       <section className="reveal reveal-3 mt-9" aria-live="polite" aria-busy={loading || loadingMore}>
-        {!shouldSearch && (
+        {!searchIntent && (
           <div className="grid gap-5 border-y border-line py-8 sm:grid-cols-[9rem_1fr]">
             <p className="card-title">как начать</p>
-            <p className="lead !text-[17px]">
-              Введите имя, событие или фразу. Можно сузить архив страной источника —
-              например, найти упоминания Путина именно в испанских медиа.
-            </p>
+            <div>
+              <p className="lead !text-[17px]">
+                Введите имя, событие или фразу. Можно сузить архив страной источника —
+                например, найти упоминания Путина именно в испанских медиа.
+              </p>
+              <div role="group" aria-label="Примеры запросов" className="mt-4 flex flex-wrap gap-2">
+                {EXAMPLE_QUERIES.map((example) => (
+                  <button
+                    key={example}
+                    type="button"
+                    onClick={() => runExample(example)}
+                    className="inline-flex min-h-11 items-center rounded-full border border-line px-3 text-[12px] text-fg transition-colors hover:border-ru-blue hover:text-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent sm:min-h-0 sm:py-1.5"
+                  >
+                    {example}
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
         )}
 

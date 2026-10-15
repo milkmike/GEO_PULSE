@@ -24,14 +24,8 @@ export default function TierDivergencePanel({ code }: { code: string }) {
     api.tierDivergence(code).then((d) => setTiers(d.tiers)).catch(() => setTiers([]));
   }, [code]);
 
-  if (!tiers) return null;
-  if (!tiers.length)
-    return (
-      <section className="card">
-        <div className="card-title px-4 pb-1 pt-3">Расхождение по тирам</div>
-        <div className="px-4 pb-3 text-xs text-dim">Недостаточно размеченных статей.</div>
-      </section>
-    );
+  // No labelled articles yet → no card rather than a "not enough data" stub.
+  if (!tiers?.length) return null;
 
   const vals = tiers.map((t) => t.sentiment);
   const spread = Math.max(...vals) - Math.min(...vals);

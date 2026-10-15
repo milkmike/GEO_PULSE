@@ -16,7 +16,7 @@ import SortableGrid, { type SortableItem } from "@/components/SortableGrid";
 import StoriesPanel from "@/components/StoriesPanel";
 import InvestigationPanel from "@/components/InvestigationPanel";
 import RriShiftList from "@/components/RriShiftList";
-import EarlyWarningPanel from "@/components/EarlyWarningPanel";
+import EarlyWarningPanel, { isPriorityRadarTrend } from "@/components/EarlyWarningPanel";
 import { useFeatureFlags } from "@/components/FeatureFlagsProvider";
 import TierDivergencePanel from "@/components/TierDivergencePanel";
 import SanctionsPanel from "@/components/SanctionsPanel";
@@ -24,12 +24,12 @@ import EnergyPanel from "@/components/EnergyPanel";
 import VoxPanel from "@/components/VoxPanel";
 import { api, apiBase } from "@/lib/api";
 import { COUNTRY_TIPS } from "@/lib/explain";
-import { fmt, fmtDate, LEVEL_COLOR, LEVEL_RU } from "@/lib/format";
+import { fmt, LEVEL_COLOR, LEVEL_RU } from "@/lib/format";
 import { deriveRriShiftMarkers, resolveInvestigationMarker } from "@/lib/rri-shifts";
 import type { RriShiftMarker } from "@/lib/rri-shifts";
 import type {
-  AgreementGroup, Brief, Dossier, EntityStat, FxSeries, Headline, TopicStat,
-  StoryListItem, TradeYear, UNVoteYear,
+  AgreementGroup, Brief, Dossier, EntityStat, FxSeries, Headline, RadarTrend, RadarTrendPage,
+  TopicStat, StoryListItem, TradeYear, UNVoteYear,
 } from "@/lib/types";
 
 // Default panel order on country pages. AI-dossier + news sources sit near the
@@ -49,6 +49,42 @@ const CHART_BASE = {
   showlegend: true,
   legend: { font: { color: "#9ca3af", size: 10 }, orientation: "h" as const, y: 1.12 },
 };
+
+// AI briefs older than this quote index values that no longer match the live
+// RRI shown above them, so they are not shown at all.
+const BRIEF_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+const RADAR_LIMIT = 4;
+
+function isFreshBrief(brief: Brief): boolean {
+  const created = brief.created_at ? Date.parse(brief.created_at) : Number.NaN;
+  return Number.isFinite(created) && Date.now() - created <= BRIEF_MAX_AGE_MS;
+}
+
+function aiWrittenDate(iso: string): string {
+  return new Intl.DateTimeFormat("ru-RU", {
+    day: "numeric", month: "long", year: "numeric", timeZone: "Europe/Moscow",
+  }).format(new Date(iso)).replace(/\s*г\.$/, "");
+}
+
+// Same paging as EarlyWarningPanel (up to three pages until `limit` priority
+// trends are found), so the page knows up front whether the radar card would
+// hold anything besides an empty-state sentence.
+async function loadPriorityTrends(
+  fetchPage: (cursor: string | null) => Promise<RadarTrendPage>,
+  limit: number,
+): Promise<RadarTrend[]> {
+  const found = new Map<string, RadarTrend>();
+  let cursor: string | null = null;
+  for (let page = 0; page < 3; page += 1) {
+    const payload = await fetchPage(cursor);
+    for (const trend of payload.items) {
+      if (isPriorityRadarTrend(trend)) found.set(trend.public_id, trend);
+    }
+    if (found.size >= limit || payload.next_cursor === null) break;
+    cursor = payload.next_cursor;
+  }
+  return [...found.values()];
+}
 
 export default function CountryPage({ params }: { params: Promise<{ code: string }> }) {
   const { storiesNavigation, investigation, signalDetail, earlyWarningRadar } = useFeatureFlags();
@@ -70,7 +106,10 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
   const [agreements, setAgreements] = useState<AgreementGroup[]>([]);
   const [errorCountry, setErrorCountry] = useState<string | null>(null);
   const [showEmbed, setShowEmbed] = useState(false);
-  const [briefState, setBriefState] = useState<"idle" | "generating" | "empty" | "error">("idle");
+  const [briefState, setBriefState] = useState<
+    "loading" | "idle" | "stale" | "generating" | "empty" | "error"
+  >("loading");
+  const [radarTrends, setRadarTrends] = useState<RadarTrend[]>([]);
   const [countryStories, setCountryStories] = useState<StoryListItem[]>([]);
   const [storiesState, setStoriesState] = useState<"loading" | "ready" | "error">("loading");
   const [storiesReload, setStoriesReload] = useState(0);
@@ -100,7 +139,7 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
     setEntities([]);
     setFx(null);
     setBrief(null);
-    setBriefState("idle");
+    setBriefState("loading");
     setUn([]);
     setTrade([]);
     setAgreements([]);
@@ -122,7 +161,13 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
     api.fx(cc, 90, controller.signal)
       .then((value) => { if (isCurrent()) setFx(value); }).catch(() => {});
     api.countryBrief(cc, controller.signal)
-      .then((value) => { if (isCurrent()) setBrief(value); }).catch(() => {}); // 404 = not generated yet → button
+      .then((value) => {
+        if (!isCurrent()) return;
+        const fresh = isFreshBrief(value);
+        setBrief(fresh ? value : null);
+        setBriefState(fresh ? "idle" : "stale");
+      })
+      .catch(() => { if (isCurrent()) setBriefState("idle"); }); // 404 = not generated yet → button
     api.unVotes(cc, controller.signal)
       .then((value) => { if (isCurrent()) setUn(value.data); }).catch(() => {});
     api.trade(cc, controller.signal)
@@ -165,6 +210,19 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
     return () => controller.abort();
   }, [cc, storiesNavigation, storiesReload]);
 
+  useEffect(() => {
+    setRadarTrends([]);
+    if (!earlyWarningRadar) return;
+    const controller = new AbortController();
+    loadPriorityTrends(
+      (cursor) => api.countryRadar(cc, { limit: 12 }, cursor, controller.signal),
+      RADAR_LIMIT,
+    )
+      .then((trends) => { if (!controller.signal.aborted) setRadarTrends(trends); })
+      .catch(() => {}); // radar is supplementary: hide the card on failure
+    return () => controller.abort();
+  }, [cc, earlyWarningRadar]);
+
   const generateBrief = () => {
     const requestCountry = cc;
     const countryRequest = activeCountryRequest.current;
@@ -178,8 +236,9 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
     api.generateCountryBrief(cc)
       .then((b) => {
         if (!isCurrent()) return;
-        setBrief(b);
-        setBriefState("idle");
+        const fresh = isFreshBrief(b);
+        setBrief(fresh ? b : null);
+        setBriefState(fresh ? "idle" : "stale");
       })
       .catch((e) => {
         if (isCurrent()) setBriefState(String(e).includes("404") ? "empty" : "error");
@@ -332,7 +391,8 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
   const color = index ? LEVEL_COLOR[index.level] : "#9ca3af";
   const embedSnippet = `<iframe src="${typeof window !== "undefined" ? window.location.origin : ""}/embed/${cc}" width="320" height="180" frameborder="0" loading="lazy"></iframe>`;
 
-  // Reorderable panels. Empty/absent nodes auto-hide (see SortableGrid).
+  // Reorderable panels. Empty/absent nodes auto-hide (see SortableGrid); panels
+  // whose only content would be a "nothing yet" sentence pass null instead.
   const panels: SortableItem[] = [
     {
       id: "sparklines", cellClassName: "md:col-span-2", tip: COUNTRY_TIPS.sparklines,
@@ -346,11 +406,15 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
     },
     {
       id: "early-warning", cellClassName: "md:col-span-2",
-      node: earlyWarningRadar ? <EarlyWarningPanel countryCode={cc} title={`Радар · ${country.name}`} limit={4} /> : null,
+      node: earlyWarningRadar && radarTrends.length > 0 ? (
+        <EarlyWarningPanel trends={radarTrends} countryCode={cc} title={`Радар · ${country.name}`} limit={RADAR_LIMIT} />
+      ) : null,
     },
     {
       id: "stories", cellClassName: "md:col-span-2",
-      node: storiesNavigation ? (
+      // Shown once there are stories (or a retryable error), never as a
+      // skeleton that may collapse into an empty-state card.
+      node: storiesNavigation && (storiesState === "error" || countryStories.length > 0) ? (
         <StoriesPanel
           stories={countryStories}
           title={`Сюжеты с участием страны: ${country.name}`}
@@ -362,7 +426,9 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
     },
     {
       id: "brief", cellClassName: "md:col-span-2", tip: COUNTRY_TIPS.brief,
-      node: (
+      // Nothing while the cached brief loads; a brief older than a week is not
+      // shown, only the button to write a fresh one.
+      node: briefState === "loading" ? null : (
         <section className="card">
           <div className="card-title px-4 pb-1 pt-3">AI-досье</div>
           <div className="max-h-[360px] overflow-y-auto px-4 pb-3">
@@ -370,7 +436,7 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
               <>
                 <Markdown text={brief.content} citations={brief.citations ?? brief.meta?.citations} />
                 <div className="mt-2 flex items-center gap-3 text-[11px] text-dim">
-                  <span>{brief.model} · {fmtDate(brief.created_at)}</span>
+                  <span title={brief.model ?? undefined}>Написано ИИ · {aiWrittenDate(brief.created_at)}</span>
                   <button onClick={generateBrief} className="underline hover:text-ru-white">
                     обновить
                   </button>
@@ -390,13 +456,15 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
                 <p className="mb-2 text-xs text-dim">
                   {briefState === "error"
                     ? "Не удалось собрать досье — попробуйте ещё раз."
-                    : "Сводка по стране ещё не собрана."}
+                    : briefState === "stale"
+                      ? "Последняя сводка старше недели, её цифры устарели."
+                      : "Сводка по стране ещё не собрана."}
                 </p>
                 <button
                   onClick={generateBrief}
                   className="rounded bg-accent/15 px-3 py-1.5 text-[13px] text-accent transition-colors hover:bg-accent/25"
                 >
-                  Собрать AI-досье
+                  {briefState === "stale" ? "Собрать заново" : "Собрать AI-досье"}
                 </button>
               </div>
             )}
@@ -552,9 +620,10 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
         </h1>
         <button
           onClick={() => setShowEmbed(!showEmbed)}
+          aria-expanded={showEmbed}
           className="ml-auto rounded-md border border-line px-2.5 py-1 text-[11px] text-dim transition-colors hover:border-ru-blue hover:text-ru-white"
         >
-          {"</> embed"}
+          <span aria-hidden="true">{"</>"}</span> Встроить
         </button>
       </div>
 

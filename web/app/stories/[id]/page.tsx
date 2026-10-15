@@ -13,11 +13,20 @@ import {
 } from "lucide-react";
 import SiteHeader from "@/components/SiteHeader";
 import StoryTimeline from "@/components/StoryTimeline";
-import EarlyWarningPanel from "@/components/EarlyWarningPanel";
+import EarlyWarningPanel, { isPriorityRadarTrend } from "@/components/EarlyWarningPanel";
 import { useFeatureFlags } from "@/components/FeatureFlagsProvider";
 import { api } from "@/lib/api";
-import type { StoryArticleEvidence, StoryDetailResponse, StoryLifecycle } from "@/lib/types";
+import { countryNameRu, pluralRu, severityRu, storySummaryRu } from "@/lib/format";
+import type {
+  RadarTrend,
+  StoryArticleEvidence,
+  StoryDetailResponse,
+  StoryLifecycle,
+} from "@/lib/types";
 import { safeHttpUrl } from "@/lib/urls";
+
+const RADAR_LIMIT = 3;
+const RADAR_MAX_PAGES = 3;
 
 const LIFECYCLE: Record<StoryLifecycle, string> = {
   emerging: "зарождается",
@@ -81,7 +90,9 @@ export default function StoryDetailPage({ params }: { params: Promise<{ id: stri
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reload, setReload] = useState(0);
+  const [radarTrends, setRadarTrends] = useState<RadarTrend[]>([]);
   const loadMoreController = useRef<AbortController | null>(null);
+  const loadedStoryId = story?.id ?? null;
 
   useEffect(() => {
     if (storyId === null) {
@@ -117,6 +128,28 @@ export default function StoryDetailPage({ params }: { params: Promise<{ id: stri
       loadMoreController.current = null;
     };
   }, [reload, storyId]);
+
+  // Priority radar trends linked to this story, paged like EarlyWarningPanel.
+  // Without any, the trends section is omitted instead of printing an empty state.
+  useEffect(() => {
+    setRadarTrends([]);
+    if (!earlyWarningRadar || loadedStoryId === null) return;
+    const controller = new AbortController();
+    (async () => {
+      const found = new Map<string, RadarTrend>();
+      let cursor: string | null = null;
+      for (let page = 0; page < RADAR_MAX_PAGES; page += 1) {
+        const payload = await api.radar({ storyId: loadedStoryId, limit: 12 }, cursor, controller.signal);
+        for (const trend of payload.items) {
+          if (isPriorityRadarTrend(trend)) found.set(trend.public_id, trend);
+        }
+        if (found.size >= RADAR_LIMIT || payload.next_cursor === null) break;
+        cursor = payload.next_cursor;
+      }
+      if (!controller.signal.aborted) setRadarTrends([...found.values()]);
+    })().catch(() => {}); // supplementary section: stays hidden on failure
+    return () => controller.abort();
+  }, [earlyWarningRadar, loadedStoryId]);
 
   async function loadMore() {
     if (!storyId || !nextCursor || loadingMore) return;
@@ -192,11 +225,11 @@ export default function StoryDetailPage({ params }: { params: Promise<{ id: stri
           <span className="rounded-full border border-line px-2 py-0.5 text-fg">{LIFECYCLE[story.lifecycle]}</span>
         </div>
         <h1 className="display mt-3 max-w-5xl text-[38px] leading-[1.02] sm:text-[56px]">{story.title_ru}</h1>
-        {story.summary && <p className="mt-5 max-w-3xl text-[15px] leading-7 text-dim">{story.summary}</p>}
+        {story.summary && <p className="mt-5 max-w-3xl text-[15px] leading-7 text-dim">{storySummaryRu(story.summary)}</p>}
         <div className="mt-5 flex flex-wrap gap-x-5 gap-y-2 border-l border-ru-blue/70 pl-4 text-[11px] text-dim">
-          <span><b className="tnum text-fg">{story.article_count}</b> публикаций</span>
-          <span><b className="tnum text-fg">{story.source_count}</b> источников</span>
-          <span><b className="tnum text-fg">{story.country_count}</b> стран</span>
+          <span><b className="tnum text-fg">{story.article_count}</b> {pluralRu(story.article_count, "публикация", "публикации", "публикаций")}</span>
+          <span><b className="tnum text-fg">{story.source_count}</b> {pluralRu(story.source_count, "источник", "источника", "источников")}</span>
+          <span><b className="tnum text-fg">{story.country_count}</b> {pluralRu(story.country_count, "страна", "страны", "стран")}</span>
           <span>{compactDate(story.first_seen)} — {compactDate(story.last_seen)}</span>
         </div>
       </header>
@@ -227,7 +260,7 @@ export default function StoryDetailPage({ params }: { params: Promise<{ id: stri
                       <Link href={`/country/${country.country_code}`} className="font-semibold hover:text-accent">{country.country_name}</Link>
                       <span className="tnum text-xs text-dim">тон {country.media_tone == null ? "—" : signed(country.media_tone)}</span>
                     </div>
-                    <p className="mt-1 text-[11px] text-dim">{country.article_count} публикаций · {country.source_count} источников</p>
+                    <p className="mt-1 text-[11px] text-dim">{country.article_count} {pluralRu(country.article_count, "публикация", "публикации", "публикаций")} · {country.source_count} {pluralRu(country.source_count, "источник", "источника", "источников")}</p>
                     {url && (
                       <a href={url} target="_blank" rel="noopener noreferrer" aria-label={`${country.country_name} · первоисточник`} className="mt-1 inline-flex min-h-11 items-center gap-1 text-[11px] text-accent sm:min-h-0">
                         первоисточник <ArrowUpRight aria-hidden="true" size={11} />
@@ -301,9 +334,9 @@ export default function StoryDetailPage({ params }: { params: Promise<{ id: stri
         </section>
       </div>
 
-      {earlyWarningRadar && (
+      {earlyWarningRadar && radarTrends.length > 0 && (
         <div className="mt-3">
-          <EarlyWarningPanel filters={{ storyId: story.id }} title="Аналитические тренды" limit={3} />
+          <EarlyWarningPanel trends={radarTrends} filters={{ storyId: story.id }} title="Аналитические тренды" limit={RADAR_LIMIT} />
         </div>
       )}
 
@@ -320,7 +353,7 @@ export default function StoryDetailPage({ params }: { params: Promise<{ id: stri
                     {signal.title}
                   </span>
                 )}
-                <p className="mt-1 text-[11px] text-dim">{signal.severity} · достоверность {Math.round(signal.confidence * 100)}% · {signal.relation === "explicit_story_evidence" ? "прямая связь" : "общие публикации"}</p>
+                <p className="mt-1 text-[11px] text-dim">{severityRu(signal.severity)} · достоверность {Math.round(signal.confidence * 100)}% · {signal.relation === "explicit_story_evidence" ? "прямая связь" : "общие публикации"}</p>
               </li>
             ))}
           </ul>
@@ -338,7 +371,7 @@ export default function StoryDetailPage({ params }: { params: Promise<{ id: stri
             return (
               <li key={article.article_id} className="py-3 first:pt-0 last:pb-0">
                 <p className="text-sm text-fg">{article.title || "Материал без заголовка"}</p>
-                <p className="mt-1 text-[11px] text-dim">{article.source} · {article.country_code} · достоверность связи {Math.round(article.membership_confidence * 100)}%</p>
+                <p className="mt-1 text-[11px] text-dim">{article.source} · {countryNameRu(article.country_code)} · достоверность связи {Math.round(article.membership_confidence * 100)}%</p>
                 {url && <a href={url} target="_blank" rel="noopener noreferrer" aria-label={`Открыть источник: ${article.title ?? article.source}`} className="mt-1 inline-flex min-h-11 items-center gap-1 text-[11px] text-accent sm:min-h-0">открыть <ArrowUpRight aria-hidden="true" size={11} /></a>}
               </li>
             );
