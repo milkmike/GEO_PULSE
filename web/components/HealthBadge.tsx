@@ -4,18 +4,19 @@ import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import type { Health } from "@/lib/types";
 
-const COLOR: Record<Health["verdict"], string> = {
-  HEALTHY: "text-ally border-ally",
-  WARNING: "text-cooling border-cooling",
-  DEGRADED: "text-hostile border-hostile",
-  UNHEALTHY: "text-hostile border-hostile",
+// Readers get a freshness dot; collection percentages stay in the tooltip and /admin.
+const DOT: Record<Health["verdict"], string> = {
+  HEALTHY: "bg-ally",
+  WARNING: "bg-cooling",
+  DEGRADED: "bg-cooling",
+  UNHEALTHY: "bg-cooling",
 };
 
 const VERDICT_RU: Record<Health["verdict"], string> = {
-  HEALTHY: "Сбор в норме",
-  WARNING: "Сбор: внимание",
-  DEGRADED: "Сбор: сбои",
-  UNHEALTHY: "Сбор: критично",
+  HEALTHY: "Данные обновляются в обычном режиме",
+  WARNING: "Часть источников обновляется с задержкой",
+  DEGRADED: "Часть источников сейчас недоступна",
+  UNHEALTHY: "Большая часть источников сейчас недоступна",
 };
 
 export default function HealthBadge() {
@@ -29,16 +30,14 @@ export default function HealthBadge() {
   }, []);
 
   if (!health) return null;
+  const label = VERDICT_RU[health.verdict];
   return (
     <span
-      className={`rounded-full border px-2.5 py-0.5 text-[11px] ${COLOR[health.verdict]}`}
-      title={
-        `Здоровье сбора данных: насколько свежо и полно собираются источники сейчас. ` +
-        `Работают ${health.sources_ok} из ${health.sources_total} источников · GDELT: ${health.gdelt.status}. ` +
-        `${health.coverage_pct}% — доля живых источников.`
-      }
+      className="inline-flex items-center"
+      title={`${label}. Работают ${health.sources_ok} из ${health.sources_total} источников.`}
     >
-      {VERDICT_RU[health.verdict]} · {health.coverage_pct}%
+      <span aria-hidden="true" className={`h-2 w-2 rounded-full ${DOT[health.verdict]}`} />
+      <span className="sr-only">{label}</span>
     </span>
   );
 }

@@ -83,9 +83,6 @@ export default function GlobalCoverageDisclosure({ refreshToken = 0, onCountries
     (!gapsOnly || country.sampled_articles_7d === 0)
     && (!search || country.name_ru.toLocaleLowerCase("ru-RU").includes(search) || country.code.toLowerCase().includes(search)));
   const sampleLimit = snapshot.limits?.per_country;
-  const researchLeads = snapshot.source_research?.queue?.lead_count ?? 0;
-  const researchNoun = researchLeads % 10 === 1 && researchLeads % 100 !== 11 ? "кандидат"
-    : researchLeads % 10 >= 2 && researchLeads % 10 <= 4 && (researchLeads % 100 < 12 || researchLeads % 100 > 14) ? "кандидата" : "кандидатов";
 
   return <details className="mt-3 min-w-0 border-y border-line py-1 text-sm">
     <summary className="min-h-11 cursor-pointer rounded-sm py-3 text-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">
@@ -96,9 +93,6 @@ export default function GlobalCoverageDisclosure({ refreshToken = 0, onCountries
       <p className="max-w-3xl text-sm leading-6 text-fg">Это ограниченная выборка местных публикаций, а не полный поток новостей из каждой страны.</p>
       <p className="mt-1 max-w-3xl text-xs leading-5 text-dim">Доступность СМИ означает успешный опрос за последние 72 часа. Страна источника не всегда совпадает со страной события.</p>
       <p className="mt-1 text-xs leading-5 text-dim">{snapshot.stale ? "Показан прежний срез сбора" : "Срез сбора"}{collectedAt(snapshot.as_of) ? ` · ${collectedAt(snapshot.as_of)}` : ""}. Время относится к сбору источников.</p>
-      {snapshot.screening?.status !== "ok" && <p className="mt-3 max-w-3xl border-l-2 border-ru-red/60 pl-3 text-xs leading-5 text-fg/80">Автоматический разбор новых материалов приостановлен. Сбор источников продолжается.</p>}
-      {snapshot.source_research?.status === "blocked" && <p className="mt-2 text-xs leading-5 text-dim">Поиск местных СМИ временно недоступен.</p>}
-      {researchLeads > 0 && <p className="mt-2 text-xs leading-5 text-dim">Поиск местных источников: найдено {researchLeads} {researchNoun} для проверки.</p>}
       {error && <p role="alert" className="mt-3 text-xs leading-5 text-dim">Не удалось обновить обзор. Показан предыдущий срез. <button type="button" onClick={() => setRetry((value) => value + 1)} className="min-h-11 text-accent underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">Повторить</button></p>}
       <div className="mt-4 flex flex-wrap items-end gap-x-5 gap-y-2">
         <label className="min-w-[180px] flex-1 text-xs text-dim sm:max-w-xs">Найти страну или территорию

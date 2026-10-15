@@ -30,8 +30,8 @@ describe("GlobalCoverageDisclosure", () => {
     expect(disclosure).not.toHaveAttribute("open");
     fireEvent.click(summary);
     expect(within(disclosure).getByText(/Срез сбора/)).toHaveTextContent("мск");
-    expect(within(disclosure).getByText("Автоматический разбор новых материалов приостановлен. Сбор источников продолжается.")).toBeVisible();
-    expect(within(disclosure).getByText("Поиск местных источников: найдено 3 кандидата для проверки.")).toBeVisible();
+    expect(within(disclosure).queryByText(/Автоматический разбор новых материалов приостановлен/)).not.toBeInTheDocument();
+    expect(within(disclosure).queryByText(/найдено 3 кандидата для проверки/)).not.toBeInTheDocument();
     expect(within(disclosure).getByRole("columnheader", { name: "Публикаций в выборке (до 40)" })).toBeVisible();
     expect(within(disclosure).getByRole("columnheader", { name: "Местных СМИ доступно" })).toBeVisible();
     expect(within(disclosure).getByText(/Доступность СМИ означает успешный опрос за последние 72 часа/)).toBeVisible();

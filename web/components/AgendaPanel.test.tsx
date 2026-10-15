@@ -62,7 +62,8 @@ describe("AgendaPanel", () => {
     expect(screen.getByRole("status")).toHaveTextContent("Загружаем повестки");
     const empty = payload(); empty.items = []; empty.coverage.status = "never_run"; empty.coverage.last_run_at = null;
     await act(async () => resolve(empty));
-    expect(screen.getByText(/Сбор повесток ещё не запускался/)).toBeVisible();
+    expect(screen.getByText("Повестки пока не сформированы.")).toBeVisible();
+    expect(screen.queryByText(/Сбор повесток ещё не запускался/)).not.toBeInTheDocument();
     mocks.agendas.mockResolvedValue({ ...empty, coverage: { ...empty.coverage, status: "ok" } });
     await user.type(screen.getByRole("searchbox", { name: "Поиск по повесткам" }), "  рейс  ");
     await user.click(screen.getByRole("button", { name: "Найти повестки" }));
@@ -70,12 +71,14 @@ describe("AgendaPanel", () => {
     expect(mocks.agendas).toHaveBeenLastCalledWith({ limit: 20, q: "рейс" }, expect.any(AbortSignal));
   });
 
-  it("keeps evidence accessible when the discovery budget is exhausted", async () => {
+  it("keeps evidence accessible without exposing the exhausted discovery budget", async () => {
     const paused = payload(); paused.coverage.status = "budget_exhausted"; paused.coverage.remaining_budget_usd = 0;
     mocks.agendas.mockResolvedValue(paused);
     const user = userEvent.setup();
     render(<AgendaPanel />);
-    expect(await screen.findByText(/Лимит бюджета достигнут/)).toBeVisible();
+    expect(await screen.findByText("Открыт новый авиарейс")).toBeVisible();
+    expect(screen.queryByText(/Лимит бюджета/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Групп-кандидатов/)).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /показать публикации/i }));
     expect(screen.getByRole("link", { name: "Первое сообщение" })).toBeVisible();
   });

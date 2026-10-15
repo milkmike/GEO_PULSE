@@ -3,21 +3,13 @@
 import { FormEvent, useEffect, useId, useState } from "react";
 import { ChevronDown, LoaderCircle, Search } from "lucide-react";
 import { api } from "@/lib/api";
-import type { AgendaArticle, AgendaCoverage, AgendaItem, AgendasResponse } from "@/lib/types";
+import type { AgendaArticle, AgendaItem, AgendasResponse } from "@/lib/types";
 import { safeHttpUrl } from "@/lib/urls";
 
 const RELATIONS: Record<AgendaArticle["relation"], string> = {
   seed: "Исходная публикация",
   same_event: "То же событие",
   development: "Развитие и реакция",
-};
-const RUN_STATUS: Record<AgendaCoverage["status"], string> = {
-  never_run: "Сбор повесток ещё не запускался.",
-  ok: "Последний проход завершён",
-  budget_exhausted: "Лимит бюджета достигнут. Поиск новых связей приостановлен; собранные публикации доступны.",
-  error: "Последний проход завершился с ошибкой. Показаны ранее собранные повестки.",
-  disabled: "Поиск новых повесток отключён. Собранные публикации доступны.",
-  running: "Идёт обновление повесток. Показаны уже собранные публикации.",
 };
 
 function formatDate(value: string | null): string | null {
@@ -174,13 +166,11 @@ export default function AgendaPanel() {
           <button type="submit" aria-label="Найти повестки" className="min-h-11 rounded-md border border-line px-4 text-sm text-fg hover:border-accent focus-visible:outline-2 focus-visible:outline-accent">Найти</button>
         </form>
       </div>
+      {/* Pipeline state (budget, run status, candidate counters) belongs to /admin, not to readers. */}
       {coverage && (
-        <div className="mt-5 border-l-2 border-ru-blue/70 pl-3 text-xs leading-5 text-dim">
-          <p role="status">{RUN_STATUS[coverage.status]}</p>
-          {lastRun && <p>Последний проход: {lastRun} МСК</p>}
-          <p>Просмотрено публикаций: {coverage.articles_scanned} · Групп-кандидатов: {coverage.candidate_groups} · Сопоставлено связей: {coverage.decisions} · Принято связей: {coverage.accepted}</p>
-          <p>Страны обозначают местонахождение издателей.</p>
-        </div>
+        <p className="mt-5 text-xs leading-5 text-dim">
+          {lastRun && `Обновлено ${lastRun} МСК. `}Страны обозначают местонахождение издателей.
+        </p>
       )}
       {loading && <p role="status" className="mt-6 flex items-center gap-2 text-sm text-dim"><LoaderCircle aria-hidden="true" size={16} className="animate-spin motion-reduce:animate-none" />Загружаем повестки…</p>}
       {error && (
@@ -189,7 +179,7 @@ export default function AgendaPanel() {
           <button type="button" onClick={() => setReload((current) => current + 1)} className="mt-2 min-h-11 rounded text-accent focus-visible:outline-2 focus-visible:outline-accent">Повторить загрузку повесток</button>
         </div>
       )}
-      {payload && !payload.items.length && coverage?.status !== "never_run" && <p className="card mt-6 p-5 text-sm leading-6 text-dim">{query ? `По запросу «${query}» повесток не найдено. Попробуйте другие слова.` : "Повестки пока не сформированы среди просмотренных публикаций. Это не означает отсутствия событий."}</p>}
+      {payload && !payload.items.length && <p className="card mt-6 p-5 text-sm leading-6 text-dim">{query ? `По запросу «${query}» повесток не найдено. Попробуйте другие слова.` : "Повестки пока не сформированы."}</p>}
       {!!payload?.items.length && <div className="mt-6 grid gap-3">{payload.items.map((item) => <AgendaCard key={item.id} item={item} />)}</div>}
       {payload?.has_more && <p className="mt-4 text-xs leading-5 text-dim">Показаны первые {payload.items.length} повесток. Уточните поиск, чтобы найти другие.</p>}
     </section>
