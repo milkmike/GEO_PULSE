@@ -1405,6 +1405,25 @@ def _persist_sql(
     return inserted, first_id, updated
 
 
+def _meta_public_id(meta: MetaTrend) -> UUID:
+    """Derive a meta trend's public id from its whole identity.
+
+    A canonical meta_key already embeds subject and direction, so its id is
+    unchanged. An anchor meta_key names only the story, and several subjects
+    can share one story anchor; without the subject their ids collided and the
+    unique violation rolled back every hourly cycle (stalled since 2026-10-12).
+    """
+
+    if meta.meta_key.startswith("canonical:"):
+        name = f"geo-pulse:radar-meta:{meta.meta_key}:{DETECTOR_VERSION}"
+    else:
+        name = (
+            f"geo-pulse:radar-meta:{meta.subject_key}:{meta.direction}:"
+            f"{meta.meta_key}:{DETECTOR_VERSION}"
+        )
+    return uuid5(NAMESPACE_URL, name)
+
+
 def _persist_meta_and_contours(
     session, metas: Iterable[MetaTrend],
     wave_ids: dict[tuple[str, Contour, str, str, str], int], as_of: datetime,
@@ -1443,7 +1462,7 @@ def _persist_meta_and_contours(
         if existing is None:
             result = session.execute(_INSERT_META, {
                 **params,
-                "public_id": uuid5(NAMESPACE_URL, f"geo-pulse:radar-meta:{meta.meta_key}:{DETECTOR_VERSION}"),
+                "public_id": _meta_public_id(meta),
                 "title_ru": meta.subject_key, "state": state,
                 "coverage_confidence": coverage,
                 "velocity": velocity,
