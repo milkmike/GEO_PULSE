@@ -61,6 +61,15 @@ STRICT_SEMANTIC_LEXICAL_THRESHOLD = 0.20
 MAX_SEMANTIC_CANDIDATE_ARTICLES = 25
 MAX_SEMANTIC_CANDIDATE_SPAN_DAYS = 14.0
 MIN_SEMANTIC_THREAD_COVERAGE = 0.30
+# Stored deterministic copy (summary_model IS NULL) is re-summarized even when
+# its source hash is unchanged, bounded per build pass and backed off per story.
+STORY_COPY_RETRIES_PER_PASS = 5
+STORY_COPY_RETRY_BACKOFF = timedelta(hours=1)
+STORY_COPY_RETRY_MAX_BACKOFF = timedelta(hours=24)
+_CYRILLIC_RE = re.compile("[\\u0400-\\u04ff]")
+# Cyrillic letters absent from Russian (Ukrainian, Belarusian, Kazakh): an
+# untranslated source headline must not pass as title_ru.
+_NON_RUSSIAN_CYRILLIC_RE = re.compile("[іїєґўәғқңөұүһ]", re.IGNORECASE)
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,6 +139,52 @@ class StoryBuildResult:
     clusters: int
     stories_upserted: int
     article_memberships: int
+
+
+# Worker-process memory of failed copy retries: story_id -> (failures, retry_at).
+# Like the model cooldowns in src/llm.py it resets on restart; the per-pass cap
+# still bounds calls when it does.
+_COPY_RETRY_BACKOFF: dict[int, tuple[int, datetime]] = {}
+
+
+class StoryCopyRetryBudget:
+    """Bound re-summarizing stories whose stored copy is the deterministic fallback.
+
+    At most ``limit`` retries run per build pass, and a story whose retry
+    failed waits 1h, 2h, 4h ... (capped at 24h) before it is tried again, so a
+    permanently failing provider is not called for every story every hour and
+    one stubborn story cannot starve the others.
+    """
+
+    def __init__(
+        self,
+        limit: int = STORY_COPY_RETRIES_PER_PASS,
+        *,
+        backoff: dict[int, tuple[int, datetime]] | None = None,
+    ) -> None:
+        self.limit = limit
+        self.attempts = 0
+        self._backoff = _COPY_RETRY_BACKOFF if backoff is None else backoff
+
+    def acquire(self, story_id: int, now: datetime) -> bool:
+        state = self._backoff.get(story_id)
+        if state is not None and now < state[1]:
+            return False
+        if self.attempts >= self.limit:
+            return False
+        self.attempts += 1
+        return True
+
+    def record(self, story_id: int, now: datetime, *, succeeded: bool) -> None:
+        if succeeded:
+            self._backoff.pop(story_id, None)
+            return
+        failures = self._backoff.get(story_id, (0, now))[0] + 1
+        delay = min(
+            STORY_COPY_RETRY_BACKOFF * 2 ** min(failures - 1, 16),
+            STORY_COPY_RETRY_MAX_BACKOFF,
+        )
+        self._backoff[story_id] = (failures, now + delay)
 
 
 def _normalized_text(value: str | None) -> str:
@@ -801,8 +856,15 @@ def resolve_story_copy(
     summarizer: Callable[[dict[str, Any]], dict[str, Any] | None] | None,
     member_article_ids: Sequence[int] | None = None,
     member_evidence: Sequence[dict[str, Any]] | None = None,
+    retry_fallback: bool = False,
 ) -> StoryCopy:
-    """Use generated copy only on source changes; otherwise preserve stored copy."""
+    """Use generated copy only on source changes; otherwise preserve stored copy.
+
+    Stored LLM copy is kept while the source hash is unchanged.  Stored
+    deterministic copy (no ``summary_model``) is never sticky: it is rebuilt
+    from current inputs, and re-summarized when ``retry_fallback`` is set (the
+    caller bounds how often that happens).
+    """
 
     fallback = deterministic_story_copy(
         candidates,
@@ -810,7 +872,10 @@ def resolve_story_copy(
         member_evidence=member_evidence,
     )
     if source_hash == previous_source_hash and previous_copy is not None:
-        return previous_copy
+        if previous_copy.summary_model:
+            return previous_copy
+        if not retry_fallback:
+            return fallback
     if summarizer is None:
         return fallback
     try:
@@ -825,11 +890,19 @@ def resolve_story_copy(
         return fallback
     if not isinstance(generated, dict):
         return fallback
-    title_ru = str(generated.get("title_ru") or generated.get("title") or fallback.title_ru).strip()
-    summary = str(generated.get("summary") or fallback.summary).strip()
+    # Partial output must not be stamped with a model name: mixing in the
+    # untranslated fallback headline would make it sticky.
+    title_ru = str(generated.get("title_ru") or generated.get("title") or "").strip()
+    summary = str(generated.get("summary") or "").strip()
     title_en_value = generated.get("title_en")
     title_en = str(title_en_value).strip() if title_en_value else None
-    if not title_ru or not summary:
+    if (
+        not title_ru
+        or not summary
+        or not _CYRILLIC_RE.search(title_ru)
+        or _NON_RUSSIAN_CYRILLIC_RE.search(title_ru)
+    ):
+        logger.warning("Story summarizer returned unusable copy; deterministic copy retained")
         return fallback
     return StoryCopy(
         title_ru=title_ru[:500],
@@ -1280,6 +1353,7 @@ def persist_story_cluster(
     membership_generation: int | None = None,
     minimum_existing_last_seen: datetime | None = None,
     non_destructive: bool = False,
+    copy_retry_budget: StoryCopyRetryBudget | None = None,
 ) -> tuple[int, int]:
     """Idempotently persist one cross-country cluster and all derived slices."""
 
@@ -1464,6 +1538,7 @@ def persist_story_cluster(
         member_evidence=member_evidence,
     )
     previous_copy = None
+    previous_source_hash = _value(existing, "source_hash") if existing else None
     if existing:
         previous_copy = StoryCopy(
             title_ru=_value(existing, "title_ru"),
@@ -1471,18 +1546,34 @@ def persist_story_cluster(
             summary=_value(existing, "summary") or "",
             summary_model=_value(existing, "summary_model"),
         )
-    copy_regenerated = (
-        previous_copy is None
-        or source_hash != (_value(existing, "source_hash") if existing else None)
+    existing_story_id = _value(existing, "id") if existing else None
+    retry_fallback = bool(
+        summarizer is not None
+        and copy_retry_budget is not None
+        and previous_copy is not None
+        and not previous_copy.summary_model
+        and source_hash == previous_source_hash
+        and existing_story_id is not None
+        and copy_retry_budget.acquire(int(existing_story_id), now)
     )
     copy = resolve_story_copy(
         candidates,
         source_hash=source_hash,
-        previous_source_hash=_value(existing, "source_hash") if existing else None,
+        previous_source_hash=previous_source_hash,
         previous_copy=previous_copy,
         summarizer=summarizer,
         member_article_ids=article_ids,
         member_evidence=member_evidence,
+        retry_fallback=retry_fallback,
+    )
+    if retry_fallback:
+        copy_retry_budget.record(
+            int(existing_story_id), now, succeeded=bool(copy.summary_model)
+        )
+    copy_regenerated = (
+        previous_copy is None
+        or source_hash != previous_source_hash
+        or copy != previous_copy
     )
 
     recent_count = sum(
@@ -2234,6 +2325,7 @@ def build_stories(
     membership_generation = (
         allocate_story_membership_generation(session) if clusters else None
     )
+    copy_retry_budget = StoryCopyRetryBudget() if summarizer is not None else None
     stories_upserted = 0
     memberships = 0
     for cluster in clusters:
@@ -2249,6 +2341,8 @@ def build_stories(
             )
         if non_destructive:
             persist_kwargs["non_destructive"] = True
+        if copy_retry_budget is not None:
+            persist_kwargs["copy_retry_budget"] = copy_retry_budget
         _, count = persist_story_cluster(session, cluster, **persist_kwargs)
         stories_upserted += 1
         memberships += count

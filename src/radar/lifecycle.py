@@ -40,6 +40,14 @@ def _decision(
     )
 
 
+def _authoritative_action(metrics: TrendMetrics) -> bool:
+    return metrics.contour is Contour.ACTION and (
+        metrics.authoritative
+        or metrics.authority in {"registry", "formal"}
+        or metrics.authoritative_source_count >= 2
+    )
+
+
 def _quiet_transition(
     metrics: TrendMetrics, previous_state: TrendState
 ) -> TrendDecision | None:
@@ -56,6 +64,15 @@ def _quiet_transition(
         and previous_state in (TrendState.CANDIDATE, TrendState.EMERGING)
         and quiet_for >= RESOLVED_QUIET_WINDOW
     ):
+        if _authoritative_action(metrics):
+            # A verified registry/formal change confirms at its effective
+            # time, so one first seen after both quiet windows (e.g. an annual
+            # row loaded months after period end) has already run its course.
+            return _decision(
+                TrendState.RESOLVED,
+                "quiet_window_elapsed",
+                metrics,
+            )
         return _decision(
             TrendState.REJECTED,
             "unconfirmed_quiet_window_elapsed",

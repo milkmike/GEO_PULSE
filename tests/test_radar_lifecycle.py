@@ -250,3 +250,22 @@ def test_unconfirmed_trend_is_rejected_after_healthy_quiet_window(previous_state
 
     assert decision.state == "rejected"
     assert decision.reason == "unconfirmed_quiet_window_elapsed"
+
+
+@pytest.mark.parametrize(("authority", "expected"), (
+    ("registry", "resolved"),
+    (None, "rejected"),
+))
+def test_stale_first_sighting_of_authoritative_action_resolves(authority, expected):
+    decision = decide_state(
+        _metrics(
+            contour=Contour.ACTION,
+            authoritative=authority is not None,
+            authority=authority,
+            authoritative_source_count=1 if authority else 0,
+            quiet_since=NOW - timedelta(days=200),
+        ),
+        "candidate",
+    )
+
+    assert decision.state == expected

@@ -47,6 +47,8 @@ def media_database():
               article_ids integer[], story_ids bigint[]);
             CREATE INDEX ON signal_evidence USING gin(article_ids);
             CREATE INDEX ON signal_evidence USING gin(story_ids);
+            CREATE TEMP TABLE countries(code char(2) primary key);
+            INSERT INTO countries VALUES ('ES'), ('FR'), ('US');
             CREATE TEMP VIEW article_country_facts AS
               SELECT article.id AS article_id, publisher.* FROM articles article
               JOIN sources discovery ON discovery.id = article.source_id
@@ -457,6 +459,32 @@ def test_action_observations_suppress_unregistered_country_codes():
     action_sql = [sql for sql, _ in session.calls if "FROM un_votes" in sql]
     assert len(action_sql) == 1
     assert "JOIN countries tracked" in action_sql[0]
+
+
+def test_media_observations_suppress_unregistered_publisher_countries():
+    """Auto-onboarded publishers outside the registry must not reach the FK."""
+
+    session = _Session(
+        registered_country_codes=("ES",),
+        media_rows=(
+            _media_row(ARTICLE_A, 10, "diario.es"),
+            _media_row(ARTICLE_B, 11, "radio.es"),
+            _media_row(ARTICLE_C, 20, "diari.ad", country_code="AD"),
+            _media_row(104, 21, "matinal.bj", country_code="BJ"),
+            _media_row(105, 22, "lowercase.es", country_code="es "),
+        ),
+    )
+
+    observations = build_media_observations(session, _window())
+
+    assert {point.country_code for point in observations} == {"ES"}
+    point = _only(observations, metric="attention_share")
+    assert point.article_ids == (ARTICLE_A, ARTICLE_B, 105)
+    # Unregistered countries never inflate a registered national denominator.
+    assert point.baseline["national_indexed_article_count"] == 3
+    assert any(
+        "radar_registered_country_codes" in sql for sql, _ in session.calls
+    )
 
 
 def test_observation_upsert_uses_input_hash_conflict_and_returns_inserted_count():

@@ -9,7 +9,7 @@ import json
 import re
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
-from typing import Any, Literal, Optional
+from typing import Any, Literal, Optional, Sequence
 
 from fastapi import APIRouter, HTTPException, Path, Query
 from pydantic import BaseModel, Field
@@ -237,6 +237,8 @@ class StoryEntityEvidence(BaseModel):
 
 class StoryEventEvidence(BaseModel):
     entity_id: str
+    # Every entity whose representative event collapsed into this row.
+    entity_ids: list[str] = Field(default_factory=list)
     event_key: str
     event_at: str | None = None
     action_level: int = Field(ge=1, le=6)
@@ -383,6 +385,49 @@ def _first_safe_public_url(values: Any, *, fallback: Any = None) -> str | None:
         if safe_url:
             return safe_url
     return None
+
+
+def _collapse_story_events(rows: Sequence[Any]) -> list[dict[str, Any]]:
+    """Return one timeline event per (event key, representative article).
+
+    Events are derived per entity, so an article naming two entities yields
+    two otherwise identical rows.  Row order is preserved; the collapsed row
+    keeps every entity id and the highest entity confidence.
+    """
+
+    events: list[dict[str, Any]] = []
+    by_key: dict[tuple[Any, ...], dict[str, Any]] = {}
+    for row in rows:
+        entity_id = str(_value(row, "entity_id"))
+        evidence = _json_object(_value(row, "evidence"))
+        article_id = evidence.get("representative_article_id")
+        event_key = _value(row, "event_key")
+        identity = (
+            (event_key, "article", str(article_id))
+            if article_id is not None
+            else (event_key, "entity", entity_id)
+        )
+        action_level = int(_value(row, "action_level", 1) or 1)
+        confidence = float(_value(row, "confidence", 0) or 0)
+        merged = by_key.get(identity)
+        if merged is None:
+            merged = {
+                "entity_id": entity_id,
+                "entity_ids": [entity_id],
+                "event_key": event_key,
+                "event_at": _iso(_value(row, "event_at")),
+                "action_level": action_level,
+                "confidence": confidence,
+                "evidence": evidence,
+            }
+            by_key[identity] = merged
+            events.append(merged)
+            continue
+        if entity_id not in merged["entity_ids"]:
+            merged["entity_ids"].append(entity_id)
+        merged["action_level"] = max(merged["action_level"], action_level)
+        merged["confidence"] = max(merged["confidence"], confidence)
+    return events
 
 
 def story_to_dict(row: Any) -> dict[str, Any]:
@@ -1615,14 +1660,7 @@ def get_story(
         "confidence": float(_value(row, "confidence", 0) or 0),
         "evidence": _json_object(_value(row, "evidence")),
     } for row in entity_rows]
-    result["events"] = [{
-        "entity_id": str(_value(row, "entity_id")),
-        "event_key": _value(row, "event_key"),
-        "event_at": _iso(_value(row, "event_at")),
-        "action_level": int(_value(row, "action_level", 1) or 1),
-        "confidence": float(_value(row, "confidence", 0) or 0),
-        "evidence": _json_object(_value(row, "evidence")),
-    } for row in event_rows]
+    result["events"] = _collapse_story_events(event_rows)
     has_more_articles = len(article_rows) > article_limit
     article_page = article_rows[:article_limit]
     primary_countries: set[str] = set()

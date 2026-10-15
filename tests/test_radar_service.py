@@ -974,6 +974,235 @@ def test_unmatched_previous_media_wave_stays_confirmed_without_collection_health
     assert wave.lifecycle_reason == "collection_gap"
 
 
+def _stale_previous_action(state, observed_at, direction="decrease"):
+    return CountryWave(
+        country_code="RS", contour="action", subject_key="economy:trade:russia",
+        direction=direction, observations=(),
+        first_observed_at=observed_at, last_observed_at=observed_at,
+        t0_auto=observed_at, t0_effective=observed_at,
+        wave_key=f"stale-action-{direction}-{observed_at.date()}", state=state,
+        detected_at=observed_at, confirmed_at=observed_at,
+    )
+
+
+def _annual_action(observed_at, *, direction="increase", source="trade:RS:2025"):
+    return make_observation(
+        country_code="RS", contour="action", subject_key="economy:trade:russia",
+        direction=direction, metric="trade_change", observed_at=observed_at,
+        evidence_ids=(source,), value=20 if direction == "increase" else -20,
+        authority="registry", source_count=1, coverage_confidence=1.0,
+        evidence={
+            "dataset": "trade_data", "status": "verified", "source_id": source,
+            "alignment_subject": "economy:trade:russia",
+            "alignment_direction": "warming" if direction == "increase" else "hardening",
+        },
+    )
+
+
+def test_confirmed_action_wave_ages_through_cooling_to_resolved(monkeypatch):
+    """Serbia regression: a 2023 annual action must not stay confirmed forever.
+
+    Actions have no collection telemetry, so media collection health must not
+    hold them with ``collection_gap``.
+    """
+
+    import src.radar.service as service
+
+    legacy_at = datetime(2023, 12, 31, tzinfo=timezone.utc)
+    monkeypatch.setattr(service, "build_media_observations", lambda *_: [])
+    monkeypatch.setattr(service, "build_action_observations", lambda *_: [])
+    monkeypatch.setattr(service, "_media_collection_health", lambda *_: {})
+
+    previous = _stale_previous_action(TrendState.CONFIRMED, legacy_at)
+    monkeypatch.setattr(service, "_previous_waves", lambda *_: (previous,))
+    [cooling] = run_radar_cycle(_Session(), AS_OF, shadow=True).country_waves
+
+    assert cooling.state is TrendState.COOLING
+    assert cooling.lifecycle_reason == "quiet_window_elapsed"
+    assert cooling.confirmed_at == previous.confirmed_at
+
+    monkeypatch.setattr(
+        service, "_previous_waves",
+        lambda *_: (replace(previous, state=TrendState.COOLING),),
+    )
+    [resolved] = run_radar_cycle(
+        _Session(), AS_OF + timedelta(hours=1), shadow=True,
+    ).country_waves
+
+    assert resolved.state is TrendState.RESOLVED
+    assert resolved.lifecycle_reason == "quiet_window_elapsed"
+
+
+@pytest.mark.parametrize(("days_quiet", "expected"), (
+    (6, TrendState.CONFIRMED),
+    (7, TrendState.COOLING),
+))
+def test_action_cooling_follows_the_quiet_window_schedule(
+    monkeypatch, days_quiet, expected,
+):
+    import src.radar.service as service
+
+    previous = _stale_previous_action(
+        TrendState.CONFIRMED, AS_OF - timedelta(days=days_quiet),
+    )
+    monkeypatch.setattr(service, "_previous_waves", lambda *_: (previous,))
+    monkeypatch.setattr(service, "build_media_observations", lambda *_: [])
+    monkeypatch.setattr(service, "build_action_observations", lambda *_: [])
+    monkeypatch.setattr(service, "_media_collection_health", lambda *_: {})
+
+    [wave] = run_radar_cycle(_Session(), AS_OF, shadow=True).country_waves
+
+    assert wave.state is expected
+    assert wave.lifecycle_reason != "collection_gap"
+
+
+def test_fresh_annual_action_still_confirms_from_one_authoritative_record(monkeypatch):
+    import src.radar.service as service
+
+    action = _annual_action(AS_OF - timedelta(days=3))
+    monkeypatch.setattr(service, "build_media_observations", lambda *_: [])
+    monkeypatch.setattr(service, "build_action_observations", lambda *_: [action])
+    monkeypatch.setattr(service, "_media_collection_health", lambda *_: {})
+
+    [wave] = run_radar_cycle(_Session(), AS_OF, shadow=True).country_waves
+
+    assert wave.state is TrendState.CONFIRMED
+    assert wave.lifecycle_reason == "authoritative_action_evidence"
+
+
+def test_annual_action_loaded_after_both_quiet_windows_is_resolved_not_confirmed(
+    monkeypatch,
+):
+    """A 2025 trade row loaded in July 2026 is history, not a current wave."""
+
+    import src.radar.service as service
+
+    action = _annual_action(datetime(2025, 12, 31, tzinfo=timezone.utc))
+    monkeypatch.setattr(service, "build_media_observations", lambda *_: [])
+    monkeypatch.setattr(service, "build_action_observations", lambda *_: [action])
+    monkeypatch.setattr(service, "_media_collection_health", lambda *_: {})
+
+    [wave] = run_radar_cycle(_Session(), AS_OF, shadow=True).country_waves
+
+    assert wave.state is TrendState.RESOLVED
+    assert wave.lifecycle_reason == "quiet_window_elapsed"
+
+
+def test_opposite_confirmed_directions_are_held_as_contradicted(monkeypatch):
+    """Serbia regression: «ослабевают» and «усиливаются» cannot both confirm."""
+
+    import src.radar.service as service
+
+    increase = _annual_action(AS_OF - timedelta(days=2), source="trade:RS:up")
+    decrease = _annual_action(
+        AS_OF - timedelta(days=2), direction="decrease", source="trade:RS:down",
+    )
+    monkeypatch.setattr(service, "build_media_observations", lambda *_: [])
+    monkeypatch.setattr(
+        service, "build_action_observations", lambda *_: [increase, decrease],
+    )
+    session = _RecordingSqlSession()
+
+    report = run_radar_cycle(session, AS_OF, shadow=False)
+
+    assert {wave.direction: wave.state for wave in report.country_waves} == {
+        "increase": TrendState.EMERGING, "decrease": TrendState.EMERGING,
+    }
+    assert {wave.lifecycle_reason for wave in report.country_waves} == {
+        service.CONTRADICTION_REASON,
+    }
+    assert all(wave.confirmed_at is None for wave in report.country_waves)
+    assert report.json_report()["confirmed"] == 0
+    inserts = [
+        params for sql, params in session.calls
+        if "INSERT INTO radar_trends" in sql and "wave_key" in params
+    ]
+    assert {params["state"] for params in inserts} == {"emerging"}
+    assert all(params["confirmed_at"] is None for params in inserts)
+    assert {
+        json.loads(params["explanation"])["lifecycle_reason"] for params in inserts
+    } == {service.CONTRADICTION_REASON}
+
+
+def test_contradiction_keeps_prior_confirmation_time_and_spares_other_subjects(monkeypatch):
+    import src.radar.service as service
+
+    confirmed_at = AS_OF - timedelta(days=3)
+    previous = replace(
+        _stale_previous_action(TrendState.CONFIRMED, AS_OF - timedelta(days=3)),
+        confirmed_at=confirmed_at,
+    )
+    decrease = _annual_action(
+        AS_OF - timedelta(days=1), direction="decrease", source="trade:RS:down",
+    )
+    increase = _annual_action(AS_OF - timedelta(days=1), source="trade:RS:up")
+    other_subject = make_observation(
+        country_code="RS", contour="action",
+        subject_key="diplomacy:un_alignment:russia", direction="increase",
+        metric="agreement_pct_delta", observed_at=AS_OF - timedelta(days=1),
+        evidence_ids=("un:RS:up",), value=2, authority="formal",
+        source_count=1, coverage_confidence=1.0,
+        evidence={"dataset": "un_votes", "status": "verified", "source_id": "un:RS:up"},
+    )
+    monkeypatch.setattr(service, "_previous_waves", lambda *_: (previous,))
+    monkeypatch.setattr(service, "build_media_observations", lambda *_: [])
+    monkeypatch.setattr(
+        service, "build_action_observations",
+        lambda *_: [decrease, increase, other_subject],
+    )
+
+    waves = run_radar_cycle(_Session(), AS_OF, shadow=True).country_waves
+    by_identity = {(wave.subject_key, wave.direction): wave for wave in waves}
+
+    trade_down = by_identity[("economy:trade:russia", "decrease")]
+    assert trade_down.wave_key == previous.wave_key
+    assert trade_down.state is TrendState.EMERGING
+    assert trade_down.confirmed_at == confirmed_at
+    assert by_identity[("economy:trade:russia", "increase")].state is TrendState.EMERGING
+    un_vote = by_identity[("diplomacy:un_alignment:russia", "increase")]
+    assert un_vote.state is TrendState.CONFIRMED
+    assert un_vote.lifecycle_reason == "authoritative_action_evidence"
+
+
+def test_confirmed_direction_stands_when_the_opposite_is_only_cooling(monkeypatch):
+    import src.radar.service as service
+
+    old_decrease = _stale_previous_action(
+        TrendState.CONFIRMED, AS_OF - timedelta(days=10),
+    )
+    increase = _annual_action(AS_OF - timedelta(days=1), source="trade:RS:up")
+    monkeypatch.setattr(service, "_previous_waves", lambda *_: (old_decrease,))
+    monkeypatch.setattr(service, "build_media_observations", lambda *_: [])
+    monkeypatch.setattr(service, "build_action_observations", lambda *_: [increase])
+
+    waves = run_radar_cycle(_Session(), AS_OF, shadow=True).country_waves
+    states = {wave.direction: wave.state for wave in waves}
+
+    assert states == {
+        "decrease": TrendState.COOLING, "increase": TrendState.CONFIRMED,
+    }
+
+
+def test_incremental_identities_include_the_opposite_direction():
+    import src.radar.service as service
+
+    params = service._identity_params([
+        _annual_action(AS_OF - timedelta(days=1)),
+        _media_point(AS_OF - timedelta(days=1)),
+    ])
+    identities = set(zip(
+        params["identity_countries"], params["identity_contours"],
+        params["identity_subjects"], params["identity_directions"],
+    ))
+
+    assert identities == {
+        ("RS", "action", "economy:trade:russia", "increase"),
+        ("RS", "action", "economy:trade:russia", "decrease"),
+        ("ES", "media", "event:energy", "negative"),
+        ("ES", "media", "event:energy", "positive"),
+    }
+
+
 def test_analyst_meta_t0_override_is_append_only():
     class _OverrideSession:
         def __init__(self):

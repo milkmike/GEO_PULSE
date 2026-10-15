@@ -13,8 +13,11 @@ from fastapi.testclient import TestClient
 from src.api.routes import stories as stories_routes
 from src.pipeline.briefs import gather_country_inputs
 from src.stories import (
+    STORY_COPY_RETRIES_PER_PASS,
     StoryCandidate,
     StoryArticle,
+    StoryCopy,
+    StoryCopyRetryBudget,
     build_stories,
     cluster_story_candidates,
     compute_source_hash,
@@ -2621,6 +2624,61 @@ def test_story_detail_includes_evidence_and_country_primary_urls(monkeypatch):
     assert "JOIN sources" not in country_sql
 
 
+class MultiEntityEventStorySession(FakeStorySession):
+    """One article names two entities, so per-entity events repeat it."""
+
+    def execute(self, statement, params=None):
+        sql = str(statement)
+        if "WITH representative_events AS" in sql:
+            self.calls.append((sql, params or {}))
+
+            def event(entity_id, article_id, *, at, confidence, key=None):
+                return SimpleNamespace(
+                    entity_id=entity_id,
+                    event_key=key or "задержание японского журналиста",
+                    event_at=at,
+                    action_level=4,
+                    evidence={
+                        "article_ids": [article_id],
+                        "representative_article_id": article_id,
+                    },
+                    confidence=confidence,
+                )
+
+            return FakeResult(rows=[
+                event("entity-mfa", 501, at=NOW, confidence=0.7),
+                event("entity-fsb", 501, at=NOW, confidence=0.9),
+                event("entity-japan", 502, at=NOW - timedelta(hours=1), confidence=0.8),
+                event(
+                    "entity-tokyo", 503, at=NOW - timedelta(hours=2), confidence=0.6,
+                    key="протест японского МИД",
+                ),
+            ])
+        return super().execute(statement, params)
+
+
+def test_story_detail_collapses_events_repeated_per_entity(monkeypatch):
+    client, _ = story_client(monkeypatch, MultiEntityEventStorySession())
+
+    response = client.get("/api/v2/stories/7")
+
+    assert response.status_code == 200
+    events = response.json()["events"]
+    assert [
+        (item["event_key"], item["evidence"]["representative_article_id"])
+        for item in events
+    ] == [
+        ("задержание японского журналиста", 501),
+        ("задержание японского журналиста", 502),
+        ("протест японского МИД", 503),
+    ]
+    assert events[0]["entity_id"] == "entity-mfa"
+    assert events[0]["entity_ids"] == ["entity-mfa", "entity-fsb"]
+    assert events[0]["confidence"] == 0.9
+    assert events[0]["event_at"] == NOW.isoformat()
+    assert events[1]["entity_ids"] == ["entity-japan"]
+
+
 def test_story_detail_excludes_unknown_primary_url_entity_and_event_evidence(
     monkeypatch,
 ):
@@ -4035,3 +4093,249 @@ def test_unchanged_copy_preserves_generated_at():
     )
     assert "generated_at = :generated_at" in update_call[0]
     assert update_call[1]["generated_at"] == session.generated_at
+
+
+# --- Story copy: deterministic fallback is not sticky -----------------------
+
+RUSSIAN_COPY = {
+    "title_ru": "Страны согласовали транскаспийский маршрут",
+    "title_en": "Countries agree on the Trans-Caspian route",
+    "summary": "Азербайджан и Казахстан обсудили транскаспийский маршрут.",
+    "model": "test-model",
+}
+
+
+class FallbackCopyPersistenceSession(UnchangedPersistenceSession):
+    """Existing story whose stored copy came from the deterministic fallback."""
+
+    def __init__(self, cluster):
+        super().__init__(cluster)
+        self.match.title_ru = "Russia Detains Japanese Journalist"
+        self.match.summary = "Сюжет объединяет 2 публикаций из стран AZ, KZ"
+        self.match.summary_model = None
+
+
+def _story_update_params(session):
+    return next(
+        params for sql, params in session.calls
+        if "UPDATE stories SET" in sql and "RETURNING id" in sql
+    )
+
+
+def test_stored_fallback_copy_is_retried_when_hash_is_unchanged():
+    candidates = [candidate("AZ"), candidate("KZ")]
+    source_hash = compute_source_hash(candidates)
+    stale_fallback = StoryCopy("Russia Detains Japanese Journalist", None, "old template")
+    calls = []
+
+    def summarize(payload):
+        calls.append(payload)
+        return dict(RUSSIAN_COPY)
+
+    retried = resolve_story_copy(
+        candidates,
+        source_hash=source_hash,
+        previous_source_hash=source_hash,
+        previous_copy=stale_fallback,
+        summarizer=summarize,
+        retry_fallback=True,
+    )
+
+    assert len(calls) == 1
+    assert retried == StoryCopy(
+        title_ru=RUSSIAN_COPY["title_ru"],
+        title_en=RUSSIAN_COPY["title_en"],
+        summary=RUSSIAN_COPY["summary"],
+        summary_model="test-model",
+    )
+
+
+def test_stored_fallback_without_retry_slot_is_rebuilt_without_llm():
+    candidates = [candidate("AZ"), candidate("KZ")]
+    source_hash = compute_source_hash(candidates)
+    stale_fallback = StoryCopy("Stale headline", None, "old template")
+
+    rebuilt = resolve_story_copy(
+        candidates,
+        source_hash=source_hash,
+        previous_source_hash=source_hash,
+        previous_copy=stale_fallback,
+        summarizer=lambda payload: pytest.fail("no retry slot was granted"),
+    )
+
+    assert rebuilt == deterministic_story_copy(candidates)
+
+
+def test_llm_copy_is_not_regenerated_when_hash_is_unchanged():
+    candidates = [candidate("AZ"), candidate("KZ")]
+    source_hash = compute_source_hash(candidates)
+    stored = StoryCopy("Сохранённый заголовок", "Stored title", "Резюме.", "model-a")
+
+    kept = resolve_story_copy(
+        candidates,
+        source_hash=source_hash,
+        previous_source_hash=source_hash,
+        previous_copy=stored,
+        summarizer=lambda payload: pytest.fail("LLM copy must stay sticky"),
+        retry_fallback=True,
+    )
+
+    assert kept is stored
+
+
+@pytest.mark.parametrize("generated", [
+    None,
+    {},
+    {"summary": "Только резюме."},
+    {"title_ru": "Заголовок без резюме"},
+    {"title_ru": "AB'den Rusya'ya yeni yaptırım dalgası", "summary": "Резюме."},
+    {"title_ru": "Росія офіційно пригрозила НАТО ядерною зброєю", "summary": "Резюме."},
+])
+def test_unusable_summarizer_output_keeps_deterministic_copy(generated):
+    candidates = [candidate("AZ"), candidate("KZ")]
+
+    resolved = resolve_story_copy(
+        candidates,
+        source_hash="new-hash",
+        previous_source_hash="old-hash",
+        previous_copy=None,
+        summarizer=lambda payload: generated,
+    )
+
+    assert resolved == deterministic_story_copy(candidates)
+    assert resolved.summary_model is None
+
+
+def test_persist_replaces_stored_fallback_copy_on_successful_retry():
+    cluster = [candidate("AZ"), candidate("KZ")]
+    session = FallbackCopyPersistenceSession(cluster)
+    budget = StoryCopyRetryBudget(backoff={})
+
+    persist_story_cluster(
+        session, cluster, summarizer=lambda payload: dict(RUSSIAN_COPY),
+        now=NOW, membership_generation=1, copy_retry_budget=budget,
+    )
+
+    params = _story_update_params(session)
+    assert params["title_ru"] == RUSSIAN_COPY["title_ru"]
+    assert params["title_en"] == RUSSIAN_COPY["title_en"]
+    assert params["summary_model"] == "test-model"
+    assert params["generated_at"] == NOW
+    assert budget.attempts == 1
+
+
+def test_persist_retry_is_capped_per_pass():
+    cluster = [candidate("AZ"), candidate("KZ")]
+    budget = StoryCopyRetryBudget(limit=1, backoff={})
+    calls = []
+
+    def failing(payload):
+        calls.append(payload)
+        return None
+
+    first = FallbackCopyPersistenceSession(cluster)
+    second = FallbackCopyPersistenceSession(cluster)
+    second.match.id = 11
+    for session in (first, second):
+        persist_story_cluster(
+            session, cluster, summarizer=failing, now=NOW,
+            membership_generation=1, copy_retry_budget=budget,
+        )
+
+    assert len(calls) == 1
+    for session in (first, second):
+        params = _story_update_params(session)
+        assert params["summary_model"] is None
+        assert params["title_ru"] == deterministic_story_copy(cluster).title_ru
+
+
+def test_failed_retry_backs_off_per_story_then_retries():
+    cluster = [candidate("AZ"), candidate("KZ")]
+    backoff = {}
+    calls = []
+
+    def flaky(payload):
+        calls.append(payload)
+        return None if len(calls) == 1 else dict(RUSSIAN_COPY)
+
+    def persist_at(now):
+        session = FallbackCopyPersistenceSession(cluster)
+        persist_story_cluster(
+            session, cluster, summarizer=flaky, now=now, membership_generation=1,
+            copy_retry_budget=StoryCopyRetryBudget(backoff=backoff),
+        )
+        return _story_update_params(session)
+
+    assert persist_at(NOW)["summary_model"] is None
+    assert backoff[10] == (1, NOW + timedelta(hours=1))
+    assert persist_at(NOW + timedelta(minutes=30))["summary_model"] is None
+    assert len(calls) == 1
+    assert persist_at(NOW + timedelta(hours=1))["summary_model"] == "test-model"
+    assert len(calls) == 2
+    assert backoff == {}
+
+
+def test_retry_budget_backoff_doubles_and_is_capped():
+    backoff = {}
+    budget = StoryCopyRetryBudget(limit=100, backoff=backoff)
+    delays = []
+    for _ in range(7):
+        budget.record(5, NOW, succeeded=False)
+        delays.append(backoff[5][1] - NOW)
+
+    assert delays == [timedelta(hours=hours) for hours in (1, 2, 4, 8, 16, 24, 24)]
+
+
+def test_persist_does_not_retry_llm_copy_with_unchanged_hash():
+    cluster = [candidate("AZ"), candidate("KZ")]
+    session = UnchangedPersistenceSession(cluster)
+    budget = StoryCopyRetryBudget(backoff={})
+
+    persist_story_cluster(
+        session, cluster,
+        summarizer=lambda payload: pytest.fail("LLM copy must stay sticky"),
+        now=NOW, membership_generation=1, copy_retry_budget=budget,
+    )
+
+    params = _story_update_params(session)
+    assert params["title_ru"] == "Stable"
+    assert params["summary_model"] == "model"
+    assert params["generated_at"] == session.generated_at
+    assert budget.attempts == 0
+
+
+def test_build_stories_shares_one_retry_budget_per_pass(monkeypatch):
+    import src.stories as stories_module
+
+    clusters = [(candidate("AZ"), candidate("KZ")), (candidate("AZ"), candidate("KZ"))]
+    observed = []
+    monkeypatch.setattr(stories_module, "fetch_story_candidates", lambda session, **kw: [])
+    monkeypatch.setattr(
+        stories_module, "derive_reactivation_pairs", lambda session, items: frozenset()
+    )
+    monkeypatch.setattr(
+        stories_module, "cluster_story_candidates",
+        lambda items, *, reactivation_pairs: clusters,
+    )
+    monkeypatch.setattr(
+        stories_module, "_filter_story_cluster_articles", lambda cluster: tuple(cluster)
+    )
+    monkeypatch.setattr(
+        stories_module, "allocate_story_membership_generation", lambda session: 3
+    )
+    monkeypatch.setattr(stories_module, "refresh_story_lifecycles", lambda session, now: None)
+
+    def fake_persist(session, items, **kwargs):
+        observed.append(kwargs)
+        return 1, 2
+
+    monkeypatch.setattr(stories_module, "persist_story_cluster", fake_persist)
+
+    build_stories(object(), summarizer=lambda payload: None, now=NOW)
+    budgets = [kwargs["copy_retry_budget"] for kwargs in observed]
+    assert len(budgets) == 2 and budgets[0] is budgets[1]
+    assert budgets[0].limit == STORY_COPY_RETRIES_PER_PASS
+
+    observed.clear()
+    build_stories(object(), now=NOW)
+    assert observed and all("copy_retry_budget" not in kwargs for kwargs in observed)

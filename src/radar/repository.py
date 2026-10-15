@@ -14,6 +14,33 @@ from sqlalchemy import text
 from .types import Contour, Observation, ObservationWindow
 
 
+_REGISTERED_COUNTRIES = text("""
+    /* radar_registered_country_codes */
+    SELECT code
+    FROM countries
+""")
+
+
+def registered_country_codes(session) -> frozenset[str]:
+    """Country codes Radar rows may reference (``countries`` foreign key).
+
+    Sources can be onboarded for areas outside the 99-country registry; one
+    such row would violate the foreign key and roll back a whole cycle.
+    """
+
+    codes: set[str] = set()
+    for row in session.execute(_REGISTERED_COUNTRIES).fetchall():
+        if isinstance(row, Mapping):
+            value = row.get("code", "")
+        else:
+            mapping = getattr(row, "_mapping", None)
+            value = mapping.get("code", "") if mapping is not None else getattr(row, "code", "")
+        code = str(value or "").strip().upper()
+        if len(code) == 2:
+            codes.add(code)
+    return frozenset(codes)
+
+
 def _json_default(value: object) -> str:
     if isinstance(value, (datetime, date, UUID)):
         return value.isoformat()

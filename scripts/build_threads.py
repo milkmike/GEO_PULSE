@@ -16,6 +16,7 @@ from src.db import get_session, wait_for_db
 from src.api_tracker import track_api_call, track_duration
 from src.embedding_store import EmbeddingStore
 from src.jev import review_story_pairs
+from src.llm import DEFAULT_MODELS, LLMError, chat, extract_json
 from src.stories import build_stories as build_global_stories
 from scripts.prepare_embedding_jobs import load_story_embedding_coverage
 
@@ -27,6 +28,12 @@ logger = logging.getLogger("threads-v2")
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 MODEL = HEAVY_MODEL
+# Story copy uses the shared provider chain in src/llm.py: an empty or
+# reasoning-only completion is recorded as a paid error, that model is cooled
+# down and the next one is tried. The token cap leaves room for hidden
+# reasoning on models where src/llm.py does not disable it for this script.
+STORY_COPY_MODELS = [MODEL] + DEFAULT_MODELS
+STORY_COPY_MAX_TOKENS = 1500
 
 # Clustering config
 COSINE_THRESHOLD = 0.82       # Embedding similarity: auto-merge
@@ -161,22 +168,44 @@ def llm_json(prompt: str, max_tokens: int = 800) -> dict | None:
 
 
 def generate_story_copy(payload: dict) -> dict | None:
-    """Generate optional story copy from the background worker only."""
+    """Generate optional story copy from the background worker only.
+
+    Returns None when every model fails or the reply is not a JSON object;
+    the caller then keeps deterministic copy and retries it later.
+    """
     prompt = f"""Ты редактор международной новостной ленты. Сформулируй единый
-межстрановой сюжет по данным ниже. Не добавляй факты, которых нет во входе.
+межстрановой сюжет по данным ниже. Заголовки источников бывают на любом языке:
+передай их смысл по-русски, не копируй исходный заголовок дословно.
+Не добавляй факты, которых нет во входе.
 
 ДАННЫЕ:
 {json.dumps(payload, ensure_ascii=False, sort_keys=True)}
 
-Верни JSON:
+Верни только JSON-объект, без пояснений и markdown:
 {{
-  "title_ru": "точный заголовок до 120 символов",
-  "title_en": "optional English title",
-  "summary": "одно проверяемое предложение"
+  "title_ru": "точный заголовок на русском языке, до 120 символов",
+  "title_en": "the same headline in English, up to 120 characters",
+  "summary": "одно проверяемое предложение на русском языке"
 }}"""
-    result = llm_json(prompt, max_tokens=400)
-    if result:
-        result["model"] = MODEL
+    try:
+        raw, model = chat(
+            prompt,
+            max_tokens=STORY_COPY_MAX_TOKENS,
+            temperature=0.2,
+            script="build_threads.py",
+            models=STORY_COPY_MODELS,
+        )
+    except LLMError as exc:
+        logger.warning("Story copy generation failed: %s", exc)
+        return None
+    try:
+        result = extract_json(raw)
+    except (ValueError, IndexError) as exc:
+        logger.warning("Story copy reply is not JSON (%s): %s", exc, raw[:300])
+        return None
+    if not isinstance(result, dict):
+        return None
+    result["model"] = model
     return result
 
 
