@@ -57,7 +57,7 @@ export default function AgendaHighlights() {
     <section aria-labelledby={titleId} className="card overflow-hidden p-3">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <h2 id={titleId} className="card-title text-dim">Свежие новостные повестки</h2>
-        <Link href="/stories" className="min-h-11 content-center text-xs text-accent underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-accent">Все повестки и архив сюжетов</Link>
+        <Link href="/lab#agendas" className="min-h-11 content-center text-xs text-accent underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-accent">Все повестки</Link>
       </div>
       <p className="mt-2 text-xs leading-5 text-dim">Публикации собраны за последние 72 часа среди подключённых источников. Повестки могут включать более ранние материалы.</p>
       {loading && <p role="status" className="mt-4 flex items-center gap-2 text-xs text-dim"><LoaderCircle aria-hidden="true" size={14} className="animate-spin motion-reduce:animate-none" />{payload ? "Обновляем свежие повестки…" : "Загружаем свежие повестки…"}</p>}

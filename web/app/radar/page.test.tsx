@@ -81,7 +81,7 @@ describe("Radar list page", () => {
     expect(status).not.toHaveTextContent("Нет свежих наблюдений");
     expect(await screen.findByRole("heading", { name: /нет подтверждённых изменений/i })).toBeVisible();
     expect(screen.getByRole("link", { name: "Свежие публикации" })).toHaveAttribute("href", "/search");
-    expect(screen.getByRole("link", { name: "Новостные повестки" })).toHaveAttribute("href", "/stories");
+    expect(screen.getByRole("link", { name: "Сюжеты" })).toHaveAttribute("href", "/stories");
   });
 
   it("flags stale observations even when a trend calculation is recent", async () => {

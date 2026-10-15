@@ -44,7 +44,7 @@ describe("AgendaHighlights", () => {
     expect(screen.getByText(/Последняя публикация собрана:/)).toHaveTextContent("14:00 МСК");
     expect(screen.queryByText(/Обновлено:/)).not.toBeInTheDocument();
     expect(screen.getByText(/Страны издателей/)).toBeVisible();
-    expect(screen.getByRole("link", { name: "Все повестки и архив сюжетов" })).toHaveAttribute("href", "/stories");
+    expect(screen.getByRole("link", { name: "Все повестки" })).toHaveAttribute("href", "/lab#agendas");
     fireEvent.click(screen.getByRole("button", { name: "Показать публикации" }));
     expect(screen.getByRole("link", { name: "Исходный материал" })).toHaveAttribute("href", "https://example.com/source");
     expect(screen.queryByRole("link", { name: "Дополнительный материал" })).not.toBeInTheDocument();
