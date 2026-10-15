@@ -1,6 +1,16 @@
 # GeoPulse v2 — Full stack with Redis queues
+
+# Cap each container's json-file log at 3 × 20 MB so long-running workers
+# cannot fill the disk; `docker compose logs` still keeps recent history.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "3"
+
 services:
   db:
+    logging: *default-logging
     image: timescale/timescaledb:latest-pg16
     environment:
       POSTGRES_DB: cis_thermometer
@@ -19,6 +29,7 @@ services:
       retries: 5
 
   redis:
+    logging: *default-logging
     image: redis:7-alpine
     ports:
       - "127.0.0.1:6379:6379"
@@ -32,6 +43,7 @@ services:
   # One-shot: apply pending DB migrations idempotently (tracked in
   # schema_migrations). Schema consumers start only after it exits successfully.
   migrate:
+    logging: *default-logging
     image: timescale/timescaledb:latest-pg16
     depends_on:
       db:
@@ -47,6 +59,7 @@ services:
     restart: "no"
 
   collector:
+    logging: *default-logging
     build:
       context: .
       dockerfile: Dockerfile.collector
@@ -66,6 +79,7 @@ services:
     restart: unless-stopped
 
   analyzer:
+    logging: *default-logging
     build:
       context: .
       dockerfile: Dockerfile.analyzer
@@ -88,6 +102,7 @@ services:
     restart: unless-stopped
 
   embedding-worker:
+    logging: *default-logging
     build:
       context: .
       dockerfile: Dockerfile.analyzer
@@ -106,6 +121,7 @@ services:
     restart: unless-stopped
 
   temperature:
+    logging: *default-logging
     build:
       context: .
       dockerfile: Dockerfile.temperature
@@ -122,6 +138,7 @@ services:
   # Persist one replay-safe Radar cycle every hour. Manual invocations remain
   # shadow-only unless they explicitly pass --apply.
   radar-worker:
+    logging: *default-logging
     build:
       context: .
       dockerfile: Dockerfile.temperature
@@ -136,6 +153,7 @@ services:
     restart: unless-stopped
 
   threads:
+    logging: *default-logging
     build:
       context: .
       dockerfile: Dockerfile.temperature
@@ -156,6 +174,7 @@ services:
     restart: unless-stopped
 
   integrity:
+    logging: *default-logging
     build:
       context: .
       dockerfile: Dockerfile.temperature
@@ -171,6 +190,7 @@ services:
 
   # === WORLD EXPANSION ===
   gdelt-collector:
+    logging: *default-logging
     build:
       context: .
       dockerfile: Dockerfile.temperature
@@ -187,6 +207,7 @@ services:
     restart: unless-stopped
 
   ru-index:
+    logging: *default-logging
     build:
       context: .
       dockerfile: Dockerfile.temperature
@@ -204,6 +225,7 @@ services:
     restart: unless-stopped
 
   signals:
+    logging: *default-logging
     build:
       context: .
       dockerfile: Dockerfile.temperature
@@ -218,6 +240,7 @@ services:
     restart: unless-stopped
 
   briefs:
+    logging: *default-logging
     build:
       context: .
       dockerfile: Dockerfile.analyzer
@@ -239,6 +262,7 @@ services:
     restart: unless-stopped
 
   agendas:
+    logging: *default-logging
     build:
       context: .
       dockerfile: Dockerfile.analyzer
@@ -261,6 +285,7 @@ services:
     restart: unless-stopped
 
   early-signals:
+    logging: *default-logging
     build:
       context: .
       dockerfile: Dockerfile.analyzer
@@ -284,6 +309,7 @@ services:
     restart: unless-stopped
 
   fx-collector:
+    logging: *default-logging
     build:
       context: .
       dockerfile: Dockerfile.temperature
@@ -298,6 +324,7 @@ services:
     restart: unless-stopped
 
   un-votes-loader:
+    logging: *default-logging
     build:
       context: .
       dockerfile: Dockerfile.loaders
@@ -312,6 +339,7 @@ services:
     restart: unless-stopped
 
   trade-loader:
+    logging: *default-logging
     build:
       context: .
       dockerfile: Dockerfile.loaders
@@ -327,6 +355,7 @@ services:
     restart: unless-stopped
 
   sanctions-loader:
+    logging: *default-logging
     build:
       context: .
       dockerfile: Dockerfile.loaders
@@ -341,6 +370,7 @@ services:
     restart: unless-stopped
 
   crea-imports-loader:
+    logging: *default-logging
     build:
       context: .
       dockerfile: Dockerfile.loaders
@@ -356,6 +386,7 @@ services:
     restart: unless-stopped
 
   market-radar-loader:
+    logging: *default-logging
     build:
       context: .
       dockerfile: Dockerfile.loaders
@@ -370,6 +401,7 @@ services:
     restart: unless-stopped
 
   web:
+    logging: *default-logging
     build:
       context: ./web
       args:
@@ -388,6 +420,7 @@ services:
     restart: unless-stopped
 
   api:
+    logging: *default-logging
     build:
       context: .
       dockerfile: Dockerfile.api
@@ -417,6 +450,7 @@ services:
 
   # === VOX POPULI ===
   vox-collector:
+    logging: *default-logging
     build:
       context: .
       dockerfile: src/vox/Dockerfile
@@ -437,6 +471,7 @@ services:
     restart: unless-stopped
 
   vox-analyzer:
+    logging: *default-logging
     build:
       context: .
       dockerfile: src/vox/Dockerfile
@@ -453,6 +488,7 @@ services:
     restart: unless-stopped
 
   vox-engine:
+    logging: *default-logging
     build:
       context: .
       dockerfile: src/vox/Dockerfile
@@ -468,6 +504,7 @@ services:
 
 
   tg-collector:
+    logging: *default-logging
     build:
       context: .
       dockerfile: Dockerfile.tg-collector
