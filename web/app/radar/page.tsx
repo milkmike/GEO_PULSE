@@ -158,7 +158,7 @@ function RadarPageContent() {
   return (
     <main className="mx-auto max-w-[1240px] px-3 pb-16">
       <SiteHeader active="/radar" />
-      <header className="reveal reveal-1 border-b border-line pb-7 pt-10"><p className="section-num">EARLY WARNING / 01</p><h1 className="display mt-2 text-[40px] leading-none sm:text-[58px]">Радар перемен</h1><p className="mt-5 max-w-3xl text-[15px] leading-7 text-dim">Подтверждённые межстрановые волны и ранние признаки ускорения. Медиа и действия показаны раздельно; пробелы покрытия не скрываются.</p></header>
+      <header className="reveal reveal-1 border-b border-line pb-7 pt-10"><p className="section-num">РАННИЕ ИЗМЕНЕНИЯ</p><h1 className="display mt-2 text-[40px] leading-none sm:text-[58px]">Радар перемен</h1><p className="mt-5 max-w-3xl text-[15px] leading-7 text-dim">Подтверждённые межстрановые волны и ранние признаки ускорения. Медиа и действия показаны раздельно; пробелы покрытия не скрываются.</p></header>
 
       <ObservationStatus />
 

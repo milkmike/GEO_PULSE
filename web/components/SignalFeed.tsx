@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { motion, useReducedMotion } from "motion/react";
-import { eventTypeRu, fmtDate, SIGNAL_RU, sourceTierRu } from "@/lib/format";
+import { eventTypeRu, fmtDate, levelRu, localizeLevelTokens, severityRu, SIGNAL_RU, sourceTierRu } from "@/lib/format";
 import type { SignalArticleReference, SignalEvidencePreview, SignalListItem } from "@/lib/types";
 import { safeHttpUrl } from "@/lib/urls";
 
@@ -10,12 +10,6 @@ const SEV_BORDER: Record<string, string> = {
   info: "border-l-line",
   warning: "border-l-cooling",
   critical: "border-l-hostile",
-};
-
-const SEVERITY_RU: Record<string, string> = {
-  info: "наблюдение",
-  warning: "внимание",
-  critical: "критический",
 };
 
 const FACT_LABELS: Record<string, string> = {
@@ -71,6 +65,7 @@ function factValue(key: string, value: unknown): string | null {
   if (typeof value === "string" && value.trim() && value.length <= 80) {
     if (key === "event_type") return eventTypeRu(value);
     if (key === "tier") return sourceTierRu(value);
+    if (key === "level") return levelRu(value);
     return value;
   }
   if (Array.isArray(value) && value.length > 0 && (key === "tiers" || value.length <= 4)) {
@@ -181,17 +176,18 @@ function SignalCard({
 }) {
   const facts = signalFacts(signal);
   const titleId = `signal-${signal.id}-title`;
-  const className = `rounded-r-md border-l-2 bg-panel2 px-3 py-3 ${SEV_BORDER[signal.severity] ?? "border-l-line"}`;
+  // `relative` keeps the sr-only link labels inside scrollable signal panels.
+  const className = `relative rounded-r-md border-l-2 bg-panel2 px-3 py-3 ${SEV_BORDER[signal.severity] ?? "border-l-line"}`;
 
   return (
     <article className={className} aria-labelledby={titleId}>
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] uppercase tracking-wide text-dim">
         {showCountry && signal.country_name && <span className="text-ru-white">{signal.country_name}</span>}
-        <span>{SEVERITY_RU[signal.severity] ?? signal.severity}</span>
+        <span>{severityRu(signal.severity)}</span>
         <span>уверенность {Math.round(signal.confidence * 100)}%</span>
       </div>
       <h3 id={titleId} className="mt-1 text-[13px] font-semibold leading-snug">{signal.title}</h3>
-      {signal.description && <div className="mt-1 text-xs leading-snug text-dim">{signal.description}</div>}
+      {signal.description && <div className="mt-1 text-xs leading-snug text-dim">{localizeLevelTokens(signal.description)}</div>}
       {facts.length > 0 && (
         <ul className="mt-2 grid gap-1 text-[11px] sm:grid-cols-3">
           {facts.map((fact) => (

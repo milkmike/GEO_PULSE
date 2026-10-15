@@ -14,6 +14,7 @@ from sqlalchemy import text
 from src.config import BRIEFS_MODEL
 from src.countries import COUNTRIES, country_name_ru
 from src.db import get_session
+from src.engine.ru_index import level_ru
 from src.llm import DEFAULT_MODELS, LLMError, chat
 from src.pipeline.topics import TOPICS
 
@@ -195,7 +196,7 @@ def gather_world_inputs(session) -> dict:
     return {
         "index_movers": [
             {"country": country_name_ru(r.country_code), "score": float(r.score),
-             "level": r.level, "delta_24h": float(r.delta_24h)}
+             "level": level_ru(r.level), "delta_24h": float(r.delta_24h)}
             for r in movers
         ],
         "signals": [
@@ -292,7 +293,7 @@ def gather_country_inputs(session, code: str) -> dict:
             "score": float(idx.score) if idx else None,
             "structural": float(idx.structural) if idx and idx.structural is not None else None,
             "media": float(idx.media) if idx and idx.media is not None else None,
-            "level": idx.level if idx else None,
+            "level": level_ru(idx.level) if idx else None,
             "delta_24h": float(idx.delta_24h) if idx and idx.delta_24h is not None else None,
             "delta_7d": float(idx.delta_7d) if idx and idx.delta_7d is not None else None,
         } if idx else None,

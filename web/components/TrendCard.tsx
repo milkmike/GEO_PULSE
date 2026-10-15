@@ -3,7 +3,7 @@ import { ArrowUpRight, CircleAlert, RadioTower } from "lucide-react";
 import type { RadarContour, RadarTrend, RadarTrendState } from "@/lib/types";
 import { safeHttpUrl } from "@/lib/urls";
 
-const STATE_LABEL: Record<RadarTrendState | "insufficient", string> = {
+export const STATE_LABEL: Record<RadarTrendState | "insufficient", string> = {
   candidate: "кандидат", emerging: "зарождается", confirmed: "подтверждён",
   cooling: "затухает", resolved: "завершён", rejected: "отклонён", insufficient: "недостаточно данных",
 };

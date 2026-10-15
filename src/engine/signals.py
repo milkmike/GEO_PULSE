@@ -32,6 +32,7 @@ from sqlalchemy import text
 
 from src.countries import COUNTRIES, country_name_ru, tier1_codes
 from src.db import get_session
+from src.engine.ru_index import level_ru
 
 logger = logging.getLogger(__name__)
 
@@ -780,7 +781,7 @@ def detect_index_shifts(session) -> int:
             title=f"Скачок индекса: {country_name_ru(r.country_code)} {delta:+.1f} за 24ч",
             description=(
                 f"Индекс отношений с Россией сдвинулся {direction} на {abs(delta):.1f} "
-                f"пунктов за сутки: сейчас {float(r.score):+.1f} [{r.level}]."
+                f"пунктов за сутки: сейчас {float(r.score):+.1f} ({level_ru(r.level)})."
             ),
             payload={"score": float(r.score), "delta_24h": delta, "level": r.level},
             evidence=_evidence(

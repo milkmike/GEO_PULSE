@@ -1028,8 +1028,21 @@ def test_copy_hash_and_summary_include_final_persisted_membership_union():
     )
 
     assert union_hash != current_hash
-    assert "3 публикаций" in copy.summary
-    assert "UZ" in copy.summary
+    assert "3 публикации" in copy.summary
+    assert "Узбекистан" in copy.summary
+
+
+def test_fallback_summary_names_countries_and_agrees_in_number():
+    one = deterministic_story_copy([candidate("AZ")], member_article_ids=(1,))
+    many = deterministic_story_copy(
+        [candidate("AZ"), candidate("KZ")], member_article_ids=tuple(range(1, 12))
+    )
+
+    assert one.summary.startswith("Сюжет объединяет 1 публикацию о событии «")
+    assert one.summary.endswith("Страны: Азербайджан.")
+    assert "11 публикаций" in many.summary
+    assert "Страны: Азербайджан, Казахстан." in many.summary
+    assert "AZ" not in many.summary
 
 
 class FakeResult:
@@ -3569,7 +3582,7 @@ def test_overlapping_story_ids_are_reconciled_into_one_primary():
         if "UPDATE stories SET" in call[0] and "RETURNING id" in call[0]
     )
     assert update_call[1]["article_count"] == 4
-    assert "4 публикаций" in update_call[1]["summary"]
+    assert "4 публикации" in update_call[1]["summary"]
     merged_meta = json.loads(update_call[1]["meta"])
     assert {item["decision_id"] for item in merged_meta["merge_audit"]} >= {
         "primary-audit", "duplicate-audit",
@@ -3692,7 +3705,7 @@ def test_resolved_story_reopens_only_with_event_and_entity_gate_and_is_audited()
     assert meta["reactivations"]
     assert meta["reactivations"][-1]["decision"] == "reactivation"
     assert meta["reactivations"][-1]["story_id"] == 10
-    assert "4 публикаций" in update_call[1]["summary"]
+    assert "4 публикации" in update_call[1]["summary"]
 
 
 def test_resolved_story_without_entity_gate_stays_closed_and_new_story_is_created():

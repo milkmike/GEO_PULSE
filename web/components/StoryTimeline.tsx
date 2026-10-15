@@ -1,5 +1,6 @@
 import { FileText, Milestone } from "lucide-react";
 import type { StoryArticleEvidence, StoryEventEvidence } from "@/lib/types";
+import { countryNameRu } from "@/lib/format";
 import { safeHttpUrl } from "@/lib/urls";
 
 type TimelineItem =
@@ -84,7 +85,7 @@ export default function StoryTimeline({
               {event ? (
                 <>событие · уровень события {event.action_level} · достоверность {Math.round(event.confidence * 100)}%</>
               ) : (
-                <>{article?.source} · {article?.country_code} · связь {Math.round((article?.membership_confidence ?? 0) * 100)}%</>
+                <>{article?.source} · {article?.country_code ? countryNameRu(article.country_code) : null} · связь {Math.round((article?.membership_confidence ?? 0) * 100)}%</>
               )}
             </div>
           </li>
