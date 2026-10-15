@@ -44,7 +44,9 @@ function contourLabel(contour: RadarContour, trend: RadarTrend) {
 export default function TrendCard({ trend, compact = false }: { trend: RadarTrend; compact?: boolean }) {
   const source = safeHttpUrl(trend.evidence_preview?.url);
   const countries = [...new Set(trend.country_waves.map((wave) => wave.country_code))];
-  const visibleCountries = countries.slice(0, 5);
+  const waveCountries = countries.slice(0, 5);
+  // Country dossier items carry no member waves, only their own country code.
+  const visibleCountries = waveCountries.length > 0 ? waveCountries : trend.country_code ? [trend.country_code] : [];
   const remainingCountries = Math.max(0, trend.country_count - visibleCountries.length);
   const effectiveDate = trendDate(trend);
   return (
@@ -62,9 +64,8 @@ export default function TrendCard({ trend, compact = false }: { trend: RadarTren
           {trend.thesis}
         </Link>
       </h3>
-      {(visibleCountries.length > 0 || trend.country_code) && <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] uppercase tracking-[0.1em] text-dim">
+      {visibleCountries.length > 0 && <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] uppercase tracking-[0.1em] text-dim">
         {visibleCountries.map((country) => <span key={country} className="rounded-full border border-line px-2 py-1">{country}</span>)}
-        {visibleCountries.length === 0 && trend.country_code && <span className="rounded-full border border-line px-2 py-1">{trend.country_code}</span>}
         {remainingCountries > 0 && <span className="rounded-full border border-line px-2 py-1">+{countriesLabel(remainingCountries)}</span>}
       </div>}
       <dl className="mt-3 grid grid-cols-2 gap-px overflow-hidden rounded-md border border-line bg-line text-[11px]">

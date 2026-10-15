@@ -94,4 +94,41 @@ describe("TrendCard", () => {
 
     expect(screen.getByText("+1 страна")).toBeVisible();
   });
+
+  it("counts the dossier country chip instead of announcing a phantom extra country", () => {
+    const trend: RadarTrend = {
+      public_id: "trend-3",
+      scope: "country",
+      state: "emerging",
+      thesis: "Торговые связи с Россией ослабевают",
+      subject_key: "economy:trade:russia",
+      direction: "decrease",
+      confidence: 0.5,
+      coverage_confidence: 1,
+      velocity: 0.2,
+      first_observed_at: "2026-07-18T12:18:05Z",
+      detected_at: "2026-07-18T12:18:05Z",
+      confirmed_at: null,
+      t0_auto: null,
+      t0_effective: null,
+      country_code: "RS",
+      country_count: 1,
+      wave_count: 0,
+      country_waves: [],
+      contours: {
+        media: { state: "insufficient", status: "insufficient" },
+        action: { state: "emerging", status: "insufficient" },
+      },
+      contradiction_marker: true,
+      evidence_preview: null,
+      why_included: "country_wave_matches_selected_filters",
+    };
+
+    render(<TrendCard trend={trend} />);
+
+    expect(screen.getByText("RS")).toBeVisible();
+    expect(screen.getByText("1 страна")).toBeVisible();
+    expect(screen.queryByText(/^\+/)).not.toBeInTheDocument();
+    expect(screen.getByText("есть противоречия")).toBeVisible();
+  });
 });
