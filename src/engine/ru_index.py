@@ -77,6 +77,22 @@ LEVELS = [
 ]
 
 
+# Russian labels for public copy (signal descriptions, brief inputs); the codes
+# above remain the stored and API values.
+LEVEL_RU = {
+    "ally": "союзник",
+    "partner": "партнёр",
+    "neutral": "нейтралитет",
+    "cooling": "охлаждение",
+    "tension": "напряжение",
+    "hostile": "враждебность",
+}
+
+
+def level_ru(level: str | None) -> str | None:
+    return LEVEL_RU.get(level, level) if level else level
+
+
 def level_for(score: float) -> str:
     for threshold, name in LEVELS:
         if score >= threshold:

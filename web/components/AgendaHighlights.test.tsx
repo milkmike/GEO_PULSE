@@ -44,7 +44,7 @@ describe("AgendaHighlights", () => {
     expect(screen.getByText(/Последняя публикация собрана:/)).toHaveTextContent("14:00 МСК");
     expect(screen.queryByText(/Обновлено:/)).not.toBeInTheDocument();
     expect(screen.getByText(/Страны издателей/)).toBeVisible();
-    expect(screen.getByRole("link", { name: "Все повестки и архив сюжетов" })).toHaveAttribute("href", "/stories");
+    expect(screen.getByRole("link", { name: "Все повестки" })).toHaveAttribute("href", "/lab#agendas");
     fireEvent.click(screen.getByRole("button", { name: "Показать публикации" }));
     expect(screen.getByRole("link", { name: "Исходный материал" })).toHaveAttribute("href", "https://example.com/source");
     expect(screen.queryByRole("link", { name: "Дополнительный материал" })).not.toBeInTheDocument();
@@ -76,7 +76,7 @@ describe("AgendaHighlights", () => {
     render(<AgendaHighlights />);
     expect(await screen.findByText(/Среди загруженных повесток нет публикаций/)).toBeVisible();
     expect(screen.queryByRole("article")).not.toBeInTheDocument();
-    expect(screen.getByText(/Это не означает отсутствия событий/)).toBeVisible();
+    expect(screen.queryByText(/Это не означает отсутствия событий/)).not.toBeInTheDocument();
   });
 
   it("offers a local retry on fetch failure and does not fetch an archive", async () => {
@@ -98,11 +98,11 @@ describe("AgendaHighlights", () => {
     ["disabled", /Поиск новых повесток отключён/],
     ["running", /Идёт обновление повесток/],
     ["never_run", /Сбор повесток ещё не запускался/],
-  ] as const)("keeps fresh evidence visible while coverage status is %s", async (status, message) => {
+  ] as const)("keeps fresh evidence visible without exposing coverage status %s", async (status, message) => {
     mocks.agendas.mockResolvedValue(response([item(1, "2026-09-30T11:00:00Z")], status));
     render(<AgendaHighlights />);
-    expect(await screen.findByText(message)).toBeVisible();
-    expect(screen.getByRole("article")).toBeVisible();
+    expect(await screen.findByRole("article")).toBeVisible();
+    expect(screen.queryByText(message)).not.toBeInTheDocument();
   });
 
   it("expires cached cards on the polling clock even when refresh fails", async () => {

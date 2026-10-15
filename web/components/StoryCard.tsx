@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { ArrowUpRight, Radio, TrendingDown, TrendingUp } from "lucide-react";
 import type { StoryLifecycle, StoryListItem } from "@/lib/types";
+import { storySummaryRu } from "@/lib/format";
 import { safeHttpUrl } from "@/lib/urls";
 
 const LIFECYCLE: Record<StoryLifecycle, { label: string; tone: string }> = {
@@ -112,7 +113,7 @@ export default function StoryCard({
 
       {!compact && story.summary && (
         <p className="mt-2 line-clamp-3 pl-1 text-[13px] leading-relaxed text-dim">
-          {story.summary}
+          {storySummaryRu(story.summary)}
         </p>
       )}
 

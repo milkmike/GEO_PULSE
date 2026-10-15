@@ -98,9 +98,11 @@ interface WorldMapProps {
   entries: MapEntry[];
   selectedCountry?: string | null;
   onSelectCountry?: (code: string) => void;
+  /** Numeric RRI colorbar; pages with a worded legend turn it off. */
+  showScale?: boolean;
 }
 
-export default function WorldMap({ entries, selectedCountry, onSelectCountry }: WorldMapProps) {
+export default function WorldMap({ entries, selectedCountry, onSelectCountry, showScale = true }: WorldMapProps) {
   const router = useRouter();
   const [missiles, setMissiles] = useState<Missile[] | null>(null);
   const [finale, setFinale] = useState(false);
@@ -161,6 +163,7 @@ export default function WorldMap({ entries, selectedCountry, onSelectCountry }: 
         hovertemplate: "%{text}<extra></extra>",
         colorscale: SCORE_COLORSCALE,
         marker: { line: { color: "#0b0f14", width: 0.5 } },
+        showscale: showScale,
         colorbar: {
           title: { text: "RRI", font: { color: "#9ca3af", size: 11 } },
           thickness: 8,
@@ -177,7 +180,7 @@ export default function WorldMap({ entries, selectedCountry, onSelectCountry }: 
         type: "choropleth", locations: [selected.iso3], z: [selected.score],
         zmin: -100, zmax: 100, colorscale: SCORE_COLORSCALE, showscale: false,
         marker: { line: { color: "#f0eee8", width: 2 } },
-        text: [`${selected.name} · выбрана`], hovertemplate: "%{text}<extra></extra>",
+        text: [onSelectCountry ? `${selected.name} · выбрана` : selected.name], hovertemplate: "%{text}<extra></extra>",
       });
     }
 
@@ -249,7 +252,7 @@ export default function WorldMap({ entries, selectedCountry, onSelectCountry }: 
     );
     return base;
     // eslint-disable-next-line react-hooks/exhaustive-deps -- tick drives reanimation frames
-  }, [entries, selectedCountry, missiles, tick]);
+  }, [entries, selectedCountry, missiles, tick, showScale, onSelectCountry]);
 
   const handleClick = useCallback(
     (p: { location?: string }) => {

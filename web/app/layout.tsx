@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { Golos_Text, JetBrains_Mono, Piazzolla } from "next/font/google";
 import "./globals.css";
-import DisclaimerBanner from "@/components/DisclaimerBanner";
+import SiteFooter from "@/components/SiteFooter";
 import Pixel from "@/components/Pixel";
 import { FeatureFlagsProvider } from "@/components/FeatureFlagsProvider";
 import { readFeatureFlags } from "@/lib/features.server";
@@ -33,8 +33,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="ru" className={`${piazzolla.variable} ${golos.variable} ${jbMono.variable}`}>
       <body className="min-h-screen antialiased">
         <FeatureFlagsProvider flags={featureFlags}>
-          <DisclaimerBanner />
           {children}
+          <SiteFooter />
           <Pixel />
         </FeatureFlagsProvider>
       </body>

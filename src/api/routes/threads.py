@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from sqlalchemy import text
 
 from src.config import COUNTRY_NAMES
+from src.countries import COUNTRY_NAMES_ALL
 from src.db import get_session
 
 logger = logging.getLogger(__name__)
@@ -313,7 +314,9 @@ def get_country_threads(
 ):
     """Get threads for a specific country."""
     code = code.upper()
-    if code not in COUNTRY_NAMES:
+    # Threads exist only for deep-coverage countries; any registered country gets
+    # an empty list instead of a 404 so the dossier does not log a failed request.
+    if code not in COUNTRY_NAMES_ALL:
         raise HTTPException(status_code=404, detail="Unknown country code")
 
     conditions = ["t.country_code = :cc", "t.article_count > 0"]
@@ -336,7 +339,7 @@ def get_country_threads(
 
         return {
             "country": code,
-            "name": COUNTRY_NAMES.get(code, code),
+            "name": COUNTRY_NAMES_ALL.get(code, code),
             "threads": [thread_to_dict(r) for r in rows],
         }
 # Append to threads.py

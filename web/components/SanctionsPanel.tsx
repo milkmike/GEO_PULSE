@@ -9,7 +9,8 @@ export default function SanctionsPanel({ code }: { code: string }) {
   const [s, setS] = useState<Sanctions | null>(null);
 
   useEffect(() => {
-    api.sanctions(code).then(setS).catch(() => setS({ has_data: false }));
+    // On failure show nothing: "no own sanctions lists" is a factual claim.
+    api.sanctions(code).then(setS).catch(() => setS(null));
   }, [code]);
 
   if (!s) return null;

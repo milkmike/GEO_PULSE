@@ -1,18 +1,42 @@
-import { act, render, screen, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { StoryDetailResponse } from "@/lib/types";
+import type { RadarTrend, StoryDetailResponse } from "@/lib/types";
 import StoryDetailPage from "./page";
 import { FeatureFlagsProvider } from "@/components/FeatureFlagsProvider";
 
-const apiMocks = vi.hoisted(() => ({ story: vi.fn() }));
+const apiMocks = vi.hoisted(() => ({ story: vi.fn(), radar: vi.fn() }));
 
 vi.mock("@/lib/api", () => ({ api: apiMocks }));
-vi.mock("@/components/EarlyWarningPanel", () => ({
-  default: ({ filters, countryCode }: { filters?: unknown; countryCode?: string }) => (
-    <div data-testid="story-radar" data-filters={JSON.stringify(filters)} data-country={countryCode}>story radar</div>
+vi.mock("@/components/EarlyWarningPanel", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/components/EarlyWarningPanel")>()),
+  default: ({ filters, countryCode, trends }: { filters?: unknown; countryCode?: string; trends?: RadarTrend[] }) => (
+    <div
+      data-testid="story-radar"
+      data-filters={JSON.stringify(filters)}
+      data-country={countryCode}
+      data-trends={trends?.map((trend) => trend.public_id).join(",")}
+    >
+      story radar
+    </div>
   ),
 }));
+
+const radarFlags = { searchNavigation: false, storiesNavigation: true, investigation: false, signalDetail: true, earlyWarningRadar: true };
+
+function radarTrend(publicId: string, state: RadarTrend["state"]): RadarTrend {
+  return {
+    public_id: publicId, scope: "meta", state, thesis: "Тезис", subject_key: "policy:ports",
+    direction: "restrictive", confidence: 0.3, coverage_confidence: 0.3, velocity: 0.2,
+    first_observed_at: null, detected_at: null, confirmed_at: null, t0_auto: null, t0_effective: null,
+    country_code: null, country_count: 2, wave_count: 0, country_waves: [],
+    contours: {
+      media: { state: "emerging", status: "aligned" },
+      action: { state: "insufficient", status: "aligned" },
+    },
+    contradiction_marker: false, evidence_preview: null, why_included: "story_evidence",
+  };
+}
 
 const detail: StoryDetailResponse = {
   id: 42,
@@ -138,7 +162,10 @@ const detail: StoryDetailResponse = {
 };
 
 describe("StoryDetailPage", () => {
-  beforeEach(() => apiMocks.story.mockReset());
+  beforeEach(() => {
+    apiMocks.story.mockReset();
+    apiMocks.radar.mockReset().mockResolvedValue({ items: [], limit: 12, next_cursor: null });
+  });
 
   it("explains the story evidence and labels RRI as non-causal context", async () => {
     apiMocks.story.mockResolvedValue(detail);
@@ -194,9 +221,12 @@ describe("StoryDetailPage", () => {
 
   it("queries the exact story relation without reducing it to the first country", async () => {
     apiMocks.story.mockResolvedValue(detail);
+    apiMocks.radar
+      .mockResolvedValueOnce({ items: [radarTrend("quiet", "emerging")], limit: 12, next_cursor: "page-2" })
+      .mockResolvedValueOnce({ items: [radarTrend("confirmed-1", "confirmed")], limit: 12, next_cursor: null });
     await act(async () => {
       render(
-        <FeatureFlagsProvider flags={{ searchNavigation: false, storiesNavigation: true, investigation: false, signalDetail: true, earlyWarningRadar: true }}>
+        <FeatureFlagsProvider flags={radarFlags}>
           <StoryDetailPage params={Promise.resolve({ id: "42" })} />
         </FeatureFlagsProvider>,
       );
@@ -204,7 +234,58 @@ describe("StoryDetailPage", () => {
 
     const panel = await screen.findByTestId("story-radar");
     expect(panel).toHaveAttribute("data-filters", JSON.stringify({ storyId: 42 }));
+    expect(panel).toHaveAttribute("data-trends", "confirmed-1");
     expect(panel).not.toHaveAttribute("data-country");
+    expect(apiMocks.radar).toHaveBeenNthCalledWith(1, { storyId: 42, limit: 12 }, null, expect.any(AbortSignal));
+    expect(apiMocks.radar).toHaveBeenNthCalledWith(2, { storyId: 42, limit: 12 }, "page-2", expect.any(AbortSignal));
+  });
+
+  it("omits the analytical trends section when the story has no priority trends", async () => {
+    apiMocks.story.mockResolvedValue(detail);
+    apiMocks.radar.mockResolvedValue({ items: [radarTrend("quiet", "emerging")], limit: 12, next_cursor: null });
+    await act(async () => {
+      render(
+        <FeatureFlagsProvider flags={radarFlags}>
+          <StoryDetailPage params={Promise.resolve({ id: "42" })} />
+        </FeatureFlagsProvider>,
+      );
+    });
+
+    expect(await screen.findByRole("heading", { level: 1, name: detail.title_ru })).toBeVisible();
+    await waitFor(() => expect(apiMocks.radar).toHaveBeenCalledTimes(1));
+    expect(screen.queryByTestId("story-radar")).not.toBeInTheDocument();
+    expect(screen.queryByText(/приоритетных сейчас нет/i)).not.toBeInTheDocument();
+  });
+
+  it("does not query the radar while the server flag is off", async () => {
+    apiMocks.story.mockResolvedValue(detail);
+    await act(async () => {
+      render(<StoryDetailPage params={Promise.resolve({ id: "42" })} />);
+    });
+
+    expect(await screen.findByRole("heading", { level: 1, name: detail.title_ru })).toBeVisible();
+    expect(apiMocks.radar).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("story-radar")).not.toBeInTheDocument();
+  });
+
+  it("renders legacy summaries, severities and source countries in Russian", async () => {
+    apiMocks.story.mockResolvedValue({
+      ...detail,
+      summary: "Сюжет объединяет 4 публикаций из стран JP, ES по событию «Портовые переговоры».",
+      linked_signals: [{ ...detail.linked_signals[0], severity: "info" }],
+      articles: [{ ...detail.articles[0], country_code: "JP" }],
+    });
+    await act(async () => {
+      render(<StoryDetailPage params={Promise.resolve({ id: "42" })} />);
+    });
+
+    expect(await screen.findByText(
+      "Сюжет объединяет 4 публикации о событии «Портовые переговоры». Страны: Япония, Испания.",
+    )).toBeVisible();
+    expect(screen.getByText(/^наблюдение · достоверность 80%/)).toBeVisible();
+    expect(screen.getByText(/El País · Япония · достоверность связи 91%/)).toBeVisible();
+    expect(document.body).not.toHaveTextContent(/\binfo\b/);
+    expect(document.body).not.toHaveTextContent(/\bJP\b/);
   });
 
   it("appends a cursor page without replacing the evidence dossier", async () => {

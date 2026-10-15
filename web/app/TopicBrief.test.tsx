@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { TopicBriefResponse } from "@/lib/types";
-import HomePage from "./page";
+import HomePage from "./lab/page";
 
 const apiMocks = vi.hoisted(() => ({
   countries: vi.fn(),
@@ -17,6 +17,11 @@ const apiMocks = vi.hoisted(() => ({
 
 vi.mock("@/lib/api", () => ({ api: apiMocks }));
 vi.mock("@/components/SiteHeader", () => ({ default: () => <nav>header</nav> }));
+// The full agenda panel on the lab page is covered by AgendaPanel.test; keep AgendaCard real.
+vi.mock("@/components/AgendaPanel", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/components/AgendaPanel")>()),
+  default: () => null,
+}));
 vi.mock("@/components/DecisionWorkspace", () => ({ default: ({ mapControls }: { mapControls?: ReactNode }) => <div>{mapControls}</div> }));
 vi.mock("@/components/SortableGrid", () => ({
   default: ({ items }: { items: { id: string; node: ReactNode }[] }) => (

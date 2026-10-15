@@ -142,7 +142,8 @@ describe("StoriesPage durable filters", () => {
         expect.any(AbortSignal),
       ),
     );
-    expect(apiMocks.agendas).toHaveBeenCalledWith({ limit: 20 }, expect.any(AbortSignal));
+    // Agendas (raw news clusters) live in the lab now, not above the stories.
+    expect(apiMocks.agendas).not.toHaveBeenCalled();
     expect(
       await screen.findByRole("link", {
         name: "Испания и Россия: портовые переговоры",

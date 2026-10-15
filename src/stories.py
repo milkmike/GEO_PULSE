@@ -19,6 +19,8 @@ from typing import Any, Callable, Sequence
 
 from sqlalchemy import text
 
+from src.countries import country_name_ru
+
 
 logger = logging.getLogger(__name__)
 
@@ -676,6 +678,14 @@ def compute_source_hash(
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
+def _ru_plural(n: int, one: str, few: str, many: str) -> str:
+    if n % 10 == 1 and n % 100 != 11:
+        return one
+    if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14:
+        return few
+    return many
+
+
 def deterministic_story_copy(
     candidates: Sequence[StoryCandidate],
     *,
@@ -718,8 +728,9 @@ def deterministic_story_copy(
         )
     })
     summary = (
-        f"Сюжет объединяет {article_count} публикаций из стран "
-        f"{', '.join(countries)} по событию «{title.rstrip('.')}»."
+        f"Сюжет объединяет {article_count} {_ru_plural(article_count, 'публикацию', 'публикации', 'публикаций')} "
+        f"о событии «{title.rstrip('.')}». "
+        f"Страны: {', '.join(country_name_ru(code) for code in countries)}."
     )
     return StoryCopy(title_ru=title, title_en=None, summary=summary)
 

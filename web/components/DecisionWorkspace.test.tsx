@@ -468,7 +468,7 @@ describe("DecisionWorkspace", () => {
     for (const heading of ["В новостях", "Страна за 60 секунд", "Кто какую позицию занимает", "Что меняется для российских граждан и организаций", "Темы для разговора"]) {
       expect(screen.queryByText(new RegExp(heading))).not.toBeInTheDocument();
     }
-    expect(screen.getByText("Обработка приостановлена: достигнут лимит.")).toBeVisible();
+    expect(screen.queryByText("Обработка приостановлена: достигнут лимит.")).not.toBeInTheDocument();
     expect(screen.getByText(/Выборка ограничена/)).toBeVisible();
     const general = screen.getByRole("region", { name: "В мире" });
     expect(within(general).getByText("Общий материал")).toBeVisible();
@@ -530,14 +530,14 @@ describe("DecisionWorkspace", () => {
     expect(within(world).queryByText("World original")).not.toBeInTheDocument();
   });
 
-  it("keeps the processing limit warning visible while detailed coverage is collapsed", async () => {
+  it("does not expose the processing limit to readers while detailed coverage is collapsed", async () => {
     const value = response();
     value.coverage.triage_status = "budget_exhausted";
     value.coverage.pending_from_country_7d = 4;
     mocks.decisionWorkspace.mockResolvedValue(value);
     render(<DecisionWorkspace />);
     await screen.findByText("Сербия ↔ Россия");
-    expect(screen.getByText("Обработка приостановлена: достигнут лимит.")).toBeVisible();
+    expect(screen.queryByText("Обработка приостановлена: достигнут лимит.")).not.toBeInTheDocument();
     expect(screen.getByText("Как собраны данные").closest("details")).not.toHaveAttribute("open");
   });
 });

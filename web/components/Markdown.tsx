@@ -3,7 +3,7 @@
  *  Citation refs like [1] become clickable superscript links when a citations
  *  map is provided. Citation urls are validated to http/https only. */
 import type { Citation } from "@/lib/types";
-import { safeHttpUrl } from "@/lib/format";
+import { localizeLevelTokens, safeHttpUrl } from "@/lib/format";
 
 function escAttr(s: string): string {
   return s
@@ -15,7 +15,7 @@ function escAttr(s: string): string {
 }
 
 function mdToHtml(text: string, cites?: Map<number, Citation>): string {
-  const esc = text
+  const esc = localizeLevelTokens(text)
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");

@@ -354,7 +354,6 @@ export default function DecisionWorkspace({ renderMap, mapControls, activeMapFil
                 <div id={`${titleId}-coverage`}><Heading title="Что вошло в обзор" description="Местные источники · за 7 дней" /></div>
                 {coverage && <>
                   <p className="mt-3 text-sm leading-6 text-fg/75">Мы видим только часть информационной картины. Отсутствие новостей не означает, что ничего не происходит.</p>
-                  {coverage.triage_status && <p role="status" className={`mt-3 text-xs leading-5 ${coverage.triage_status === "budget_exhausted" ? "text-cooling" : "text-dim"}`}>{{ not_started: "Обработка ещё не началась.", partial: "Обработана часть материалов.", up_to_date: "Поступившие материалы обработаны.", budget_exhausted: "Обработка приостановлена: достигнут лимит." }[coverage.triage_status]}</p>}
                   <dl className="mt-4 grid grid-cols-2 gap-4 text-xs">
                     <div><dt className="text-dim">Публикаций за неделю</dt><dd className="tnum mt-1 text-xl text-ru-white">{coverage.collected_from_country_7d}</dd></div>
                     <div><dt className="text-dim">Групп источников</dt><dd className="tnum mt-1 text-xl text-ru-white">{coverage.local_publisher_families}</dd></div>

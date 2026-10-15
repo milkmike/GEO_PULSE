@@ -12,7 +12,6 @@ import {
 import { useRouter, useSearchParams } from "next/navigation";
 import { Filter, LoaderCircle, Network, Search, X } from "lucide-react";
 import SiteHeader from "@/components/SiteHeader";
-import AgendaPanel from "@/components/AgendaPanel";
 import StoryCard from "@/components/StoryCard";
 import { api } from "@/lib/api";
 import type {
@@ -327,11 +326,9 @@ function StoriesPageContent() {
     <main className="mx-auto max-w-[1240px] px-3 pb-16">
       <SiteHeader active="/stories" />
 
-      <AgendaPanel />
-
       <header className="reveal reveal-1 grid gap-6 pb-8 pt-10 lg:grid-cols-[1fr_22rem] lg:items-end">
         <div>
-          <p className="section-num">СЮЖЕТЫ / 02</p>
+          <p className="section-num">СЮЖЕТЫ</p>
           <h1 className="display mt-2 max-w-4xl text-[40px] leading-[0.98] sm:text-[54px]">
             Одна история — несколько стран
           </h1>

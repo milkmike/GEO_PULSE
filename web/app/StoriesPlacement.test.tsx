@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgendaItem, CountrySummary, Dossier, MapEntry, StoryListItem } from "@/lib/types";
-import HomePage from "./page";
+import HomePage from "./lab/page";
 import CountryPage from "./country/[code]/page";
 import { FeatureFlagsProvider } from "@/components/FeatureFlagsProvider";
 
@@ -23,6 +23,11 @@ const apiMocks = vi.hoisted(() => ({
 
 vi.mock("@/lib/api", () => ({ api: apiMocks, apiBase: () => "http://api.test" }));
 vi.mock("@/components/SiteHeader", () => ({ default: () => <nav>header</nav> }));
+// The full agenda panel on the lab page is covered by AgendaPanel.test; keep AgendaCard real.
+vi.mock("@/components/AgendaPanel", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/components/AgendaPanel")>()),
+  default: () => null,
+}));
 vi.mock("@/components/DecisionWorkspace", () => ({
   default: ({ renderMap, mapControls }: {
     renderMap: (props: { selectedCountry: string; onSelectCountry: (code: string) => void }) => ReactNode;
@@ -162,8 +167,9 @@ describe("story placements", () => {
     expect(screen.queryByRole("region", { name: /свежие новостные повестки/i })).not.toBeInTheDocument();
   });
 
-  it("keeps an explicit story panel on a country page even when it is empty", async () => {
-    apiMocks.countryStories.mockResolvedValue({ country: "ES", name: "Испания", stories: [], next_cursor: null });
+  it("omits the country story panel while loading and when there are no stories", async () => {
+    const pending = deferred<{ country: string; name: string; stories: StoryListItem[]; next_cursor: null }>();
+    apiMocks.countryStories.mockReturnValue(pending.promise);
     await act(async () => {
       render(
         <FeatureFlagsProvider flags={{ searchNavigation: false, storiesNavigation: true, investigation: false, signalDetail: false, earlyWarningRadar: false }}>
@@ -172,14 +178,35 @@ describe("story placements", () => {
       );
     });
 
-    expect(await screen.findByRole("region", { name: /сюжеты с участием страны: Испания/i })).toBeVisible();
-    expect(screen.getByText(/пока нет межстрановых сюжетов/i)).toBeVisible();
+    expect(await screen.findByRole("heading", { name: /Испания/ })).toBeVisible();
     await waitFor(() => expect(apiMocks.countryStories).toHaveBeenCalledWith(
       "ES",
       { limit: 6 },
       null,
       expect.any(AbortSignal),
     ));
+    expect(screen.queryByRole("region", { name: /сюжеты с участием страны/i })).not.toBeInTheDocument();
+
+    await act(async () => pending.resolve({ country: "ES", name: "Испания", stories: [], next_cursor: null }));
+    expect(screen.queryByRole("region", { name: /сюжеты с участием страны/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/пока нет межстрановых сюжетов/i)).not.toBeInTheDocument();
+  });
+
+  it("keeps a retryable story error on a country page", async () => {
+    apiMocks.countryStories
+      .mockRejectedValueOnce(new Error("503"))
+      .mockResolvedValueOnce({ country: "ES", name: "Испания", stories: [story(7)], next_cursor: null });
+    await act(async () => {
+      render(
+        <FeatureFlagsProvider flags={{ searchNavigation: false, storiesNavigation: true, investigation: false, signalDetail: false, earlyWarningRadar: false }}>
+          <CountryPage params={Promise.resolve({ code: "es" })} />
+        </FeatureFlagsProvider>,
+      );
+    });
+
+    expect(await screen.findByText("Не удалось загрузить сюжеты.")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "повторить" }));
+    expect(await screen.findByRole("link", { name: "Сюжет 7" })).toBeVisible();
   });
 
   it("aborts and ignores an ES story response after navigation to FR", async () => {

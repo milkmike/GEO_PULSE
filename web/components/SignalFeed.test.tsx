@@ -213,4 +213,19 @@ describe("SignalFeed", () => {
     expect(screen.getByText(/доступны официальные или крупные СМИ/i).closest("li")).toHaveTextContent("нет");
     expect(screen.queryByText(/military|official|analytics|sanctions_escalation/i)).not.toBeInTheDocument();
   });
+
+  it("localizes RRI level codes in stored descriptions and payload facts", () => {
+    render(
+      <SignalFeed signals={[{
+        ...signal,
+        severity: "info",
+        description: "Индекс отношений с Россией сдвинулся вверх на 16.9 пунктов за сутки: сейчас +41.4 [partner].",
+        payload: { score: 41.38, delta_24h: 16.88, level: "partner" },
+      }]} />,
+    );
+    expect(screen.getByText(/сейчас \+41\.4 \(партнёр\)\./)).toBeVisible();
+    expect(screen.getByText("уровень RRI").closest("li")).toHaveTextContent("партнёр");
+    expect(screen.getByText("наблюдение")).toBeVisible();
+    expect(screen.queryByText(/partner|\binfo\b/)).not.toBeInTheDocument();
+  });
 });

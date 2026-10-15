@@ -22,18 +22,9 @@ export default function VoxPanel({ code }: { code: string }) {
     api.vox(code).then(setV).catch(() => setV(null));
   }, [code]);
 
-  if (!v) return null;
-  const last = v.timeline.at(-1);
-  if (!v.timeline.length || !last) {
-    return (
-      <section className="card">
-        <div className="card-title px-4 pb-1 pt-3">Народные настроения</div>
-        <div className="px-4 pb-3 text-xs text-dim">
-          Нет данных по комментариям (собираются для стран СНГ).
-        </div>
-      </section>
-    );
-  }
+  const last = v?.timeline.at(-1);
+  // Comments are collected for CIS countries only; elsewhere there is nothing to show.
+  if (!v || !last) return null;
 
   const emoTotal = Object.values(v.emotions).reduce((a, b) => a + b, 0) || 1;
   const emos = Object.entries(v.emotions)

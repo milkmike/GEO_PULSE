@@ -28,7 +28,8 @@ export default function EnergyPanel({ code }: { code: string }) {
   const [e, setE] = useState<Energy | null>(null);
 
   useEffect(() => {
-    api.energy(code).then(setE).catch(() => setE({ has_data: false }));
+    // On failure show nothing: "no imports recorded" is a factual claim.
+    api.energy(code).then(setE).catch(() => setE(null));
   }, [code]);
 
   if (!e) return null;
