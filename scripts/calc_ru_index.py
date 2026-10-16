@@ -3,6 +3,7 @@ import argparse
 import logging
 import time
 
+from scripts.recompute_ru_index import recompute_ru_index
 from src.countries import COUNTRIES, ensure_countries_in_db
 from src.db import wait_for_db
 from src.engine.ru_index import calculate_ru_index, save_ru_index, warm_cache
@@ -46,6 +47,21 @@ def main():
 
     wait_for_db()
     ensure_countries_in_db()
+
+    # Do not start live snapshots until any concurrent replay has completed.
+    # A failed replay must not stop the index: live deltas only compare rows of
+    # the current version, and the next worker start retries the replay.
+    while True:
+        try:
+            report = recompute_ru_index()
+        except Exception:
+            logger.exception("RRI v1.1 replay failed; continuing with live snapshots")
+            break
+        if report is not None:
+            logger.info("RRI v1.1 replay: %s", report)
+            break
+        logger.info("Waiting for another RRI history replay")
+        time.sleep(5)
 
     if args.loop:
         logger.info(f"Starting RRI calculator (interval: {args.interval}s)")

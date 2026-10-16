@@ -53,6 +53,16 @@ describe("HomeHot helpers", () => {
     expect(warmed.map((c) => c.code)).toEqual(["ID", "MA"]);
   });
 
+  it("uses the API low_data flag before the older article and volume heuristics", () => {
+    const { warmed, cooled } = weeklyMovers([
+      country("BA", "Босния", -10, 4, { low_data: true, article_count: 20 }),
+      country("BR", "Бразилия", 10, 4, { low_data: false, article_count: 1 }),
+      country("NZ", "Новая Зеландия", 12, 4, { low_data: false, media: 0, gdelt_volume: 0 }),
+    ]);
+    expect(cooled).toEqual([]);
+    expect(warmed.map((c) => c.code)).toEqual(["NZ", "BR"]);
+  });
+
   it("leaves out moves whose media layer rests on one or two articles or an empty GDELT reading", () => {
     const { cooled, warmed } = weeklyMovers([
       country("BA", "Босния и Герцеговина", -45, -28.4, { media: -66.7, article_count: 1 }),

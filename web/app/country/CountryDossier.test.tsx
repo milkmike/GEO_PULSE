@@ -123,6 +123,13 @@ describe("country dossier hygiene", () => {
 
   afterEach(() => vi.useRealTimers());
 
+  it("shows the shared low-data hint beside the index", async () => {
+    apiMocks.dossier.mockResolvedValue({ ...dossier, index: { ...dossier.index!, low_data: true, media_confidence: .05 } });
+    await renderCountry();
+    expect(await screen.findByText("мало данных")).toHaveAttribute("title",
+      "индекс держится в основном на позиции страны: о России там почти не пишут");
+  });
+
   it("dates a fresh AI brief and keeps the refresh action", async () => {
     apiMocks.countryBrief.mockResolvedValue(brief("2026-10-12T09:00:00+00:00"));
     await renderCountry();

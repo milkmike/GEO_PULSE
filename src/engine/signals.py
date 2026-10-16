@@ -706,7 +706,7 @@ def detect_index_shifts(session) -> int:
         text("""
             WITH latest AS (
                 SELECT DISTINCT ON (country_code)
-                       country_code, score, level, delta_24h, time
+                       country_code, score, level, delta_24h, time, version
                 FROM ru_index
                 ORDER BY country_code, time DESC
             )
@@ -719,6 +719,8 @@ def detect_index_shifts(session) -> int:
                 SELECT r.time, r.score, r.level
                 FROM ru_index r
                 WHERE r.country_code = l.country_code
+                  AND r.version = l.version
+                  AND r.time > l.time - INTERVAL '8 days'
                   AND r.time <= l.time - INTERVAL '18 hours'
                 ORDER BY r.time DESC
                 LIMIT 1

@@ -18,6 +18,7 @@ from src.api.public_urls import safe_public_url
 from src.api.signal_article_context import load_signal_article_previews
 from src.countries import COUNTRIES, REGIONS, country_name_ru
 from src.db import get_session
+from src.engine.ru_index import media_api_fields
 from src.engine.health import health_summary, source_coverage, source_health
 from src.entities import CATEGORIES as ENTITY_CATEGORIES, ENTITIES, get_entity
 from src.pipeline.agreements import group_agreements
@@ -84,7 +85,7 @@ def list_countries(region: Optional[str] = None, level: Optional[str] = None):
                     SELECT DISTINCT ON (country_code)
                            country_code, score, structural, media, level,
                            delta_24h, delta_7d, article_count,
-                           gdelt_volume, gdelt_tone, time
+                           gdelt_volume, gdelt_tone, time, details
                     FROM ru_index
                     ORDER BY country_code, time DESC
                 """)
@@ -107,6 +108,7 @@ def list_countries(region: Optional[str] = None, level: Optional[str] = None):
                 "gdelt_volume": float(r.gdelt_volume) if r.gdelt_volume is not None else None,
                 "gdelt_tone": float(r.gdelt_tone) if r.gdelt_tone is not None else None,
                 "updated_at": r.time.isoformat(),
+                **media_api_fields(r.details),
             })
 
     if region:
@@ -394,6 +396,7 @@ def country_dossier(code: str, days: int = Query(30, ge=1, le=365)):
             "delta_24h": float(latest.delta_24h) if latest.delta_24h is not None else None,
             "delta_7d": float(latest.delta_7d) if latest.delta_7d is not None else None,
             "details": latest.details,
+            **media_api_fields(latest.details),
             "updated_at": latest.time.isoformat(),
             "version": latest.version,
         } if latest else None,

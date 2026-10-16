@@ -1,8 +1,9 @@
-"""Russia Relations Index (RRI v1) — world-wide index of relations with Russia.
+"""Russia Relations Index (RRI v1.1) — world-wide index of relations with Russia.
 
 Methodology (inspired by worldmonitor's CII v8 two-layer design):
 
-    score = w_structural × structural + w_media × media + boost
+    w_media_eff = w_media × confidence; w_structural_eff = 1 − w_media_eff
+    score = w_structural_eff × structural + w_media_eff × media + boost
     clamped to [-100, +100], then floors/caps from hard facts are enforced.
 
 Layers:
@@ -18,14 +19,18 @@ is far higher fidelity than GDELT tone:
   tier 1: 0.45 structural / 0.55 media
   tier 2: 0.60 structural / 0.40 media
 
+These are full-evidence weights. Media confidence grows with article count,
+reaching 1 at 20 articles over the thermometer's 14-day window. GDELT confidence
+is the fraction of the last 7 calendar days with tone and positive volume.
+Unused media weight goes to the structural baseline. Without media, only the
+structural baseline is used (the existing no-media boost behavior is preserved).
+
 Levels: ally ≥ +45 · partner +15..45 · neutral −15..+15 ·
         cooling −40..−15 · tension −70..−40 · hostile < −70
 """
 import json
 import logging
-import math
-import statistics
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import text
 
@@ -34,7 +39,10 @@ from src.db import get_session
 
 logger = logging.getLogger(__name__)
 
-INDEX_VERSION = "v1"
+INDEX_VERSION = "v1.1"
+FULL_EVIDENCE_ARTICLES = 20
+LOW_DATA_CONFIDENCE = 0.25
+GDELT_WINDOW_DAYS = 7
 
 MEMBERSHIP_WEIGHTS = {
     "union_state": 20,
@@ -151,6 +159,63 @@ def structural_baseline(country: dict, session) -> tuple[float, dict]:
     return _clamp(score), detail
 
 
+def media_evidence(source: str, *, articles: int | None = None,
+                   days_with_volume: int | None = None) -> dict:
+    """Stored evidence and bounded confidence, shared by live and replay paths."""
+    if source == "temperature":
+        confidence = min(1.0, max(0, articles or 0) / FULL_EVIDENCE_ARTICLES)
+    elif source == "gdelt":
+        confidence = min(1.0, max(0, days_with_volume or 0) / GDELT_WINDOW_DAYS)
+    else:
+        confidence = 0.0
+    return {"articles": articles, "days_with_volume": days_with_volume,
+            "confidence": confidence}
+
+
+def gdelt_days_with_volume(rows, at: datetime) -> int:
+    """Count distinct observed days in the inclusive UTC seven-day window."""
+    end = at.astimezone(timezone.utc).date()
+    start = end - timedelta(days=GDELT_WINDOW_DAYS)
+    return len({r.day for r in rows if start < r.day <= end
+                and r.tone_avg is not None and (r.volume or 0) > 0})
+
+
+def score_components(country: dict, structural: float, media: float | None,
+                     boost: float, confidence: float) -> tuple[float, dict, str | None]:
+    """Apply the v1.1 formula and unchanged bounds, including no-media behavior."""
+    base_s, base_m = TIER1_WEIGHTS if country["tier"] == 1 else TIER2_WEIGHTS
+    w_m = base_m * confidence if media is not None else 0.0
+    # At full confidence use the equivalent original constant: 1 - 0.55
+    # introduces binary error that can change v1 rounding by 0.01.
+    w_s = base_s if media is not None and confidence == 1.0 else 1.0 - w_m
+    combined = structural if media is None else w_s * structural + w_m * media + boost
+    combined, rule = apply_floors_caps(_clamp(combined), country)
+    return round(combined, 2), {"structural": w_s, "media": w_m}, rule
+
+
+def deltas_from_history(now: datetime, score: float, history) -> tuple[float | None, float | None]:
+    """Use the newest prior point at least 75% of each target age, within 8 days.
+
+    Callers supply only points from the same version. Accept (time, score) pairs
+    in any order; future points and the current snapshot cannot be baselines.
+    """
+    points = sorted(((at, float(value)) for at, value in history
+                     if now - timedelta(days=8) < at < now), reverse=True)
+    deltas = []
+    for hours in (24, 168):
+        baseline = next((value for at, value in points
+                         if now - at >= timedelta(hours=hours * 0.75)), None)
+        deltas.append(round(score - baseline, 2) if baseline is not None else None)
+    return tuple(deltas)
+
+
+def media_api_fields(details: dict | None) -> dict:
+    """Public evidence flags for both the API fallback and the warmed cache."""
+    details = details or {}
+    return {"media_confidence": (details.get("media") or {}).get("confidence"),
+            "low_data": bool(details.get("low_data", False))}
+
+
 def media_component(country: dict, session) -> tuple[float | None, dict]:
     """Fast layer: LLM temperature (tier 1) or GDELT tone (tier 2).
 
@@ -159,6 +224,7 @@ def media_component(country: dict, session) -> tuple[float | None, dict]:
     """
     detail = {}
     code = country["code"]
+    now = datetime.now(timezone.utc)
 
     # Own-media LLM temperature (preferred when fresh: < 48h old)
     temp_row = session.execute(
@@ -169,10 +235,11 @@ def media_component(country: dict, session) -> tuple[float | None, dict]:
         {"cc": code},
     ).fetchone()
     if temp_row and temp_row.temperature is not None:
-        age_h = (datetime.now(timezone.utc) - temp_row.time).total_seconds() / 3600
+        age_h = (now - temp_row.time).total_seconds() / 3600
         if age_h <= 48:
             detail["source"] = "temperature"
             detail["article_count"] = temp_row.article_count
+            detail.update(media_evidence("temperature", articles=temp_row.article_count))
             return float(temp_row.temperature), detail
 
     # GDELT tone, 7-day weighted average (recent days matter more)
@@ -180,10 +247,10 @@ def media_component(country: dict, session) -> tuple[float | None, dict]:
         text("""
             SELECT day, tone_avg, volume FROM gdelt_daily
             WHERE country_code = :cc AND tone_avg IS NOT NULL
-              AND day > CURRENT_DATE - 8
+              AND day > :window_end - 7 AND day <= :window_end
             ORDER BY day DESC
         """),
-        {"cc": code},
+        {"cc": code, "window_end": now.date()},
     ).fetchall()
     if rows:
         num, den = 0.0, 0.0
@@ -195,9 +262,10 @@ def media_component(country: dict, session) -> tuple[float | None, dict]:
         detail["source"] = "gdelt"
         detail["gdelt_tone_7d"] = round(tone, 2)
         detail["gdelt_volume_latest"] = float(rows[0].volume or 0)
+        detail.update(media_evidence("gdelt", days_with_volume=gdelt_days_with_volume(rows, now)))
         return _clamp(tone * GDELT_TONE_SCALE), detail
 
-    return None, {"source": "none"}
+    return None, {"source": "none", **media_evidence("none")}
 
 
 def event_boost(code: str, session) -> tuple[float, dict]:
@@ -263,46 +331,27 @@ def calculate_ru_index(code: str) -> dict | None:
         media, m_detail = media_component(country, session)
         boost, b_detail = event_boost(code, session)
 
-        w_s, w_m = TIER1_WEIGHTS if country["tier"] == 1 else TIER2_WEIGHTS
-        if media is None:
-            # No media signal at all — index rests on the structural layer
-            combined = structural
-            w_s, w_m = 1.0, 0.0
-        else:
-            combined = w_s * structural + w_m * media + boost
+        confidence = m_detail["confidence"]
+        score, weights, bound_rule = score_components(country, structural, media, boost, confidence)
 
-        combined = _clamp(combined)
-        combined, bound_rule = apply_floors_caps(combined, country)
-        score = round(combined, 2)
-
-        # Deltas from history
-        delta_24h = delta_7d = None
+        # Never compare different formula versions.
         hist = session.execute(
             text("""
                 SELECT time, score FROM ru_index
-                WHERE country_code = :cc AND time > NOW() - INTERVAL '8 days'
+                WHERE country_code = :cc AND time > :now - INTERVAL '8 days'
+                  AND version = :version AND time < :now
                 ORDER BY time DESC
             """),
-            {"cc": code},
+            {"cc": code, "version": INDEX_VERSION, "now": now},
         ).fetchall()
-        for target_hours, attr in ((24, "delta_24h"), (168, "delta_7d")):
-            best = None
-            for h in hist:
-                age_h = (now - h.time).total_seconds() / 3600
-                if age_h >= target_hours * 0.75:
-                    best = float(h.score)
-                    break
-            if best is not None:
-                if attr == "delta_24h":
-                    delta_24h = round(score - best, 2)
-                else:
-                    delta_7d = round(score - best, 2)
+        delta_24h, delta_7d = deltas_from_history(now, score, hist)
 
         details = {
             "structural": s_detail,
             "media": m_detail,
             "boost": b_detail,
-            "weights": {"structural": w_s, "media": w_m},
+            "weights": weights,
+            "low_data": media is not None and confidence < LOW_DATA_CONFIDENCE,
         }
         if bound_rule:
             details["bound_rule"] = bound_rule
@@ -354,7 +403,7 @@ def warm_cache():
                 SELECT DISTINCT ON (r.country_code)
                        r.country_code, r.score, r.structural, r.media, r.level,
                        r.delta_24h, r.delta_7d, r.article_count,
-                       r.gdelt_volume, r.gdelt_tone, r.time
+                       r.gdelt_volume, r.gdelt_tone, r.time, r.details
                 FROM ru_index r
                 ORDER BY r.country_code, r.time DESC
             """)
@@ -383,6 +432,7 @@ def warm_cache():
             "gdelt_volume": float(r.gdelt_volume) if r.gdelt_volume is not None else None,
             "gdelt_tone": float(r.gdelt_tone) if r.gdelt_tone is not None else None,
             "updated_at": r.time.isoformat(),
+            **media_api_fields(r.details),
         })
 
     try:

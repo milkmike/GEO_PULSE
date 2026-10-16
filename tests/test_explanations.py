@@ -792,13 +792,23 @@ def test_index_explanation_endpoint_validates_window_forms_and_urls(monkeypatch)
         "country_code": "KZ",
         "from_time": NOW - timedelta(hours=24),
         "to_time": NOW,
-        "rri_version": "v1",
+        "rri_version": "v1.1",
     }
     assert interval.status_code == 200
     assert mixed.status_code == 422
     assert incomplete.status_code == 422
     assert reversed_interval.status_code == 422
     assert naive.status_code == 422
+
+
+@pytest.mark.parametrize("version", ["v1", "v1.1"])
+def test_index_explanation_accepts_minor_formula_versions(monkeypatch, version):
+    client, observed = investigation_client(monkeypatch)
+    response = client.get("/api/v2/countries/KZ/index-explanation", params={
+        "at": NOW.isoformat(), "rri_version": version,
+    })
+    assert response.status_code == 200
+    assert observed[0]["rri_version"] == version
 
 
 def test_methodology_endpoint_returns_plain_and_technical_layers(monkeypatch):
