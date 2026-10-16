@@ -145,6 +145,168 @@ def test_unregistered_publisher_country_cannot_abort_the_hourly_cycle(radar_engi
     assert trends == ["ES"]
 
 
+def _seed_quiet_media_trends(connection, *, as_of: datetime, healthy_until: datetime) -> None:
+    """Three open ES media trends whose topics went quiet, on healthy collection.
+
+    Every UTC day carries irrelevant articles from two publisher families:
+    healthy collection that yields no new Radar observation for any topic. The
+    third trend's evidence predates the 104-day history lookback.
+    """
+
+    from src.radar.grouping import CountryWave, assign_meta_trends
+    from src.radar.repository import make_observation
+    from src.radar.service import _persist_sql
+
+    connection.execute(text("""
+        INSERT INTO countries(code, name_ru, name_en, iso3, region)
+        VALUES ('ES', 'Испания', 'Spain', 'ESP', 'europe');
+        INSERT INTO sources(id, name, url, country_code, source_type, config)
+        VALUES
+          (1, 'Diario ES', 'https://diario-es.example/rss', 'ES', 'rss',
+           '{"publisher_domain": "diario-es.example"}'),
+          (2, 'Radio ES', 'https://radio-es.example/rss', 'ES', 'rss',
+           '{"publisher_domain": "radio-es.example"}');
+    """))
+    day = (as_of - timedelta(days=95)).replace(hour=6, minute=0)
+    articles = []
+    while day < healthy_until:
+        for source_id in (1, 2):
+            articles.append({
+                "id": len(articles) + 1, "source_id": source_id,
+                "external_id": f"article-{len(articles) + 1}",
+                "url": f"https://example.test/{len(articles) + 1}",
+                "published_at": day,
+            })
+        day += timedelta(days=1)
+    connection.execute(text("""
+        INSERT INTO articles(id, source_id, external_id, title, url,
+                             published_at, collected_at)
+        VALUES (:id, :source_id, :external_id, 'Local news', :url,
+                :published_at, :published_at + INTERVAL '10 minutes')
+    """), articles)
+    connection.execute(text("""
+        INSERT INTO analysis(article_id, is_relevant, sentiment, topics, analyzed_at)
+        VALUES (:id, FALSE, 0, ARRAY[]::text[], :published_at + INTERVAL '20 minutes')
+    """), articles)
+
+    def media_point(subject: str, observed_at: datetime, article_id: int):
+        return make_observation(
+            country_code="ES", contour="media", subject_key=subject,
+            direction="negative", metric="attention_share",
+            observed_at=observed_at, evidence_ids=(f"article:{article_id}",),
+            value=0.8, publisher_family_count=2, source_count=2,
+            coverage_confidence=1.0,
+            evidence={"article_ids": (article_id,)},
+        )
+
+    confirmed = tuple(
+        media_point("event:quiet_note", as_of - timedelta(days=days_ago), days_ago)
+        for days_ago in (20, 15, 11, 8)
+    )
+    emerging = (media_point("event:fizzled_note", as_of - timedelta(days=31), 31),)
+    ancient = (media_point("event:ancient_note", as_of - timedelta(days=110), 110),)
+    waves = (
+        CountryWave(
+            country_code="ES", contour="media", subject_key="event:quiet_note",
+            direction="negative", observations=confirmed,
+            first_observed_at=confirmed[0].observed_at,
+            t0_auto=confirmed[0].observed_at, t0_effective=confirmed[0].observed_at,
+            wave_key="quiet-confirmed", state="confirmed",
+            detected_at=confirmed[0].observed_at,
+            confirmed_at=confirmed[1].observed_at,
+        ),
+        CountryWave(
+            country_code="ES", contour="media", subject_key="event:fizzled_note",
+            direction="negative", observations=emerging,
+            first_observed_at=emerging[0].observed_at, t0_auto=None,
+            wave_key="quiet-emerging", state="emerging",
+            detected_at=emerging[0].observed_at,
+        ),
+        CountryWave(
+            country_code="ES", contour="media", subject_key="event:ancient_note",
+            direction="negative", observations=ancient,
+            first_observed_at=ancient[0].observed_at, t0_auto=None,
+            wave_key="out-of-window", state="emerging",
+            detected_at=ancient[0].observed_at,
+        ),
+    )
+    session = Session(bind=connection)
+    _persist_sql(
+        session, [*confirmed, *emerging, *ancient], waves,
+        assign_meta_trends(waves, ()).meta_trends,
+        confirmed[-1].observed_at + timedelta(hours=1),
+    )
+    session.flush()
+
+
+def test_quiet_media_trends_age_in_incremental_cycles(radar_engine):
+    """Hourly ``--generation-days 3`` cycles must age topics with no new article."""
+
+    # Meta memberships record joined_at with the wall clock and may only be
+    # closed later, so the replay runs after "now".
+    as_of = datetime(datetime.now(timezone.utc).year + 1, 6, 1, 14, tzinfo=timezone.utc)
+    later = as_of + timedelta(days=31)
+    with radar_engine.begin() as connection:
+        _seed_quiet_media_trends(connection, as_of=as_of, healthy_until=later)
+
+    @contextmanager
+    def session_factory():
+        session = Session(bind=radar_engine)
+        try:
+            yield session
+        finally:
+            session.close()
+
+    def cycle(cycle_as_of: datetime) -> dict[str, tuple[str, str, float]]:
+        payload = run_once(
+            parse_args([
+                "--apply", "--days", "90", "--generation-days", "3",
+                "--as-of", cycle_as_of.isoformat(),
+            ]),
+            session_factory=session_factory,
+        )
+        assert payload["inserted_observations"] == 0
+        with radar_engine.connect() as connection:
+            rows = connection.execute(text("""
+                SELECT wave_key, state, explanation->>'lifecycle_reason' AS reason,
+                       coverage_confidence
+                FROM radar_trends WHERE scope = 'country'
+            """)).all()
+        return {
+            row.wave_key: (row.state, row.reason, float(row.coverage_confidence))
+            for row in rows
+        }
+
+    assert cycle(as_of) == {
+        "quiet-confirmed": ("cooling", "quiet_window_elapsed", 1.0),
+        "quiet-emerging": ("rejected", "unconfirmed_quiet_window_elapsed", 1.0),
+        # Not re-scored from nothing: a full cycle still ages it.
+        "out-of-window": ("emerging", "unscored", 1.0),
+    }
+    assert cycle(later)["quiet-confirmed"] == ("resolved", "quiet_window_elapsed", 1.0)
+    with radar_engine.connect() as connection:
+        transitions = connection.execute(text("""
+            SELECT trend.wave_key, event.from_state, event.to_state
+            FROM radar_state_events event
+            JOIN radar_trends trend ON trend.id = event.trend_id
+            WHERE trend.scope = 'country'
+            ORDER BY trend.wave_key, event.occurred_at
+        """)).all()
+        open_members = connection.execute(text("""
+            SELECT count(*) FROM radar_trend_members WHERE left_at IS NULL
+        """)).scalar_one()
+    assert [tuple(row) for row in transitions] == [
+        ("out-of-window", None, "emerging"),
+        ("quiet-confirmed", None, "confirmed"),
+        ("quiet-confirmed", "confirmed", "cooling"),
+        ("quiet-confirmed", "cooling", "resolved"),
+        ("quiet-emerging", None, "emerging"),
+        ("quiet-emerging", "emerging", "rejected"),
+    ]
+    # Only the untouched out-of-window trend keeps its meta membership.
+    assert open_members == 1
+
+
 def test_annual_action_trend_cools_and_resolves_in_incremental_cycles(radar_engine):
     """A confirmed annual action must age out instead of being held forever."""
 

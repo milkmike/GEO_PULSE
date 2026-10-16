@@ -94,6 +94,26 @@ WHERE trend.scope = 'country' AND trend.detector_version = :detector_version
   AND trend.first_observed_at < :as_of
 """)
 
+_NON_TERMINAL_IDENTITIES = text("""
+/* radar_non_terminal_identities */
+SELECT DISTINCT trend.country_code, trend.contour::text AS contour,
+       trend.subject_key, trend.direction
+FROM radar_trends trend
+WHERE trend.scope = 'country' AND trend.detector_version = :detector_version
+  AND trend.state IN ('candidate', 'emerging', 'confirmed', 'cooling')
+  AND trend.first_observed_at < :as_of
+  AND (
+    trend.contour = 'action'
+    OR EXISTS (
+      SELECT 1 FROM radar_trend_evidence evidence
+      JOIN radar_observations observation ON observation.id = evidence.observation_id
+      WHERE evidence.trend_id = trend.id
+        AND observation.observed_at >= :history_start
+        AND observation.observed_at < :as_of
+    )
+  )
+""")
+
 _STORY_ANCHORS = text("""
 /* radar_story_anchors */
 SELECT story.id, event.event_key, story.meta->>'subject_key' AS subject_key
@@ -330,6 +350,7 @@ def _previous_waves(session, as_of: datetime) -> tuple[CountryWave, ...]:
 
 def _identity_params(
     observations: Iterable[Observation],
+    extra_identities: Iterable[tuple[str, str, str, str]] = (),
 ) -> dict[str, list[str]]:
     # The opposite direction is loaded too, so an incremental cycle sees both
     # sides of a possible contradiction (see _hold_contradicted_confirmations).
@@ -345,7 +366,7 @@ def _identity_params(
             observation.direction,
             _OPPOSITE_DIRECTIONS.get(observation.direction, observation.direction),
         )
-    })
+    } | set(extra_identities))
     return {
         "identity_countries": [identity[0] for identity in identities],
         "identity_contours": [identity[1] for identity in identities],
@@ -358,10 +379,11 @@ def _previous_waves_for_identities(
     session: Any,
     as_of: datetime,
     observations: Iterable[Observation],
+    extra_identities: Iterable[tuple[str, str, str, str]] = (),
 ) -> tuple[CountryWave, ...]:
     if _store(session) is not None:
         return ()
-    params = _identity_params(observations)
+    params = _identity_params(observations, extra_identities)
     if not params["identity_countries"]:
         return ()
     rows = session.execute(_PRIOR_WAVES_FOR_IDENTITIES, {
@@ -370,6 +392,36 @@ def _previous_waves_for_identities(
         "as_of": as_of,
     }).fetchall()
     return _waves_from_rows(rows)
+
+
+def _non_terminal_identities(
+    session: Any, as_of: datetime, days: int,
+) -> tuple[tuple[str, str, str, str], ...]:
+    """Identities of open country waves that can be re-scored this cycle.
+
+    An incremental cycle regenerates only recent observations, so a quiet wave
+    would otherwise never be re-scored and could not cool, resolve or reject.
+    A media wave qualifies only with evidence inside the history lookback:
+    without it, re-scoring could only rewrite it with zero coverage, and its
+    90-day health gate leaves it to a full cycle. Actions have no such gate.
+    """
+
+    if _store(session) is not None:
+        return ()
+    rows = session.execute(_NON_TERMINAL_IDENTITIES, {
+        "detector_version": DETECTOR_VERSION,
+        "history_start": as_of - timedelta(days=days + 14),
+        "as_of": as_of,
+    }).fetchall()
+    return tuple(
+        (
+            str(_row_value(row, "country_code")),
+            str(_row_value(row, "contour")),
+            str(_row_value(row, "subject_key")),
+            str(_row_value(row, "direction")),
+        )
+        for row in rows
+    )
 
 
 def _story_anchors(session, as_of: datetime) -> tuple[object, ...]:
@@ -413,10 +465,11 @@ def _history_for_identities(
     as_of: datetime,
     days: int,
     observations: Iterable[Observation],
+    extra_identities: Iterable[tuple[str, str, str, str]] = (),
 ) -> tuple[Observation, ...]:
     if _store(session) is not None:
         return ()
-    params = _identity_params(observations)
+    params = _identity_params(observations, extra_identities)
     if not params["identity_countries"]:
         return ()
     rows = session.execute(_HISTORY_FOR_IDENTITIES, {
@@ -2040,9 +2093,17 @@ def run_radar_cycle(
         observation.input_hash for observation in generated
     )
     retained_actions = _action_history(session, as_of, days) if incremental else ()
+    # Open waves without a generated observation still age every cycle. Their
+    # history and prior waves load by identity, as in a full cycle, so they are
+    # re-scored from real evidence instead of as empty zero-coverage waves.
+    open_identities = (
+        _non_terminal_identities(session, as_of, days) if incremental else ()
+    )
     history = (
         (
-            *_history_for_identities(session, as_of, days, generated),
+            *_history_for_identities(
+                session, as_of, days, generated, open_identities,
+            ),
             *retained_actions,
         )
         if incremental
@@ -2058,7 +2119,7 @@ def run_radar_cycle(
     )
     previous_waves = (
         _previous_waves_for_identities(
-            session, as_of, (*generated, *retained_actions),
+            session, as_of, (*generated, *retained_actions), open_identities,
         )
         if incremental
         else _previous_waves(session, as_of)
