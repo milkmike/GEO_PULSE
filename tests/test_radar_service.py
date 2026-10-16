@@ -1203,6 +1203,282 @@ def test_incremental_identities_include_the_opposite_direction():
     }
 
 
+_OPEN_STATES = {"candidate", "emerging", "confirmed", "cooling"}
+
+
+def _requested_identities(params):
+    return set(zip(
+        params["identity_countries"], params["identity_contours"],
+        params["identity_subjects"], params["identity_directions"],
+    ))
+
+
+def _row_identity(row):
+    return (
+        row["country_code"], row["contour"], row["subject_key"], row["direction"],
+    )
+
+
+def _point_identity(point):
+    return (
+        point.country_code, point.contour.value, point.subject_key, point.direction,
+    )
+
+
+class _PersistedRadarSession(_RecordingSqlSession):
+    """Serves persisted trends and history only for the identities requested."""
+
+    def __init__(self, trends, history):
+        super().__init__()
+        self.trends = trends
+        self.history = history
+
+    def execute(self, statement, params=None):
+        sql = str(statement)
+        params = params or {}
+        if "radar_non_terminal_identities" in sql:
+            self.calls.append((sql, params))
+            return _Result(rows=[
+                {key: row[key] for key in (
+                    "country_code", "contour", "subject_key", "direction",
+                )}
+                for row in self.trends if row["state"] in _OPEN_STATES
+                and (
+                    row["contour"] == "action"
+                    or params["history_start"] <= row["last_observed_at"] < params["as_of"]
+                )
+            ])
+        if "radar_prior_waves_incremental" in sql:
+            self.calls.append((sql, params))
+            requested = _requested_identities(params)
+            return _Result(rows=[
+                row for row in self.trends if _row_identity(row) in requested
+            ])
+        if "radar_observation_history_incremental" in sql:
+            self.calls.append((sql, params))
+            requested = _requested_identities(params)
+            return _Result(rows=[
+                point for point in self.history
+                if _point_identity(point) in requested
+                and params["history_start"] <= point.observed_at < params["as_of"]
+            ])
+        if "SELECT id, state, first_observed_at" in sql:
+            self.calls.append((sql, params))
+            return _Result(rows=[
+                row for row in self.trends
+                if row["wave_key"] == params["wave_key"]
+            ])
+        return super().execute(statement, params)
+
+
+def _persisted_media_trend(state, history, *, wave_key):
+    first = history[0].observed_at
+    confirmed = state in (TrendState.CONFIRMED, TrendState.COOLING)
+    return {
+        "id": 41, "wave_key": wave_key, "country_code": "ES", "contour": "media",
+        "subject_key": history[0].subject_key, "direction": "negative",
+        "state": state.value, "first_observed_at": first,
+        "detected_at": first if state is not TrendState.CANDIDATE else None,
+        "confirmed_at": first if confirmed else None,
+        "t0_auto": first if confirmed else None,
+        "t0_effective": first if confirmed else None,
+        "has_analyst_t0_override": False,
+        "last_observed_at": history[-1].observed_at,
+    }
+
+
+def test_incremental_cycle_cools_quiet_confirmed_media_wave_from_its_history(monkeypatch):
+    """Production runs ``--generation-days 3``: quiet open waves must still age."""
+
+    import src.radar.service as service
+
+    quiet_history = [
+        _media_point(AS_OF - timedelta(days=days_ago), subject="event:quiet",
+                     value=0.8, article_id=950 + days_ago)
+        for days_ago in (20, 15, 11, 8)
+    ]
+    trend = _persisted_media_trend(
+        TrendState.CONFIRMED, quiet_history, wave_key="quiet-confirmed",
+    )
+    unrelated = _media_point(AS_OF - timedelta(days=1), value=0.8, article_id=990)
+    monkeypatch.setattr(service, "build_media_observations", lambda *_: [unrelated])
+    monkeypatch.setattr(service, "build_action_observations", lambda *_: [])
+    monkeypatch.setattr(service, "_action_history", lambda *_: ())
+    # The last observation sits in bucket 82; every later day is healthy.
+    monkeypatch.setattr(
+        service, "_media_collection_health", lambda *_: {"ES": set(range(83, 90))},
+    )
+    session = _PersistedRadarSession([trend], quiet_history)
+
+    report = run_radar_cycle(session, AS_OF, shadow=False, generation_days=3)
+
+    waves = {wave.wave_key: wave for wave in report.country_waves}
+    quiet = waves["quiet-confirmed"]
+    assert quiet.state is TrendState.COOLING
+    assert quiet.lifecycle_reason == "quiet_window_elapsed"
+    assert quiet.confirmed_at == trend["confirmed_at"]
+    # Re-scored from its real evidence, not as an empty unmatched wave whose
+    # zero coverage would leak into /api/v2/radar/coverage.
+    assert quiet.observations == tuple(quiet_history)
+    assert quiet.baseline.coverage_confidence == pytest.approx(1.0)
+    [update] = [
+        params for sql, params in session.calls
+        if "UPDATE radar_trends trend SET" in sql and params.get("id") == trend["id"]
+    ]
+    assert update["state"] == "cooling"
+    assert update["coverage_confidence"] == pytest.approx(1.0)
+    assert any(
+        "INSERT INTO radar_state_events" in sql
+        and params["trend_id"] == trend["id"]
+        and (params["from_state"], params["to_state"]) == ("confirmed", "cooling")
+        for sql, params in session.calls
+    )
+
+
+def test_incremental_cycle_rejects_candidate_after_thirty_healthy_quiet_days(monkeypatch):
+    import src.radar.service as service
+
+    quiet_history = [
+        _media_point(AS_OF - timedelta(days=31), subject="event:fizzled",
+                     value=0.8, article_id=960),
+    ]
+    trend = _persisted_media_trend(
+        TrendState.CANDIDATE, quiet_history, wave_key="quiet-candidate",
+    )
+    monkeypatch.setattr(service, "build_media_observations", lambda *_: [])
+    monkeypatch.setattr(service, "build_action_observations", lambda *_: [])
+    monkeypatch.setattr(service, "_action_history", lambda *_: ())
+    monkeypatch.setattr(
+        service, "_media_collection_health", lambda *_: {"ES": set(range(60, 90))},
+    )
+
+    report = run_radar_cycle(
+        _PersistedRadarSession([trend], quiet_history), AS_OF,
+        shadow=True, generation_days=3,
+    )
+
+    [wave] = report.country_waves
+    assert wave.wave_key == "quiet-candidate"
+    assert wave.observations == tuple(quiet_history)
+    assert wave.state is TrendState.REJECTED
+    assert wave.lifecycle_reason == "unconfirmed_quiet_window_elapsed"
+
+
+def test_incremental_aging_still_needs_healthy_media_collection(monkeypatch):
+    import src.radar.service as service
+
+    quiet_history = [
+        _media_point(AS_OF - timedelta(days=days_ago), subject="event:quiet",
+                     value=0.8, article_id=970 + days_ago)
+        for days_ago in (20, 15, 11, 8)
+    ]
+    trend = _persisted_media_trend(
+        TrendState.CONFIRMED, quiet_history, wave_key="quiet-confirmed",
+    )
+    monkeypatch.setattr(service, "build_media_observations", lambda *_: [])
+    monkeypatch.setattr(service, "build_action_observations", lambda *_: [])
+    monkeypatch.setattr(service, "_action_history", lambda *_: ())
+    # One unhealthy day after the last observation is a collection gap, not quiet.
+    monkeypatch.setattr(
+        service, "_media_collection_health", lambda *_: {"ES": {83, 84, 86, 87, 88, 89}},
+    )
+
+    report = run_radar_cycle(
+        _PersistedRadarSession([trend], quiet_history), AS_OF,
+        shadow=True, generation_days=3,
+    )
+
+    [wave] = report.country_waves
+    assert wave.state is TrendState.CONFIRMED
+    assert wave.lifecycle_reason == "collection_gap"
+
+
+def test_incremental_aging_skips_media_waves_with_no_evidence_in_lookback(monkeypatch):
+    """Without in-window evidence a media wave cannot be re-scored, only zeroed.
+
+    Prod holds ~20k such candidates; rewriting each one hourly with zero
+    coverage would pollute /api/v2/radar/coverage. A full cycle still ages them.
+    """
+
+    import src.radar.service as service
+
+    ancient = [
+        _media_point(AS_OF - timedelta(days=110), subject="event:ancient",
+                     value=0.8, article_id=985),
+    ]
+    trend = _persisted_media_trend(
+        TrendState.CANDIDATE, ancient, wave_key="out-of-window-candidate",
+    )
+    monkeypatch.setattr(service, "build_media_observations", lambda *_: [])
+    monkeypatch.setattr(service, "build_action_observations", lambda *_: [])
+    monkeypatch.setattr(service, "_action_history", lambda *_: ())
+    monkeypatch.setattr(
+        service, "_media_collection_health", lambda *_: {"ES": set(range(90))},
+    )
+    session = _PersistedRadarSession([trend], ancient)
+
+    report = run_radar_cycle(session, AS_OF, shadow=True, generation_days=3)
+
+    assert report.country_waves == ()
+    assert not any(
+        "radar_observation_history_incremental" in sql for sql, _ in session.calls
+    )
+
+
+def test_incremental_aging_cools_action_wave_older_than_action_retention(monkeypatch):
+    import src.radar.service as service
+
+    legacy_at = AS_OF - timedelta(days=110)
+    previous = _stale_previous_action(TrendState.CONFIRMED, legacy_at)
+    trend = {
+        "id": 42, "wave_key": previous.wave_key, "country_code": "RS",
+        "contour": "action", "subject_key": previous.subject_key,
+        "direction": previous.direction, "state": "confirmed",
+        "first_observed_at": legacy_at, "detected_at": legacy_at,
+        "confirmed_at": legacy_at, "t0_auto": legacy_at, "t0_effective": legacy_at,
+        "has_analyst_t0_override": False, "last_observed_at": legacy_at,
+    }
+    monkeypatch.setattr(service, "build_media_observations", lambda *_: [])
+    monkeypatch.setattr(service, "build_action_observations", lambda *_: [])
+    monkeypatch.setattr(service, "_action_history", lambda *_: ())
+    monkeypatch.setattr(service, "_media_collection_health", lambda *_: {})
+
+    report = run_radar_cycle(
+        _PersistedRadarSession([trend], []), AS_OF, shadow=True, generation_days=3,
+    )
+
+    [wave] = report.country_waves
+    assert wave.wave_key == previous.wave_key
+    assert wave.state is TrendState.COOLING
+    assert wave.lifecycle_reason == "quiet_window_elapsed"
+
+
+def test_incremental_cycle_leaves_terminal_waves_without_new_evidence_alone(monkeypatch):
+    import src.radar.service as service
+
+    resolved_history = [
+        _media_point(AS_OF - timedelta(days=40), subject="event:over",
+                     value=0.8, article_id=980),
+    ]
+    trend = _persisted_media_trend(
+        TrendState.RESOLVED, resolved_history, wave_key="already-resolved",
+    )
+    monkeypatch.setattr(service, "build_media_observations", lambda *_: [])
+    monkeypatch.setattr(service, "build_action_observations", lambda *_: [])
+    monkeypatch.setattr(service, "_action_history", lambda *_: ())
+    monkeypatch.setattr(
+        service, "_media_collection_health", lambda *_: {"ES": set(range(90))},
+    )
+    session = _PersistedRadarSession([trend], resolved_history)
+
+    report = run_radar_cycle(session, AS_OF, shadow=True, generation_days=3)
+
+    assert report.country_waves == ()
+    assert not any(
+        "radar_observation_history_incremental" in sql for sql, _ in session.calls
+    )
+
+
 def test_analyst_meta_t0_override_is_append_only():
     class _OverrideSession:
         def __init__(self):
