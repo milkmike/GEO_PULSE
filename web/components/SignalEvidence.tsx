@@ -156,7 +156,7 @@ function EvidenceRecord({
   const notApplicable = value.type === "not_applicable";
   return (
     <section role="region" aria-label={title} className="rounded-lg border border-line bg-panel2 p-4">
-      <h3 className="text-xs uppercase tracking-wide text-dim">{title}</h3>
+      <h3 className="text-xs text-dim">{title}</h3>
       {notApplicable ? (
         <p className="mt-2 text-sm">сравнение не требуется</p>
       ) : entries.length === 0 ? (
@@ -228,7 +228,7 @@ export default function SignalEvidence({ detail, storiesEnabled, radarEnabled = 
   return (
     <article className="space-y-6">
       <header className="border-b border-line pb-5">
-        <div className="flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-wide text-dim">
+        <div className="flex flex-wrap items-center gap-2 text-xs text-dim">
           <span>{SEVERITY_LABEL[detail.severity] ?? detail.severity}</span>
           <span>уверенность {Math.round(detail.confidence * 100)}%</span>
           <span className={detail.state.active ? "text-ally" : "text-dim"}>
@@ -238,7 +238,7 @@ export default function SignalEvidence({ detail, storiesEnabled, radarEnabled = 
             <span className="rounded-full border border-cooling px-2 py-0.5 text-cooling">частичные доказательства</span>
           )}
         </div>
-        <h1 className="display mt-3 text-3xl leading-tight sm:text-4xl">{detail.summary.headline}</h1>
+        <h1 className="display mt-3 text-h2 leading-tight sm:text-h1">{detail.summary.headline}</h1>
         {detail.summary.what_changed && <p className="lead mt-4">{detail.summary.what_changed}</p>}
         {detail.summary.description && detail.summary.description !== detail.summary.what_changed && (
           <p className="mt-2 text-sm text-dim">{detail.summary.description}</p>
@@ -284,7 +284,7 @@ export default function SignalEvidence({ detail, storiesEnabled, radarEnabled = 
         </div>
         {detail.rule.current_rule_reference != null && (
           <aside className="mt-4 rounded border border-cooling/40 bg-cooling/5 p-3">
-            <strong className="text-xs uppercase tracking-wide text-cooling">Текущее правило, не исторический порог</strong>
+            <strong className="text-xs text-cooling">Текущее правило, не исторический порог</strong>
             <p className="mt-1 text-xs text-dim">{typeof detail.rule.current_rule_reference === "string"
               ? detail.rule.current_rule_reference
               : Object.entries(detail.rule.current_rule_reference).map(([key, value]) => `${readableKey(key)}: ${displayValue(value, key)}`).join(" · ")}</p>
@@ -421,7 +421,7 @@ export default function SignalEvidence({ detail, storiesEnabled, radarEnabled = 
             ["Точки RRI", detail.evidence_truncation.rri_points],
           ].map(([label, count]) => {
             const item = count as { total: number; returned: number; truncated: boolean };
-            return <div key={label as string} className="rounded bg-panel2 p-3"><dt className="text-xs text-dim">{label as string}</dt><dd className="tnum mt-1 text-lg">{item.returned}/{item.total}</dd></div>;
+            return <div key={label as string} className="rounded bg-panel2 p-3"><dt className="text-xs text-dim">{label as string}</dt><dd className="tnum mt-1 text-xl">{item.returned}/{item.total}</dd></div>;
           })}
         </dl>
       </section>

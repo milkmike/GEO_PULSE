@@ -72,19 +72,19 @@ export default function DynamicsPanel({
 
       {/* Вердикт направления */}
       <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 px-4 pb-2">
-        <span className="text-lg font-semibold" style={{ color: verdict.color }}>
+        <span className="text-xl font-semibold" style={{ color: verdict.color }}>
           {verdict.arrow} {verdict.label}
         </span>
         {verdict.d7 != null && (
-          <span className="tnum text-xs text-dim">
+          <span className="text-xs text-dim">
             RRI: 7д {fmt(verdict.d7)} · сутки {fmt(verdict.d24)}
           </span>
         )}
         {verdict.toneTrend != null && (
-          <span className="tnum text-xs text-dim">тон GDELT {fmt(verdict.toneTrend, 2)}</span>
+          <span className="text-xs text-dim">тон GDELT {fmt(verdict.toneTrend, 2)}</span>
         )}
         {verdict.spike && (
-          <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[11px] text-amber-400">
+          <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-xs text-amber-400">
             всплеск внимания
           </span>
         )}
@@ -100,13 +100,13 @@ export default function DynamicsPanel({
               <div key={t.id} className="rounded-lg border border-line bg-panel2 px-3 py-2">
                 <div className="flex items-baseline gap-2">
                   <span
-                    className="shrink-0 rounded px-1.5 py-0.5 text-[10px]"
+                    className="shrink-0 rounded px-1.5 py-0.5 text-xs"
                     style={{ color: arc.color, border: `1px solid ${arc.color}55` }}
                   >
                     {arc.label}
                   </span>
-                  <span className="text-[13px] font-medium">{t.summary?.title ?? t.title}</span>
-                  <span className="ml-auto shrink-0 text-[11px] text-dim">
+                  <span className="text-sm font-medium">{t.summary?.title ?? t.title}</span>
+                  <span className="ml-auto shrink-0 text-xs text-dim">
                     {t.velocity > 0 && `${t.velocity.toFixed(0)} ст./день`}
                     {Math.abs(shift) >= 0.3 && (
                       <span style={{ color: shift > 0 ? "var(--color-partner)" : "var(--color-hostile)" }}>
@@ -116,10 +116,10 @@ export default function DynamicsPanel({
                   </span>
                 </div>
                 {t.summary?.dynamics && (
-                  <p className="mt-1 text-[12px] text-gray-300">{t.summary.dynamics}</p>
+                  <p className="mt-1 text-xs text-gray-300">{t.summary.dynamics}</p>
                 )}
                 {t.summary?.forecast && (
-                  <p className="mt-1 text-[12px] text-dim">
+                  <p className="mt-1 text-xs text-dim">
                     <span className="text-zinc-500">куда движется:</span> {t.summary.forecast}
                   </p>
                 )}
@@ -128,7 +128,7 @@ export default function DynamicsPanel({
                     {t.articles.map((a, i) => {
                       const url = a.url ? safeHttpUrl(a.url) : null;
                       return (
-                        <li key={i} className="truncate text-[12px]">
+                        <li key={i} className="truncate text-xs">
                           {url ? (
                             <a href={url} target="_blank" rel="noopener noreferrer"
                                className="text-dim hover:text-accent">↗ {a.title}</a>
@@ -145,10 +145,10 @@ export default function DynamicsPanel({
           })}
         </div>
       ) : loading ? (
-        <div className="px-4 pb-3 text-[12px] text-dim">Загрузка сюжетов…</div>
+        <div className="px-4 pb-3 text-xs text-dim">Загрузка сюжетов…</div>
       ) : (
         <div className="px-4 pb-3">
-          <div className="text-[11px] text-dim">
+          <div className="text-xs text-dim">
             Глубоких сюжетов нет (GDELT-мониторинг). Свежий информационный фон:
           </div>
           {topics.length > 0 && (
@@ -156,7 +156,7 @@ export default function DynamicsPanel({
               {topics.slice(0, 6).map((t) => (
                 <span
                   key={t.topic}
-                  className="rounded-full border border-line bg-panel2 px-2.5 py-0.5 text-[11px]"
+                  className="rounded-full border border-line bg-panel2 px-2.5 py-0.5 text-xs"
                   title={`тон ${fmt(t.avg_sentiment)}`}
                 >
                   {t.label} <span className="text-dim">×{t.articles}</span>
@@ -169,14 +169,14 @@ export default function DynamicsPanel({
               {headlines.headlines.slice(0, 5).map((h, i) => {
                 const url = h.url ? safeHttpUrl(h.url) : null;
                 return (
-                  <li key={i} className="text-[12px]">
+                  <li key={i} className="text-xs">
                     {url ? (
                       <a href={url} target="_blank" rel="noopener noreferrer"
                          className="hover:text-accent">↗ {h.title}</a>
                     ) : (
                       <span>{h.title}</span>
                     )}
-                    <span className="text-[10px] text-zinc-600">
+                    <span className="text-xs text-zinc-600">
                       {h.source ? ` — ${h.source}` : ""}
                       {h.published_at ? ` · ${fmtDay(h.published_at)}` : ""}
                     </span>
@@ -185,7 +185,7 @@ export default function DynamicsPanel({
               })}
             </ul>
           ) : (
-            <div className="mt-2 text-[12px] text-dim">Свежих материалов пока нет.</div>
+            <div className="mt-2 text-xs text-dim">Свежих материалов пока нет.</div>
           )}
         </div>
       )}

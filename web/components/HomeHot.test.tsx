@@ -83,7 +83,7 @@ describe("HomeHot", () => {
     const card = screen.getByRole("region", { name: "Главное за сутки" });
     expect(within(card).getByText(/индекс −41,6 за сутки/)).toBeVisible();
     expect(within(card).queryByText(/арест журналиста/)).not.toBeInTheDocument();
-    expect(within(card).getByText(/Написано ИИ/)).toHaveAttribute("title", "qwen/qwen3.7-plus");
+    expect(within(card).getByText(/^ИИ ·/)).toHaveAttribute("title", "qwen/qwen3.7-plus");
     fireEvent.click(within(card).getByRole("button", { name: "Вся сводка" }));
     expect(within(card).getByText(/арест журналиста/)).toBeVisible();
   });

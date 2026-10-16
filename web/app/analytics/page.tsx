@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import HeadlinesFeed from "@/components/HeadlinesFeed";
-import SiteHeader from "@/components/SiteHeader";
+import PageShell from "@/components/ui/PageShell";
 import { apiBase } from "@/lib/api";
 import type { Headline } from "@/lib/types";
 
@@ -33,19 +33,18 @@ export default function AnalyticsPage() {
   const countries = [...new Set(items.map((h) => h.country_code).filter(Boolean))] as string[];
 
   return (
-    <main className="mx-auto max-w-[900px] px-3 pb-8">
-      <SiteHeader active="/analytics" />
+    <PageShell active="/about">
 
       <div className="reveal reveal-1 pt-8">
-        <h1 className="display text-[30px] leading-tight">Аналитические центры о&nbsp;России</h1>
+        <h1 className="display text-h2 leading-tight">Аналитические центры о&nbsp;России</h1>
       </div>
-      <p className="lead reveal reveal-2 mb-5 mt-2 !text-[16px]">
+      <p className="lead reveal reveal-2 mb-5 mt-2 !text-base">
         Публикации think tanks и OSINT-расследователей за выбранный период. Это не новости,
         а аналитика — у каждого центра своя оптика и свои спонсоры; читайте с поправкой.
       </p>
 
       {/* Period selector */}
-      <div className="mb-3 flex flex-wrap items-center gap-1.5 text-[11px]">
+      <div className="mb-3 flex flex-wrap items-center gap-1.5 text-xs">
         {PERIODS.map((p) => (
           <button
             key={p.hours}
@@ -65,7 +64,7 @@ export default function AnalyticsPage() {
       </div>
 
       {/* Country filter */}
-      <div className="mb-3 flex flex-wrap gap-1.5 text-[11px]">
+      <div className="mb-3 flex flex-wrap gap-1.5 text-xs">
         <span
           onClick={() => setCountry(null)}
           className={`cursor-pointer rounded px-2 py-0.5 ${!country ? "bg-accent/20 text-accent" : "bg-white/5 text-dim"}`}
@@ -88,6 +87,6 @@ export default function AnalyticsPage() {
           ? <div className="px-4 py-3 text-xs text-dim">Загрузка…</div>
           : <HeadlinesFeed items={items} />}
       </section>
-    </main>
+    </PageShell>
   );
 }

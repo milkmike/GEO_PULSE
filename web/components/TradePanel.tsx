@@ -20,15 +20,15 @@ export default function TradePanel({ data }: { data: TradeYear[] }) {
     <MotionCard>
       <div className="card-title px-4 pb-1 pt-3">Торговля с Россией</div>
       <div className="grid grid-cols-2 gap-2 px-4 pt-1 sm:grid-cols-4">
-        <div><div className="text-lg font-semibold">{fmtUsd(last.total_trade_usd)}</div>
-          <div className="text-[10px] uppercase text-dim">оборот {last.year}</div></div>
-        <div><div className="text-lg font-semibold text-indigo-400">{fmtUsd(last.ru_export_usd)}</div>
-          <div className="text-[10px] uppercase text-dim">экспорт РФ</div></div>
-        <div><div className="text-lg font-semibold text-teal-400">{fmtUsd(last.ru_import_usd)}</div>
-          <div className="text-[10px] uppercase text-dim">импорт РФ</div></div>
-        <div><div className={`text-lg font-semibold ${yoy != null && yoy < 0 ? "text-red-400" : "text-emerald-400"}`}>
+        <div><div className="text-xl font-semibold">{fmtUsd(last.total_trade_usd)}</div>
+          <div className="text-xs text-dim">оборот {last.year}</div></div>
+        <div><div className="text-xl font-semibold text-indigo-400">{fmtUsd(last.ru_export_usd)}</div>
+          <div className="text-xs text-dim">экспорт РФ</div></div>
+        <div><div className="text-xl font-semibold text-teal-400">{fmtUsd(last.ru_import_usd)}</div>
+          <div className="text-xs text-dim">импорт РФ</div></div>
+        <div><div className={`text-xl font-semibold ${yoy != null && yoy < 0 ? "text-red-400" : "text-emerald-400"}`}>
           {yoy != null ? `${yoy > 0 ? "+" : ""}${yoy.toFixed(1)}%` : "—"}</div>
-          <div className="text-[10px] uppercase text-dim">за год</div></div>
+          <div className="text-xs text-dim">за год</div></div>
       </div>
       <Plot className="h-[200px] w-full px-2 pb-2"
         data={[
@@ -43,7 +43,7 @@ export default function TradePanel({ data }: { data: TradeYear[] }) {
         layout={{
           barmode: "stack", margin: { l: 40, r: 8, t: 8, b: 24 },
           paper_bgcolor: "transparent", plot_bgcolor: "transparent",
-          font: { color: "#9ca3af", size: 10 },
+          font: { color: "#9ca3af", size: 12 },
           legend: { orientation: "h", y: 1.15 },
           yaxis: { gridcolor: "rgba(255,255,255,0.06)" },
           xaxis: { gridcolor: "rgba(255,255,255,0.06)" },

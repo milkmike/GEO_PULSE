@@ -53,29 +53,29 @@ export default function RadarPanel() {
       ) : (
         <div className="px-4 pb-3">
           <span
-            className="inline-block rounded-full border px-2.5 py-0.5 text-[11px]"
+            className="inline-block rounded-full border px-2.5 py-0.5 text-xs"
             style={{ color: PRESSURE_COLOR[r.pressure ?? 0], borderColor: PRESSURE_COLOR[r.pressure ?? 0] }}
           >
             {r.verdict}
           </span>
 
-          <div className="mt-3 grid grid-cols-3 gap-3 text-[12px]">
+          <div className="mt-3 grid grid-cols-3 gap-3 text-xs">
             <div>
-              <div className="text-[10px] uppercase tracking-wide text-dim">USD/RUB</div>
+              <div className="text-xs text-dim">USD/RUB</div>
               <div className="tnum text-base text-ru-white">{r.usd_rub ? r.usd_rub.toFixed(1) : "—"}</div>
               <div className="tnum" style={{ color: (r.usd_rub_chg30 ?? 0) > 0 ? "var(--color-hostile)" : "var(--color-partner)" }}>
                 {pct(r.usd_rub_chg30)}
               </div>
             </div>
             <div>
-              <div className="text-[10px] uppercase tracking-wide text-dim">CNY/RUB</div>
+              <div className="text-xs text-dim">CNY/RUB</div>
               <div className="tnum text-base text-ru-white">{r.cny_rub ? r.cny_rub.toFixed(2) : "—"}</div>
               <div className="tnum" style={{ color: (r.cny_rub_chg30 ?? 0) > 0 ? "var(--color-hostile)" : "var(--color-partner)" }}>
                 {pct(r.cny_rub_chg30)}
               </div>
             </div>
             <div>
-              <div className="text-[10px] uppercase tracking-wide text-dim">МосБиржа</div>
+              <div className="text-xs text-dim">МосБиржа</div>
               <div className="tnum text-base text-ru-white">{r.moex ? Math.round(r.moex) : "—"}</div>
               <div className="tnum" style={{ color: (r.moex_chg30 ?? 0) >= 0 ? "var(--color-partner)" : "var(--color-hostile)" }}>
                 {pct(r.moex_chg30)}
@@ -85,7 +85,7 @@ export default function RadarPanel() {
 
           {!!r.moex_spark?.length && <Spark data={r.moex_spark} />}
 
-          <div className="mt-2 text-[11px] text-dim">
+          <div className="mt-2 text-xs text-dim">
             рубль и индекс МосБиржи · ~30 дней · ориентировочный композит
           </div>
         </div>

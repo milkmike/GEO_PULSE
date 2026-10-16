@@ -1,5 +1,5 @@
 // Plain-language explanations shown via the info (ⓘ) badge on each dashboard
-// block. Keys match the panel ids used in SortableGrid on each page.
+// block. Keys match the panel ids used in the fixed grid on each page.
 
 export const HOME_TIPS: Record<string, string> = {
   map:

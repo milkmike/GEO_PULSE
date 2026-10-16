@@ -2,14 +2,13 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import HealthBadge from "@/components/HealthBadge";
 import HomeHot from "@/components/HomeHot";
 import RelationsThermometer from "@/components/RelationsThermometer";
-import SiteHeader from "@/components/SiteHeader";
+import PageShell from "@/components/ui/PageShell";
 import WorldMap from "@/components/WorldMap";
 import { useFeatureFlags } from "@/components/FeatureFlagsProvider";
 import { api } from "@/lib/api";
-import { fmtDate, pluralRu } from "@/lib/format";
+import { pluralRu } from "@/lib/format";
 import type { Brief, CountrySummary, Signal } from "@/lib/types";
 
 const REFRESH_MS = 120_000;
@@ -59,24 +58,14 @@ export default function HomePage() {
     })),
     [countries],
   );
-  const updatedAt = countries[0]?.updated_at;
   const total = countries.length || 99;
 
   return (
-    <main className="mx-auto max-w-[1240px] px-3 pb-8">
-      <SiteHeader
-        active="/"
-        right={
-          <span className="flex items-center gap-2">
-            <HealthBadge />
-            {updatedAt && <span className="tnum text-xs text-dim">обновлено {fmtDate(updatedAt)}</span>}
-          </span>
-        }
-      />
+    <PageShell active="/">
 
       <header className="pb-5 pt-6">
-        <h1 className="display text-[32px] leading-tight sm:text-[40px]">Россия и мир</h1>
-        <p className="mt-2 max-w-3xl text-[15px] leading-6 text-dim">
+        <h1 className="display text-h2 leading-tight sm:text-h1">Россия и мир</h1>
+        <p className="mt-2 max-w-3xl text-base leading-6 text-dim">
           Как {total} {pluralRu(total, "страна относится", "страны относятся", "стран относятся")} к России.
           Индекс от −100 до +100 складывается из позиции страны и тона её СМИ.
           Нажмите на страну на карте или в термометре, чтобы открыть досье.
@@ -89,7 +78,7 @@ export default function HomePage() {
         </p>
       )}
 
-      <section aria-label="Карта и термометр отношений" className="grid gap-3 lg:h-[560px] lg:grid-cols-[minmax(0,1fr)_340px]">
+      <section aria-label="Карта и термометр отношений" className="grid grid-cols-1 gap-3 lg:h-[560px] lg:grid-cols-[minmax(0,1fr)_340px]">
         <div className="card flex min-h-0 min-w-0 flex-col p-2">
           <div className="min-h-[260px] flex-1 sm:min-h-[360px]">
             <WorldMap entries={mapEntries} selectedCountry={highlighted} showScale={false} />
@@ -105,6 +94,6 @@ export default function HomePage() {
         Новости по отдельной стране и ранние наблюдения по всему миру собраны в{" "}
         <Link href="/lab" className="text-accent underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-accent">лаборатории</Link>.
       </p>
-    </main>
+    </PageShell>
   );
 }

@@ -45,7 +45,7 @@ function NewsRow({ lead }: { lead: NewsLead }) {
       <span aria-hidden="true">·</span>
       <time dateTime={lead.published_at}>{newsDateTime(lead.published_at)}</time>
     </div>
-    <h4 tabIndex={-1} className="max-w-[65ch] break-words rounded-sm text-lg font-medium leading-relaxed text-ru-white focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent sm:text-xl">{title}</h4>
+    <h4 tabIndex={-1} className="max-w-[65ch] break-words rounded-sm text-xl font-medium leading-relaxed text-ru-white focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent sm:text-xl">{title}</h4>
     <div className="mt-2 flex flex-wrap items-start gap-x-6 gap-y-1 text-sm">
       {href && <a href={href} target="_blank" rel="noopener noreferrer"
         className="inline-flex min-h-11 items-center gap-1.5 rounded-sm text-accent underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">

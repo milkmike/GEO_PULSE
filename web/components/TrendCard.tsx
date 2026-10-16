@@ -10,7 +10,7 @@ export const STATE_LABEL: Record<RadarTrendState | "insufficient", string> = {
 
 const STATE_COLOR: Record<RadarTrendState | "insufficient", string> = {
   candidate: "text-dim border-line", emerging: "text-cooling border-cooling/40",
-  confirmed: "text-ru-red border-ru-red/50", cooling: "text-accent border-accent/40",
+  confirmed: "text-accent border-accent/50", cooling: "text-accent border-accent/40",
   resolved: "text-dim border-line", rejected: "text-dim border-line", insufficient: "text-dim border-line",
 };
 
@@ -50,25 +50,25 @@ export default function TrendCard({ trend, compact = false }: { trend: RadarTren
   const remainingCountries = Math.max(0, trend.country_count - visibleCountries.length);
   const effectiveDate = trendDate(trend);
   return (
-    <article className={`group border-l-2 px-4 py-4 ${trend.state === "confirmed" ? "border-l-ru-red" : "border-l-cooling"}`}>
-      <div className="flex flex-wrap items-center gap-2 text-[10px] uppercase tracking-[0.12em] text-dim">
+    <article className={`group border-l-2 px-4 py-4 ${trend.state === "confirmed" ? "border-l-accent" : "border-l-cooling"}`}>
+      <div className="flex flex-wrap items-center gap-2 text-xs text-dim">
         <span className={`rounded-full border px-2 py-0.5 ${STATE_COLOR[trend.state]}`}>{STATE_LABEL[trend.state]}</span>
-        <span className="tnum">{countriesLabel(trend.country_count)}</span>
-        <span className="tnum">уверенность {percent(trend.confidence)}</span>
-        <span className="tnum">ускорение {trend.velocity == null ? "—" : trend.velocity.toLocaleString("ru-RU", { maximumFractionDigits: 1 })}</span>
+        <span className="text-dim">{countriesLabel(trend.country_count)}</span>
+        <span className="text-dim">уверенность {percent(trend.confidence)}</span>
+        <span className="text-dim">ускорение {trend.velocity == null ? "—" : trend.velocity.toLocaleString("ru-RU", { maximumFractionDigits: 1 })}</span>
         {effectiveDate && <time dateTime={trend.t0_effective ?? trend.detected_at ?? trend.first_observed_at ?? undefined}>{effectiveDate}</time>}
         {trend.contradiction_marker && <span className="inline-flex items-center gap-1 text-cooling"><CircleAlert size={11} aria-hidden="true" /> есть противоречия</span>}
       </div>
-      <h3 className={`${compact ? "text-[16px]" : "text-[20px]"} display mt-2 leading-snug`}>
+      <h3 className={`${compact ? "text-base" : "text-xl"} display mt-2 leading-snug`}>
         <Link href={`/radar/${trend.public_id}`} className="rounded-sm transition-colors hover:text-accent focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent">
           {trend.thesis}
         </Link>
       </h3>
-      {visibleCountries.length > 0 && <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] uppercase tracking-[0.1em] text-dim">
+      {visibleCountries.length > 0 && <div className="mt-2 flex flex-wrap gap-1.5 text-xs text-dim">
         {visibleCountries.map((country) => <span key={country} className="rounded-full border border-line px-2 py-1">{country}</span>)}
         {remainingCountries > 0 && <span className="rounded-full border border-line px-2 py-1">+{countriesLabel(remainingCountries)}</span>}
       </div>}
-      <dl className="mt-3 grid grid-cols-2 gap-px overflow-hidden rounded-md border border-line bg-line text-[11px]">
+      <dl className="mt-3 grid grid-cols-2 gap-px overflow-hidden rounded-md border border-line bg-line text-xs">
         {(["media", "action"] as const).map((contour) => (
           <div key={contour} className="bg-panel2 px-3 py-2">
             <dt className="flex items-center gap-1 text-dim"><RadioTower size={11} aria-hidden="true" />{contour === "media" ? "медиаконтур" : "контур действий"}</dt>

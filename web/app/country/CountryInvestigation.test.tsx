@@ -36,9 +36,6 @@ const apiMocks = vi.hoisted(() => ({
 vi.mock("@/lib/api", () => ({ api: apiMocks, apiBase: () => "http://api.test" }));
 
 vi.mock("@/components/SiteHeader", () => ({ default: () => <nav>header</nav> }));
-vi.mock("@/components/SortableGrid", () => ({
-  default: ({ items }: { items: { id: string; node: ReactNode }[] }) => <>{items.map((item) => <div key={item.id}>{item.node}</div>)}</>,
-}));
 vi.mock("@/components/Plot", () => ({
   default: ({ data, onClick }: { data: Array<{ customdata?: string[] }>; onClick?: (point: { customdata?: string }) => void }) => {
     const marker = data.find((trace) => trace.customdata?.length)?.customdata?.[0];

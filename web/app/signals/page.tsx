@@ -1,9 +1,10 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import SignalFeed from "@/components/SignalFeed";
 import { useFeatureFlags } from "@/components/FeatureFlagsProvider";
-import SiteHeader from "@/components/SiteHeader";
+import PageShell from "@/components/ui/PageShell";
 import { api } from "@/lib/api";
 import { SIGNAL_RU } from "@/lib/format";
 import type { Signal } from "@/lib/types";
@@ -11,7 +12,7 @@ import type { Signal } from "@/lib/types";
 const SEVERITIES = ["critical", "warning", "info"] as const;
 
 export default function SignalsPage() {
-  const { signalDetail } = useFeatureFlags();
+  const { signalDetail, earlyWarningRadar } = useFeatureFlags();
   const [signals, setSignals] = useState<Signal[]>([]);
   const [type, setType] = useState<string>("");
   const [severity, setSeverity] = useState<string>("");
@@ -35,16 +36,16 @@ export default function SignalsPage() {
   );
 
   return (
-    <main className="mx-auto max-w-3xl px-3 pb-10">
-      <SiteHeader active="/signals" />
+    <PageShell active="/signals">
 
       <div className="reveal reveal-1 flex items-baseline gap-3 pb-4 pt-8">
-        <h1 className="display text-[30px] leading-tight">Сигналы медиаполя</h1>
-        <span className="tnum ml-auto text-xs text-dim">
+        <h1 className="display text-h2 leading-tight">Изменения</h1>
+        <span className="ml-auto text-xs text-dim">
           7 дней · {filtered.length} из {signals.length}
         </span>
       </div>
 
+      {earlyWarningRadar && <Link href="/radar" className="mb-4 inline-flex min-h-11 items-center text-sm text-accent hover:underline focus-visible:outline-2 focus-visible:outline-accent">Радар перемен →</Link>}
       <div className="mb-3 flex flex-wrap gap-2">
         <input
           value={query}
@@ -77,6 +78,6 @@ export default function SignalsPage() {
       <div className="card">
         <SignalFeed signals={filtered} emptyText="Ничего не найдено" detailEnabled={signalDetail} />
       </div>
-    </main>
+    </PageShell>
   );
 }

@@ -112,10 +112,10 @@ function ArticlePreviewRow({ article }: { article: SignalArticleReference }) {
       ) : (
         <div className="min-h-11 py-1.5">
           {titleNode}
-          <p className="mt-0.5 text-[10px] leading-tight text-dim">Ссылка на первоисточник не сохранена.</p>
+          <p className="mt-0.5 text-xs leading-tight text-dim">Ссылка на первоисточник не сохранена.</p>
         </div>
       )}
-      <div className="flex min-w-0 items-center gap-1 overflow-hidden whitespace-nowrap text-[10px] text-dim">
+      <div className="flex min-w-0 items-center gap-1 overflow-hidden whitespace-nowrap text-xs text-dim">
         <span className="truncate">{source}</span>
         {article.published_at && (
           <>
@@ -136,28 +136,28 @@ function EvidencePreview({ preview }: { preview: SignalEvidencePreview | null | 
   return (
     <section className="mt-3 border-t border-line/70 pt-2.5" aria-label={isEvidence ? "Источники сигнала" : "Контекст сигнала"}>
       <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-        <h4 className="text-[10px] font-semibold uppercase tracking-wide text-ru-white">
+        <h4 className="text-xs font-semibold text-ru-white">
           {isEvidence ? "На чём основан сигнал" : "Публикации в окне сигнала"}
         </h4>
         {preview && kind !== "unavailable" && articles.length > 0 && (
-          <span className="text-[10px] text-dim">
+          <span className="text-xs text-dim">
             {articles.length} из {preview.total} {isEvidence ? "сохранённых публикаций" : "релевантных публикаций"}
           </span>
         )}
       </div>
 
       {kind === "context" && (
-        <p className="mt-1 text-[10px] leading-snug text-dim">
+        <p className="mt-1 text-xs leading-snug text-dim">
           Контекст для проверки; причинная связь не установлена.
         </p>
       )}
 
       {kind === "context" && articles.length === 0 ? (
-        <p className="mt-2 text-[11px] leading-snug text-dim">В сохранённом 72-часовом окне релевантные публикации не найдены.</p>
+        <p className="mt-2 text-xs leading-snug text-dim">В сохранённом 72-часовом окне релевантные публикации не найдены.</p>
       ) : kind === "unavailable" ? (
-        <p className="mt-2 text-[11px] leading-snug text-dim">Публикации для этого сигнала не найдены или не сохранились.</p>
+        <p className="mt-2 text-xs leading-snug text-dim">Публикации для этого сигнала не найдены или не сохранились.</p>
       ) : (
-        <ul className="mt-2 divide-y divide-line/70 border-y border-line/70 text-[11px]">
+        <ul className="mt-2 divide-y divide-line/70 border-y border-line/70 text-xs">
           {articles.map((article) => <ArticlePreviewRow key={article.id} article={article} />)}
         </ul>
       )}
@@ -181,15 +181,15 @@ function SignalCard({
 
   return (
     <article className={className} aria-labelledby={titleId}>
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] uppercase tracking-wide text-dim">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-dim">
         {showCountry && signal.country_name && <span className="text-ru-white">{signal.country_name}</span>}
         <span>{severityRu(signal.severity)}</span>
         <span>уверенность {Math.round(signal.confidence * 100)}%</span>
       </div>
-      <h3 id={titleId} className="mt-1 text-[13px] font-semibold leading-snug">{signal.title}</h3>
+      <h3 id={titleId} className="mt-1 text-sm font-semibold leading-snug">{signal.title}</h3>
       {signal.description && <div className="mt-1 text-xs leading-snug text-dim">{localizeLevelTokens(signal.description)}</div>}
       {facts.length > 0 && (
-        <ul className="mt-2 grid gap-1 text-[11px] sm:grid-cols-3">
+        <ul className="mt-2 grid gap-1 text-xs sm:grid-cols-3">
           {facts.map((fact) => (
             <li key={fact.key} className="rounded border border-line/70 px-2 py-1">
               <span className="text-dim">{fact.label}</span>{" "}
@@ -198,7 +198,7 @@ function SignalCard({
           ))}
         </ul>
       )}
-      <div className="mt-2 text-[11px] text-dim">
+      <div className="mt-2 text-xs text-dim">
         {SIGNAL_RU[signal.type] ?? signal.type.replaceAll("_", " ")} · {fmtDate(signal.created_at)}
         {typeof signal.active === "boolean" && (
           <span className={`ml-2 ${signal.active ? "text-ally" : "text-dim"}`}>
@@ -210,7 +210,7 @@ function SignalCard({
       {detailEnabled && (
         <Link
           href={`/signals/${signal.id}`}
-          className="mt-3 inline-flex min-h-11 w-full items-center justify-between rounded-sm border border-line px-3 py-2 text-[10px] font-semibold uppercase tracking-wide text-accent transition-colors hover:border-accent hover:text-ru-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent sm:w-auto"
+          className="mt-3 inline-flex min-h-11 w-full items-center justify-between rounded-sm border border-line px-3 py-2 text-xs font-semibold text-accent transition-colors hover:border-accent hover:text-ru-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent sm:w-auto"
         >
           Открыть разбор сигнала <span aria-hidden="true">→</span>
         </Link>

@@ -2,6 +2,9 @@
 
 import Link from "next/link";
 import { useId, useState } from "react";
+import Delta from "./ui/Delta";
+import AiNote, { citationSourceCount } from "./ui/AiNote";
+import SectionHeader from "./ui/SectionHeader";
 import Markdown from "./Markdown";
 import { fmt, fmtDate, LEVEL_COLOR } from "@/lib/format";
 import type { Brief, CountrySummary, Signal } from "@/lib/types";
@@ -68,7 +71,7 @@ export function weeklyMovers(countries: CountrySummary[]) {
 function CardHeader({ id, title, href, more }: { id: string; title: string; href?: string; more?: string }) {
   return (
     <div className="flex items-baseline justify-between gap-3">
-      <h3 id={id} className="text-[15px] font-semibold text-ru-white">{title}</h3>
+      <h3 id={id} className="text-base font-semibold text-ru-white">{title}</h3>
       {href && more && (
         <Link href={href} className="shrink-0 text-xs text-accent hover:underline focus-visible:outline-2 focus-visible:outline-accent">
           {more} <span aria-hidden="true">→</span>
@@ -90,8 +93,8 @@ function BriefCard({ brief, now }: { brief: Brief; now: number }) {
         <Markdown text={full ? brief.content : highlights.replace(/^## [^\n]*\n?/, "")} citations={brief.citations ?? brief.meta?.citations} />
       </div>
       <div className="mt-auto flex flex-wrap items-center justify-between gap-2 border-t border-line pt-2 text-xs text-dim">
-        <span title={brief.model ?? undefined}>
-          Написано ИИ · {fmtDate(brief.created_at)}
+        <span>
+          <AiNote createdAt={brief.created_at} sources={citationSourceCount(brief.citations ?? brief.meta?.citations)} model={brief.model} />
           {now - Date.parse(brief.created_at) > 24 * 60 * 60 * 1000 && " · сводка старше суток"}
         </span>
         {hasMore && (
@@ -105,16 +108,13 @@ function BriefCard({ brief, now }: { brief: Brief; now: number }) {
 }
 
 function MoverRow({ country }: { country: CountrySummary }) {
-  const delta = country.delta_7d ?? 0;
   return (
     <li>
       <Link href={`/country/${country.code}`} className="flex min-h-9 items-center gap-2 rounded-md px-1.5 text-sm hover:bg-panel2 focus-visible:outline-2 focus-visible:outline-accent">
         <span aria-hidden="true" className="w-5 shrink-0 text-center">{country.flag}</span>
         <span className="min-w-0 flex-1 truncate text-fg">{country.name}</span>
         <span className="tnum w-11 shrink-0 text-right text-xs" style={{ color: LEVEL_COLOR[country.level] }}>{fmt(country.score)}</span>
-        <span className={`tnum w-16 shrink-0 whitespace-nowrap text-right text-sm font-semibold ${delta > 0 ? "text-partner" : "text-hostile"}`}>
-          <span aria-hidden="true">{delta > 0 ? "▲ " : "▼ "}</span>{fmt(delta)}
-        </span>
+        <span className="w-16 shrink-0 text-right"><Delta value={country.delta_7d} /></span>
       </Link>
     </li>
   );
@@ -125,7 +125,7 @@ function MoversCard({ cooled, warmed }: ReturnType<typeof weeklyMovers>) {
   if (!cooled.length && !warmed.length) return null;
   return (
     <section aria-labelledby={titleId} className="card flex min-w-0 flex-col gap-2 p-4">
-      <CardHeader id={titleId} title="Сильнее всего за неделю" />
+      <CardHeader id={titleId} title="Сильнее всего за неделю" href="/countries" more="все" />
       <p className="text-xs text-dim">
         Изменение индекса за 7 дней; справа от названия текущий индекс.
         Страны, где о России почти не пишут и данных мало, не показываем.
@@ -158,7 +158,7 @@ function SignalsCard({ signals, detailEnabled }: { signals: Signal[]; detailEnab
               <Link href={href} className="flex items-start gap-2.5 rounded-md px-1.5 py-2 text-sm hover:bg-panel2 focus-visible:outline-2 focus-visible:outline-accent">
                 <span aria-hidden="true" className={`mt-[7px] h-2 w-2 shrink-0 rounded-full ${SEVERITY_DOT[signal.severity]}`} />
                 <span className="min-w-0 flex-1 leading-snug text-fg">{signal.title}</span>
-                <time dateTime={signal.created_at} className="tnum shrink-0 text-xs text-dim">{fmtDate(signal.created_at)}</time>
+                <time dateTime={signal.created_at} className="shrink-0 text-xs text-dim">{fmtDate(signal.created_at)}</time>
               </Link>
             </li>
           );
@@ -191,8 +191,7 @@ export default function HomeHot({
   return (
     <section aria-labelledby={titleId} className="mt-10">
       <div className="mb-3">
-        <h2 id={titleId} className="display text-[26px] leading-tight">Горячее</h2>
-        <p className="mt-1 text-sm text-dim">На что смотреть в первую очередь.</p>
+        <SectionHeader id={titleId} title="Горячее" description="На что смотреть в первую очередь." />
       </div>
       <div className="grid items-start gap-3 lg:grid-cols-3">
         {freshBrief && <BriefCard brief={freshBrief} now={now} />}

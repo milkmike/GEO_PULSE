@@ -45,15 +45,15 @@ export default function EnergyPanel({ code }: { code: string }) {
         <div className="px-4 pb-3">
           <div className="flex flex-wrap items-end gap-x-6 gap-y-2">
             <div>
-              <div className="tnum text-2xl text-ru-white">{eur(e.total_eur ?? 0)}</div>
-              <div className="text-[11px] uppercase tracking-wide text-dim">заплачено России с 2022</div>
+              <div className="tnum text-h2 text-ru-white">{eur(e.total_eur ?? 0)}</div>
+              <div className="text-xs text-dim">заплачено России с 2022</div>
             </div>
             {!!e.world_rank && (
               <div>
-                <div className="tnum text-2xl" style={{ color: "var(--color-hostile)" }}>
+                <div className="tnum text-h2" style={{ color: "var(--color-hostile)" }}>
                   #{e.world_rank}
                 </div>
-                <div className="text-[11px] uppercase tracking-wide text-dim">покупатель в мире</div>
+                <div className="text-xs text-dim">покупатель в мире</div>
               </div>
             )}
           </div>
@@ -62,7 +62,7 @@ export default function EnergyPanel({ code }: { code: string }) {
             const items = e.commodities.filter((c) => c.value_eur > 0).slice(0, 5);
             const max = Math.max(...items.map((c) => c.value_eur), 1);
             return (
-              <ul className="mt-3 space-y-1.5 text-[12px]">
+              <ul className="mt-3 space-y-1.5 text-xs">
                 {items.map((c) => (
                   <li key={c.group} className="flex items-center gap-2">
                     <span className="w-28 shrink-0 truncate text-dim">
@@ -82,7 +82,7 @@ export default function EnergyPanel({ code }: { code: string }) {
           })()}
 
           {e.period_from && (
-            <div className="mt-2 text-[11px] text-dim">
+            <div className="mt-2 text-xs text-dim">
               накопительно с {e.period_from.slice(0, 4)} года · данные CREA
             </div>
           )}

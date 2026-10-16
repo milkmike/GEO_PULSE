@@ -53,14 +53,14 @@ export default function SparklineStrip({ dossier }: { dossier: SparkDossier }) {
   }) => (
     <div className="card flex-1 px-3 py-2">
       <div className="flex items-baseline justify-between">
-        <span className="text-[11px] uppercase tracking-wide text-dim">{title}</span>
+        <span className="text-xs text-dim">{title}</span>
         {badge && (
-          <span className="rounded px-1.5 text-[10px]" style={{ color: "var(--color-hostile)", border: "1px solid var(--color-hostile)" }}>
+          <span className="rounded px-1.5 text-xs" style={{ color: "var(--color-hostile)", border: "1px solid var(--color-hostile)" }}>
             {badge}
           </span>
         )}
       </div>
-      <div className="tnum text-lg text-ru-white">{value}</div>
+      <div className="tnum text-xl text-ru-white">{value}</div>
       <Plot data={plot.data} layout={plot.layout} className="h-[46px] w-full" />
     </div>
   );

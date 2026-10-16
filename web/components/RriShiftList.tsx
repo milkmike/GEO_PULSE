@@ -36,7 +36,7 @@ export default function RriShiftList({ markers, onSelect }: RriShiftListProps) {
               aria-label={label}
               title={label}
               onClick={(event) => onSelect(marker, event.currentTarget)}
-              className="min-h-11 rounded-md border border-line bg-panel2 px-3 py-2 text-left text-[11px] leading-tight text-dim transition-colors hover:border-ru-blue hover:text-ru-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+              className="min-h-11 rounded-md border border-line bg-panel2 px-3 py-2 text-left text-xs leading-tight text-dim transition-colors hover:border-accent hover:text-ru-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
             >
               <span className="block font-semibold text-ru-white">{fmtDay(marker.day)} · {fmt(marker.dailyDelta)}</span>
               <span>{fmt(marker.fromScore)} → {fmt(marker.score)}</span>

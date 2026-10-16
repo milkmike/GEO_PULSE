@@ -25,6 +25,14 @@
   --color-tension: #f97316;
   --color-hostile: #ef4444;
 
+  /* Two page widths and the six-step type scale. */
+  --container-page: 1200px;
+  --container-read: 720px;
+  --text-h2: 28px;
+  --text-h2--line-height: 1.25;
+  --text-h1: 40px;
+  --text-h1--line-height: 1.15;
+
   /* typography */
   --font-display: var(--font-piazzolla), Georgia, serif;
   --font-body: var(--font-golos), -apple-system, sans-serif;
@@ -38,7 +46,7 @@ html {
 
 body {
   font-family: var(--font-body);
-  font-size: 14px;
+  font-size: 15px;
   /* faint cold glow at the top so the dark isn't flat */
   background-image: radial-gradient(
       ellipse 80% 50% at 50% -10%,
@@ -59,10 +67,8 @@ body {
 }
 
 .card-title {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.14em;
+  font-family: var(--font-body);
+  font-size: 12px;
   color: var(--color-dim);
 }
 
@@ -99,12 +105,12 @@ body {
 .lead {
   font-family: var(--font-display);
   font-weight: 400;
-  font-size: 19px;
+  font-size: 20px;
   line-height: 1.65;
   color: #b9c0ca;
 }
 .prose-editorial {
-  font-size: 15.5px;
+  font-size: 16px;
   line-height: 1.75;
   color: #c3c9d2;
 }
@@ -119,19 +125,18 @@ body {
   float: left;
   line-height: 0.82;
   padding-right: 0.12em;
-  color: var(--color-ru-red);
+  color: var(--color-accent);
 }
 .section-num {
-  font-family: var(--font-mono);
+  font-family: var(--font-body);
   font-size: 12px;
-  letter-spacing: 0.2em;
-  color: var(--color-ru-red);
+  color: var(--color-accent);
 }
 .pull-quote {
   font-family: var(--font-display);
   font-style: italic;
   font-weight: 500;
-  font-size: 24px;
+  font-size: 28px;
   line-height: 1.45;
   color: var(--color-ru-white);
 }
@@ -156,10 +161,10 @@ body {
 @keyframes pulseDot {
   0%,
   100% {
-    box-shadow: 0 0 0 0 rgba(217, 79, 67, 0.55);
+    box-shadow: 0 0 0 0 rgba(107, 155, 232, 0.55);
   }
   60% {
-    box-shadow: 0 0 0 7px rgba(217, 79, 67, 0);
+    box-shadow: 0 0 0 7px rgba(107, 155, 232, 0);
   }
 }
 
@@ -179,7 +184,7 @@ body {
   width: 7px;
   height: 7px;
   border-radius: 9999px;
-  background: var(--color-ru-red);
+  background: var(--color-accent);
   animation: pulseDot 2.4s ease-out infinite;
 }
 

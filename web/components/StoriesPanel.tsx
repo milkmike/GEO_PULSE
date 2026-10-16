@@ -24,8 +24,8 @@ export default function StoriesPanel({
     <section className="card overflow-hidden" aria-label={title}>
       <div className="flex items-baseline gap-3 border-b border-line px-4 pb-2 pt-3">
         <h2 className="card-title text-dim">{title}</h2>
-        <span className="tnum text-[10px] text-dim">{stories.length || "—"}</span>
-        <Link href={allHref} className="ml-auto min-h-11 py-3 text-[11px] text-accent hover:text-ru-white sm:min-h-0 sm:py-0">
+        <span className="tnum text-xs text-dim">{stories.length || "—"}</span>
+        <Link href={allHref} className="ml-auto min-h-11 py-3 text-xs text-accent hover:text-ru-white sm:min-h-0 sm:py-0">
           все сюжеты →
         </Link>
       </div>
@@ -50,7 +50,7 @@ export default function StoriesPanel({
       )}
       {state === "ready" && stories.length === 0 && (
         <div className="px-4 py-7">
-          <p className="display text-lg text-fg">Пока нет межстрановых сюжетов</p>
+          <p className="display text-xl text-fg">Пока нет межстрановых сюжетов</p>
           <p className="mt-1 max-w-lg text-xs leading-relaxed text-dim">
             Панель останется на месте: здесь появятся связи этой страны с общей повесткой, когда накопится достаточно независимых источников.
           </p>

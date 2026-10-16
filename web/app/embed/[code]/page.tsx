@@ -56,14 +56,14 @@ export default function EmbedPage({ params }: { params: Promise<{ code: string }
       className="block h-screen overflow-hidden bg-bg p-3"
     >
       <div className="flex items-center gap-2">
-        <span className="text-lg">{country.flag}</span>
+        <span className="text-xl">{country.flag}</span>
         <span className="text-sm font-semibold">{country.name} ↔ Россия</span>
       </div>
       <div className="mt-1 flex items-baseline gap-2.5">
-        <span className="tnum text-3xl font-bold" style={{ color }}>
+        <span className="tnum text-h2 font-bold" style={{ color }}>
           {fmt(index.score)}
         </span>
-        <span className="rounded-full border px-2 py-px text-[10px]" style={{ color, borderColor: color }}>
+        <span className="rounded-full border px-2 py-px text-xs" style={{ color, borderColor: color }}>
           {LEVEL_RU[index.level]}
         </span>
         {index.delta_24h != null && (
@@ -78,7 +78,7 @@ export default function EmbedPage({ params }: { params: Promise<{ code: string }
           className="mt-1 w-full"
         />
       )}
-      <div className="mt-0.5 text-right text-[9px] text-dim">geopulse · {apiBase().replace(/^https?:\/\//, "")}</div>
+      <div className="mt-0.5 text-right text-xs text-dim">geopulse · {apiBase().replace(/^https?:\/\//, "")}</div>
     </a>
   );
 }

@@ -61,15 +61,15 @@ export default function StoryTimeline({
             <span
               aria-hidden="true"
               className={`absolute -left-[1.67rem] top-1 flex h-5 w-5 items-center justify-center rounded-full border bg-panel ${
-                isEvent ? "border-ru-red/60 text-ru-red" : "border-ru-blue/60 text-ru-blue"
+                isEvent ? "border-accent/60 text-accent" : "border-accent/60 text-accent"
               }`}
             >
               {isEvent ? <Milestone size={10} /> : <FileText size={10} />}
             </span>
-            <time dateTime={item.at ?? undefined} className="tnum text-[10px] uppercase tracking-[0.12em] text-dim">
+            <time dateTime={item.at ?? undefined} className="text-xs text-dim">
               {timelineDate(item.at)}
             </time>
-            <div className="mt-1 text-[14px] font-semibold leading-snug text-fg">
+            <div className="mt-1 text-sm font-semibold leading-snug text-fg">
               {url ? (
                 <a
                   href={url}
@@ -81,7 +81,7 @@ export default function StoryTimeline({
                 </a>
               ) : title}
             </div>
-            <div className="mt-1 text-[11px] text-dim">
+            <div className="mt-1 text-xs text-dim">
               {event ? (
                 <>событие · уровень события {event.action_level} · достоверность {Math.round(event.confidence * 100)}%</>
               ) : (

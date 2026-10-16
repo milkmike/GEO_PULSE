@@ -34,9 +34,6 @@ vi.mock("@/components/DecisionWorkspace", () => ({
     mapControls?: ReactNode;
   }) => <section aria-label="Аналитическое рабочее место">Рабочее место{renderMap({ selectedCountry: "ES", onSelectCountry: () => {} })}{mapControls}</section>,
 }));
-vi.mock("@/components/SortableGrid", () => ({
-  default: ({ items }: { items: { id: string; node: ReactNode }[] }) => <>{items.map((item) => <div key={item.id}>{item.node}</div>)}</>,
-}));
 
 vi.mock("@/components/CountryRanking", () => ({ default: () => null }));
 vi.mock("@/components/HealthBadge", () => ({ default: () => null }));

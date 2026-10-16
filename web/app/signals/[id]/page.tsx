@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import { readFeatureFlags } from "@/lib/features.server";
+import PageShell from "@/components/ui/PageShell";
 import SignalDetailClient from "./SignalDetailClient";
 
 export default async function SignalDetailPage({ params }: { params: Promise<{ id: string }> }) {
@@ -10,5 +11,5 @@ export default async function SignalDetailPage({ params }: { params: Promise<{ i
   const signalId = Number(rawId);
   if (!Number.isSafeInteger(signalId) || signalId <= 0) notFound();
 
-  return <SignalDetailClient signalId={signalId} />;
+  return <PageShell active="/signals"><SignalDetailClient signalId={signalId} /></PageShell>;
 }

@@ -2,16 +2,16 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import SiteHeader from "@/components/SiteHeader";
+import PageShell from "@/components/ui/PageShell";
 import { api } from "@/lib/api";
 import { fmtDate, safeHttpUrl } from "@/lib/format";
 import type { Meta, SourceHealthRow, SourceRow } from "@/lib/types";
 
 const TIERS: Record<string, { label: string; cls: string }> = {
-  official: { label: "Официальный", cls: "bg-red-500/15 text-red-400" },
-  state: { label: "Государственный", cls: "bg-red-500/15 text-red-400" },
+  official: { label: "Официальный", cls: "bg-accent/15 text-accent" },
+  state: { label: "Государственный", cls: "bg-accent/15 text-accent" },
   mainstream: { label: "Мейнстрим", cls: "bg-blue-500/15 text-blue-400" },
-  independent: { label: "Независимый", cls: "bg-emerald-500/15 text-emerald-400" },
+  independent: { label: "Независимый", cls: "bg-accent/15 text-accent" },
   social: { label: "Соцмедиа", cls: "bg-cyan-500/15 text-cyan-400" },
   domestic_opposition: { label: "Оппозиция", cls: "bg-yellow-500/15 text-yellow-400" },
   opposition: { label: "Оппозиция (v1)", cls: "bg-yellow-500/15 text-yellow-400" },
@@ -106,17 +106,16 @@ export default function SourcesPage() {
   }, [meta, sources]);
 
   const chip = (active: boolean) =>
-    `cursor-pointer rounded px-2 py-0.5 text-[11px] ${
+    `cursor-pointer rounded px-2 py-0.5 text-xs ${
       active ? "bg-accent/20 text-accent" : "bg-white/5 text-dim hover:text-fg"
     }`;
 
   return (
-    <main className="mx-auto max-w-[1200px] px-3 pb-8">
-      <SiteHeader active="/sources" />
+    <PageShell active="/about">
 
       <div className="reveal reveal-1 pt-8">
-        <h1 className="display text-[30px] leading-tight">Источники</h1>
-        <p className="lead mt-2 max-w-3xl !text-[16px]">
+        <h1 className="display text-h2 leading-tight">Источники</h1>
+        <p className="lead mt-2 max-w-3xl !text-base">
           Все источники платформы — с тиром доверия, языком и живостью. Мы показываем
           и работающие, и замолчавшие фиды: прозрачность важнее красивой статистики.
         </p>
@@ -133,14 +132,14 @@ export default function SourcesPage() {
         ).map(([label, v]) => (
           <div key={label} className="card px-4 py-3">
             <div className="text-xl font-semibold">{loading ? "…" : v}</div>
-            <div className="text-[11px] uppercase text-dim">{label}</div>
+            <div className="text-xs text-dim">{label}</div>
           </div>
         ))}
       </div>
 
       <section className="card mb-3 px-4 py-3">
         <button
-          className="text-[13px] text-accent disabled:opacity-40"
+          className="text-sm text-accent disabled:opacity-40"
           disabled={loading}
           onClick={() => setShowMatrix(!showMatrix)}
         >
@@ -152,12 +151,12 @@ export default function SourcesPage() {
               <button
                 key={r.code}
                 onClick={() => setFCountry(r.code)}
-                className="flex items-center justify-between border-b border-white/5 py-1 text-left text-[12px] hover:bg-white/5"
+                className="flex items-center justify-between border-b border-white/5 py-1 text-left text-xs hover:bg-white/5"
               >
                 <span className="truncate">
                   {r.flag} {r.name}
                 </span>
-                <span className="shrink-0 font-mono">
+                <span className="shrink-0">
                   <span className={r.ru ? "text-emerald-400" : "text-zinc-600"}>
                     ru
                   </span>{" "}
@@ -174,7 +173,7 @@ export default function SourcesPage() {
         )}
       </section>
 
-      <div className="mb-3 flex flex-wrap items-center gap-1.5 text-[11px]">
+      <div className="mb-3 flex flex-wrap items-center gap-1.5 text-xs">
         <select
           value={fCountry ?? ""}
           onChange={(e) => setFCountry(e.target.value || null)}
@@ -236,7 +235,7 @@ export default function SourcesPage() {
           return (
             <div
               key={s.id}
-              className="flex flex-wrap items-center gap-2 px-4 py-2 text-[13px]"
+              className="flex flex-wrap items-center gap-2 px-4 py-2 text-sm"
             >
               {safeUrl ? (
                 <a
@@ -251,14 +250,14 @@ export default function SourcesPage() {
                 <span className="min-w-0 flex-1 truncate">{s.name}</span>
               )}
               <span className="text-dim">{s.country_code}</span>
-              <span className={`rounded px-1.5 py-0.5 text-[10px] ${t.cls}`}>
+              <span className={`rounded px-1.5 py-0.5 text-xs ${t.cls}`}>
                 {t.label}
               </span>
               <span className="w-6 text-dim">{s.language ?? "—"}</span>
               <span className="w-20 text-right text-dim">
                 {s.article_count.toLocaleString("ru")} ст.
               </span>
-              <span className="w-24 text-right text-[11px] text-dim">
+              <span className="w-24 text-right text-xs text-dim">
                 {h?.last_article_at
                   ? fmtDate(h.last_article_at)
                   : s.last_collected
@@ -266,7 +265,7 @@ export default function SourcesPage() {
                     : "—"}
               </span>
               <span
-                className={`w-12 text-right text-[11px] font-semibold ${
+                className={`w-12 text-right text-xs font-semibold ${
                   STATUS_CLS[h?.status ?? ""] ?? "text-zinc-600"
                 }`}
               >
@@ -276,6 +275,6 @@ export default function SourcesPage() {
           );
         })}
       </section>
-    </main>
+    </PageShell>
   );
 }

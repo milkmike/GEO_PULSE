@@ -9,7 +9,7 @@ export default function SiteFooter() {
   // Embedded widgets live inside other sites and carry no site chrome.
   if (pathname?.startsWith("/embed")) return null;
   return (
-    <footer className="mx-auto max-w-[1240px] px-3 pb-8">
+    <footer className="mx-auto max-w-[var(--container-page)] px-4 pb-8">
       <p className="border-t border-line pt-4 text-xs leading-5 text-dim">
         Индекс считает алгоритм, сводки и брифинги пишет ИИ: воспринимайте оценки как ориентир
         и проверяйте по первоисточникам.{" "}

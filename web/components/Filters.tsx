@@ -46,7 +46,7 @@ export default function Filters({
               key={lvl}
               aria-pressed={active}
               onClick={() => onChange({ ...value, level: active ? null : lvl })}
-              className="relative rounded-full border px-2.5 py-0.5 text-[11px] transition-colors"
+              className="relative rounded-full border px-2.5 py-0.5 text-xs transition-colors"
               style={{
                 borderColor: active ? LEVEL_COLOR[lvl] : "#1f2937",
                 color: active ? LEVEL_COLOR[lvl] : "#6b7280",
@@ -85,7 +85,7 @@ export default function Filters({
       {(value.region || value.level || value.topic) && (
         <motion.button
           onClick={() => onChange({ region: null, level: null, topic: null })}
-          className="text-[11px] text-dim underline hover:text-gray-300"
+          className="text-xs text-dim underline hover:text-gray-300"
           whileTap={reduce ? undefined : { scale: 0.95 }}
         >
           сбросить
