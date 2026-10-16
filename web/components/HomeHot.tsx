@@ -147,12 +147,12 @@ function SignalsCard({ signals, detailEnabled }: { signals: Signal[]; detailEnab
   if (!signals.length) return null;
   return (
     <section aria-labelledby={titleId} className="card flex min-w-0 flex-col gap-2 p-4">
-      <CardHeader id={titleId} title="Свежие сигналы" href="/signals" more="все" />
+      <CardHeader id={titleId} title="Свежие сигналы" href="/changes" more="все" />
       <p className="text-xs text-dim">Резкие изменения за трое суток, повторы убраны.</p>
       <ul className="divide-y divide-line">
         {signals.map((signal) => {
           const href = detailEnabled ? `/signals/${signal.id}`
-            : signal.country_code ? `/country/${signal.country_code}` : "/signals";
+            : signal.country_code ? `/country/${signal.country_code}` : "/changes";
           return (
             <li key={signal.id}>
               <Link href={href} className="flex items-start gap-2.5 rounded-md px-1.5 py-2 text-sm hover:bg-panel2 focus-visible:outline-2 focus-visible:outline-accent">

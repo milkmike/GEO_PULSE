@@ -701,7 +701,7 @@ def detect_gdelt_shifts(session) -> int:
 
 
 def detect_index_shifts(session) -> int:
-    """RRI 24h move from 7 through 18 points."""
+    """RRI 24h move from 7 points; flag extreme moves for review."""
     rows = session.execute(
         text("""
             WITH latest AS (
@@ -736,12 +736,7 @@ def detect_index_shifts(session) -> int:
         delta = float(r.delta_24h)
         if abs(delta) < 7:
             continue
-        # Upper sanity cap: a genuine 24h RRI move can't exceed the boost layer's
-        # ±15 reach by much. Anything beyond 18 points in a day is data instability
-        # (e.g. a fresh baseline after a bulk re-analysis), not real diplomacy —
-        # skip it instead of crying wolf with a critical "Скачок индекса".
-        if abs(delta) > 18:
-            continue
+        needs_review = abs(delta) > 18
         direction = "вверх" if delta > 0 else "вниз"
         confidence = 0.8
         point_time = r.time
@@ -780,12 +775,14 @@ def detect_index_shifts(session) -> int:
         emitted += _emit(
             session, "index_shift", r.country_code,
             dedup_key=f"index_shift:{r.country_code}:{day_bucket}",
-            title=f"Скачок индекса: {country_name_ru(r.country_code)} {delta:+.1f} за 24ч",
+            title=(f"Скачок индекса: {country_name_ru(r.country_code)} {delta:+.1f} за 24ч"
+                   + (" · требует проверки" if needs_review else "")),
             description=(
                 f"Индекс отношений с Россией сдвинулся {direction} на {abs(delta):.1f} "
                 f"пунктов за сутки: сейчас {float(r.score):+.1f} ({level_ru(r.level)})."
             ),
-            payload={"score": float(r.score), "delta_24h": delta, "level": r.level},
+            payload={"score": float(r.score), "delta_24h": delta, "level": r.level,
+                     **({"needs_review": True} if needs_review else {})},
             evidence=_evidence(
                 "index_shift",
                 threshold={
@@ -802,8 +799,8 @@ def detect_index_shifts(session) -> int:
                 window_end=point_time,
                 confidence=confidence,
                 rule=(
-                    "Абсолютный сдвиг RRI за 24 часа от 7 до 18 пунктов; "
-                    "большие значения считаются нестабильностью данных"
+                    "Абсолютный сдвиг RRI за 24 часа от 7 пунктов; "
+                    "значения больше 18 пунктов требуют проверки"
                 ),
                 limitations=(
                     "Сигнал фиксирует изменение RRI, но сам по себе не устанавливает новостную причину.",
@@ -814,7 +811,7 @@ def detect_index_shifts(session) -> int:
                 rri_points=tuple(rri_points),
                 evidence_ids=tuple(evidence_ids),
             ),
-            severity="critical" if abs(delta) >= 14 else "warning",
+            severity="info" if needs_review else "critical" if abs(delta) >= 14 else "warning",
         )
     return emitted
 

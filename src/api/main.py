@@ -19,6 +19,7 @@ from src.config import COUNTRY_NAMES, COUNTRY_ISO3
 from src.db import get_session
 from src.api.admin import is_admin
 from src.api.routes.sources import router as sources_router
+from src.api.routes.changes import router as changes_router
 from src.api.routes.stories import router as stories_router
 from src.api.routes.threads import router as threads_router
 from src.api.routes.vox import router as vox_router
@@ -161,6 +162,7 @@ app.include_router(agendas_router)
 from src.api.routes.decision_workspace import router as decision_workspace_router
 app.include_router(decision_workspace_router)
 app.include_router(stories_router)
+app.include_router(changes_router)
 app.include_router(threads_router)
 app.include_router(vox_router)
 app.include_router(articles_router)

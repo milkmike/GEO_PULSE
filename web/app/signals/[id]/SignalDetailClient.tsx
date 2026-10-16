@@ -51,7 +51,7 @@ export default function SignalDetailClient({ signalId }: { signalId: number }) {
 
       <div className="pt-7">
         <Link
-          href="/signals"
+          href="/changes"
           className="inline-flex min-h-11 items-center gap-2 text-xs text-dim transition-colors hover:text-accent focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
         >
           <ArrowLeft aria-hidden="true" size={15} />
