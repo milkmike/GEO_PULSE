@@ -26,24 +26,24 @@ export default function SanctionsPanel({ code }: { code: string }) {
         <div className="px-4 pb-3">
           <div className="flex gap-6">
             <div>
-              <div className="tnum text-2xl text-ru-white">{s.target_count}</div>
-              <div className="text-[11px] uppercase tracking-wide text-dim">целей под санкциями</div>
+              <div className="tnum text-h2 text-ru-white">{s.target_count}</div>
+              <div className="text-xs text-dim">целей под санкциями</div>
             </div>
             <div>
-              <div className="tnum text-2xl text-ru-white">{s.lists_count}</div>
-              <div className="text-[11px] uppercase tracking-wide text-dim">программ</div>
+              <div className="tnum text-h2 text-ru-white">{s.lists_count}</div>
+              <div className="text-xs text-dim">программ</div>
             </div>
             {!!s.delta && s.delta > 0 && (
               <div>
-                <div className="tnum text-2xl" style={{ color: "var(--color-hostile)" }}>
+                <div className="tnum text-h2" style={{ color: "var(--color-hostile)" }}>
                   +{s.delta}
                 </div>
-                <div className="text-[11px] uppercase tracking-wide text-dim">недавно добавлено</div>
+                <div className="text-xs text-dim">недавно добавлено</div>
               </div>
             )}
           </div>
           {!!s.programs?.length && (
-            <ul className="mt-3 space-y-1 text-[12px]">
+            <ul className="mt-3 space-y-1 text-xs">
               {s.programs
                 .slice()
                 .sort((a, b) => b.targets - a.targets)
@@ -57,7 +57,7 @@ export default function SanctionsPanel({ code }: { code: string }) {
             </ul>
           )}
           {s.last_change && (
-            <div className="mt-2 text-[11px] text-dim">обновление списков: {s.last_change.slice(0, 10)}</div>
+            <div className="mt-2 text-xs text-dim">обновление списков: {s.last_change.slice(0, 10)}</div>
           )}
         </div>
       )}

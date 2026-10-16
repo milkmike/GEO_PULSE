@@ -3,8 +3,9 @@
 import { use, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import AiNote, { citationSourceCount } from "@/components/ui/AiNote";
 import LowDataBadge from "@/components/LowDataBadge";
-import SiteHeader from "@/components/SiteHeader";
+import PageShell from "@/components/ui/PageShell";
 import AgreementsPanel from "@/components/AgreementsPanel";
 import Markdown from "@/components/Markdown";
 import Plot from "@/components/Plot";
@@ -13,7 +14,8 @@ import TradePanel from "@/components/TradePanel";
 import UNVotesPanel from "@/components/UNVotesPanel";
 import SparklineStrip from "@/components/SparklineStrip";
 import DynamicsPanel from "@/components/DynamicsPanel";
-import SortableGrid, { type SortableItem } from "@/components/SortableGrid";
+import FixedPanel from "@/components/FixedPanel";
+import type { ReactNode } from "react";
 import StoriesPanel from "@/components/StoriesPanel";
 import InvestigationPanel from "@/components/InvestigationPanel";
 import RriShiftList from "@/components/RriShiftList";
@@ -33,8 +35,9 @@ import type {
   TopicStat, StoryListItem, TradeYear, UNVoteYear,
 } from "@/lib/types";
 
-// Default panel order on country pages. AI-dossier + news sources sit near the
-// top; visitors can drag any card to reorder (saved per browser in localStorage).
+type Panel = { id: string; cellClassName?: string; tip?: string; node: ReactNode };
+
+// Fixed editorial order, shared by every country dossier.
 const PANEL_ORDER = [
   "sparklines", "dynamics", "early-warning", "stories", "brief", "headlines", "index", "gdelt",
   "tier", "sanctions", "energy", "vox", "topics", "entities",
@@ -48,7 +51,7 @@ const CHART_BASE = {
   xaxis: { color: "#6b7280", gridcolor: "#1f2937" },
   yaxis: { color: "#6b7280", gridcolor: "#1f2937", zerolinecolor: "#374151" },
   showlegend: true,
-  legend: { font: { color: "#9ca3af", size: 10 }, orientation: "h" as const, y: 1.12 },
+  legend: { font: { color: "#9ca3af", size: 12 }, orientation: "h" as const, y: 1.12 },
 };
 
 // AI briefs older than this quote index values that no longer match the live
@@ -59,12 +62,6 @@ const RADAR_LIMIT = 4;
 function isFreshBrief(brief: Brief): boolean {
   const created = brief.created_at ? Date.parse(brief.created_at) : Number.NaN;
   return Number.isFinite(created) && Date.now() - created <= BRIEF_MAX_AGE_MS;
-}
-
-function aiWrittenDate(iso: string): string {
-  return new Intl.DateTimeFormat("ru-RU", {
-    day: "numeric", month: "long", year: "numeric", timeZone: "Europe/Moscow",
-  }).format(new Date(iso)).replace(/\s*г\.$/, "");
 }
 
 // Same paging as EarlyWarningPanel (up to three pages until `limit` priority
@@ -368,23 +365,21 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
 
   if (errorCountry === cc) {
     return (
-      <main className="mx-auto max-w-[1100px] px-3 pb-10">
-        <SiteHeader />
+      <PageShell active="/countries">
         <div className="reveal reveal-1 px-1 py-10 text-center">
           <p className="text-dim">Страна не найдена или API недоступен.</p>
           <Link href="/" className="text-accent">← на карту</Link>
         </div>
-      </main>
+      </PageShell>
     );
   }
   if (!dossier) {
     return (
-      <main className="mx-auto max-w-[1100px] px-3 pb-10">
-        <SiteHeader />
+      <PageShell active="/countries">
         <div className="reveal reveal-1 px-1 py-10 text-center text-dim">
           Загрузка досье…
         </div>
-      </main>
+      </PageShell>
     );
   }
 
@@ -392,9 +387,9 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
   const color = index ? LEVEL_COLOR[index.level] : "#9ca3af";
   const embedSnippet = `<iframe src="${typeof window !== "undefined" ? window.location.origin : ""}/embed/${cc}" width="320" height="180" frameborder="0" loading="lazy"></iframe>`;
 
-  // Reorderable panels. Empty/absent nodes auto-hide (see SortableGrid); panels
+  // Fixed panels. Empty/absent nodes auto-hide; panels
   // whose only content would be a "nothing yet" sentence pass null instead.
-  const panels: SortableItem[] = [
+  const panels: Panel[] = [
     {
       id: "sparklines", cellClassName: "md:col-span-2", tip: COUNTRY_TIPS.sparklines,
       node: (
@@ -431,13 +426,13 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
       // shown, only the button to write a fresh one.
       node: briefState === "loading" ? null : (
         <section className="card">
-          <div className="card-title px-4 pb-1 pt-3">AI-досье</div>
-          <div className="max-h-[360px] overflow-y-auto px-4 pb-3">
+          <div className="card-title px-4 pb-1 pt-3">Коротко</div>
+          <div className="relative max-h-[360px] overflow-y-auto px-4 pb-3">
             {brief ? (
               <>
                 <Markdown text={brief.content} citations={brief.citations ?? brief.meta?.citations} />
-                <div className="mt-2 flex items-center gap-3 text-[11px] text-dim">
-                  <span title={brief.model ?? undefined}>Написано ИИ · {aiWrittenDate(brief.created_at)}</span>
+                <div className="mt-2 flex items-center gap-3 text-xs text-dim">
+                  <AiNote createdAt={brief.created_at} sources={citationSourceCount(brief.citations ?? brief.meta?.citations)} model={brief.model} />
                   <button onClick={generateBrief} className="underline hover:text-ru-white">
                     обновить
                   </button>
@@ -463,9 +458,9 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
                 </p>
                 <button
                   onClick={generateBrief}
-                  className="rounded bg-accent/15 px-3 py-1.5 text-[13px] text-accent transition-colors hover:bg-accent/25"
+                  className="rounded bg-accent/15 px-3 py-1.5 text-sm text-accent transition-colors hover:bg-accent/25"
                 >
-                  {briefState === "stale" ? "Собрать заново" : "Собрать AI-досье"}
+                  {briefState === "stale" ? "Собрать заново" : "Собрать сводку"}
                 </button>
               </div>
             )}
@@ -482,11 +477,11 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
           </div>
           <div className="px-4 pb-3">
             {headlines.headlines.map((h, i) => (
-              <div key={i} className="border-b border-dashed border-line py-1.5 text-[13px]">
+              <div key={i} className="border-b border-dashed border-line py-1.5 text-sm">
                 <a href={h.url ?? "#"} target="_blank" rel="noopener noreferrer" className="hover:text-accent">
                   {h.title}
                 </a>
-                <div className="text-[11px] text-dim">
+                <div className="text-xs text-dim">
                   {h.source}
                   {h.sentiment != null && ` · тон ${fmt(h.sentiment)}`}
                   {h.tier && ` · ${h.tier}`}
@@ -543,7 +538,7 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
           <div className="card-title px-4 pb-2 pt-3">Темы · 30 дней</div>
           <div className="px-4 pb-3">
             {topics.map((t) => (
-              <div key={t.topic} className="flex items-center justify-between border-b border-dashed border-line py-1 text-[13px]">
+              <div key={t.topic} className="flex items-center justify-between border-b border-dashed border-line py-1 text-sm">
                 <span>{t.label}</span>
                 <span className="tnum text-xs text-dim">
                   {t.articles} ст. ·{" "}
@@ -566,7 +561,7 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
             {entities.map((e) => (
               <span
                 key={e.key}
-                className="rounded-full border border-line bg-panel2 px-2.5 py-0.5 text-[11px]"
+                className="rounded-full border border-line bg-panel2 px-2.5 py-0.5 text-xs"
                 title={`тон ${fmt(e.avg_sentiment)}`}
               >
                 {e.name} <span className="text-dim">×{e.mentions}</span>
@@ -611,18 +606,17 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
   ];
 
   return (
-    <main className="mx-auto max-w-[1100px] px-3 pb-10">
-      <SiteHeader />
+    <PageShell active="/countries">
 
       <div className="reveal reveal-1 flex flex-wrap items-baseline gap-3 pb-3 pt-8">
-        <h1 className="display text-[32px] leading-tight">
+        <h1 className="display text-h2 leading-tight">
           {country.flag} {country.name}{" "}
           <span className="font-normal text-dim">↔ Россия</span>
         </h1>
         <button
           onClick={() => setShowEmbed(!showEmbed)}
           aria-expanded={showEmbed}
-          className="ml-auto rounded-md border border-line px-2.5 py-1 text-[11px] text-dim transition-colors hover:border-ru-blue hover:text-ru-white"
+          className="ml-auto rounded-md border border-line px-2.5 py-1 text-xs text-dim transition-colors hover:border-accent hover:text-ru-white"
         >
           <span aria-hidden="true">{"</>"}</span> Встроить
         </button>
@@ -631,7 +625,7 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
       {showEmbed && (
         <div className="card mb-3 px-4 py-3">
           <div className="card-title pb-1">Виджет для встраивания</div>
-          <code className="block select-all break-all rounded bg-panel2 px-3 py-2 text-[11px] text-gray-400">
+          <code className="block select-all break-all rounded bg-panel2 px-3 py-2 text-xs text-gray-400">
             {embedSnippet}
           </code>
         </div>
@@ -647,7 +641,7 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
 
       {index ? (
         <div className="mt-2 flex flex-wrap items-end gap-x-6 gap-y-2">
-          <span className="tnum text-5xl font-bold" style={{ color }}>
+          <span className="tnum text-h1 font-bold" style={{ color }}>
             {fmt(index.score)}
           </span>
           {index.low_data && <LowDataBadge />}
@@ -665,7 +659,7 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
             ["7д", index.delta_7d],
           ].map(([label, v]) => (
             <div key={label as string} className="mb-1">
-              <div className="text-[10px] uppercase tracking-wider text-dim">{label}</div>
+              <div className="text-xs text-dim">{label}</div>
               <div className="tnum text-base font-semibold">{fmt(v as number | null)}</div>
             </div>
           ))}
@@ -675,7 +669,11 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
       )}
 
       <div className="mt-4 grid gap-3 md:grid-cols-2">
-        <SortableGrid storageKey="country-panel-order" defaultOrder={PANEL_ORDER} items={panels} />
+        {PANEL_ORDER.map((id) => panels.find((panel) => panel.id === id)).filter((panel): panel is Panel => Boolean(panel)).map((panel) => (
+          <FixedPanel key={panel.id} id={panel.id} className={panel.cellClassName} tip={panel.tip}>
+            {panel.node}
+          </FixedPanel>
+        ))}
       </div>
 
       {invalidAtMessage && <p role="status" className="mt-3 text-xs text-cooling">{invalidAtMessage}</p>}
@@ -693,9 +691,9 @@ export default function CountryPage({ params }: { params: Promise<{ code: string
         />
       )}
 
-      <div className="mt-4 text-[11px] text-dim">
+      <div className="mt-4 text-xs text-dim">
         API: <code className="text-gray-500">{apiBase()}/api/v2/countries/{cc}</code>
       </div>
-    </main>
+    </PageShell>
   );
 }

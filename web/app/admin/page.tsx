@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import SiteHeader from "@/components/SiteHeader";
+import PageShell from "@/components/ui/PageShell";
 import { AdminAuthError, adminGet } from "@/lib/api";
 
 const KEY_STORE = "mr_admin_key";
@@ -108,13 +108,12 @@ export default function AdminPage() {
   // ── login gate ──
   if (!key) {
     return (
-      <main className="mx-auto max-w-md px-4 pb-20">
-        <SiteHeader active="/admin" />
+      <PageShell active="/admin">
         <form onSubmit={submitKey} className="card mt-10 p-6">
-          <h1 className="display mb-1 text-lg">Вход в админку</h1>
-          <p className="mb-4 text-[13px] text-dim">
-            Введите <span className="tnum">ADMIN_API_KEY</span> (из серверного{" "}
-            <span className="tnum">.env</span>). Ключ хранится только в этом браузере.
+          <h1 className="display mb-1 text-xl">Вход в админку</h1>
+          <p className="mb-4 text-sm text-dim">
+            Введите <span>ADMIN_API_KEY</span> (из серверного{" "}
+            <span>.env</span>). Ключ хранится только в этом браузере.
           </p>
           <input
             type="password"
@@ -125,7 +124,7 @@ export default function AdminPage() {
             autoFocus
           />
           {authErr && (
-            <p className="mt-2 text-[12px] text-ru-red">Неверный ключ (или не задан на сервере).</p>
+            <p className="mt-2 text-xs text-accent">Неверный ключ (или не задан на сервере).</p>
           )}
           <button
             type="submit"
@@ -134,21 +133,14 @@ export default function AdminPage() {
             Войти
           </button>
         </form>
-      </main>
+      </PageShell>
     );
   }
 
   // ── dashboard ──
   return (
-    <main className="mx-auto max-w-5xl px-4 pb-24">
-      <SiteHeader
-        active="/admin"
-        right={
-          <button onClick={logout} className="text-dim transition-colors hover:text-ru-white">
-            выход
-          </button>
-        }
-      />
+    <PageShell active="/admin">
+      <div className="mt-4 flex justify-end"><button onClick={logout} className="min-h-11 text-sm text-accent">Выйти</button></div>
 
       {loading && !visits ? (
         <p className="mt-10 text-dim">Загрузка…</p>
@@ -158,7 +150,7 @@ export default function AdminPage() {
           <section className="card p-5">
             <div className="mb-3 flex items-center justify-between">
               <h2 className="display text-base">Посещения</h2>
-              <div className="flex gap-1 text-[12px]">
+              <div className="flex gap-1 text-xs">
                 {PERIODS.map((d) => (
                   <button
                     key={d}
@@ -177,19 +169,19 @@ export default function AdminPage() {
 
             <div className="flex gap-8">
               <div>
-                <div className="tnum text-3xl text-ru-white">{visits?.totals.views ?? 0}</div>
-                <div className="text-[12px] uppercase tracking-wide text-dim">визитов</div>
+                <div className="tnum text-h2 text-ru-white">{visits?.totals.views ?? 0}</div>
+                <div className="text-xs text-dim">визитов</div>
               </div>
               <div>
-                <div className="tnum text-3xl text-ru-white">{visits?.totals.uniques ?? 0}</div>
-                <div className="text-[12px] uppercase tracking-wide text-dim">уникальных</div>
+                <div className="tnum text-h2 text-ru-white">{visits?.totals.uniques ?? 0}</div>
+                <div className="text-xs text-dim">уникальных</div>
               </div>
             </div>
 
             <div className="mt-5 grid gap-6 md:grid-cols-3">
               <div>
-                <h3 className="mb-2 text-[12px] uppercase tracking-wide text-dim">По дням</h3>
-                <ul className="space-y-1 text-[13px]">
+                <h3 className="mb-2 text-xs text-dim">По дням</h3>
+                <ul className="space-y-1 text-sm">
                   {(visits?.daily ?? []).slice(0, 12).map((r) => (
                     <li key={r.day} className="flex justify-between tnum">
                       <span className="text-dim">{r.day.slice(5)}</span>
@@ -203,10 +195,10 @@ export default function AdminPage() {
                 </ul>
               </div>
               <div>
-                <h3 className="mb-2 text-[12px] uppercase tracking-wide text-dim">Топ-страницы</h3>
-                <ul className="space-y-1 text-[13px]">
+                <h3 className="mb-2 text-xs text-dim">Топ-страницы</h3>
+                <ul className="space-y-1 text-sm">
                   {(visits?.top_paths ?? []).map((r) => (
-                    <li key={r.path} className="flex justify-between gap-3 tnum">
+                    <li key={r.path} className="flex justify-between gap-3">
                       <span className="truncate text-fg">{r.path}</span>
                       <span className="text-dim">{r.views}</span>
                     </li>
@@ -214,10 +206,10 @@ export default function AdminPage() {
                 </ul>
               </div>
               <div>
-                <h3 className="mb-2 text-[12px] uppercase tracking-wide text-dim">Рефереры</h3>
-                <ul className="space-y-1 text-[13px]">
+                <h3 className="mb-2 text-xs text-dim">Рефереры</h3>
+                <ul className="space-y-1 text-sm">
                   {(visits?.top_referrers ?? []).map((r) => (
-                    <li key={r.host} className="flex justify-between gap-3 tnum">
+                    <li key={r.host} className="flex justify-between gap-3">
                       <span className="truncate text-fg">{r.host}</span>
                       <span className="text-dim">{r.views}</span>
                     </li>
@@ -239,7 +231,7 @@ export default function AdminPage() {
               <Stat label="за месяц" value={usd(summary?.total_cost_month ?? 0)} />
               <Stat label="вызовов сегодня" value={String(summary?.calls_today ?? 0)} />
             </div>
-            <p className="mt-3 text-[12px] text-dim">
+            <p className="mt-3 text-xs text-dim">
               топ-модель: <span className="text-fg">{summary?.top_model ?? "—"}</span>
               {" · "}топ-сервис: <span className="text-fg">{summary?.top_service ?? "—"}</span>
             </p>
@@ -248,11 +240,11 @@ export default function AdminPage() {
           {/* Здоровье */}
           <section className="card p-5">
             <h2 className="display mb-3 text-base">Здоровье сервисов</h2>
-            <ul className="grid gap-1.5 text-[13px] sm:grid-cols-2">
+            <ul className="grid gap-1.5 text-sm sm:grid-cols-2">
               {(health ?? []).map((s) => (
                 <li key={s.service} className="flex items-center justify-between gap-3">
                   <span className="text-fg">{s.service}</span>
-                  <span className="tnum" style={{ color: STATUS_COLOR[s.status] ?? "var(--color-dim)" }}>
+                  <span style={{ color: STATUS_COLOR[s.status] ?? "var(--color-dim)" }}>
                     {s.status}
                     {s.latency_ms != null && (
                       <span className="text-dim"> · {s.latency_ms}ms</span>
@@ -265,7 +257,7 @@ export default function AdminPage() {
           </section>
         </div>
       )}
-    </main>
+    </PageShell>
   );
 }
 
@@ -273,7 +265,7 @@ function Stat({ label, value }: { label: string; value: string }) {
   return (
     <div>
       <div className="tnum text-xl text-ru-white">{value}</div>
-      <div className="text-[12px] uppercase tracking-wide text-dim">{label}</div>
+      <div className="text-xs text-dim">{label}</div>
     </div>
   );
 }

@@ -77,7 +77,7 @@ describe("home page", () => {
   it("puts weekly movers in «Горячее» without a second list of all countries", async () => {
     render(<HomePage />);
     const movers = await screen.findByRole("region", { name: "Сильнее всего за неделю" });
-    const links = within(movers).getAllByRole("link");
+    const links = within(movers).getAllByRole("link").filter((link) => link.getAttribute("href")?.startsWith("/country/"));
     expect(links[0]).toHaveTextContent("Босния и Герцеговина");
     expect(links[0]).toHaveAttribute("href", "/country/BA");
     expect(screen.queryByRole("heading", { name: "Все страны" })).not.toBeInTheDocument();

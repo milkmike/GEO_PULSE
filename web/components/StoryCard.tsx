@@ -78,7 +78,7 @@ export default function StoryCard({
 
   return (
     <article
-      className={`group relative overflow-hidden rounded-lg border border-line bg-panel2/55 transition-[border-color,transform] duration-200 hover:-translate-y-0.5 hover:border-ru-blue/50 motion-reduce:transition-none motion-reduce:hover:translate-y-0 ${
+      className={`group relative overflow-hidden rounded-lg border border-line bg-panel2/55 transition-[border-color,transform] duration-200 hover:-translate-y-0.5 hover:border-accent/50 motion-reduce:transition-none motion-reduce:hover:translate-y-0 ${
         compact ? "px-3 py-3" : "px-4 py-4"
       }`}
       data-story-id={story.id}
@@ -86,23 +86,23 @@ export default function StoryCard({
     >
       <span
         aria-hidden="true"
-        className="absolute inset-y-0 left-0 w-px bg-gradient-to-b from-ru-white via-ru-blue to-ru-red opacity-70"
+        className="absolute inset-y-0 left-0 w-px bg-gradient-to-b from-ru-white via-accent to-accent opacity-70"
       />
       <div className="flex flex-wrap items-center gap-2 pl-1">
-        <span className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-[0.12em] ${lifecycle.tone}`}>
+        <span className={`rounded-full border px-2 py-0.5 text-xs ${lifecycle.tone}`}>
           {lifecycle.label}
         </span>
-        <span className="tnum text-[10px] uppercase tracking-[0.12em] text-dim">
+        <span className="text-xs text-dim">
           сюжет {String(story.id).padStart(4, "0")}
         </span>
         {countryCode && (
-          <span className="ml-auto text-[10px] text-dim">
+          <span className="ml-auto text-xs text-dim">
             срез: {countryName(countryCode)}
           </span>
         )}
       </div>
 
-      <h2 className={`display mt-2 pl-1 leading-tight ${compact ? "text-[17px]" : "text-[21px]"}`}>
+      <h2 className={`display mt-2 pl-1 leading-tight ${compact ? "text-xl" : "text-xl"}`}>
         <Link
           href={`/stories/${story.id}`}
           className="rounded-sm outline-none transition-colors hover:text-accent focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
@@ -112,19 +112,19 @@ export default function StoryCard({
       </h2>
 
       {!compact && story.summary && (
-        <p className="mt-2 line-clamp-3 pl-1 text-[13px] leading-relaxed text-dim">
+        <p className="mt-2 line-clamp-3 pl-1 text-sm leading-relaxed text-dim">
           {storySummaryRu(story.summary)}
         </p>
       )}
 
       {countryContext && (
-        <div className="mt-3 border-l border-ru-blue/60 bg-bg/35 px-3 py-2 text-[11px] text-fg">
-          <span className="mb-1 block text-[9px] uppercase tracking-[0.11em] text-dim">срез страны</span>
+        <div className="mt-3 border-l border-accent/60 bg-bg/35 px-3 py-2 text-xs text-fg">
+          <span className="mb-1 block text-xs text-dim">срез страны</span>
           {countryContext.country_name} · {countryContext.article_count} {plural(countryContext.article_count, ["публикация", "публикации", "публикаций"])} · {countryContext.source_count} {plural(countryContext.source_count, ["источник", "источника", "источников"])} · тон {countryContext.media_tone == null ? "—" : signed(countryContext.media_tone)}
         </div>
       )}
 
-      <div className="mt-3 flex flex-wrap gap-x-3 gap-y-1 pl-1 text-[11px] text-dim">
+      <div className="mt-3 flex flex-wrap gap-x-3 gap-y-1 pl-1 text-xs text-dim">
         <span className="text-fg">{countries || "страны не указаны"}</span>
         <span>
           {story.article_count} {plural(story.article_count, ["публикация", "публикации", "публикаций"])}
@@ -141,7 +141,7 @@ export default function StoryCard({
       </div>
 
       {rri && (
-        <div className="mt-3 rounded-md border border-line/80 bg-bg/45 px-3 py-2 text-[11px]">
+        <div className="mt-3 rounded-md border border-line/80 bg-bg/45 px-3 py-2 text-xs">
           <div className="flex items-center gap-2 text-fg">
             <ShiftIcon aria-hidden="true" size={13} className={rri.delta_24h >= 0 ? "text-ally" : "text-hostile"} />
             <span className="font-semibold">
@@ -152,7 +152,7 @@ export default function StoryCard({
         </div>
       )}
 
-      <div className="mt-3 flex flex-wrap items-center gap-3 border-t border-line/70 pt-2 pl-1 text-[11px] text-dim">
+      <div className="mt-3 flex flex-wrap items-center gap-3 border-t border-line/70 pt-2 pl-1 text-xs text-dim">
         <time dateTime={story.last_seen}>обновлено {compactDate(story.last_seen)}</time>
         {story.linked_signal_count > 0 && (
           <span className="inline-flex items-center gap-1 text-cooling">

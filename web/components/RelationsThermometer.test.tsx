@@ -13,14 +13,16 @@ const bosnia: CountrySummary = {
 describe("RelationsThermometer evidence", () => {
   it("marks sparse evidence with an explanation and a muted value", () => {
     render(<RelationsThermometer countries={[bosnia]} />);
-    expect(screen.getByText("мало данных")).toHaveAttribute("title",
-      "индекс держится в основном на позиции страны: о России там почти не пишут");
-    expect(screen.getByText("+4.0")).toHaveStyle({ color: "var(--color-dim)" });
+    expect(screen.getByTitle("мало данных: индекс держится в основном на позиции страны")).toHaveTextContent("·");
+    expect(screen.getByText("мало данных")).toHaveClass("sr-only");
+    expect(screen.getByText("+4.0")).toHaveClass("text-dim");
+    expect(screen.getByText("Серым — страны, где о России почти не пишут")).toBeVisible();
     expect(screen.getByRole("link", { name: /Босния/ })).toHaveAttribute("href", "/country/BA");
   });
 
   it("leaves full evidence and older API responses without a badge", () => {
     render(<RelationsThermometer countries={[{ ...bosnia, low_data: undefined }]} />);
     expect(screen.queryByText("мало данных")).not.toBeInTheDocument();
+    expect(screen.getByText("+4.0")).not.toHaveClass("text-dim");
   });
 });

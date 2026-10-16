@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { ArrowLeft, CircleAlert, LoaderCircle } from "lucide-react";
-import SiteHeader from "@/components/SiteHeader";
 import SignalEvidence from "@/components/SignalEvidence";
 import { useFeatureFlags } from "@/components/FeatureFlagsProvider";
 import { api } from "@/lib/api";
@@ -48,13 +47,12 @@ export default function SignalDetailClient({ signalId }: { signalId: number }) {
   }, [reload, signalId]);
 
   return (
-    <main className="mx-auto max-w-[1240px] px-3 pb-16">
-      <SiteHeader active="/signals" />
+    <>
 
       <div className="pt-7">
         <Link
           href="/signals"
-          className="inline-flex min-h-11 items-center gap-2 text-xs uppercase tracking-wide text-dim transition-colors hover:text-accent focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
+          className="inline-flex min-h-11 items-center gap-2 text-xs text-dim transition-colors hover:text-accent focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
         >
           <ArrowLeft aria-hidden="true" size={15} />
           все сигналы
@@ -69,8 +67,8 @@ export default function SignalDetailClient({ signalId }: { signalId: number }) {
       )}
 
       {!loading && error && (
-        <div role="alert" className="mx-auto mt-14 max-w-xl border-y border-ru-red/40 py-10 text-center">
-          <CircleAlert aria-hidden="true" size={22} className="mx-auto mb-3 text-ru-red" />
+        <div role="alert" className="mx-auto mt-14 max-w-xl border-y border-accent/40 py-10 text-center">
+          <CircleAlert aria-hidden="true" size={22} className="mx-auto mb-3 text-accent" />
           <p className="text-sm text-dim">{error}</p>
           <button
             type="button"
@@ -87,6 +85,6 @@ export default function SignalDetailClient({ signalId }: { signalId: number }) {
           <SignalEvidence detail={detail} storiesEnabled={storiesNavigation} radarEnabled={earlyWarningRadar} />
         </div>
       )}
-    </main>
+    </>
   );
 }

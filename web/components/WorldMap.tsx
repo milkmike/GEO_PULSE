@@ -165,9 +165,9 @@ export default function WorldMap({ entries, selectedCountry, onSelectCountry, sh
         marker: { line: { color: "#0b0f14", width: 0.5 } },
         showscale: showScale,
         colorbar: {
-          title: { text: "RRI", font: { color: "#9ca3af", size: 11 } },
+          title: { text: "RRI", font: { color: "#9ca3af", size: 12 } },
           thickness: 8,
-          tickfont: { color: "#9ca3af", size: 10 },
+          tickfont: { color: "#9ca3af", size: 12 },
           outlinewidth: 0,
           len: 0.75,
         },
@@ -280,14 +280,14 @@ export default function WorldMap({ entries, selectedCountry, onSelectCountry, sh
         onClick={launch}
         title="не нажимать"
         aria-label="не нажимать"
-        className="absolute bottom-2 left-2 z-10 select-none text-[13px] leading-none opacity-25 transition-opacity duration-300 hover:opacity-90"
+        className="absolute bottom-2 left-2 z-10 select-none text-sm leading-none opacity-25 transition-opacity duration-300 hover:opacity-90"
       >
         ☢
       </button>
       {finale && (
         <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center">
           <span
-            className="display reveal text-[34px] tracking-wide"
+            className="display reveal text-h2 "
             style={{ textShadow: "0 0 32px rgba(217,79,67,0.85)" }}
           >
             МАССАРАКШ.

@@ -20,8 +20,8 @@ function mdToHtml(text: string, cites?: Map<number, Citation>): string {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
   let html = esc
-    .replace(/^### (.*)$/gm, '<h4 class="mt-3 mb-1 text-[13px] font-semibold text-accent">$1</h4>')
-    .replace(/^## (.*)$/gm, '<h3 class="mt-3 mb-1 text-[13px] font-semibold text-accent">$1</h3>')
+    .replace(/^### (.*)$/gm, '<h4 class="mt-3 mb-1 text-sm font-semibold text-accent">$1</h4>')
+    .replace(/^## (.*)$/gm, '<h3 class="mt-3 mb-1 text-sm font-semibold text-accent">$1</h3>')
     .replace(/^# (.*)$/gm, '<h3 class="mt-3 mb-1 text-sm font-semibold text-accent">$1</h3>')
     .replace(/\*\*(.+?)\*\*/g, "<b>$1</b>")
     .replace(/^[-*] (.*)$/gm, '<li class="ml-4 list-disc">$1</li>')
@@ -52,7 +52,7 @@ export default function Markdown({
     citations?.length ? new Map(citations.map((c) => [c.n, c])) : undefined;
   return (
     <div
-      className={`text-[13px] leading-relaxed ${className}`}
+      className={`text-sm leading-relaxed ${className}`}
       dangerouslySetInnerHTML={{ __html: mdToHtml(text, map) }}
     />
   );

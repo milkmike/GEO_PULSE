@@ -34,7 +34,7 @@ export default function TierDivergencePanel({ code }: { code: string }) {
     <section className="card">
       <div className="flex items-baseline justify-between px-4 pb-1 pt-3">
         <span className="card-title">Расхождение по тирам</span>
-        <span className="tnum text-[11px] text-dim">разброс {spread.toFixed(1)}</span>
+        <span className="text-xs text-dim">разброс {spread.toFixed(1)}</span>
       </div>
       <div className="space-y-2 px-4 pb-3">
         {tiers.map((t) => {
@@ -44,7 +44,7 @@ export default function TierDivergencePanel({ code }: { code: string }) {
             ? { left: "50%", width: `${w}%`, background: "var(--color-partner)" }
             : { right: "50%", width: `${w}%`, background: "var(--color-hostile)" };
           return (
-            <div key={t.tier} className="flex items-center gap-2 text-[12px]">
+            <div key={t.tier} className="flex items-center gap-2 text-xs">
               <span className="w-28 shrink-0 text-dim">{TIER_RU[t.tier] ?? t.tier}</span>
               <div className="relative h-3 flex-1 rounded bg-panel2">
                 <div className="absolute left-1/2 top-0 h-full w-px bg-line" />
@@ -59,7 +59,7 @@ export default function TierDivergencePanel({ code }: { code: string }) {
           );
         })}
       </div>
-      <div className="px-4 pb-3 text-[11px] text-dim">
+      <div className="px-4 pb-3 text-xs text-dim">
         Тон статей о России по типам источников (−3 враждебно … +3 благожелательно), число статей справа.
       </div>
     </section>

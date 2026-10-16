@@ -38,20 +38,20 @@ export default function HeadlinesFeed({ items }: { items: Headline[] }) {
                     href={url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="block truncate text-[13px] leading-5 hover:text-accent"
+                    className="block truncate text-sm leading-5 hover:text-accent"
                     title={h.title}
                   >
                     {h.title}
                   </a>
                 ) : (
                   <span
-                    className="block truncate text-[13px] leading-5"
+                    className="block truncate text-sm leading-5"
                     title={h.title}
                   >
                     {h.title}
                   </span>
                 )}
-                <div className="flex items-center gap-2 text-[11px] text-dim">
+                <div className="flex items-center gap-2 text-xs text-dim">
                   <span className={`inline-block h-1.5 w-1.5 rounded-full ${sentDot(h.sentiment)}`} />
                   <span className="truncate">{h.source}</span>
                   <span>·</span>
@@ -96,20 +96,20 @@ export default function HeadlinesFeed({ items }: { items: Headline[] }) {
                 href={url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="block truncate text-[13px] leading-5 hover:text-accent"
+                className="block truncate text-sm leading-5 hover:text-accent"
                 title={h.title}
               >
                 {h.title}
               </a>
             ) : (
               <span
-                className="block truncate text-[13px] leading-5"
+                className="block truncate text-sm leading-5"
                 title={h.title}
               >
                 {h.title}
               </span>
             )}
-            <div className="flex items-center gap-2 text-[11px] text-dim">
+            <div className="flex items-center gap-2 text-xs text-dim">
               <span className={`inline-block h-1.5 w-1.5 rounded-full ${sentDot(h.sentiment)}`} />
               <span className="truncate">{h.source}</span>
               <span>·</span>

@@ -16,7 +16,10 @@ import {
   Newspaper,
   Zap,
 } from "lucide-react";
-import SiteHeader from "@/components/SiteHeader";
+import Card from "@/components/ui/Card";
+import ListRow from "@/components/ui/ListRow";
+import SectionHeader from "@/components/ui/SectionHeader";
+import PageShell from "@/components/ui/PageShell";
 import TemperatureMethodologyBlock from "@/components/TemperatureMethodologyBlock";
 import { api } from "@/lib/api";
 import type { Meta, RadarMethodology, SourceRow, TemperatureMethodology } from "@/lib/types";
@@ -63,9 +66,8 @@ function SectionHead({ num, title }: { num: string; title: string }) {
     <div className="mb-5 mt-14">
       <div className="flex items-baseline gap-3">
         <span className="section-num">{num}</span>
-        <h2 className="display text-[26px] leading-tight sm:text-[30px]">{title}</h2>
+        <h2 className="display text-h2 leading-tight sm:text-h2">{title}</h2>
       </div>
-      <span className="tricolor mt-3 max-w-[120px] opacity-70" aria-hidden="true" />
     </div>
   );
 }
@@ -141,13 +143,12 @@ export default function AboutPage() {
   ] as const;
 
   return (
-    <main className="mx-auto max-w-[760px] px-4 pb-20">
-      <SiteHeader active="/about" />
+    <PageShell active="/about" width="read">
 
       {/* ── hero ── */}
       <section className="pt-14">
         <p className="reveal reveal-1 section-num">О проекте</p>
-        <h1 className="display reveal reveal-2 mt-4 text-[38px] leading-[1.12] sm:text-[52px]">
+        <h1 className="display reveal reveal-2 mt-4 text-h1 leading-[1.12] sm:text-h1">
           Массаракш&nbsp;— это «мир наизнанку»
         </h1>
         <p className="lead reveal reveal-3 mt-6">
@@ -162,10 +163,10 @@ export default function AboutPage() {
         <div className="reveal reveal-5 mt-10 grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-line bg-line sm:grid-cols-4">
           {STATS.map(([v, label]) => (
             <div key={label} className="bg-panel px-4 py-4">
-              <div className="tnum text-[22px] font-medium text-ru-white">
+              <div className="tnum text-xl font-medium text-ru-white">
                 {stats.loaded ? fmt(v as number) : ph}
               </div>
-              <div className="mt-1 text-[11px] uppercase tracking-[0.14em] text-dim">
+              <div className="mt-1 text-xs text-dim">
                 {label}
               </div>
             </div>
@@ -201,19 +202,19 @@ export default function AboutPage() {
               className="card group flex gap-4 px-5 py-4 transition-transform hover:-translate-y-0.5"
             >
               <t.icon
-                className="mt-1 h-5 w-5 shrink-0 text-ru-blue transition-colors group-hover:text-ru-red"
+                className="mt-1 h-5 w-5 shrink-0 text-accent transition-colors group-hover:text-accent"
                 strokeWidth={1.75}
                 aria-hidden="true"
               />
               <div>
-                <div className="display mb-1 text-[16.5px]">{t.title}</div>
-                <p className="text-[14px] leading-relaxed text-dim">{t.text}</p>
+                <div className="display mb-1 text-xl">{t.title}</div>
+                <p className="text-sm leading-relaxed text-dim">{t.text}</p>
               </div>
             </div>
           ))}
         </div>
 
-        <blockquote className="pull-quote my-10 border-l-2 border-ru-red pl-6">
+        <blockquote className="pull-quote my-10 border-l-2 border-accent pl-6">
           Мы не умеем выключать чужие башни — мы умеем мерить их излучение.
         </blockquote>
         <p className="mb-4">
@@ -263,19 +264,19 @@ export default function AboutPage() {
           ].map((b) => (
             <div key={b.n} className="flex gap-4">
               <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-line bg-panel">
-                <b.icon className="h-4 w-4 text-ru-blue" strokeWidth={1.75} aria-hidden="true" />
+                <b.icon className="h-4 w-4 text-accent" strokeWidth={1.75} aria-hidden="true" />
               </div>
               <div>
-                <h3 className="display mb-1 text-[17px]">{b.h}</h3>
-                <p className="text-[14px] leading-relaxed text-dim">{b.p}</p>
+                <h3 className="display mb-1 text-xl">{b.h}</h3>
+                <p className="text-sm leading-relaxed text-dim">{b.p}</p>
               </div>
             </div>
           ))}
         </div>
 
-        <aside className="card mb-8 border-l-2 border-l-ru-blue px-5 py-4">
-          <h3 className="display mb-1 text-[16px]">Полы и потолки</h3>
-          <p className="text-[14px] leading-relaxed text-dim">
+        <aside className="card mb-8 border-l-2 border-l-accent px-5 py-4">
+          <h3 className="display mb-1 text-base">Полы и потолки</h3>
+          <p className="text-sm leading-relaxed text-dim">
             Жёсткие факты ограничивают индекс независимо от медийного шума: у страны,
             ведущей боевые действия против России, индекс не поднимется выше −75, как бы
             ни менялся тон прессы; у участника Союзного государства не опустится ниже
@@ -285,7 +286,7 @@ export default function AboutPage() {
 
         <h3 className="card-title mb-3">Шесть уровней шкалы</h3>
         <div className="overflow-x-auto">
-          <div aria-hidden="true" className="tricolor-draw flex min-w-[460px] overflow-hidden rounded-md">
+          <div aria-hidden="true" className="flex min-w-[460px] overflow-hidden rounded-md">
             {SCALE_LEVELS.map((lvl) => (
               <div key={lvl.label} className={`flex-1 ${lvl.bg} py-2.5`} />
             ))}
@@ -293,10 +294,10 @@ export default function AboutPage() {
           <div className="mt-2 flex min-w-[460px]">
             {SCALE_LEVELS.map((lvl) => (
               <div key={lvl.label} className="flex-1 px-1 text-center">
-                <div className="text-[10.5px] font-semibold leading-tight text-ru-white">
+                <div className="text-xs font-semibold leading-tight text-ru-white">
                   {lvl.label}
                 </div>
-                <div className="tnum text-[9.5px] leading-tight text-dim">{lvl.range}</div>
+                <div className="tnum text-xs leading-tight text-dim">{lvl.range}</div>
               </div>
             ))}
           </div>
@@ -319,7 +320,7 @@ export default function AboutPage() {
         </div>
       )}
       {!temperatureLoading && temperatureError && (
-        <div role="alert" className="card border-l-2 border-l-ru-red px-5 py-5 text-sm text-dim">
+        <div role="alert" className="card border-l-2 border-l-accent px-5 py-5 text-sm text-dim">
           <p>Актуальная методика температуры сейчас недоступна.</p>
           <button
             type="button"
@@ -336,17 +337,17 @@ export default function AboutPage() {
 
       {earlyWarningRadar && <>
         <SectionHead num="04" title="Как работает радар" />
-        {radarMethodError && <p role="alert" className="card border-l-2 border-l-ru-red px-5 py-5 text-sm text-dim">Актуальная методика радара сейчас недоступна.</p>}
+        {radarMethodError && <p role="alert" className="card border-l-2 border-l-accent px-5 py-5 text-sm text-dim">Актуальная методика радара сейчас недоступна.</p>}
         {radarMethodology && (
           <section className="prose-editorial" aria-label="Методика радара">
             <p>Радар сравнивает страновые медиа- и событийные ряды с <b>{radarMethodology.baseline.window_days}-дневной базовой линией</b>, отдельно проверяет ускорение за {radarMethodology.baseline.acceleration_days} дней и сохраняет исходный и эффективный T0.</p>
             <dl className="my-6 grid gap-px overflow-hidden rounded-lg border border-line bg-line text-sm sm:grid-cols-3">
-              <div className="bg-panel p-4"><dt className="card-title">версия</dt><dd className="tnum mt-2">{radarMethodology.detector_version}</dd></div>
+              <div className="bg-panel p-4"><dt className="card-title">версия</dt><dd className="mt-2">{radarMethodology.detector_version}</dd></div>
               <div className="bg-panel p-4"><dt className="card-title">факторы уверенности</dt><dd className="mt-2 text-xs text-dim">{radarMethodology.confidence_factors.join(", ")}</dd></div>
               <div className="bg-panel p-4"><dt className="card-title">роли доказательств</dt><dd className="mt-2 text-xs text-dim">{radarMethodology.evidence_roles.join(", ")}</dd></div>
             </dl>
             <p className="border-l-2 border-cooling pl-4 text-sm text-dim">{radarMethodology.coverage_hard_gate}</p>
-            <p className="mt-3 border-l-2 border-ru-blue pl-4 text-sm text-dim">{radarMethodology.action_independence}</p>
+            <p className="mt-3 border-l-2 border-accent pl-4 text-sm text-dim">{radarMethodology.action_independence}</p>
             <ul className="mt-5 list-disc space-y-2 pl-5 text-sm text-dim">{radarMethodology.limitations.map((item) => <li key={item}>{item}</li>)}</ul>
           </section>
         )}
@@ -384,7 +385,7 @@ export default function AboutPage() {
             },
           ].map((d, i) => (
             <li key={i} className="flex gap-3">
-              <d.icon className="mt-1 h-4 w-4 shrink-0 text-ru-blue" strokeWidth={1.75} aria-hidden="true" />
+              <d.icon className="mt-1 h-4 w-4 shrink-0 text-accent" strokeWidth={1.75} aria-hidden="true" />
               <span>
                 <b>{d.b}</b>
                 {d.t}
@@ -438,7 +439,7 @@ export default function AboutPage() {
             },
           ].map((d, i) => (
             <li key={i} className="flex gap-4">
-              <span className="tnum mt-0.5 text-[13px] text-ru-red">
+              <span className="tnum mt-0.5 text-sm text-accent">
                 {String(i + 1).padStart(2, "0")}
               </span>
               <span>
@@ -460,7 +461,7 @@ export default function AboutPage() {
         </p>
         <ul className="mb-5 space-y-3">
           <li className="flex items-center gap-3">
-            <Code2 className="h-4 w-4 shrink-0 text-ru-blue" strokeWidth={1.75} aria-hidden="true" />
+            <Code2 className="h-4 w-4 shrink-0 text-accent" strokeWidth={1.75} aria-hidden="true" />
             <a
               href="https://github.com/milkmike/GEO_PULSE"
               target="_blank"
@@ -471,7 +472,7 @@ export default function AboutPage() {
             </a>
           </li>
           <li className="flex items-center gap-3">
-            <Mail className="h-4 w-4 shrink-0 text-ru-blue" strokeWidth={1.75} aria-hidden="true" />
+            <Mail className="h-4 w-4 shrink-0 text-accent" strokeWidth={1.75} aria-hidden="true" />
             <a
               href="mailto:mishtkachenk@gmail.com"
               className="text-accent underline-offset-4 hover:underline"
@@ -480,7 +481,7 @@ export default function AboutPage() {
             </a>
           </li>
         </ul>
-        <p className="mb-4 text-[14px] text-dim">
+        <p className="mb-4 text-sm text-dim">
           Часть методологий адаптирована из открытого проекта{" "}
           <a
             href="https://github.com/koala73/worldmonitor"
@@ -498,13 +499,19 @@ export default function AboutPage() {
         </p>
 
         <footer className="border-t border-line pt-8 text-center">
-          <p className="pull-quote mx-auto max-w-[540px] text-[20px]">
+          <p className="pull-quote mx-auto max-w-[540px] text-xl">
             «Массаракш» меряет излучение мирового медиаполя — чтобы видеть мир
             как он есть. Не наизнанку.
           </p>
-          <span className="tricolor mx-auto mt-8 max-w-[120px]" aria-hidden="true" />
         </footer>
       </section>
-    </main>
+      <section className="mt-12">
+        <SectionHeader title="Источники и методология" description="Откуда берутся данные и как их читать." />
+        <Card className="mt-4">
+          <ListRow href="/sources" title="Источники" meta="Издания, языки и покрытие стран" />
+          <ListRow href="/analytics" title="Аналитические центры" meta="Публикации и исследования о России" />
+        </Card>
+      </section>
+    </PageShell>
   );
 }

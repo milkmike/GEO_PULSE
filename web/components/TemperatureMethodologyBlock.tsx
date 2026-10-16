@@ -113,7 +113,7 @@ function ValueRows({ values }: { values: Record<string, unknown> }) {
       {Object.entries(values).map(([key, value]) => (
         <div key={key} className="grid gap-1 py-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)] sm:gap-5">
           <dt className="text-dim">{readableKey(key)}</dt>
-          <dd className="tnum break-words text-ru-white">{displayValue(value)}</dd>
+          <dd className={`break-words text-ru-white ${typeof value === "number" ? "tnum" : ""}`}>{displayValue(value)}</dd>
         </div>
       ))}
     </dl>
@@ -150,9 +150,9 @@ export default function TemperatureMethodologyBlock({ methodology }: { methodolo
 
   return (
     <section className="prose-editorial" aria-labelledby="temperature-methodology-title">
-      <header className="mb-6 border-l-2 border-ru-red pl-5">
-        <h3 id="temperature-methodology-title" className="display text-[24px] leading-tight">{methodology.name}</h3>
-        <p className="tnum mt-2 text-[11px] uppercase tracking-wide text-dim">
+      <header className="mb-6 border-l-2 border-accent pl-5">
+        <h3 id="temperature-methodology-title" className="display text-xl leading-tight">{methodology.name}</h3>
+        <p className="mt-2 text-xs text-dim">
           версия методики {methodology.methodology_version}
         </p>
       </header>
@@ -160,14 +160,14 @@ export default function TemperatureMethodologyBlock({ methodology }: { methodolo
       <div className="space-y-5">
         {methodology.plain_language.map((item) => (
           <section key={item.id} aria-labelledby={`temperature-plain-${item.id}`}>
-            <h4 id={`temperature-plain-${item.id}`} className="display mb-1 text-[17px]">{item.title}</h4>
-            <p className="text-[14px] leading-relaxed text-dim">{item.body}</p>
+            <h4 id={`temperature-plain-${item.id}`} className="display mb-1 text-xl">{item.title}</h4>
+            <p className="text-sm leading-relaxed text-dim">{item.body}</p>
           </section>
         ))}
       </div>
 
       <details className="group mt-7 rounded-lg border border-line bg-panel">
-        <summary className="min-h-11 cursor-pointer px-5 py-4 text-sm font-semibold text-ru-white marker:text-ru-blue focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">
+        <summary className="min-h-11 cursor-pointer px-5 py-4 text-sm font-semibold text-ru-white marker:text-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">
           Технические критерии
         </summary>
         <div role="region" aria-label="Технические критерии" className="grid gap-3 border-t border-line p-4 md:grid-cols-2">
@@ -178,7 +178,7 @@ export default function TemperatureMethodologyBlock({ methodology }: { methodolo
       </details>
 
       <details className="group mt-3 rounded-lg border border-line bg-panel">
-        <summary className="min-h-11 cursor-pointer px-5 py-4 text-sm font-semibold text-ru-white marker:text-ru-blue focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">
+        <summary className="min-h-11 cursor-pointer px-5 py-4 text-sm font-semibold text-ru-white marker:text-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">
           Пример расчёта
         </summary>
         <div role="region" aria-label="Пример расчёта" className="space-y-4 border-t border-line p-4">
@@ -188,7 +188,7 @@ export default function TemperatureMethodologyBlock({ methodology }: { methodolo
               <ValueRows values={article} />
             </section>
           ))}
-          <section className="rounded-lg border border-ru-blue/40 bg-ru-blue/5 p-4">
+          <section className="rounded-lg border border-accent/40 bg-accent/5 p-4">
             <h4 className="card-title mb-2">Результат</h4>
             <ValueRows values={{
               weighted_numerator: methodology.worked_example.weighted_numerator,
@@ -201,7 +201,7 @@ export default function TemperatureMethodologyBlock({ methodology }: { methodolo
 
       <section role="region" aria-label="Ограничения температуры" className="mt-7 border-t border-line pt-5">
         <h4 className="card-title">Ограничения температуры</h4>
-        <ul className="mt-3 list-disc space-y-2 pl-5 text-[14px] leading-relaxed text-dim">
+        <ul className="mt-3 list-disc space-y-2 pl-5 text-sm leading-relaxed text-dim">
           {methodology.limitations.map((limitation) => (
             <li key={limitation}>{LIMITATION_LABELS[limitation] ?? limitation}</li>
           ))}

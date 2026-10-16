@@ -38,20 +38,20 @@ export default function VoxPanel({ code }: { code: string }) {
         <div className="flex gap-6">
           {last.vox_temperature != null && (
             <div>
-              <div className="tnum text-2xl" style={{ color: last.vox_temperature >= 0 ? "var(--color-partner)" : "var(--color-hostile)" }}>
+              <div className="tnum text-h2" style={{ color: last.vox_temperature >= 0 ? "var(--color-partner)" : "var(--color-hostile)" }}>
                 {last.vox_temperature > 0 ? "+" : ""}
                 {last.vox_temperature.toFixed(0)}°
               </div>
-              <div className="text-[11px] uppercase tracking-wide text-dim">температура народа</div>
+              <div className="text-xs text-dim">температура народа</div>
             </div>
           )}
           {last.elite_gap != null && (
             <div>
-              <div className="tnum text-2xl text-ru-white">
+              <div className="tnum text-h2 text-ru-white">
                 {last.elite_gap > 0 ? "+" : ""}
                 {last.elite_gap.toFixed(0)}
               </div>
-              <div className="text-[11px] uppercase tracking-wide text-dim">разрыв с медиа</div>
+              <div className="text-xs text-dim">разрыв с медиа</div>
             </div>
           )}
         </div>
@@ -59,7 +59,7 @@ export default function VoxPanel({ code }: { code: string }) {
         {!!emos.length && (
           <div className="mt-3 space-y-1.5">
             {emos.map(([emo, n]) => (
-              <div key={emo} className="flex items-center gap-2 text-[12px]">
+              <div key={emo} className="flex items-center gap-2 text-xs">
                 <span className="w-24 shrink-0 text-dim">{EMO_RU[emo] ?? emo}</span>
                 <div className="h-2.5 flex-1 rounded bg-panel2">
                   <div
@@ -76,7 +76,7 @@ export default function VoxPanel({ code }: { code: string }) {
         {!!v.top_topics.length && (
           <div className="mt-3 flex flex-wrap gap-1.5">
             {v.top_topics.slice(0, 8).map((t) => (
-              <span key={t.topic} className="rounded border border-line px-2 py-0.5 text-[11px] text-dim">
+              <span key={t.topic} className="rounded border border-line px-2 py-0.5 text-xs text-dim">
                 {t.topic} · {t.count}
               </span>
             ))}

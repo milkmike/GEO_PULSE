@@ -5,14 +5,14 @@ import Link from "next/link";
 import { ChevronDown } from "lucide-react";
 import CountryRanking from "@/components/CountryRanking";
 import Filters, { type FilterState } from "@/components/Filters";
-import HealthBadge from "@/components/HealthBadge";
 import HeadlinesFeed from "@/components/HeadlinesFeed";
 import Markdown from "@/components/Markdown";
 import RadarPanel from "@/components/RadarPanel";
 import EarlyWarningPanel from "@/components/EarlyWarningPanel";
 import SignalFeed from "@/components/SignalFeed";
-import SiteHeader from "@/components/SiteHeader";
-import SortableGrid, { type SortableItem } from "@/components/SortableGrid";
+import PageShell from "@/components/ui/PageShell";
+import FixedPanel from "@/components/FixedPanel";
+import type { ReactNode } from "react";
 import AgendaHighlights from "@/components/AgendaHighlights";
 import AgendaPanel from "@/components/AgendaPanel";
 import DecisionWorkspace from "@/components/DecisionWorkspace";
@@ -22,6 +22,8 @@ import { api } from "@/lib/api";
 import { HOME_TIPS } from "@/lib/explain";
 import { newsDateTime as fmtDate } from "@/components/NewsReadingList";
 import type { Brief, CountrySummary, Headline, Meta, Signal, TopicBriefResponse } from "@/lib/types";
+
+type Panel = { id: string; cellClassName?: string; tip?: string; node: ReactNode };
 
 // World monitoring workspace (the former home page): country decision workspace,
 // early observations for every country and the secondary data panels.
@@ -121,10 +123,9 @@ export default function LabPage() {
     [filtered],
   );
 
-  const updatedAt = countries[0]?.updated_at;
 
   // Secondary data views remain available below the map and country detail.
-  const homePanels: SortableItem[] = [
+  const homePanels: Panel[] = [
     {
       id: "early-warning", cellClassName: "col-span-12 lg:col-span-8",
       node: earlyWarningRadar ? <EarlyWarningPanel limit={3} /> : null,
@@ -160,7 +161,7 @@ export default function LabPage() {
         <section className="card">
           <div className="card-title flex items-baseline justify-between px-4 pb-1 pt-3">
             <span>Сигналы медиаполя</span>
-            <Link href="/signals" className="text-[11px] normal-case text-dim hover:text-accent">
+            <Link href="/signals" className="text-xs normal-case text-dim hover:text-accent">
               все →
             </Link>
           </div>
@@ -192,7 +193,7 @@ export default function LabPage() {
               ) : topicBrief?.status === "ready" ? (
                 <>
                   <Markdown text={topicBrief.content} citations={topicBrief.citations ?? topicBrief.meta?.citations} />
-                  <div className="mt-2 text-[11px] text-dim">
+                  <div className="mt-2 text-xs text-dim">
                     {topicBrief.model} · {fmtDate(topicBrief.created_at)}
                   </div>
                 </>
@@ -206,7 +207,7 @@ export default function LabPage() {
             ) : brief ? (
               <>
                 <Markdown text={brief.content} citations={brief.citations ?? brief.meta?.citations} />
-                <div className="mt-2 text-[11px] text-dim">
+                <div className="mt-2 text-xs text-dim">
                   {brief.model} · {fmtDate(brief.created_at)}
                 </div>
               </>
@@ -224,23 +225,10 @@ export default function LabPage() {
   ];
 
   return (
-    <main className="mx-auto max-w-[1500px] px-3 pb-8">
-      <SiteHeader
-        active="/lab"
-        right={
-          <span className="flex items-center gap-3">
-            <HealthBadge />
-            {updatedAt && (
-              <span className="tnum text-[10px] text-dim">
-                обновлено {fmtDate(updatedAt)}
-              </span>
-            )}
-          </span>
-        }
-      />
+    <PageShell active="/lab">
 
       <header className="pt-6">
-        <p className="section-num">ЛАБОРАТОРИЯ</p>
+        <p className="section-num">Лаборатория</p>
         <p className="mt-2 max-w-3xl text-sm leading-6 text-dim">
           Рабочее место аналитика: новости по выбранной стране и ранние наблюдения по всем странам мира,
           в том числе не связанные с Россией. Раздел экспериментальный.
@@ -261,7 +249,7 @@ export default function LabPage() {
 
       <details className="group border-t border-line py-3">
         <summary className="flex min-h-16 cursor-pointer list-none items-center justify-between gap-4 rounded-lg px-3 py-3 hover:bg-panel focus-visible:outline-2 focus-visible:outline-accent [&::-webkit-details-marker]:hidden">
-          <span><span className="block text-lg font-medium text-ru-white">Сравнить страны</span><span className="mt-1 block text-sm text-fg/75">Индекс отношений с Россией и его изменения</span></span>
+          <span><span className="block text-xl font-medium text-ru-white">Сравнить страны</span><span className="mt-1 block text-sm text-fg/75">Индекс отношений с Россией и его изменения</span></span>
           <ChevronDown aria-hidden="true" size={20} className="shrink-0 text-accent transition-transform group-open:rotate-180 motion-reduce:transition-none" />
         </summary>
         <div className="card mt-4 max-h-[520px] overflow-y-auto"><CountryRanking countries={filtered} topicCounts={topicCounts ?? undefined} /></div>
@@ -269,17 +257,21 @@ export default function LabPage() {
 
       <details className="group border-t border-line py-3">
         <summary className="flex min-h-16 cursor-pointer list-none items-center justify-between gap-4 rounded-lg px-3 py-3 hover:bg-panel focus-visible:outline-2 focus-visible:outline-accent [&::-webkit-details-marker]:hidden">
-          <span><span className="block text-lg font-medium text-ru-white">Больше данных</span><span className="mt-1 block text-sm text-fg/75">Новостные ленты, сводки и сигналы изменений</span></span>
+          <span><span className="block text-xl font-medium text-ru-white">Больше данных</span><span className="mt-1 block text-sm text-fg/75">Новостные ленты, сводки и сигналы изменений</span></span>
           <ChevronDown aria-hidden="true" size={20} className="shrink-0 text-accent transition-transform group-open:rotate-180 motion-reduce:transition-none" />
         </summary>
         <div className="reveal reveal-2 mt-4 grid grid-cols-12 gap-3">
-          <SortableGrid storageKey="home-panel-order" defaultOrder={HOME_ORDER} items={homePanels} />
+          {HOME_ORDER.map((id) => homePanels.find((panel) => panel.id === id)).filter((panel): panel is Panel => Boolean(panel)).map((panel) => (
+          <FixedPanel key={panel.id} id={panel.id} className={panel.cellClassName} tip={panel.tip}>
+            {panel.node}
+          </FixedPanel>
+        ))}
         </div>
       </details>
 
       <div id="agendas" className="scroll-mt-24">
         <AgendaPanel />
       </div>
-    </main>
+    </PageShell>
   );
 }

@@ -231,7 +231,7 @@ export default function InvestigationPanel({
           <div className="flex items-start gap-4">
             <div className="min-w-0 flex-1">
               <div className="section-num">Единое расследование</div>
-              <h2 id={headingId} className="display mt-1 text-2xl">
+              <h2 id={headingId} className="display mt-1 text-h2">
                 <span className="sr-only">Единое расследование: </span>{countryName} · сдвиг RRI
               </h2>
               <p id={descriptionId} className="mt-1 text-xs leading-relaxed text-dim">
@@ -242,7 +242,7 @@ export default function InvestigationPanel({
               ref={closeRef}
               type="button"
               onClick={onClose}
-              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-line text-dim transition-colors hover:border-ru-blue hover:text-ru-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-line text-dim transition-colors hover:border-accent hover:text-ru-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
               aria-label="Закрыть единое расследование"
             >
               <X className="h-5 w-5" aria-hidden="true" />
@@ -306,7 +306,7 @@ export default function InvestigationPanel({
                     ["Остаток округления", exact.rounding_residual],
                   ].map(([label, value]) => (
                     <div key={label as string} className="rounded bg-panel2 px-3 py-2">
-                      <dt className="text-[11px] text-dim">{label}</dt>
+                      <dt className="text-xs text-dim">{label}</dt>
                       <dd className="tnum font-semibold">{fmtSigned(value as number)}</dd>
                     </div>
                   ))}
@@ -342,13 +342,13 @@ export default function InvestigationPanel({
                           Оценка пропущена: {codeLabel(REASON_LABELS, item.reason, "Причина")}
                         </p>
                       )}
-                      {item.confidence != null && <p className="mt-1 text-[11px] text-dim">Уверенность: {Math.round(item.confidence * 100)}%</p>}
+                      {item.confidence != null && <p className="mt-1 text-xs text-dim">Уверенность: {Math.round(item.confidence * 100)}%</p>}
                     </article>
                   ))}
                 </div>
               </section>
 
-              <section role="region" aria-labelledby={`${headingId}-context`} className="rounded-lg border border-ru-blue/40 bg-ru-blue/5 p-4">
+              <section role="region" aria-labelledby={`${headingId}-context`} className="rounded-lg border border-accent/40 bg-accent/5 p-4">
                 <h3 id={`${headingId}-context`} className="card-title">Что происходило рядом · контекст, не причина</h3>
                 <p className="mt-1 text-xs leading-relaxed text-dim">
                   Временная и тематическая близость помогает исследованию, но не доказывает причинность.
@@ -361,7 +361,7 @@ export default function InvestigationPanel({
                       <div className="mt-1 text-xs leading-relaxed text-dim">
                         {codeLabel(CONTEXT_LABELS, item.why_included, "Основание контекста")}
                       </div>
-                      {item.occurred_at && <time className="mt-1 block text-[11px] text-dim" dateTime={item.occurred_at}>{fmtTime(item.occurred_at)}</time>}
+                      {item.occurred_at && <time className="mt-1 block text-xs text-dim" dateTime={item.occurred_at}>{fmtTime(item.occurred_at)}</time>}
                     </li>
                   ))}
                 </ul>

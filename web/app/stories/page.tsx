@@ -11,7 +11,7 @@ import {
 } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Filter, LoaderCircle, Network, Search, X } from "lucide-react";
-import SiteHeader from "@/components/SiteHeader";
+import PageShell from "@/components/ui/PageShell";
 import StoryCard from "@/components/StoryCard";
 import { api } from "@/lib/api";
 import type {
@@ -323,31 +323,30 @@ function StoriesPageContent() {
   const indexedTo = shortDate(coverage?.available_to);
 
   return (
-    <main className="mx-auto max-w-[1240px] px-3 pb-16">
-      <SiteHeader active="/stories" />
+    <PageShell active="/stories">
 
       <header className="reveal reveal-1 grid gap-6 pb-8 pt-10 lg:grid-cols-[1fr_22rem] lg:items-end">
         <div>
-          <p className="section-num">СЮЖЕТЫ</p>
-          <h1 className="display mt-2 max-w-4xl text-[40px] leading-[0.98] sm:text-[54px]">
+          <p className="section-num">Сюжеты</p>
+          <h1 className="display mt-2 max-w-4xl text-h1 leading-[0.98] sm:text-h1">
             Одна история — несколько стран
           </h1>
         </div>
-        <p className="border-l border-ru-blue/70 pl-4 text-[12px] leading-5 text-dim">
+        <p className="border-l border-accent/70 pl-4 text-xs leading-5 text-dim">
           Мы соединяем публикации только по доказуемому сходству событий, сущностей и времени.
           Сдвиги RRI показаны как соседний контекст, а не как установленная причина.
         </p>
       </header>
 
       <form onSubmit={submit} className="reveal reveal-2 card relative overflow-visible px-4 py-4 sm:px-5">
-        <span className="tricolor absolute inset-x-0 top-0 !h-[2px]" aria-hidden="true" />
+        <span className="absolute inset-x-0 top-0 h-0.5 bg-accent" aria-hidden="true" />
         <div className="mb-3 flex items-center gap-2 text-dim">
           <Filter aria-hidden="true" size={13} />
           <span className="card-title">линза сюжетов</span>
         </div>
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
           <label>
-            <span className="mb-1 block text-[10px] uppercase tracking-[0.08em] text-dim">Страна</span>
+            <span className="mb-1 block text-xs text-dim">Страна</span>
             <select
               aria-label="Страна"
               value={draft.country}
@@ -364,7 +363,7 @@ function StoriesPageContent() {
             </select>
           </label>
           <label>
-            <span className="mb-1 block text-[10px] uppercase tracking-[0.08em] text-dim">Тема</span>
+            <span className="mb-1 block text-xs text-dim">Тема</span>
             <select
               aria-label="Тема"
               value={draft.topic}
@@ -379,7 +378,7 @@ function StoriesPageContent() {
             </select>
           </label>
           <label>
-            <span className="mb-1 block text-[10px] uppercase tracking-[0.08em] text-dim">Стадия</span>
+            <span className="mb-1 block text-xs text-dim">Стадия</span>
             <select
               aria-label="Стадия"
               value={draft.lifecycle}
@@ -394,7 +393,7 @@ function StoriesPageContent() {
             </select>
           </label>
           <label>
-            <span className="mb-1 block text-[10px] uppercase tracking-[0.08em] text-dim">Период</span>
+            <span className="mb-1 block text-xs text-dim">Период</span>
             <select
               aria-label="Период"
               value={draft.period}
@@ -408,7 +407,7 @@ function StoriesPageContent() {
             </select>
           </label>
           <div className="relative">
-            <label htmlFor="story-entity" className="mb-1 block text-[10px] uppercase tracking-[0.08em] text-dim">
+            <label htmlFor="story-entity" className="mb-1 block text-xs text-dim">
               Сущность
             </label>
             <div className="relative">
@@ -464,10 +463,10 @@ function StoriesPageContent() {
                     onPointerDown={(event) => event.preventDefault()}
                     onClick={() => chooseEntity(entity)}
                     className={`flex min-h-11 w-full items-center justify-between border-b border-line px-3 text-left text-sm last:border-0 ${
-                      index === activeSuggestion ? "bg-ru-blue/15 text-ru-white" : "hover:bg-white/5"
+                      index === activeSuggestion ? "bg-accent/15 text-ru-white" : "hover:bg-white/5"
                     }`}
                   >
-                    <span>{entity.label}</span><span className="tnum text-[9px] uppercase text-dim">{entity.kind}</span>
+                    <span>{entity.label}</span><span className="text-xs text-dim">{entity.kind}</span>
                   </button>
                 ))}
               </div>
@@ -481,11 +480,11 @@ function StoriesPageContent() {
               setDraft({ country: "", topic: "", lifecycle: "", entity_id: "", entity_label: "", period: "30d" });
               setEntityQuery("");
             }}
-            className="min-h-11 text-[11px] text-dim underline underline-offset-4 hover:text-fg sm:min-h-0"
+            className="min-h-11 text-xs text-dim underline underline-offset-4 hover:text-fg sm:min-h-0"
           >
             сбросить фильтры
           </button>
-          <button type="submit" className="inline-flex min-h-11 items-center gap-2 rounded-md bg-ru-white px-5 text-[11px] font-semibold uppercase tracking-[0.08em] text-bg hover:bg-white focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent">
+          <button type="submit" className="inline-flex min-h-11 items-center gap-2 rounded-md bg-ru-white px-5 text-xs font-semibold text-bg hover:bg-white focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent">
             <Network aria-hidden="true" size={14} /> показать сюжеты
           </button>
         </div>
@@ -496,9 +495,9 @@ function StoriesPageContent() {
           role="status"
           aria-label="Режим выдачи"
           title={consistency.limitation}
-          className="tnum mt-3 flex items-center gap-2 text-[10px] uppercase tracking-[0.08em] text-dim"
+          className="mt-3 flex items-center gap-2 text-xs text-dim"
         >
-          <span className="inline-block size-1.5 rounded-full bg-ru-blue" aria-hidden="true" />
+          <span className="inline-block size-1.5 rounded-full bg-accent" aria-hidden="true" />
           Состав сюжетов зафиксирован для этой выдачи · фильтры обновляются
         </p>
       )}
@@ -507,11 +506,11 @@ function StoriesPageContent() {
         {loading && (
           <div role="status" className="border-y border-line py-12 text-center text-dim">
             <LoaderCircle aria-hidden="true" className="mx-auto mb-3 animate-spin motion-reduce:animate-none" size={22} />
-            <span className="tnum text-[10px] uppercase tracking-[0.12em]">Собираем межстрановые связи…</span>
+            <span className="text-xs ">Собираем межстрановые связи…</span>
           </div>
         )}
         {error && (
-          <div role="alert" className="card border-ru-red/40 px-4 py-4 text-[13px] text-[#e5aaa5]">
+          <div role="alert" className="card border-accent/40 px-4 py-4 text-sm text-fg">
             <p>{error}</p>
             <button type="button" onClick={() => setReload((value) => value + 1)} className="mt-2 min-h-11 text-ru-white underline underline-offset-4 sm:min-h-0">
               повторить
@@ -520,13 +519,13 @@ function StoriesPageContent() {
         )}
         {!loading && !error && stories.length === 0 && !needsCanonicalPeriod && (
           <div className="border-y border-line py-12 text-center">
-            <p className="display text-[26px]">По этой линзе сюжетов пока нет</p>
-            <p className="mx-auto mt-2 max-w-xl text-[12px] leading-5 text-dim">
+            <p className="display text-h2">По этой линзе сюжетов пока нет</p>
+            <p className="mx-auto mt-2 max-w-xl text-xs leading-5 text-dim">
               Выбранный период: {selectedPeriodLabel}. Уберите один из фильтров или расширьте период.
               Сюжет появляется только после подтверждения связи материалами как минимум из двух стран.
             </p>
             {indexedFrom && indexedTo && (
-              <p className="tnum mt-2 text-[10px] uppercase tracking-[0.08em] text-dim">
+              <p className="mt-2 text-xs text-dim">
                 Проиндексированное покрытие: {indexedFrom}–{indexedTo}
               </p>
             )}
@@ -536,7 +535,7 @@ function StoriesPageContent() {
           <>
             <div className="mb-3 flex items-baseline justify-between gap-3">
               <p className="card-title">доказательные досье</p>
-              <p className="tnum text-[10px] text-dim">показано {stories.length}</p>
+              <p className="text-xs text-dim">показано {stories.length}</p>
             </div>
             <div className="grid gap-3 lg:grid-cols-2">
               {stories.map((story) => <StoryCard key={story.id} story={story} />)}
@@ -547,7 +546,7 @@ function StoriesPageContent() {
                   type="button"
                   onClick={more}
                   disabled={loadingMore}
-                  className="inline-flex min-h-11 items-center gap-2 rounded-md border border-line px-5 text-[11px] uppercase tracking-[0.08em] text-fg hover:border-ru-blue disabled:opacity-50"
+                  className="inline-flex min-h-11 items-center gap-2 rounded-md border border-line px-5 text-xs text-fg hover:border-accent disabled:opacity-50"
                 >
                   {loadingMore && <LoaderCircle aria-hidden="true" size={14} className="animate-spin motion-reduce:animate-none" />}
                   {loadingMore ? "загружаем" : "следующую страницу"}
@@ -557,7 +556,7 @@ function StoriesPageContent() {
           </>
         )}
       </section>
-    </main>
+    </PageShell>
   );
 }
 

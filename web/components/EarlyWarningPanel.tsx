@@ -99,10 +99,10 @@ export default function EarlyWarningPanel({
     <section className="card overflow-hidden" aria-labelledby={`early-warning-${countryCode ?? "global"}`}>
       <div className="flex items-center justify-between gap-3 border-b border-line px-4 py-3">
         <div className="flex items-center gap-2">
-          <Radar aria-hidden="true" size={15} className="text-ru-red" />
+          <Radar aria-hidden="true" size={15} className="text-accent" />
           <h2 id={`early-warning-${countryCode ?? "global"}`} className="card-title text-fg">{title}</h2>
         </div>
-        <Link href={radarHref} className="min-h-11 py-3 text-[11px] text-dim hover:text-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent sm:min-h-0 sm:py-0">весь радар →</Link>
+        <Link href={radarHref} className="min-h-11 py-3 text-xs text-dim hover:text-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent sm:min-h-0 sm:py-0">весь радар →</Link>
       </div>
       {state === "loading" && <p role="status" className="flex items-center gap-2 px-4 py-7 text-xs text-dim"><LoaderCircle size={14} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />сверяем подтверждённые волны…</p>}
       {state === "error" && <div role="alert" className="px-4 py-6 text-xs text-dim">Радар сейчас недоступен. <button type="button" onClick={() => setReload((value) => value + 1)} className="ml-1 min-h-11 text-accent underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent sm:min-h-0">повторить</button></div>}
@@ -110,7 +110,7 @@ export default function EarlyWarningPanel({
       {state === "ready" && items.length === 0 && searchScope === "exhausted" && <p className="px-4 py-7 text-xs text-dim">Среди всех сохранённых трендов приоритетных сейчас нет.</p>}
       {state === "ready" && items.length === 0 && searchScope === "unknown" && <p className="px-4 py-7 text-xs text-dim">В переданной выборке приоритетных трендов нет.</p>}
       {state === "ready" && items.length > 0 && <div className="divide-y divide-line">{items.map((trend) => <TrendCard key={trend.public_id} trend={trend} compact />)}</div>}
-      {state === "ready" && items.length > 0 && searchScope === "partial" && <p className="border-t border-line px-4 py-3 text-[11px] text-dim">Показаны приоритетные тренды из проверенной части радара.</p>}
+      {state === "ready" && items.length > 0 && searchScope === "partial" && <p className="border-t border-line px-4 py-3 text-xs text-dim">Показаны приоритетные тренды из проверенной части радара.</p>}
     </section>
   );
 }

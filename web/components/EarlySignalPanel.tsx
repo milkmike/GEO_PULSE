@@ -51,23 +51,23 @@ function SignalArticle({ item }: { item: EarlySignal }) {
   return <article className="min-w-0 border-t border-line py-5 first:border-t-0 sm:py-6">
     <div className="grid min-w-0 gap-x-8 gap-y-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
       <div className="min-w-0">
-        <p className="text-[10px] font-medium uppercase tracking-[0.18em] text-ru-red">Рабочая гипотеза</p>
-        <h4 className="display mt-2 max-w-xl break-words text-[22px] leading-[1.22] sm:text-[25px]">{item.headline_ru}</h4>
+        <p className="text-xs font-medium text-accent">Рабочая гипотеза</p>
+        <h4 className="display mt-2 max-w-xl break-words text-xl leading-[1.22] sm:text-h2">{item.headline_ru}</h4>
         {horizon && <p className="mt-2 text-xs leading-5 text-dim">Горизонт наблюдения: {horizon}</p>}
       </div>
       <div className="min-w-0">
-        {item.interpretation_ru && <p className="max-w-3xl break-words text-sm leading-6 text-fg sm:text-[15px] sm:leading-7">{item.interpretation_ru}</p>}
+        {item.interpretation_ru && <p className="max-w-3xl break-words text-sm leading-6 text-fg sm:text-base sm:leading-7">{item.interpretation_ru}</p>}
         <button type="button" aria-expanded={expanded} onClick={() => setExpanded((current) => !current)} className="mt-3 inline-flex min-h-11 items-center rounded-sm text-sm font-medium text-accent underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">
           {expanded ? "Свернуть гипотезу" : "Раскрыть гипотезу"}
         </button>
       </div>
     </div>
-    {expanded && <div className="mx-auto mt-5 w-full max-w-[900px] min-w-0 space-y-5 border-l-2 border-ru-blue/60 pl-4 sm:mt-6 sm:pl-6">
-            {item.hypothesis_ru && <section><h5 className="text-[10px] font-semibold uppercase tracking-[0.14em] text-dim">Что может происходить</h5><p className="mt-1 break-words text-sm leading-6 text-fg">{item.hypothesis_ru}</p></section>}
-            {item.opportunity_ru && <section><h5 className="text-[10px] font-semibold uppercase tracking-[0.14em] text-dim">Возможность для России</h5><p className="mt-1 break-words text-sm leading-6 text-fg">{item.opportunity_ru}</p></section>}
+    {expanded && <div className="mx-auto mt-5 w-full max-w-[900px] min-w-0 space-y-5 border-l-2 border-accent/60 pl-4 sm:mt-6 sm:pl-6">
+            {item.hypothesis_ru && <section><h5 className="text-xs font-semibold text-dim">Что может происходить</h5><p className="mt-1 break-words text-sm leading-6 text-fg">{item.hypothesis_ru}</p></section>}
+            {item.opportunity_ru && <section><h5 className="text-xs font-semibold text-dim">Возможность для России</h5><p className="mt-1 break-words text-sm leading-6 text-fg">{item.opportunity_ru}</p></section>}
             {item.russia_link === "unestablished" && <p className="text-xs leading-5 text-dim">Связь с Россией пока не установлена.</p>}
-            {item.counterargument_ru && <section><h5 className="text-[10px] font-semibold uppercase tracking-[0.14em] text-dim">Другая версия</h5><p className="mt-1 break-words text-sm leading-6 text-fg">{item.counterargument_ru}</p></section>}
-            {watch.length > 0 && <section><h5 className="text-[10px] font-semibold uppercase tracking-[0.14em] text-dim">Что наблюдать дальше</h5><ul className="mt-2 space-y-2">{watch.map((point, index) => <li key={`${point.observation_ru}-${index}`} className="break-words text-sm leading-6 text-fg"><span className="font-medium text-ru-white">{point.effect === "strengthens" ? "В пользу гипотезы" : "Ослабит гипотезу"}:</span> {point.observation_ru}{displayDate(point.by_date) ? ` · до ${displayDate(point.by_date)}` : ""}</li>)}</ul></section>}
+            {item.counterargument_ru && <section><h5 className="text-xs font-semibold text-dim">Другая версия</h5><p className="mt-1 break-words text-sm leading-6 text-fg">{item.counterargument_ru}</p></section>}
+            {watch.length > 0 && <section><h5 className="text-xs font-semibold text-dim">Что наблюдать дальше</h5><ul className="mt-2 space-y-2">{watch.map((point, index) => <li key={`${point.observation_ru}-${index}`} className="break-words text-sm leading-6 text-fg"><span className="font-medium text-ru-white">{point.effect === "strengthens" ? "В пользу гипотезы" : "Ослабит гипотезу"}:</span> {point.observation_ru}{displayDate(point.by_date) ? ` · до ${displayDate(point.by_date)}` : ""}</li>)}</ul></section>}
             {observations.length > 0 && <details className="min-w-0 border-t border-line pt-2"><summary className="flex min-h-11 cursor-pointer items-center rounded-sm text-sm font-medium text-accent underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">На чём основана гипотеза · {citedCount} {sourceNoun}</summary><ul className="mt-2 space-y-4">{observations.map((observation) => {
               const source = evidence.find((entry) => entry.id === observation.article_id);
               return <li key={observation.id} className="min-w-0 break-words text-sm leading-6 text-fg"><p>{observation.text_ru}</p>{observation.quote && <blockquote className="mt-1 border-l border-line pl-3 text-xs leading-5 text-dim">«{observation.quote}»</blockquote>}{source && <Evidence item={source} />}</li>;
@@ -84,8 +84,8 @@ function ObservationArticle({ item }: { item: PreliminaryObservation }) {
   return <article className="min-w-0 border-t border-line py-5 first:border-t-0 sm:py-6">
     <div className="grid min-w-0 gap-x-8 gap-y-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
       <div className="min-w-0">
-        <h4 className="display max-w-xl break-words text-[21px] leading-[1.25] sm:text-[24px]">{item.title_ru || item.label_ru}</h4>
-        {item.title_origin === "machine_translation" && <p className="mt-1 text-[11px] leading-4 text-dim">Автоматический перевод</p>}
+        <h4 className="display max-w-xl break-words text-xl leading-[1.25] sm:text-xl">{item.title_ru || item.label_ru}</h4>
+        {item.title_origin === "machine_translation" && <p className="mt-1 text-xs leading-4 text-dim">Автоматический перевод</p>}
         <p className="mt-2 text-xs leading-5 text-dim">{countryName(item.country_code)} · {item.source_name}{published ? ` · ${published}` : ""}</p>
       </div>
       <div className="min-w-0">
@@ -145,7 +145,7 @@ export default function EarlySignalPanel({ country, availableCountry, countryNam
   if (!value && error) return <p role="alert" className="mt-5 text-xs leading-5 text-dim">Ранние сигналы сейчас недоступны. <button type="button" onClick={() => setRetry((current) => current + 1)} className="min-h-11 px-1 text-accent underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">Повторить</button></p>;
   return <section aria-labelledby={titleId} className="mt-7 min-w-0 border-t border-line pt-5 sm:mt-8" aria-busy={loading}>
     <header className="flex flex-wrap items-end justify-between gap-x-6 gap-y-2">
-      <div><p className="text-[10px] font-medium uppercase tracking-[0.18em] text-ru-red">Ранние сигналы</p><h3 id={titleId} className="display mt-1 break-words text-[27px] leading-tight sm:text-[32px]">{scope === "world" ? "На горизонте: мир" : `На горизонте: ${countryName || scope}`}</h3></div>
+      <div><p className="text-xs font-medium text-accent">Ранние сигналы</p><h3 id={titleId} className="display mt-1 break-words text-h2 leading-tight sm:text-h2">{scope === "world" ? "На горизонте: мир" : `На горизонте: ${countryName || scope}`}</h3></div>
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
         {countryCode && <nav aria-label="Масштаб ранних сигналов" className="flex items-center gap-1 text-xs">
           <button type="button" aria-pressed={scope === "world"} onClick={() => { setScopeMode("world"); onWorld?.(); }} className={`min-h-11 rounded-sm px-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${scope === "world" ? "text-ru-white underline underline-offset-4" : "text-accent"}`}>Мир</button>
@@ -156,7 +156,7 @@ export default function EarlySignalPanel({ country, availableCountry, countryNam
     </header>
     <p className="mt-2 max-w-3xl text-sm leading-6 text-fg/80">Небольшие изменения, за которыми стоит следить. Наблюдения по публикациям и проверенные человеком гипотезы показаны отдельно.</p>
     {signalOnly && scope !== "world" && <p className="mt-1 text-xs leading-5 text-dim">Фильтр ранних сигналов: {countryName || countryCode}. Страновой обзор остаётся на прежней стране.</p>}
-    {value?.notice && <p className="mt-3 max-w-3xl border-l-2 border-ru-blue/60 pl-3 text-xs leading-5 text-dim">{value.notice}</p>}
+    {value?.notice && <p className="mt-3 max-w-3xl border-l-2 border-accent/60 pl-3 text-xs leading-5 text-dim">{value.notice}</p>}
     {error && <p role="alert" className="mt-4 text-xs leading-5 text-dim">{value ? "Не удалось обновить сигналы. Показан предыдущий обзор." : "Ранние сигналы сейчас недоступны."} <button type="button" onClick={() => setRetry((current) => current + 1)} className="min-h-11 px-1 text-accent underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">Повторить</button></p>}
     {preliminary.length > 0 && <div className="mt-5 min-w-0"><h4 className="text-sm font-medium text-fg">Первые наблюдения</h4><p className="mt-1 text-xs leading-5 text-dim">Предварительные сведения по публикациям. Версии развития событий ещё не подготовлены.</p><div className="mt-1 border-b border-line">{preliminary.map((item) => <ObservationArticle key={item.id} item={item} />)}</div></div>}
     {items.length > 0 && <div className="mt-5 min-w-0"><h4 className="text-sm font-medium text-fg">Гипотезы после проверки</h4><div className="mt-1 border-b border-line">{items.map((item) => <SignalArticle key={item.id} item={item} />)}</div></div>}

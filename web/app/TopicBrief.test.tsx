@@ -23,11 +23,6 @@ vi.mock("@/components/AgendaPanel", async (importOriginal) => ({
   default: () => null,
 }));
 vi.mock("@/components/DecisionWorkspace", () => ({ default: ({ mapControls }: { mapControls?: ReactNode }) => <div>{mapControls}</div> }));
-vi.mock("@/components/SortableGrid", () => ({
-  default: ({ items }: { items: { id: string; node: ReactNode }[] }) => (
-    <>{items.map((item) => <div key={item.id}>{item.node}</div>)}</>
-  ),
-}));
 vi.mock("@/components/Filters", () => ({
   default: ({ value, onChange }: {
     value: { region: string | null; level: string | null; topic: string | null };
@@ -61,6 +56,15 @@ async function renderWithTopicResponse(response: TopicBriefResponse) {
 }
 
 describe("thematic brief states", () => {
+  it("keeps lab panels in the fixed editorial order", async () => {
+    localStorage.setItem("home-panel-order", JSON.stringify(["radar", "brief"]));
+    render(<HomePage />);
+    const panels = [...document.querySelectorAll("[data-panel]")].map((panel) => panel.getAttribute("data-panel"));
+    expect(panels).toEqual(["early-warning", "stories", "headlines", "signals", "brief", "radar"]);
+    expect(document.querySelector("[draggable]")).toBeNull();
+    localStorage.removeItem("home-panel-order");
+    await screen.findByRole("button", { name: "Выбрать культуру и спорт" });
+  });
   beforeEach(() => {
     Object.values(apiMocks).forEach((mock) => mock.mockReset());
     apiMocks.countries.mockResolvedValue({ countries: [], total: 0 });

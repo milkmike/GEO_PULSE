@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useId } from "react";
-import LowDataBadge from "./LowDataBadge";
+import Delta from "./ui/Delta";
 import { fmt, LEVEL_COLOR, pluralRu } from "@/lib/format";
 import type { CountrySummary, Level } from "@/lib/types";
 
@@ -15,21 +15,6 @@ export const THERMOMETER_BANDS: { level: Level; label: string; range: string }[]
   { level: "tension", label: "Напряжённость", range: "−70…−40" },
   { level: "hostile", label: "Враждебность", range: "ниже −70" },
 ];
-
-function WeeklyDelta({ value }: { value: number | null }) {
-  if (value == null || Math.abs(value) < 1) return null;
-  const up = value > 0;
-  return (
-    <span
-      className={`tnum shrink-0 text-xs ${up ? "text-partner" : "text-hostile"}`}
-      title={`За неделю: ${fmt(value)}`}
-    >
-      <span aria-hidden="true">{up ? "▲" : "▼"}</span>
-      <span className="sr-only">за неделю </span>
-      {fmt(value)}
-    </span>
-  );
-}
 
 /** Vertical «thermometer»: every country placed in its RRI level band, warmest on top. */
 export default function RelationsThermometer({
@@ -50,12 +35,13 @@ export default function RelationsThermometer({
   return (
     <section aria-labelledby={titleId} className="card flex min-h-0 flex-col">
       <header className="border-b border-line px-4 pb-3 pt-3">
-        <h2 id={titleId} className="text-[15px] font-semibold text-ru-white">Термометр отношений</h2>
+        <h2 id={titleId} className="text-base font-semibold text-ru-white">Термометр отношений</h2>
         <p className="mt-0.5 text-xs text-dim">
           {countries.length > 0
             ? `${countries.length} ${pluralRu(countries.length, "страна", "страны", "стран")} по индексу: сверху самые дружественные`
             : "Загружаем индекс стран…"}
         </p>
+        <p className="mt-1 text-xs text-dim">Серым — страны, где о России почти не пишут</p>
       </header>
       {/* `relative` keeps the rows' sr-only labels inside the scroll area. */}
       <div className="relative min-h-0 flex-1 overflow-y-auto px-3 py-2 max-lg:max-h-[480px]">
@@ -88,9 +74,9 @@ export default function RelationsThermometer({
                     >
                       <span aria-hidden="true" className="w-5 shrink-0 text-center">{c.flag}</span>
                       <span className="min-w-0 flex-1 truncate text-fg">{c.name}</span>
-                      {c.low_data && <LowDataBadge />}
-                      <WeeklyDelta value={c.delta_7d} />
-                      <span className="tnum w-12 shrink-0 text-right font-semibold" style={{ color: c.low_data ? "var(--color-dim)" : LEVEL_COLOR[c.level] }}>
+                      <Delta value={c.delta_7d} />
+                      <span className={`tnum w-12 shrink-0 whitespace-nowrap text-right font-semibold ${c.low_data ? "text-dim" : ""}`} style={c.low_data ? undefined : { color: LEVEL_COLOR[c.level] }}>
+                        {c.low_data && <><span aria-hidden="true" className="mr-0.5 font-sans text-xs" title="мало данных: индекс держится в основном на позиции страны">·</span><span className="sr-only">мало данных </span></>}
                         {fmt(c.score)}
                       </span>
                     </Link>

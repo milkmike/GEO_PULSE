@@ -4,7 +4,7 @@ import { Suspense, useEffect, useMemo, useRef, useState, type KeyboardEvent } fr
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { CircleAlert, LoaderCircle, Radar } from "lucide-react";
 import Link from "next/link";
-import SiteHeader from "@/components/SiteHeader";
+import PageShell from "@/components/ui/PageShell";
 import TrendCard from "@/components/TrendCard";
 import { useFeatureFlags } from "@/components/FeatureFlagsProvider";
 import { api } from "@/lib/api";
@@ -40,7 +40,7 @@ function ObservationStatus() {
   const updated = observationDate(coverage?.updated_at ?? null);
   const stale = summary && (!latest || Date.now() - new Date(summary.latest_observation_at!).getTime() > 72 * 3600000);
   return (
-    <section aria-label="Наблюдения радара" className="mt-5 border-l-2 border-ru-blue/70 py-1 pl-4 text-sm leading-6 text-dim">
+    <section aria-label="Наблюдения радара" className="mt-5 border-l-2 border-accent/70 py-1 pl-4 text-sm leading-6 text-dim">
       <h2 className="text-sm font-medium text-fg">Наблюдения радара</h2>
       <p className="mt-1 text-xs">Медиаконтур · все страны · сохранённые наблюдения за 30 календарных дней UTC</p>
       {state === "loading" && <p role="status" className="mt-2">Загружаем сводку наблюдений…</p>}
@@ -153,39 +153,38 @@ function RadarPageContent() {
     }
   }
 
-  if (!earlyWarningRadar) return <main className="mx-auto max-w-[1240px] px-3 pb-16"><SiteHeader /><div className="mx-auto mt-16 max-w-xl border-y border-line py-10 text-center"><Radar size={24} className="mx-auto mb-3 text-dim" aria-hidden="true" /><h1 className="display text-2xl">Радар раннего предупреждения</h1><p className="mt-3 text-sm text-dim">Раздел раннего предупреждения отключён.</p></div></main>;
+  if (!earlyWarningRadar) return <PageShell active="/signals"><div className="mx-auto mt-16 max-w-xl border-y border-line py-10 text-center"><Radar size={24} className="mx-auto mb-3 text-dim" aria-hidden="true" /><h1 className="display text-h2">Радар раннего предупреждения</h1><p className="mt-3 text-sm text-dim">Раздел раннего предупреждения отключён.</p></div></PageShell>;
 
   return (
-    <main className="mx-auto max-w-[1240px] px-3 pb-16">
-      <SiteHeader active="/radar" />
-      <header className="reveal reveal-1 border-b border-line pb-7 pt-10"><p className="section-num">РАННИЕ ИЗМЕНЕНИЯ</p><h1 className="display mt-2 text-[40px] leading-none sm:text-[58px]">Радар перемен</h1><p className="mt-5 max-w-3xl text-[15px] leading-7 text-dim">Подтверждённые межстрановые волны и ранние признаки ускорения. Медиа и действия показаны раздельно; пробелы покрытия не скрываются.</p></header>
+    <PageShell active="/signals">
+      <header className="reveal reveal-1 border-b border-line pb-7 pt-10"><p className="section-num">Ранние изменения</p><h1 className="display mt-2 text-h1 leading-none sm:text-h1">Радар перемен</h1><p className="mt-5 max-w-3xl text-base leading-7 text-dim">Подтверждённые межстрановые волны и ранние признаки ускорения. Медиа и действия показаны раздельно; пробелы покрытия не скрываются.</p></header>
 
       <ObservationStatus />
 
       <section aria-label="Фильтры радара" className="my-5 grid gap-2 border-y border-line py-3 sm:grid-cols-[1fr_1fr_1fr_auto]">
-        <label className="text-[10px] uppercase tracking-wide text-dim">Состояние<select id="radar-state" value={filters.state ?? ""} onKeyDown={(event) => moveFilterFocus(event, 0)} onChange={(event) => updateFilter("state", event.target.value)} className="mt-1 min-h-11 w-full rounded-md border border-line bg-panel px-3 text-sm text-fg focus-visible:outline-2 focus-visible:outline-accent">{STATES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-        <label className="text-[10px] uppercase tracking-wide text-dim">Контур<select id="radar-contour" value={filters.contour ?? ""} onKeyDown={(event) => moveFilterFocus(event, 1)} onChange={(event) => updateFilter("contour", event.target.value)} className="mt-1 min-h-11 w-full rounded-md border border-line bg-panel px-3 text-sm text-fg focus-visible:outline-2 focus-visible:outline-accent">{CONTOURS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-        <label className="text-[10px] uppercase tracking-wide text-dim">Страна<input id="radar-country" value={countryDraft} maxLength={2} placeholder="ISO · ES" onKeyDown={(event) => { moveFilterFocus(event, 2); if (event.key === "Enter") updateFilter("country", countryDraft); }} onBlur={() => updateFilter("country", countryDraft)} onChange={(event) => setCountryDraft(event.target.value.toUpperCase())} className="mt-1 min-h-11 w-full rounded-md border border-line bg-panel px-3 text-sm uppercase text-fg placeholder:text-dim focus-visible:outline-2 focus-visible:outline-accent" /></label>
+        <label className="text-xs text-dim">Состояние<select id="radar-state" value={filters.state ?? ""} onKeyDown={(event) => moveFilterFocus(event, 0)} onChange={(event) => updateFilter("state", event.target.value)} className="mt-1 min-h-11 w-full rounded-md border border-line bg-panel px-3 text-sm text-fg focus-visible:outline-2 focus-visible:outline-accent">{STATES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+        <label className="text-xs text-dim">Контур<select id="radar-contour" value={filters.contour ?? ""} onKeyDown={(event) => moveFilterFocus(event, 1)} onChange={(event) => updateFilter("contour", event.target.value)} className="mt-1 min-h-11 w-full rounded-md border border-line bg-panel px-3 text-sm text-fg focus-visible:outline-2 focus-visible:outline-accent">{CONTOURS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+        <label className="text-xs text-dim">Страна<input id="radar-country" value={countryDraft} maxLength={2} placeholder="ISO · ES" onKeyDown={(event) => { moveFilterFocus(event, 2); if (event.key === "Enter") updateFilter("country", countryDraft); }} onBlur={() => updateFilter("country", countryDraft)} onChange={(event) => setCountryDraft(event.target.value.toUpperCase())} className="mt-1 min-h-11 w-full rounded-md border border-line bg-panel px-3 text-sm text-fg placeholder:text-dim focus-visible:outline-2 focus-visible:outline-accent" /></label>
         <button type="button" onClick={() => router.replace(pathname)} className="min-h-11 self-end px-3 text-xs text-dim underline underline-offset-4 hover:text-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">сбросить</button>
       </section>
 
       {state === "loading" && <p role="status" className="flex items-center justify-center gap-2 py-16 text-sm text-dim"><LoaderCircle size={18} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />сверяем сохранённые тренды…</p>}
-      {state === "error" && <div role="alert" className="border-y border-ru-red/40 py-12 text-center"><CircleAlert size={20} className="mx-auto mb-3 text-ru-red" aria-hidden="true" /><p className="text-sm text-dim">Не удалось загрузить радар.</p><button type="button" onClick={() => setReload((value) => value + 1)} className="mt-3 min-h-11 text-accent underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">повторить</button></div>}
+      {state === "error" && <div role="alert" className="border-y border-accent/40 py-12 text-center"><CircleAlert size={20} className="mx-auto mb-3 text-accent" aria-hidden="true" /><p className="text-sm text-dim">Не удалось загрузить радар.</p><button type="button" onClick={() => setReload((value) => value + 1)} className="mt-3 min-h-11 text-accent underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">повторить</button></div>}
       {state === "ready" && items.length === 0 && <div className="border-y border-line py-14 text-center">
-        <h2 className="display text-2xl text-fg">Нет подтверждённых изменений по выбранным фильтрам</h2>
+        <h2 className="display text-h2 text-fg">Нет подтверждённых изменений по выбранным фильтрам</h2>
         <p className="mx-auto mt-3 max-w-2xl text-sm leading-6 text-dim">Радар покажет изменение, когда оно появится минимум в двух странах, получит измеримое ускорение и проверяемые материалы. Отсутствие подтверждённых изменений не означает отсутствия событий.</p>
         <div className="mt-4 flex flex-wrap justify-center gap-x-6 gap-y-2 text-sm"><Link href="/search" className="min-h-11 content-center text-accent underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-accent">Свежие публикации</Link><Link href="/stories" className="min-h-11 content-center text-accent underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-accent">Сюжеты</Link></div>
       </div>}
       {state === "ready" && items.length > 0 && <section aria-label="Тренды радара" className="divide-y divide-line border-y border-line">{items.map((trend) => <TrendCard key={trend.public_id} trend={trend} />)}</section>}
-      {state === "ready" && loadMoreError && <div role="alert" className="mt-4 border-l-2 border-ru-red px-4 py-2 text-xs text-dim">Следующую страницу трендов загрузить не удалось. <button type="button" onClick={loadMore} className="ml-1 min-h-11 text-accent underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent sm:min-h-0">повторить</button></div>}
-      {nextCursor && !loadMoreError && <button type="button" disabled={loadingMore} onClick={loadMore} className="mt-6 min-h-11 rounded-md border border-line px-5 text-xs uppercase tracking-wide hover:border-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:opacity-50">{loadingMore ? "загружаем…" : "следующие тренды"}</button>}
-    </main>
+      {state === "ready" && loadMoreError && <div role="alert" className="mt-4 border-l-2 border-accent px-4 py-2 text-xs text-dim">Следующую страницу трендов загрузить не удалось. <button type="button" onClick={loadMore} className="ml-1 min-h-11 text-accent underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent sm:min-h-0">повторить</button></div>}
+      {nextCursor && !loadMoreError && <button type="button" disabled={loadingMore} onClick={loadMore} className="mt-6 min-h-11 rounded-md border border-line px-5 text-xs hover:border-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:opacity-50">{loadingMore ? "загружаем…" : "следующие тренды"}</button>}
+    </PageShell>
   );
 }
 
 export default function RadarPage() {
   return (
-    <Suspense fallback={<main className="mx-auto max-w-[1240px] px-3 pb-16"><SiteHeader active="/radar" /><div role="status" className="py-16 text-center text-dim">Готовим радар…</div></main>}>
+    <Suspense fallback={<PageShell active="/signals"><div role="status" className="py-16 text-center text-dim">Готовим радар…</div></PageShell>}>
       <RadarPageContent />
     </Suspense>
   );

@@ -61,7 +61,7 @@ export default function AgendaHighlights() {
       </div>
       <p className="mt-2 text-xs leading-5 text-dim">Публикации собраны за последние 72 часа среди подключённых источников. Повестки могут включать более ранние материалы.</p>
       {loading && <p role="status" className="mt-4 flex items-center gap-2 text-xs text-dim"><LoaderCircle aria-hidden="true" size={14} className="animate-spin motion-reduce:animate-none" />{payload ? "Обновляем свежие повестки…" : "Загружаем свежие повестки…"}</p>}
-      {error && <div role="alert" className="mt-4 border-l-2 border-ru-red/50 pl-3 text-sm text-dim">
+      {error && <div role="alert" className="mt-4 border-l-2 border-accent/50 pl-3 text-sm text-dim">
         <p>Не удалось загрузить свежие повестки.</p>
         <button type="button" disabled={loading} onClick={refresh} className="min-h-11 text-xs text-accent underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50">Повторить загрузку</button>
       </div>}

@@ -40,7 +40,7 @@ function SourceTitle({ title, titleRu, href, heading = false }: {
   const displayedTitle = isTranslation ? translation : title;
   return <>
     {heading ? (
-      <h3 id={titleId} lang={isTranslation ? "ru" : undefined} className="mt-3 break-words text-lg font-medium leading-7">{displayedTitle}</h3>
+      <h3 id={titleId} lang={isTranslation ? "ru" : undefined} className="mt-3 break-words text-xl font-medium leading-7">{displayedTitle}</h3>
     ) : href ? (
       <a id={titleId} lang={isTranslation ? "ru" : undefined} href={href} target="_blank" rel="noopener noreferrer" className="break-words text-sm leading-6 text-fg underline decoration-line underline-offset-4 hover:text-accent focus-visible:outline-2 focus-visible:outline-accent">{displayedTitle}</a>
     ) : <p id={titleId} lang={isTranslation ? "ru" : undefined} className="break-words text-sm leading-6 text-fg">{displayedTitle}</p>}
@@ -89,7 +89,7 @@ export function AgendaCard({ item }: { item: AgendaItem }) {
   return (
     <article className="card min-w-0 p-4 sm:p-5">
       <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-dim">
-        <span className="uppercase tracking-[0.08em]">Заголовок источника</span>
+        <span className="">Заголовок источника</span>
         {verified && <span title={item.model ?? undefined} className="rounded border border-line px-2 py-1">Связи сопоставлены ИИ</span>}
       </div>
       <SourceTitle title={item.title} titleRu={item.title_ru} heading />
@@ -153,8 +153,8 @@ export default function AgendaPanel() {
     <section aria-labelledby={titleId} className="border-b border-line pb-8 pt-10">
       <div className="flex flex-wrap items-end justify-between gap-5">
         <div className="max-w-2xl">
-          <p className="section-num">ПУБЛИКАЦИИ / ПОВЕСТКИ</p>
-          <h2 id={titleId} className="display mt-2 text-[32px] leading-tight sm:text-[40px]">Новостные повестки</h2>
+          <p className="section-num">Публикации и повестки</p>
+          <h2 id={titleId} className="display mt-2 text-h2 leading-tight sm:text-h1">Новостные повестки</h2>
           <p className="mt-3 text-sm leading-6 text-dim">События и их развитие среди подключённых источников. Заголовок взят из публикации; откройте источники, чтобы сопоставить сообщения.</p>
         </div>
         <form onSubmit={submit} role="search" aria-label="Поиск повесток" className="flex w-full gap-2 sm:w-auto">

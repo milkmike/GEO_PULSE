@@ -10,7 +10,7 @@ import {
 import { FormEvent, KeyboardEvent, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import SearchResults from "@/components/SearchResults";
-import SiteHeader from "@/components/SiteHeader";
+import PageShell from "@/components/ui/PageShell";
 import { api } from "@/lib/api";
 import type {
   ArticleSearchRequest,
@@ -337,17 +337,16 @@ function SearchPageContent() {
   }
 
   return (
-    <main className="mx-auto max-w-[1120px] px-3 pb-16">
-      <SiteHeader active="/search" />
+    <PageShell active="/search">
 
       <header className="reveal reveal-1 grid gap-5 pb-7 pt-9 md:grid-cols-[minmax(0,1fr)_18rem] md:items-end">
         <div>
-          <p className="section-num">АРХИВ / 01</p>
-          <h1 className="display mt-2 max-w-3xl text-[38px] leading-[1.03] sm:text-[48px]">
+          <p className="section-num">Архив</p>
+          <h1 className="display mt-2 max-w-3xl text-h1 leading-[1.03] sm:text-h1">
             Поиск по новостным доказательствам
           </h1>
         </div>
-        <p className="border-l border-ru-red/70 pl-4 text-[12px] leading-5 text-dim">
+        <p className="border-l border-accent/70 pl-4 text-xs leading-5 text-dim">
           Поиск охватывает только собранные и проиндексированные материалы. Каждое
           совпадение ведёт к сохранённой первичной ссылке, если она безопасна и доступна.
         </p>
@@ -358,7 +357,7 @@ function SearchPageContent() {
         role="search"
         className="reveal reveal-2 card relative overflow-visible px-4 py-5 sm:px-6"
       >
-        <span className="tricolor absolute inset-x-0 top-0 !h-[2px]" aria-hidden="true" />
+        <span className="absolute inset-x-0 top-0 h-0.5 bg-accent" aria-hidden="true" />
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
           <label className="min-w-0 flex-1">
             <span className="card-title mb-2 block">Слова в заголовке, тексте или сущностях</span>
@@ -377,20 +376,20 @@ function SearchPageContent() {
                 maxLength={200}
                 onChange={(event) => updateDraft("q", event.target.value)}
                 placeholder="например, Путин"
-                className="min-h-11 w-full border-b border-line bg-transparent py-2 pl-7 pr-2 text-[18px] text-ru-white outline-none transition-colors placeholder:text-dim/70 focus:border-accent"
+                className="min-h-11 w-full border-b border-line bg-transparent py-2 pl-7 pr-2 text-xl text-ru-white outline-none transition-colors placeholder:text-dim/70 focus:border-accent"
               />
             </span>
           </label>
           <button
             type="submit"
-            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md bg-ru-white px-5 py-2 text-[12px] font-semibold uppercase tracking-[0.08em] text-bg transition-colors hover:bg-white focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
+            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md bg-ru-white px-5 py-2 text-xs font-semibold text-bg transition-colors hover:bg-white focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
           >
             Найти материалы
           </button>
         </div>
 
         <div className="mt-6 border-t border-line pt-5">
-          <p className="mb-4 text-[12px] leading-5 text-dim">
+          <p className="mb-4 text-xs leading-5 text-dim">
             Кавычки ищут точную фразу: «&quot;Северный поток&quot;». Минус исключает слово:
             «санкции -спорт». OR ищет любой вариант: «Газпром OR Gazprom».
             Страна относится к источнику публикации.
@@ -400,17 +399,17 @@ function SearchPageContent() {
           </p>
           <div className="grid gap-x-4 gap-y-4 sm:grid-cols-2 lg:grid-cols-4">
             <label>
-              <span className="mb-1 block text-[10px] uppercase tracking-[0.08em] text-dim">Страна источника</span>
+              <span className="mb-1 block text-xs text-dim">Страна источника</span>
               <input
                 value={draft.country}
                 maxLength={2}
                 onChange={(event) => updateDraft("country", event.target.value)}
                 placeholder="ES"
-                className="min-h-11 w-full rounded-md border border-line bg-panel2 px-2.5 py-2 text-base uppercase text-fg outline-none focus:border-accent sm:min-h-0 sm:text-xs"
+                className="min-h-11 w-full rounded-md border border-line bg-panel2 px-2.5 py-2 text-base text-fg outline-none focus:border-accent sm:min-h-0 sm:text-xs"
               />
             </label>
             <label>
-              <span className="mb-1 block text-[10px] uppercase tracking-[0.08em] text-dim">Тема</span>
+              <span className="mb-1 block text-xs text-dim">Тема</span>
               <input
                 value={draft.topic}
                 onChange={(event) => updateDraft("topic", event.target.value)}
@@ -419,7 +418,7 @@ function SearchPageContent() {
               />
             </label>
             <div className="relative sm:col-span-2">
-              <label htmlFor="entity-suggest" className="mb-1 block text-[10px] uppercase tracking-[0.08em] text-dim">
+              <label htmlFor="entity-suggest" className="mb-1 block text-xs text-dim">
                 Персона, организация, место или событие
               </label>
               <div className="relative">
@@ -471,11 +470,11 @@ function SearchPageContent() {
                       onPointerDown={(event) => event.preventDefault()}
                       onClick={() => chooseEntity(entity)}
                       className={`flex min-h-11 w-full items-center justify-between gap-4 border-b border-line px-3 py-2 text-left text-base last:border-b-0 sm:text-xs ${
-                        index === activeSuggestion ? "bg-ru-blue/15 text-ru-white" : "text-fg hover:bg-white/5"
+                        index === activeSuggestion ? "bg-accent/15 text-ru-white" : "text-fg hover:bg-white/5"
                       }`}
                     >
                       <span>{entity.label}</span>
-                      <span className="tnum text-[9px] uppercase text-dim">{entity.kind}</span>
+                      <span className="text-xs text-dim">{entity.kind}</span>
                     </button>
                   ))}
                 </div>
@@ -488,7 +487,7 @@ function SearchPageContent() {
                     setSelectedEntityLabel("");
                     setEntityQuery("");
                   }}
-                  className="mt-1 inline-flex min-h-11 items-center gap-1 text-[10px] text-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent sm:min-h-0"
+                  className="mt-1 inline-flex min-h-11 items-center gap-1 text-xs text-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent sm:min-h-0"
                 >
                   {selectedEntityLabel || `сущность ${draft.entity_id.slice(0, 8)}…`}
                   <X aria-hidden="true" size={11} />
@@ -496,7 +495,7 @@ function SearchPageContent() {
               )}
             </div>
             <label>
-              <span className="mb-1 block text-[10px] uppercase tracking-[0.08em] text-dim">От даты</span>
+              <span className="mb-1 block text-xs text-dim">От даты</span>
               <input
                 type="date"
                 value={draft.from}
@@ -508,7 +507,7 @@ function SearchPageContent() {
               />
             </label>
             <label>
-              <span className="mb-1 block text-[10px] uppercase tracking-[0.08em] text-dim">До даты</span>
+              <span className="mb-1 block text-xs text-dim">До даты</span>
               <input
                 type="date"
                 value={draft.to}
@@ -520,7 +519,7 @@ function SearchPageContent() {
               />
             </label>
             <label>
-              <span className="mb-1 block text-[10px] uppercase tracking-[0.08em] text-dim">Тип источника</span>
+              <span className="mb-1 block text-xs text-dim">Тип источника</span>
               <select
                 value={draft.tier}
                 onChange={(event) => updateDraft("tier", event.target.value)}
@@ -538,7 +537,7 @@ function SearchPageContent() {
             </label>
             <div className="grid grid-cols-2 gap-2">
               <label>
-                <span className="mb-1 block text-[10px] uppercase tracking-[0.08em] text-dim">Язык</span>
+                <span className="mb-1 block text-xs text-dim">Язык</span>
                 <input
                   value={draft.language}
                   maxLength={8}
@@ -548,7 +547,7 @@ function SearchPageContent() {
                 />
               </label>
               <label>
-                <span className="mb-1 block text-[10px] uppercase tracking-[0.08em] text-dim">Порядок</span>
+                <span className="mb-1 block text-xs text-dim">Порядок</span>
                 <select
                   value={draft.sort}
                   onChange={(event) => updateDraft("sort", event.target.value as SearchSort)}
@@ -579,7 +578,7 @@ function SearchPageContent() {
               setSelectedEntityLabel("");
             }}
             aria-pressed={draft.range === "all"}
-            className="mt-2 inline-flex min-h-11 items-center text-[10px] uppercase tracking-[0.08em] text-dim underline decoration-line underline-offset-4 hover:text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent sm:min-h-0"
+            className="mt-2 inline-flex min-h-11 items-center text-xs text-dim underline decoration-line underline-offset-4 hover:text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent sm:min-h-0"
           >
             Искать по всей истории без фильтров
           </button>
@@ -591,7 +590,7 @@ function SearchPageContent() {
           <div className="grid gap-5 border-y border-line py-8 sm:grid-cols-[9rem_1fr]">
             <p className="card-title">как начать</p>
             <div>
-              <p className="lead !text-[17px]">
+              <p className="lead !text-xl">
                 Введите имя, событие или фразу. Можно сузить архив страной источника —
                 например, найти упоминания Путина именно в испанских медиа.
               </p>
@@ -601,7 +600,7 @@ function SearchPageContent() {
                     key={example}
                     type="button"
                     onClick={() => runExample(example)}
-                    className="inline-flex min-h-11 items-center rounded-full border border-line px-3 text-[12px] text-fg transition-colors hover:border-ru-blue hover:text-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent sm:min-h-0 sm:py-1.5"
+                    className="inline-flex min-h-11 items-center rounded-full border border-line px-3 text-xs text-fg transition-colors hover:border-accent hover:text-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent sm:min-h-0 sm:py-1.5"
                   >
                     {example}
                   </button>
@@ -618,18 +617,18 @@ function SearchPageContent() {
               className="mx-auto mb-3 animate-spin motion-reduce:animate-none"
               size={22}
             />
-            <span className="tnum text-[10px] uppercase tracking-[0.12em]">Сверяем индекс и доказательства…</span>
+            <span className="text-xs ">Сверяем индекс и доказательства…</span>
           </div>
         )}
 
         {error && (
-          <div role="alert" className="card border-ru-red/40 px-4 py-4 text-[13px] text-[#e5aaa5]">
+          <div role="alert" className="card border-accent/40 px-4 py-4 text-sm text-fg">
             <p>{error}</p>
             {shouldSearch && !loadingMore && (
               <button
                 type="button"
                 onClick={() => setReload((value) => value + 1)}
-                className="mt-2 inline-flex min-h-11 items-center text-[11px] text-ru-white underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent sm:min-h-0"
+                className="mt-2 inline-flex min-h-11 items-center text-xs text-ru-white underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent sm:min-h-0"
               >
                 Повторить запрос
               </button>
@@ -639,8 +638,8 @@ function SearchPageContent() {
 
         {!loading && !error && shouldSearch && items.length === 0 && (
           <div className="border-y border-line py-10 text-center">
-            <p className="display text-[25px]">Совпадений в индексе нет</p>
-            <p className="mx-auto mt-2 max-w-xl text-[12px] leading-5 text-dim">
+            <p className="display text-h2">Совпадений в индексе нет</p>
+            <p className="mx-auto mt-2 max-w-xl text-xs leading-5 text-dim">
               Попробуйте убрать отдельные фильтры, расширить период или проверить другое
               написание имени. Это пустой результат по собранному архиву, а не по всему медиаполю.
             </p>
@@ -651,12 +650,12 @@ function SearchPageContent() {
           <>
             <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
               <p className="card-title">найденные материалы</p>
-              <p className="tnum text-[10px] uppercase tracking-[0.08em] text-dim">
+              <p className="text-xs text-dim">
                 показано {items.length} · в выборке {candidateCount}
               </p>
             </div>
             {candidateLimitReached && (
-              <p role="status" className="mb-4 border-l-2 border-cooling pl-3 text-[12px] leading-5 text-dim">
+              <p role="status" className="mb-4 border-l-2 border-cooling pl-3 text-xs leading-5 text-dim">
                 Выборка ограничена: часть совпадений может не войти в результаты.
                 Сузьте период или добавьте фильтры, чтобы проверить материалы за нужный срез.
               </p>
@@ -668,7 +667,7 @@ function SearchPageContent() {
                   type="button"
                   onClick={loadMore}
                   disabled={loadingMore}
-                  className="inline-flex min-h-11 items-center gap-2 text-[11px] uppercase tracking-[0.09em] text-accent disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
+                  className="inline-flex min-h-11 items-center gap-2 text-xs text-accent disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
                 >
                   {loadingMore ? (
                     <LoaderCircle aria-hidden="true" size={14} className="animate-spin motion-reduce:animate-none" />
@@ -682,7 +681,7 @@ function SearchPageContent() {
           </>
         )}
       </section>
-    </main>
+    </PageShell>
   );
 }
 
@@ -690,10 +689,9 @@ export default function SearchPage() {
   return (
     <Suspense
       fallback={
-        <main className="mx-auto max-w-[1120px] px-3 pb-16">
-          <SiteHeader active="/search" />
+        <PageShell active="/search">
           <div role="status" className="py-16 text-center text-dim">Готовим архив…</div>
-        </main>
+        </PageShell>
       }
     >
       <SearchPageContent />

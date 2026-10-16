@@ -22,9 +22,6 @@ const apiMocks = vi.hoisted(() => ({
 vi.mock("@/lib/api", () => ({ api: apiMocks, apiBase: () => "http://api.test" }));
 
 vi.mock("@/components/SiteHeader", () => ({ default: () => <nav>header</nav> }));
-vi.mock("@/components/SortableGrid", () => ({
-  default: ({ items }: { items: { id: string; node: ReactNode }[] }) => <>{items.map((item) => <div key={item.id}>{item.node}</div>)}</>,
-}));
 vi.mock("@/components/Markdown", () => ({ default: ({ text }: { text: string }) => <div>{text}</div> }));
 vi.mock("@/components/EarlyWarningPanel", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/components/EarlyWarningPanel")>()),
@@ -102,6 +99,16 @@ function renderCountry(overrides: Partial<FeatureFlags> = {}) {
 }
 
 describe("country dossier hygiene", () => {
+  it("keeps the editorial order even when an old draggable layout was saved", async () => {
+    localStorage.setItem("country-panel-order", JSON.stringify(["signals", "fx", "index"]));
+    await renderCountry();
+    await screen.findByRole("heading", { name: /Сербия/ });
+    const panels = [...document.querySelectorAll("[data-panel]")].map((panel) => panel.getAttribute("data-panel"));
+    expect(panels.slice(0, 7)).toEqual(["sparklines", "dynamics", "early-warning", "stories", "brief", "headlines", "index"]);
+    expect(document.querySelector("[draggable]")).toBeNull();
+    expect(screen.queryByRole("button", { name: /сбросить раскладку|Перетащить/i })).not.toBeInTheDocument();
+    localStorage.removeItem("country-panel-order");
+  });
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-10-15T12:00:00Z"));
@@ -135,8 +142,8 @@ describe("country dossier hygiene", () => {
     await renderCountry();
 
     expect(await screen.findByText("Сербия ↔ Россия: текущее состояние")).toBeVisible();
-    expect(screen.getByText("AI-досье")).toBeVisible();
-    expect(screen.getByText("Написано ИИ · 12 октября 2026")).toHaveAttribute(
+    expect(screen.getByText("Коротко")).toBeVisible();
+    expect(screen.getByText(/^ИИ ·/ )).toHaveAttribute(
       "title",
       "google/gemini-3-flash-preview",
     );
@@ -160,11 +167,11 @@ describe("country dossier hygiene", () => {
     apiMocks.countryBrief.mockReturnValue(pending.promise);
     await renderCountry();
     expect(await screen.findByRole("heading", { name: /Сербия/ })).toBeVisible();
-    expect(screen.queryByText("AI-досье")).not.toBeInTheDocument();
+    expect(screen.queryByText("Коротко")).not.toBeInTheDocument();
 
     await act(async () => pending.reject(new Error("404")));
     expect(await screen.findByText("Сводка по стране ещё не собрана.")).toBeVisible();
-    expect(screen.getByRole("button", { name: "Собрать AI-досье" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Собрать сводку" })).toBeVisible();
   });
 
   it("labels the embed toggle in Russian and keeps the snippet behaviour", async () => {
