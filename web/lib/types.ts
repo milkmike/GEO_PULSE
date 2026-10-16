@@ -38,6 +38,7 @@ export interface MapHistoryFrame {
 }
 
 export interface Signal {
+  dedup_key?: string;
   id: number;
   type: string;
   country_code: string | null;
@@ -886,4 +887,38 @@ export interface AgendasResponse {
   items: AgendaItem[];
   coverage: AgendaCoverage;
   has_more: boolean;
+}
+
+
+export type ChangeType = "all" | "index" | "tone" | "waves" | "stories" | "attention";
+export interface ChangeItem {
+  id: string;
+  kind: "signal" | "wave" | "story";
+  type: string;
+  country_codes: string[];
+  country_names: string[];
+  title: string;
+  context: string;
+  direction: "worse" | "better" | "new" | "attention";
+  severity: string;
+  occurred_at: string;
+  first_at: string;
+  repeat_count: number;
+  days_running: number;
+  href: string;
+  evidence_preview: { id: number; title: string | null; source_name: string; published_at: string | null; url: string | null }[];
+  evidence_total: number;
+}
+export interface ChangesRequest {
+  days?: number;
+  type?: ChangeType;
+  country?: string;
+  important?: boolean;
+  limit?: number;
+}
+export interface ChangesResponse {
+  items: ChangeItem[];
+  next_cursor: string | null;
+  total: number;
+  raw_total: number;
 }

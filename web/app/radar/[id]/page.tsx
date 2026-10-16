@@ -101,10 +101,10 @@ export default function RadarTrendPage({ params }: { params: Promise<{ id: strin
     }
   }
 
-  if (!earlyWarningRadar) return <PageShell active="/signals"><p className="mt-16 border-y border-line py-10 text-center text-sm text-dim">Раздел раннего предупреждения отключён.</p></PageShell>;
+  if (!earlyWarningRadar) return <PageShell active="/changes"><p className="mt-16 border-y border-line py-10 text-center text-sm text-dim">Раздел раннего предупреждения отключён.</p></PageShell>;
   return (
-    <PageShell active="/signals">
-      <div className="pt-7"><Link href="/radar" className="inline-flex min-h-11 items-center text-xs text-dim hover:text-accent focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent">← все тренды</Link></div>
+    <PageShell active="/changes">
+      <div className="pt-7"><Link href="/changes?type=waves" className="inline-flex min-h-11 items-center text-xs text-dim hover:text-accent focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent">← все тренды</Link></div>
       {state === "loading" && <p role="status" className="flex items-center justify-center gap-2 py-20 text-sm text-dim"><LoaderCircle size={20} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />собираем расследование…</p>}
       {state === "error" && <div role="alert" className="mt-12 border-y border-accent/40 py-12 text-center"><CircleAlert size={20} className="mx-auto mb-3 text-accent" aria-hidden="true" /><p className="text-sm text-dim">Не удалось загрузить расследование тренда.</p><button type="button" onClick={() => setReload((value) => value + 1)} className="mt-3 min-h-11 text-accent underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">повторить</button></div>}
       {state === "ready" && payload && <div className="reveal reveal-1 mt-4"><header className="mb-6 border-b border-line pb-7"><p className="section-num">Разбор изменения · {(STATE_LABEL[payload.trend.state] ?? payload.trend.state)}</p><h1 className="display mt-3 max-w-5xl text-h1 leading-[1.05] sm:text-h1">{payload.trend.thesis}</h1></header><TrendInvestigation {...payload} view={view} onViewChange={setView} evidenceLoadingMore={evidenceLoadingMore} evidenceLoadError={evidenceLoadError} onLoadMoreEvidence={loadMoreEvidence} /></div>}

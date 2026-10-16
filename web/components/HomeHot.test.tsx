@@ -99,6 +99,7 @@ describe("HomeHot", () => {
       />,
     );
     expect(screen.queryByRole("region", { name: "Главное за сутки" })).not.toBeInTheDocument();
+    expect(within(screen.getByRole("region", { name: "Свежие сигналы" })).getByRole("link", { name: /все/ })).toHaveAttribute("href", "/changes");
     expect(screen.getByRole("link", { name: /Босния и Герцеговина/ })).toHaveAttribute("href", "/country/BA");
     expect(screen.getByRole("link", { name: /Великобритания \(похолодел\)/ })).toHaveAttribute("href", "/signals/7");
   });

@@ -14,7 +14,7 @@ const NAV = [
   { href: "/", label: "Обзор" },
   { href: "/countries", label: "Страны" },
   { href: "/stories", label: "Сюжеты", feature: "storiesNavigation" as const },
-  { href: "/signals", label: "Изменения" },
+  { href: "/changes", label: "Изменения" },
   { href: "/about", label: "О данных" },
 ];
 

@@ -731,7 +731,7 @@ def list_signals(days: int = Query(3, ge=1, le=30),
         rows = session.execute(
             text(f"""
                 SELECT id, signal_type, country_code, severity, confidence,
-                       title, description, payload, created_at, expires_at
+                       title, description, payload, dedup_key, created_at, expires_at
                 FROM signals
                 WHERE {' AND '.join(conditions)}
                 ORDER BY CASE severity WHEN 'critical' THEN 0
@@ -750,6 +750,7 @@ def list_signals(days: int = Query(3, ge=1, le=30),
              "country_name": country_name_ru(r.country_code) if r.country_code else None,
              "severity": r.severity, "confidence": float(r.confidence or 0),
              "title": r.title, "description": r.description, "payload": r.payload,
+             "dedup_key": r.dedup_key,
              "created_at": r.created_at.isoformat(),
              "expires_at": r.expires_at.isoformat() if r.expires_at else None,
              "active": bool(r.expires_at and r.expires_at > datetime.now(timezone.utc)),

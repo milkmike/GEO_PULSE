@@ -24,6 +24,7 @@ describe("SiteHeader", () => {
   it("shows the five sections, active accent and freshness; gates search and stories", () => {
     const { rerender } = render(header());
     expect(within(screen.getByRole("navigation")).getAllByRole("link").map((link) => link.textContent)).toEqual(["Обзор", "Страны", "Сюжеты", "Изменения", "О данных"]);
+    expect(screen.getByRole("link", { name: "Изменения" })).toHaveAttribute("href", "/changes");
     expect(screen.getByRole("link", { name: "Страны" })).toHaveAttribute("aria-current", "page");
     expect(screen.getByRole("link", { name: "Страны" })).toHaveClass("text-accent");
     expect(screen.getByTestId("freshness")).toBeVisible();

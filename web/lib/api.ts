@@ -1,5 +1,5 @@
 import type {
-  AgendasRequest, AgendasResponse, AgreementGroup, ArticleSearchRequest, ArticleSearchResponse, Brief, CountrySummary,
+  ChangesRequest, ChangesResponse, AgendasRequest, AgendasResponse, AgreementGroup, ArticleSearchRequest, ArticleSearchResponse, Brief, CountrySummary,
   Dossier, EntityStat, EntitySuggestionsResponse, FxSeries, Headline, Health, MapEntry,
   IndexExplanation, IndexExplanationRequest, Meta, Signal, SignalDetail, SourceHealthRow,
   SourceRow, StoriesListResponse, StoriesRequest, StoryDetailResponse, TemperatureMethodology,
@@ -90,6 +90,14 @@ function radarParams(request: RadarFilters, cursor?: string | null): URLSearchPa
 }
 
 export const api = {
+  changes: (request: ChangesRequest = {}, cursor?: string | null, signal?: AbortSignal) => {
+    const params = new URLSearchParams({ days: String(request.days ?? 7), limit: String(request.limit ?? 30) });
+    if (request.type && request.type !== "all") params.set("type", request.type);
+    if (request.country) params.set("country", request.country.toUpperCase());
+    if (request.important) params.set("important", "1");
+    if (cursor) params.set("cursor", cursor);
+    return get<ChangesResponse>(`/api/v2/changes?${params.toString()}`, signal);
+  },
   globalCoverage: (signal?: AbortSignal) => get<GlobalCoverageResponse>("/api/v2/early-signals/coverage", signal),
   earlySignals: (country?: string | null, signal?: AbortSignal) => {
     const params = new URLSearchParams({ limit: "6" });

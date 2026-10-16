@@ -161,7 +161,7 @@ export default function LabPage() {
         <section className="card">
           <div className="card-title flex items-baseline justify-between px-4 pb-1 pt-3">
             <span>Сигналы медиаполя</span>
-            <Link href="/signals" className="text-xs normal-case text-dim hover:text-accent">
+            <Link href="/changes" className="text-xs normal-case text-dim hover:text-accent">
               все →
             </Link>
           </div>

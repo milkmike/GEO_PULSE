@@ -154,6 +154,7 @@ def test_country_dossier_batches_and_serializes_signal_article_previews(monkeypa
             title="Официальное молчание",
             description=None,
             payload={},
+            dedup_key="official_silence:ES:20260715",
             created_at=created_at,
         ),
     ]
@@ -219,6 +220,7 @@ def test_signal_list_treats_null_expiry_as_inactive(monkeypatch):
         title="Исторический сигнал",
         description=None,
         payload={},
+        dedup_key="tone_shift:ES:20260715",
         created_at=created_at,
         expires_at=None,
     )
@@ -239,6 +241,8 @@ def test_signal_list_treats_null_expiry_as_inactive(monkeypatch):
     )
 
     assert result["signals"][0]["expires_at"] is None
+    assert result["signals"][0]["dedup_key"] == "tone_shift:ES:20260715"
+    assert "dedup_key" in session.calls[0][0]
     assert result["signals"][0]["active"] is False
 
 
@@ -253,6 +257,7 @@ def test_signal_list_includes_context_article_preview_in_one_batch(monkeypatch):
         title="Изменение риторики",
         description=None,
         payload={},
+        dedup_key="tone_shift:ES:20260715",
         created_at=created_at,
         expires_at=None,
     )
@@ -369,6 +374,7 @@ def test_signal_list_batches_exact_previews_and_sanitizes_urls(monkeypatch):
             title="Подтверждённое событие",
             description="Есть сохранённая доказательная статья.",
             payload={},
+            dedup_key="notable:событие",
             created_at=created_at,
             expires_at=created_at + timedelta(hours=24),
         ),
@@ -381,6 +387,7 @@ def test_signal_list_batches_exact_previews_and_sanitizes_urls(monkeypatch):
             title="Сигнал без статей",
             description=None,
             payload={},
+            dedup_key="index_shift:ES:20260715",
             created_at=created_at,
             expires_at=None,
         ),
@@ -393,6 +400,7 @@ def test_signal_list_batches_exact_previews_and_sanitizes_urls(monkeypatch):
             title="Сигнал без допустимого контекстного fallback",
             description=None,
             payload={},
+            dedup_key="official_silence:ES:20260715",
             created_at=created_at,
             expires_at=None,
         ),
@@ -504,6 +512,7 @@ def test_legacy_gdelt_signal_context_prefers_payload_matching_aggregate_day(monk
         title="Сдвиг тона о России",
         description="Сигнал построен на агрегате GDELT за 10 июля.",
         payload={"tone": -6.22},
+        dedup_key="tone_shift:ES:20260715",
         created_at=created_at,
         expires_at=None,
     )

@@ -11,5 +11,5 @@ export default async function SignalDetailPage({ params }: { params: Promise<{ i
   const signalId = Number(rawId);
   if (!Number.isSafeInteger(signalId) || signalId <= 0) notFound();
 
-  return <PageShell active="/signals"><SignalDetailClient signalId={signalId} /></PageShell>;
+  return <PageShell active="/changes"><SignalDetailClient signalId={signalId} /></PageShell>;
 }
